@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/kegari-v0"]
+resolver = "3"
