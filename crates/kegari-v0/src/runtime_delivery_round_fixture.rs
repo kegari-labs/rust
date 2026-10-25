@@ -703,3 +703,200 @@ async fn admit(
     );
     (worker, reference, permit)
 }
+
+/// Real round/source/Control/grant composition. The provider terminal is a
+/// declared duplex observation; no native joined completion is installed.
+pub(super) async fn marked_retry(f: ReviewFixture<'_>) {
+    let config = f.built.runtime.configuration.snapshot().unwrap();
+    let phase = begin_phase(&f, f.scope.clone()).await;
+    let initial = Arc::new(
+        maintain_phase_observations(
+            &f.built.runtime,
+            phase.coordinator.initial_review_round(
+                ReviewRoundSource {
+                    admission: &phase.admission,
+                    claim: f.original_claim.clone(),
+                    source: f.source_proof,
+                    completion: f.original_completion.clone(),
+                    assignment: f.review,
+                    validated_retry: None,
+                },
+                &config,
+                &[],
+            ),
+        )
+        .await
+        .unwrap(),
+    );
+    f.service
+        .retire_delivery_phase(&phase, json!({"round_proposal":initial.digest()}))
+        .unwrap();
+    let (reviewer, run, permit) = admit(
+        &f,
+        &initial,
+        ReviewRoundRunCause::Review,
+        "marked-grant-predecessor",
+        false,
+    )
+    .await;
+    let protocol = Arc::new(protocol::RoundProtocol::new(
+        f.built.runtime.clone(),
+        permit,
+        initial.authority().clone(),
+        f.service.current_gate(),
+    ));
+    let failed = failed_admitted_review_with_gate(
+        &f.built.runtime.control,
+        &reviewer,
+        run.max_turns,
+        None,
+        Some("serverOverloaded"),
+        Some(protocol.clone()),
+    )
+    .await;
+    protocol.assert_closed_review_effect(failed.operation_id);
+    let predecessor = f
+        .built
+        .runtime
+        .control
+        .operation(failed.operation_id)
+        .unwrap();
+    assert_eq!(
+        crate::control::ReviewRoundReference::from_receipt(&predecessor)
+            .unwrap()
+            .as_ref(),
+        Some(initial.reference())
+    );
+    refresh(&f).await;
+    let grant = retry_fixture::publish_failed_review(f.built.runtime.clone()).await;
+    refresh(&f).await;
+    let grants = crate::runtime_workflow::current_retry_grants(
+        &config,
+        &f.built.runtime.observations.admission_snapshot().unwrap(),
+        f.gate.work(),
+        &f.built.runtime.control.operations().unwrap(),
+        &f.built.runtime.services.key,
+    )
+    .unwrap();
+    let phase = begin_phase(&f, f.scope.clone()).await;
+    let retry = Arc::new(
+        maintain_phase_observations(
+            &f.built.runtime,
+            phase.coordinator.retry_failed_review(ReviewRetryRequest {
+                admission: &phase.admission,
+                assignment: initial.assignment(),
+                failed,
+                grant: grant.clone(),
+                current_grants: &grants,
+            }),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(retry.requires_review_round());
+    assert_eq!(retry.next_attempt().unwrap(), 1);
+    let receipts = f.built.runtime.control.operations().unwrap();
+    assert!(!receipts.iter().any(|receipt| {
+        RunReference::from_receipt(receipt)
+            .unwrap()
+            .is_some_and(|run| run.phase == *retry.phase())
+    }));
+    let now = predecessor.updated_at + Duration::seconds(60);
+    assert_eq!(
+        crate::runtime_schedule::plan_review_retry(
+            &config.runtime,
+            retry.phase(),
+            f.gate.workspace_id(),
+            &receipts,
+            &retry,
+            now,
+        )
+        .unwrap_err()
+        .code,
+        "review_round_unavailable"
+    );
+    let mut request = crate::runtime_workers::LaunchRequest {
+        lease: f.lease.clone(),
+        operation_id: Uuid::new_v4(),
+        authority: f
+            .service
+            .current_delivery_worker_authority(retry.authority())
+            .unwrap(),
+        phase: retry.phase().clone(),
+        source: None,
+        delivery: Some(retry.assignment().clone()),
+        unfinished: None,
+        source_advanced: None,
+        retried_unfinished: None,
+        review_retry: Some(retry.clone()),
+        validation_retry: None,
+        review_round: None,
+        max_seconds: 60,
+        max_turns: grant.new_budget().max_turns,
+    };
+    assert_eq!(
+        request.validate_binding().unwrap_err().code,
+        "worker_binding"
+    );
+    let granted = Arc::new(
+        maintain_phase_observations(
+            &f.built.runtime,
+            phase.coordinator.granted_review_round(
+                ReviewRoundSource {
+                    admission: &phase.admission,
+                    claim: f.original_claim.clone(),
+                    source: f.source_proof,
+                    completion: f.original_completion.clone(),
+                    assignment: f.review,
+                    validated_retry: None,
+                },
+                &config,
+                retry.clone(),
+                &grants,
+            ),
+        )
+        .await
+        .unwrap(),
+    );
+    request.review_round = Some(granted.clone());
+    request.authority = f
+        .service
+        .current_delivery_worker_authority(granted.authority())
+        .unwrap();
+    request.validate_binding().unwrap();
+    let schedule =
+        crate::runtime_schedule::plan_review_round(crate::runtime_schedule::RoundScheduleInput {
+            runtime: &config.runtime,
+            phase: retry.phase(),
+            workspace: f.gate.workspace_id(),
+            receipts: &f.built.runtime.control.operations().unwrap(),
+            grants: &grants,
+            proof: &granted,
+            cause: &ReviewRoundRunCause::Review,
+            review_retry: Some(&retry),
+            now,
+        })
+        .unwrap();
+    assert_eq!(schedule.attempt, 1);
+    assert_eq!(granted.reference().review_phase, grant.phase_key());
+    f.service
+        .retire_delivery_phase(&phase, json!({"granted_round":granted.digest()}))
+        .unwrap();
+    f.built.runtime.retain_retry_grant(grant).unwrap();
+    assert_eq!(
+        f.built
+            .runtime
+            .next_attempt_for_review_retry(&retry)
+            .unwrap_err()
+            .code,
+        "worker_binding"
+    );
+    assert_eq!(
+        f.built
+            .runtime
+            .next_attempt_for_review_round(&request)
+            .unwrap_err()
+            .code,
+        "reconciliation_required"
+    );
+}

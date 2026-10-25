@@ -130,6 +130,10 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
             .await
             .unwrap(),
     );
+    assert!(
+        !proof.requires_review_round(),
+        "legacy unmarked retry remains available"
+    );
     assert_eq!(proof.source().revision(), f.revision);
     let mut forked = grants.clone();
     forked.push(grant.clone());

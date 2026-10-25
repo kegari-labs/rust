@@ -615,6 +615,7 @@ impl RuntimeCoordinator {
             && match readmission {
                 Some(WorkerReadmission::Unfinished(proof)) => proof.requires_review_round(),
                 Some(WorkerReadmission::SourceAdvanced(proof)) => proof.requires_review_round(),
+                Some(WorkerReadmission::ReviewRetry(proof)) => proof.requires_review_round(),
                 _ => false,
             }
         {

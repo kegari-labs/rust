@@ -311,6 +311,12 @@ pending provider turns, grant deletion/edits/forks, source movement and unrelate
 new review admissions block this path. Preparation and final model admission
 recheck the grant; the result's publication checks its exact new completed
 admission and current grant again inside the provider mutation gate.
+A marked review retains its round requirement across every later grant namespace.
+The first session of a new grant must carry the actual opaque review-round plan
+even though that new phase has no model history yet. Request binding, scheduling
+and final runtime planning enforce this from the retained whole-record inventory;
+unmarked legacy retries keep their existing path. The [round guard report](../validation/LOCAL-REVIEW-RETRY-ROUND-GUARD.md)
+records the focused checks and their native-execution limits.
 
 Another fully observed transient terminal failed review within that grant mints a new private
 per-attempt proof from its actual completion and complete current receipt

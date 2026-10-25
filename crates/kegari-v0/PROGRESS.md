@@ -2,6 +2,19 @@
 
 Local implementation and validation remain in progress; the Goal is incomplete.
 
+The isolated first-new-grant review-round omission fix passed all-target check,
+strict Clippy,24 unique child-continuation/scheduler tests, formatting,496-block
+inventory and diff checks. Source1 retains615 unchanged inputs at
+`sha256:223772a0e6b513f7ce0aba2ecf456772f98957b8c72cee50417d5f220b00fabb`.
+Sessions84681/97996 are closed, with eight verified before/after source/tool/log
+artifacts. The new marked1 regression is included in continuation1 and not counted
+twice. This focused result is not a new full-suite or native qualification.
+Root prepares its local checkpoint; broader paired native/results remain TEMP.
+See[the guard report](validation/LOCAL-REVIEW-RETRY-ROUND-GUARD.md). This separate
+fix closes a review-grant admission gap; the prior checkpoint implements changed-
+source validation continuation, so keeping their local commits separate preserves
+a clear behavior and test boundary. No history rewrite is planned.
+
 The changed-source validation successor passed **766 tests,
 zero failures and two required native ignores across 39 groups** in
 772.838s. Full4 retained615 unchanged inputs at
@@ -12,9 +25,14 @@ the collector verified15 retained invocations, including the earlier
 compile and lint failures. Required native ignores remain incomplete. This does
 not establish genuine passed-check/native joined qualification, live evaluations
 or required human calibration; the Goal remains incomplete.
-Root is preparing the exact local checkpoint. This is a separate coherent
-increment from2494a28: it continues validation after source changes, while the
-prior commit binds retries to an unchanged source. No history rewrite is needed. Check1 failed on a moved borrowed
+The verified local checkpoint is `4244532bf5393c94e6954f3a255132119d06c1af` —
+`feat(kegari-v0): preserve validation budgets after source changes`. All19 committed
+file bodies and615 tested inputs match, with a clean tree afterward. No commits
+were consolidated, rewritten or pushed. This separate coherent increment
+continues validation after source changes;2494a28 binds retries to unchanged
+source. Verification is retained at
+`/private/tmp/kegari-v0-validation-successor-integration-commit-verification.json`.
+Check1 failed on a moved borrowed
 fixture template; check2 passed after cloning it. StrictClippy2 found one nested
 conditional, corrected without changing its predicates. Admission3 found the
 invalid three-attempt fixture cap; source4 fixes only its declared data limit. Full historical failures
@@ -91,6 +109,13 @@ a4307bdbc5ccdf339a1c405ba03a738779809108149ca9968e3cb0fdcafdb851.
 Codex owns its actual-origin ReviewRetryWork predicate and pure scheduler
 regression. This finding remains unvalidated; v4 is not installed or compiled.
 The older native artifact and contrary guard rationale remain historical only.
+Root subsequently reviewed the typed completed-resume Control reader and flat
+opaque result. A concrete retained-proof gap was confirmed: older non-resumed
+source/checkout ownership checks did not survive flattening. Config now owns
+preserving a flat actual source inventory plus every joined execution ownership
+check, including a new copy of the four leaf collector files; the original68aff
+artifact remains intact. Correction, independent review and compilation are
+pending. No native or cold recovery success is inferred.
 
 The structured-review evaluation draft is retained at
 `/private/tmp/kegari-evaluation-structured-review-draft`, manifest

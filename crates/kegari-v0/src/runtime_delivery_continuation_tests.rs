@@ -189,6 +189,7 @@ fn repair_cycle(
         findings,
         None,
         None,
+        false,
     ))
 }
 async fn repair_cycle_inner(
@@ -198,6 +199,7 @@ async fn repair_cycle_inner(
     findings: bool,
     round_limit: Option<u32>,
     validation_retry: Option<&str>,
+    marked_review_retry: bool,
 ) {
     let retry_again = failure_code.is_some();
     let (root, built, old_service, wire, owner) =
@@ -535,7 +537,9 @@ async fn repair_cycle_inner(
             account: &account,
             scope: scope(DeliveryPhase::NoChange),
         };
-        if let Some(limit) = round_limit {
+        if marked_review_retry {
+            Box::pin(round_fixture::marked_retry(fixture)).await;
+        } else if let Some(limit) = round_limit {
             Box::pin(round_fixture::run(
                 fixture,
                 limit,
@@ -1170,11 +1174,29 @@ use review_retry_fixture::ReviewFixture;
 mod round_fixture;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exact_round_preparation_reaches_native_join_barrier_and_final_round_repair() {
-    Box::pin(repair_cycle_inner(false, false, None, false, Some(1), None)).await;
+    Box::pin(repair_cycle_inner(
+        false,
+        false,
+        None,
+        false,
+        Some(1),
+        None,
+        false,
+    ))
+    .await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recurring_findings_reuse_implementation_budget_after_actual_changed_source() {
-    Box::pin(repair_cycle_inner(false, false, None, false, Some(2), None)).await;
+    Box::pin(repair_cycle_inner(
+        false,
+        false,
+        None,
+        false,
+        Some(2),
+        None,
+        false,
+    ))
+    .await;
 }
 
 #[path = "runtime_delivery_validation_retry_fixture.rs"]
@@ -1188,6 +1210,7 @@ async fn exact_validation_retry_uses_native_grant_and_new_checks_without_join_fi
         false,
         None,
         Some("serverOverloaded"),
+        false,
     ))
     .await;
 }
@@ -1200,6 +1223,21 @@ async fn exact_validation_retry_refuses_automatic_auth_failure_within_granted_bu
         false,
         None,
         Some("unauthorized"),
+        false,
+    ))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_granted_review_cannot_omit_actual_prior_round_provenance() {
+    Box::pin(repair_cycle_inner(
+        false,
+        false,
+        None,
+        false,
+        Some(2),
+        None,
+        true,
     ))
     .await;
 }

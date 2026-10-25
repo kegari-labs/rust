@@ -276,6 +276,10 @@ impl LaunchRequest {
                 || self
                     .source_advanced
                     .as_ref()
+                    .is_some_and(|proof| proof.requires_review_round())
+                || self
+                    .review_retry
+                    .as_ref()
                     .is_some_and(|proof| proof.requires_review_round()))
         {
             return Err(Error::new(

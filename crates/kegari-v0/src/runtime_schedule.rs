@@ -226,6 +226,14 @@ fn plan_review_retry_inner(
 ) -> Result<RunSchedule> {
     let (review, round) = proofs;
     review.verify_inventory(receipts)?;
+    // Exact-phase history below is empty for the first session of a new grant.
+    // Its authenticated prior namespaces must still retain their opaque plan.
+    if round.is_none() && review.requires_review_round() {
+        return Err(Error::new(
+            "review_round_unavailable",
+            "marked review retry ancestry requires its exact opaque round plan",
+        ));
+    }
     review.verify_retry_cause()?;
     let failed = receipts
         .iter()

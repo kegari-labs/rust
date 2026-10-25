@@ -20,6 +20,7 @@ pub struct ReviewRetryWork {
     receipt: Receipt,
     receipt_digest: String,
     inventory_digest: String,
+    round_admissions: BTreeMap<Uuid, String>,
     grant: VerifiedRetryGrant,
     phase: PhaseKey,
     digest: String,
@@ -48,6 +49,11 @@ impl ReviewRetryWork {
     }
     pub fn digest(&self) -> &str {
         &self.digest
+    }
+    /// Derived only from actual retained marked review admissions across every
+    /// grant namespace for this work/generation. A new grant cannot erase it.
+    pub fn requires_review_round(&self) -> bool {
+        !self.round_admissions.is_empty()
     }
     pub(crate) fn next_attempt(&self) -> Result<u32> {
         if self.reference.phase == self.phase {
@@ -96,6 +102,8 @@ impl ReviewRetryWork {
     pub fn verify_inventory(&self, receipts: &[Receipt]) -> Result<()> {
         if review_inventory(receipts, self.receipt.runtime_id, &self.reference)?
             != self.inventory_digest
+            || marked_review_admissions(receipts, self.receipt.runtime_id, &self.reference)?
+                != self.round_admissions
         {
             return Err(Error::new(
                 "stale_result",
@@ -576,9 +584,10 @@ impl DeliveryCoordinator {
         };
         let receipt_digest = canonical_digest(1, &receipt)?;
         let inventory_digest = review_inventory(&receipts, receipt.runtime_id, &reference)?;
+        let round_admissions = marked_review_admissions(&receipts, receipt.runtime_id, &reference)?;
         let digest = canonical_digest(
             1,
-            &json!({"purpose":"exact_source_review_retry","assignment":request.assignment.digest()?,"failed":receipt_digest,"inventory":inventory_digest,"grant":request.grant.digest(),"previous":prior.map(ReviewRetryWork::digest),"transient_failure":transient_failure}),
+            &json!({"purpose":"exact_source_review_retry","assignment":request.assignment.digest()?,"failed":receipt_digest,"inventory":inventory_digest,"grant":request.grant.digest(),"previous":prior.map(ReviewRetryWork::digest),"transient_failure":transient_failure,"round_admissions":round_admissions}),
         )?;
         let result = ReviewRetryWork {
             assignment: request.assignment.clone(),
@@ -590,6 +599,7 @@ impl DeliveryCoordinator {
             receipt,
             receipt_digest,
             inventory_digest,
+            round_admissions,
             phase: request.grant.phase_key(),
             grant: request.grant,
             digest,
@@ -708,6 +718,28 @@ fn review_inventory(
         }
     }
     canonical_digest(1, &inventory)
+}
+fn marked_review_admissions(
+    receipts: &[Receipt],
+    runtime: Uuid,
+    reference: &RunReference,
+) -> Result<BTreeMap<Uuid, String>> {
+    let mut marked = BTreeMap::new();
+    for receipt in receipts {
+        if let Some(run) = RunReference::from_receipt(receipt)?
+            && same_group(runtime, reference, receipt, &run)
+            && crate::control::ReviewRoundReference::from_receipt(receipt)?.is_some()
+            && marked
+                .insert(receipt.operation_id, canonical_digest(1, receipt)?)
+                .is_some()
+        {
+            return Err(Error::new(
+                "record_corrupt",
+                "duplicate marked review admission",
+            ));
+        }
+    }
+    Ok(marked)
 }
 fn verify_lineage(
     grant: &VerifiedRetryGrant,
