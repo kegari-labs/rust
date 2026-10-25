@@ -12,6 +12,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+#[path = "instructions_resume.rs"]
+mod resume;
+pub use resume::{ResumeSemantics, VerifiedResumeInstructions};
+
 pub const ASSEMBLY_SCHEMA: u32 = 1;
 pub const ASSET_VERSION: &str = "3";
 pub const MAX_CONTEXT_BYTES: usize = 1_048_576;
@@ -171,12 +175,18 @@ pub struct InstructionManifest {
     pub provider_discovery: ProviderDiscovery,
     pub tools: Vec<ExposedTool>,
     pub permissions: PermissionManifest,
+    /// Absent legacy records retain their exact serialization but cannot prove
+    /// semantic compatibility for a newly admitted provider session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_semantics: Option<ResumeSemantics>,
 }
 #[derive(Clone, Debug)]
 pub struct AssembledInstructions {
     pub prompt: String,
     pub manifest: InstructionManifest,
     pub manifest_digest: String,
+    // Private seal is minted by the real assembler, never by manifest JSON.
+    assembly_seal: String,
 }
 #[derive(Clone, Debug)]
 pub struct RepositoryContext {
@@ -509,8 +519,13 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
         prompt.push_str(asset(name)?);
         prompt.push_str("\n\n");
     }
+    let static_prompt_digest = bytes_digest(prompt.as_bytes());
+    let boundary = serde_json::json!({"role":input.role,"phase":input.phase,"workspace_id":input.workspace_id,"operation_id":input.operation_id,"work_generation":input.work_generation,"correction_revision":input.correction_revision,"profile":input.profile,"cwd":cwd,"tools":input.tools,"permissions":permissions});
     prompt.push_str("# Admitted operation boundary\n\n");
-    prompt.push_str(&serde_json::to_string(&serde_json::json!({"role":input.role,"phase":input.phase,"workspace_id":input.workspace_id,"operation_id":input.operation_id,"work_generation":input.work_generation,"correction_revision":input.correction_revision,"profile":input.profile,"cwd":cwd,"tools":input.tools,"permissions":permissions})).map_err(|_| Error::invalid("cannot encode operation boundary"))?);
+    prompt.push_str(
+        &serde_json::to_string(&boundary)
+            .map_err(|_| Error::invalid("cannot encode operation boundary"))?,
+    );
     // Runtime context is mandatory even when the repository chooses a literal
     // workflow without interpolation. JSON keeps issue/comment contents in a
     // data layer; those contents cannot replace the admitted authority boundary.
@@ -570,12 +585,21 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
         provider_discovery: input.provider_discovery,
         tools: input.tools,
         permissions,
+        resume_semantics: resume::components(
+            &boundary,
+            input.context,
+            &repository_text,
+            &rendered,
+            static_prompt_digest,
+        )?,
     };
     let manifest_digest = canonical_digest(ASSEMBLY_SCHEMA, &manifest)?;
+    let assembly_seal = resume::assembly_seal(&prompt, &manifest, &manifest_digest)?;
     Ok(AssembledInstructions {
         prompt,
         manifest,
         manifest_digest,
+        assembly_seal,
     })
 }
 fn add_ancestors(root: &Path, directory: &Path, output: &mut BTreeSet<PathBuf>) -> Result<()> {
@@ -705,26 +729,11 @@ fn reject_secret_fields(value: &Value) -> Result<()> {
     Ok(())
 }
 impl InstructionManifest {
-    /// Operation IDs and dynamic input digests can differ on continuation, but
-    /// resumed sessions must have exactly compatible effective instructions.
+    /// Diagnostic comparison only. Actual resume authority requires the private
+    /// assembler seal through `AssembledInstructions::verify_resume`; a decoded
+    /// or edited manifest cannot establish its own component hashes.
     pub fn resume_compatible(&self, next: &Self) -> bool {
-        self.runtime_version == next.runtime_version
-            && self.runtime_build == next.runtime_build
-            && self.asset_version == next.asset_version
-            && self.assets == next.assets
-            && self.workflow_digest == next.workflow_digest
-            && self.role == next.role
-            && self.workspace_id == next.workspace_id
-            && self.work_generation == next.work_generation
-            && self.profile == next.profile
-            && self.cwd == next.cwd
-            && self.repository_root == next.repository_root
-            && self.repository_revision == next.repository_revision
-            && self.codex_home == next.codex_home
-            && self.codex_version == next.codex_version
-            && self.supplied_files == next.supplied_files
-            && self.permissions == next.permissions
-            && canonical_digest(1, &self.tools).ok() == canonical_digest(1, &next.tools).ok()
+        resume::compatible_manifests(self, next).unwrap_or(false)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -44,6 +44,7 @@ pub(crate) struct Fixture {
     issues: BTreeMap<Uuid, Value>,
     pub(crate) comments: BTreeMap<Uuid, Vec<Value>>,
     pub(crate) github_values: BTreeMap<String, Value>,
+    pub(crate) github_transport: Option<Arc<dyn HttpTransport>>,
     pub(crate) before_issue_read: Option<Arc<dyn Fn() -> Result<()> + Send + Sync>>,
     relations: Vec<Value>,
     history: BTreeMap<Uuid, Vec<Value>>,
@@ -67,6 +68,7 @@ impl Fixture {
             ]),
             comments: BTreeMap::new(),
             github_values: BTreeMap::new(),
+            github_transport: None,
             before_issue_read: None,
             relations: Vec::new(),
             history: BTreeMap::from([(
@@ -95,6 +97,12 @@ impl HttpTransport for Wire {
         request: HttpRequest,
     ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
         Box::pin(async move {
+            if request.url.host_str() == Some("github.invalid") {
+                let delegated = self.0.lock().unwrap().github_transport.clone();
+                if let Some(transport) = delegated {
+                    return transport.send(request).await;
+                }
+            }
             let mut f = self.0.lock().unwrap();
             let body: Value = if request.body.is_empty() {
                 Value::Null

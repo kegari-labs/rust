@@ -17,6 +17,12 @@ use uuid::Uuid;
 #[path = "control_continuation.rs"]
 mod continuation;
 pub use continuation::{RunContinuationReference, SourceAdvancedReference};
+#[path = "control_decisions.rs"]
+mod decisions;
+#[path = "control_preparation.rs"]
+mod preparation;
+pub(crate) use preparation::preparation_operation;
+pub use preparation::{PreparationAdmission, PreparationReference};
 #[path = "control_release.rs"]
 mod release_recovery;
 pub use release_recovery::ReleaseResumeReference;
@@ -157,7 +163,9 @@ impl RunReference {
             .expected
             .get("run")
             .map(|encoded| {
-                if receipt.kind != "admission" {
+                if receipt.kind != "admission"
+                    || receipt.expected.contains_key("worker_preparation")
+                {
                     return Err(Error::new(
                         "record_corrupt",
                         "run budget is attached to a non-admission receipt",
@@ -234,7 +242,10 @@ impl MetadataReference {
             .expected
             .get("metadata")
             .map(|encoded| {
-                if receipt.kind != "admission" || receipt.expected.contains_key("run") {
+                if receipt.kind != "admission"
+                    || receipt.expected.contains_key("run")
+                    || receipt.expected.contains_key("worker_preparation")
+                {
                     return Err(Error::new(
                         "record_corrupt",
                         "metadata budget is attached to another operation kind",
@@ -270,6 +281,7 @@ pub struct MetadataAdmission {
     pub reference: MetadataReference,
 }
 enum AdmissionReference {
+    Preparation(PreparationReference),
     Run(RunReference),
     ContinuedRun(RunReference, RunContinuationReference),
     SourceAdvancedRun(RunReference, SourceAdvancedReference),
@@ -1136,6 +1148,13 @@ impl ControlHost {
                 "source_advanced".into(),
                 serde_json::to_string(source)
                     .map_err(|_| Error::invalid("source-advanced reference encoding"))?,
+            );
+        }
+        if let Some(AdmissionReference::Preparation(reference)) = &reference {
+            expected.insert(
+                "worker_preparation".into(),
+                serde_json::to_string(reference)
+                    .map_err(|_| Error::invalid("worker preparation reference encoding"))?,
             );
         }
         if let Some(AdmissionReference::Metadata(reference)) = reference {

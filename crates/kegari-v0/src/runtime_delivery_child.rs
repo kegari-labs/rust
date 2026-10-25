@@ -638,6 +638,7 @@ impl RuntimeDelivery {
                 source: None,
                 delivery: Some(assignment),
                 unfinished: None,
+                retried_unfinished: None,
                 source_advanced,
                 max_seconds: 3600,
                 max_turns: schedule.max_turns,
@@ -708,7 +709,9 @@ impl RuntimeDelivery {
         error: Error,
     ) -> Result<()> {
         let digest = proof.digest().to_owned();
-        child.unfinished = Some(Arc::new(proof));
+        let proof = Arc::new(proof);
+        child.unfinished = Some(proof.clone());
+        self.runtime.retain_unfinished_target(proof)?;
         child.reference.unfinished_digest = Some(digest);
         self.finish_child_phase(child, Stage::RepairLaunch)?;
         child.reference.error = Some(error);
@@ -735,9 +738,60 @@ impl RuntimeDelivery {
             child.reference.stage = Stage::RepairWaiting;
             return self.persist_child(child);
         }
-        let schedule = self.runtime.next_attempt_for_unfinished(&proof)?;
-        let assignment = crate::delivery::repair_worker_assignment(&proof)?;
-        proof.verify_assignment(&assignment)?;
+        let receipts = self.runtime.control.operations()?;
+        let grants = crate::runtime_workflow::current_retry_grants(
+            &self.runtime.configuration.snapshot()?,
+            &self.runtime.observations.admission_snapshot()?,
+            proof.authority().work(),
+            &receipts,
+            &self.runtime.services.key,
+        )?;
+        let matches: Vec<_> = grants
+            .iter()
+            .filter(|grant| grant.phase() == proof.phase())
+            .collect();
+        let (phase, assignment, unfinished, retried_unfinished, schedule) = match matches.as_slice()
+        {
+            [] => {
+                let schedule = self.runtime.next_attempt_for_unfinished(&proof)?;
+                let assignment = crate::delivery::repair_worker_assignment(&proof)?;
+                proof.verify_assignment(&assignment)?;
+                (
+                    proof.phase().clone(),
+                    assignment,
+                    Some(proof),
+                    None,
+                    schedule,
+                )
+            }
+            [grant] => {
+                let workspace = self.workspace(
+                    &self.runtime.observations.admission_snapshot()?,
+                    proof.authority().workspace_id(),
+                )?;
+                let retried = Arc::new(workspace.coordinator.retry_unfinished(
+                    proof.clone(),
+                    (*grant).clone(),
+                    &grants,
+                )?);
+                let schedule = self.runtime.next_attempt_for_retried_unfinished(&retried)?;
+                let assignment = crate::delivery::retried_repair_worker_assignment(&retried)?;
+                retried.verify_assignment(&assignment)?;
+                (
+                    retried.phase().clone(),
+                    assignment,
+                    None,
+                    Some(retried),
+                    schedule,
+                )
+            }
+            _ => {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "multiple operator retries replace this unfinished budget",
+                ));
+            }
+        };
         child.reference.repair_operation = Some(operation);
         self.persist_child(child)?;
         crate::runtime_workers::launch(
@@ -745,11 +799,12 @@ impl RuntimeDelivery {
             crate::runtime_workers::LaunchRequest {
                 lease: lease.clone(),
                 operation_id: operation,
-                authority: WorkerAuthority::Authorized(proof.authority().clone()),
-                phase: proof.phase().clone(),
+                authority: WorkerAuthority::Authorized(assignment.authority().clone()),
+                phase,
                 source: None,
                 delivery: Some(assignment),
-                unfinished: Some(proof),
+                unfinished,
+                retried_unfinished,
                 source_advanced: None,
                 max_seconds: 3600,
                 max_turns: schedule.max_turns,

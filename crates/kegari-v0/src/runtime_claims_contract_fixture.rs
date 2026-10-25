@@ -70,6 +70,9 @@ pub(crate) fn test_completed_contract_fixture(
     )?;
     let turn = format!("fixture-turn-{}", admission.operation_id);
     session.thread_id = Some(format!("fixture-thread-{}", admission.operation_id));
+    // This protected-claims fixture supplies a synthetic terminal summary, not
+    // actual full provider history that could qualify a thread for resumption.
+    session.provider_history = None;
     session.turns_started = 1;
     session.terminal = Some("completed".into());
     session

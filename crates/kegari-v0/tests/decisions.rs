@@ -367,6 +367,7 @@ impl ProcessProbe for NoProcesses {
         Ok(vec![])
     }
 }
+type PublishedRetryHook = Box<dyn FnOnce(&VerifiedRetryGrant) -> Result<()> + Send>;
 #[derive(Default)]
 struct Evidence {
     delivery: Mutex<ParentDelivery>,
@@ -374,6 +375,7 @@ struct Evidence {
     retries: Mutex<Vec<VerifiedRetryGrant>>,
     retry: Mutex<Option<RetryTarget>>,
     recovery_authorizations: Mutex<Vec<Receipt>>,
+    after_retry_publication: Mutex<Option<PublishedRetryHook>>,
 }
 impl DecisionEvidence for Evidence {
     fn current(&self, _: &kegari_v0::authority::IssueKey) -> Result<ParentDelivery> {
@@ -388,6 +390,21 @@ impl DecisionEvidence for Evidence {
             .unwrap()
             .clone()
             .ok_or_else(|| Error::new("retry_unavailable", "fixture has no resolved retry phase"))
+    }
+    fn published_retry_target(&self, expected: &VerifiedRetryGrant) -> Result<RetryTarget> {
+        let hook = self.after_retry_publication.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook(expected)?;
+        }
+        let target = self.retry.lock().unwrap().clone().ok_or_else(|| {
+            Error::new("retry_unavailable", "fixture has no resolved retry phase")
+        })?;
+        if target.phase != *expected.phase()
+            || target.admissions != expected.record().prior_admissions.keys().copied().collect()
+        {
+            return Err(Error::new("stale_result", "fixture retry history changed"));
+        }
+        Ok(target)
     }
     fn record_acceptance(
         &self,
@@ -1251,4 +1268,137 @@ async fn stopped_recovery_reaches_backend_with_pending_correction_and_retains_un
     );
     assert!(f.control.snapshot().unwrap().active_operations.is_empty());
     assert_eq!(f.writes(), 0);
+}
+
+#[tokio::test]
+async fn retry_finalization_allows_only_its_own_started_budget_and_preserves_holds() {
+    use kegari_v0::control::{
+        Lease, Lifecycle, PreparationAdmission, PreparationReference, RunAdmission,
+    };
+    for preparation in [false, true] {
+        for unrelated_budget in [false, true] {
+            let f = DecisionFixture::new().await;
+            prepare_retry_fixture(&f);
+            let mut actor = f.actor();
+            actor.roles.insert("lifecycle".into());
+            f.control
+                .lifecycle(
+                    MutationRequest {
+                        request_id: Uuid::new_v4(),
+                        runtime_id: id(1),
+                        actor: actor.clone(),
+                        kind: "lifecycle".into(),
+                        canonical_targets: vec![id(1).to_string()],
+                        expected: BTreeMap::new(),
+                        payload: json!({"start":true}),
+                    },
+                    Lifecycle::Start,
+                    0,
+                )
+                .unwrap();
+            let lease = Lease {
+                runtime_id: id(1),
+                owner_generation: 1,
+                owner_id: Uuid::new_v4(),
+            };
+            f.control.attach_reconciled(lease.clone()).unwrap();
+            let control = f.control.clone();
+            let owned = Arc::new(Mutex::new(None));
+            let observed = owned.clone();
+            *f.evidence.after_retry_publication.lock().unwrap() = Some(Box::new(move |grant| {
+                // The provider has acknowledged the grant. Simulate the independent
+                // runtime consuming it before the command's final readback gate.
+                let mut phase = grant.phase_key();
+                if unrelated_budget {
+                    phase.retry_grant = Some(Uuid::new_v4());
+                }
+                let operation = Uuid::new_v4();
+                let work = phase.work.clone();
+                let permit = if preparation {
+                    let reference = PreparationReference {
+                        worker_operation: operation,
+                        workspace: id(2),
+                        account: "codex-fixture".into(),
+                        phase,
+                    };
+                    control.admit_preparation(
+                        &lease,
+                        PreparationAdmission {
+                            request_id: reference.operation_id()?,
+                            work_key: work.clone(),
+                            scope_digest: canonical_digest(1, &"actual fixture successor")?,
+                            reference,
+                        },
+                        || Ok(()),
+                    )?
+                } else {
+                    control.admit_run(
+                        &lease,
+                        RunAdmission {
+                            request_id: operation,
+                            work_key: work.clone(),
+                            scope_digest: canonical_digest(1, &"actual fixture successor")?,
+                            reference: RunReference {
+                                normalized_state: Some("todo".into()),
+                                workspace: id(2),
+                                account: "codex-fixture".into(),
+                                phase,
+                                profile_digest: canonical_digest(1, &"profile")?,
+                                instruction_digest: canonical_digest(1, &"instructions")?,
+                                max_attempts: grant.new_budget().max_attempts,
+                                max_turns: grant.new_budget().max_turns,
+                                max_review_rounds: grant.new_budget().max_review_rounds,
+                                attempt: 1,
+                            },
+                        },
+                        || Ok(()),
+                    )?
+                };
+                let operation = permit.operation_id;
+                let effect = Uuid::new_v4();
+                let (_pending, ()) = control.begin_effect(
+                    MutationRequest {
+                        request_id: effect,
+                        runtime_id: id(1),
+                        actor,
+                        kind: "fixture_pending_successor_effect".into(),
+                        canonical_targets: vec![work],
+                        expected: BTreeMap::new(),
+                        payload: Value::Null,
+                    },
+                    &permit,
+                    || Ok(()),
+                    |_| Ok(()),
+                )?;
+                *observed.lock().unwrap() = Some((operation, effect));
+                Ok(())
+            }));
+            let (request, parent) = f.command(
+                CommandName::Retry,
+                json!({"work":"TEST-101","reason":"Resolved blocker; use one exact bounded retry"}),
+            );
+            let result = f.manager.execute(f.actor(), request, parent).await;
+            if unrelated_budget {
+                assert_eq!(result.unwrap_err().code, "operation_uncertain");
+                assert!(f.evidence.retries.lock().unwrap().is_empty());
+            } else {
+                assert_eq!(result.unwrap().phase, ReceiptPhase::Acknowledged);
+                assert_eq!(f.evidence.retries.lock().unwrap().len(), 1);
+            }
+            assert_eq!(f.writes(), 1);
+            let (operation, effect) = owned.lock().unwrap().unwrap();
+            let snapshot = f.control.snapshot().unwrap();
+            assert!(
+                snapshot
+                    .active_operations
+                    .iter()
+                    .any(|p| p.operation_id == operation)
+            );
+            assert!(snapshot.unresolved_operations.contains_key(&effect));
+            assert_eq!(
+                f.control.operation(effect).unwrap().phase,
+                ReceiptPhase::Sent
+            );
+        }
+    }
 }

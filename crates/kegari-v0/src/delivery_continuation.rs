@@ -92,6 +92,13 @@ impl UnfinishedChildWork {
         self.inner.review_rounds_consumed
     }
     pub fn verify_contract(&self, contract: &crate::worker::WorkerContract) -> Result<()> {
+        self.verify_contract_with_task(self.remaining_task(), contract)
+    }
+    fn verify_contract_with_task(
+        &self,
+        task: &Value,
+        contract: &crate::worker::WorkerContract,
+    ) -> Result<()> {
         let crate::worker::WorkerAuthority::Authorized(gate) = contract.authority() else {
             return Err(Error::new(
                 "worker_binding",
@@ -103,7 +110,7 @@ impl UnfinishedChildWork {
             contract,
             self.authority(),
             &self.phase().phase,
-            self.remaining_task(),
+            task,
         )?;
         if gate.digest()? != self.authority().digest()?
             || manifest.role != self.role()
@@ -933,6 +940,10 @@ fn require_latest_phase(
     }
     Ok(())
 }
+
+#[path = "delivery_continuation_retry.rs"]
+mod retry;
+pub use retry::RetriedUnfinishedWork;
 
 #[cfg(test)]
 mod tests {

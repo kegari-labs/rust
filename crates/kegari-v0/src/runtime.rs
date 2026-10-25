@@ -47,6 +47,7 @@ struct State {
     archived_delivery: BTreeMap<(IssueKey, String), ParentDelivery>,
     explicit_corrections: BTreeMap<Uuid, crate::decisions::VerifiedExplicitCorrection>,
     retry_grants: BTreeMap<Uuid, crate::decisions::VerifiedRetryGrant>,
+    unfinished_targets: BTreeMap<String, Arc<crate::delivery::UnfinishedChildWork>>,
     retry_errors: BTreeMap<String, Error>,
     schedule_blockers: BTreeMap<String, Error>,
     completion_errors: BTreeMap<Uuid, Error>,
@@ -388,6 +389,58 @@ impl RuntimeCoordinator {
     ) -> Result<crate::runtime_schedule::RunSchedule> {
         self.plan_attempt(phase, workspace, account, None, None)
     }
+    /// Revalidate the exact selected cause under the preparation admission lock.
+    /// The supplied snapshot avoids reentering ControlHost; no permit exists yet.
+    pub(crate) fn plan_worker_preparation(
+        &self,
+        request: &crate::runtime_workers::LaunchRequest,
+        workspace: Uuid,
+        account: &str,
+        snapshot: &crate::control::ControlSnapshot,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        request.validate_binding()?;
+        self.registration.verify_active_owner(&request.lease)?;
+        let current = self.current_admission_authority(&request.authority)?;
+        request.authority.compare(&current)?;
+        if authority_settings(&current).0 != workspace {
+            return Err(Error::new(
+                "worker_binding",
+                "preparation workspace changed",
+            ));
+        }
+        if let WorkerAuthority::Authorized(gate) = &current {
+            let grants = crate::runtime_workflow::current_retry_grants(
+                &self.configuration.snapshot()?,
+                &self.observations.admission_snapshot()?,
+                gate.work(),
+                &self.control.operations()?,
+                &self.services.key,
+            )?;
+            if grants.iter().any(|grant| grant.phase() == &request.phase) {
+                return Err(Error::new(
+                    "stale_generation",
+                    "preparation budget was superseded by an explicit retry grant",
+                ));
+            }
+        }
+        let cause = match (
+            &request.unfinished,
+            &request.source_advanced,
+            &request.retried_unfinished,
+        ) {
+            (Some(proof), None, None) => Some(WorkerReadmission::Unfinished(proof)),
+            (None, Some(proof), None) => Some(WorkerReadmission::SourceAdvanced(proof)),
+            (None, None, Some(proof)) => Some(WorkerReadmission::Retried(proof)),
+            (None, None, None) => None,
+            _ => {
+                return Err(Error::new(
+                    "worker_binding",
+                    "conflicting preparation causes",
+                ));
+            }
+        };
+        self.plan_attempt(&request.phase, workspace, account, cause, Some(snapshot))
+    }
     pub fn next_attempt_for_unfinished(
         &self,
         proof: &crate::delivery::UnfinishedChildWork,
@@ -399,6 +452,12 @@ impl RuntimeCoordinator {
         proof: &crate::delivery::VerifiedSourceAdvanced,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
         self.next_attempt_for_readmission(WorkerReadmission::SourceAdvanced(proof))
+    }
+    pub fn next_attempt_for_retried_unfinished(
+        &self,
+        proof: &crate::delivery::RetriedUnfinishedWork,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        self.next_attempt_for_readmission(WorkerReadmission::Retried(proof))
     }
     fn next_attempt_for_readmission(
         &self,
@@ -502,6 +561,17 @@ impl RuntimeCoordinator {
                 &self.services.key,
             )?;
             crate::runtime_workflow::require_current_grant(&grant, &observed)?;
+            if crate::runtime_schedule::grant_requires_unfinished(grant.phase(), phase, &receipts)?
+                && !matches!(readmission, Some(WorkerReadmission::Retried(_)))
+            {
+                return Err(Error::new(
+                    "unfinished_retry_required",
+                    "completed budget retry requires its verified retained repair assignment",
+                ));
+            }
+            if let Some(WorkerReadmission::Retried(proof)) = readmission {
+                proof.verify_current(&receipts, &observed)?;
+            }
             let parent = projection.parent(workspace, grant.work().parent)?;
             let current = grant
                 .work()
@@ -537,6 +607,22 @@ impl RuntimeCoordinator {
         )?;
         if let Some(proof) = readmission {
             proof.verify_inventory(&receipts)?;
+            let current_grants = crate::runtime_workflow::current_retry_grants(
+                &config,
+                &self.observations.admission_snapshot()?,
+                proof.authority().work(),
+                &receipts,
+                &self.services.key,
+            )?;
+            if current_grants.iter().any(|grant| grant.phase() == phase) {
+                return Err(Error::new(
+                    "stale_generation",
+                    "readmission budget was superseded by a current published grant",
+                ));
+            }
+            if let WorkerReadmission::Retried(proof) = proof {
+                self.verify_unfinished_target(proof.original(), &receipts)?;
+            }
             if proof.phase() != phase
                 || proof.authority().workspace_id() != workspace
                 || proof.authority().work_key()? != phase.work
@@ -591,17 +677,7 @@ impl RuntimeCoordinator {
                         "readmission lost its actual joined completion",
                     )
                 })?;
-            if !completed.local_exit_confirmed
-                || completed.hook_error.is_some()
-                || !matches!(completed.outcome, crate::worker_run::RunOutcome::Completed)
-                || completed.state.intervention.is_some()
-                || completed.state.input_required
-            {
-                return Err(Error::new(
-                    "reconciliation_required",
-                    "readmission requires a known completed session without provider or hook blockers",
-                ));
-            }
+            require_joined_readmission(&completed)?;
             match proof {
                 WorkerReadmission::Unfinished(proof) => crate::runtime_schedule::plan_unfinished(
                     &limits,
@@ -620,6 +696,14 @@ impl RuntimeCoordinator {
                         &source_advanced_reference(proof),
                         Utc::now(),
                     )
+                }
+                WorkerReadmission::Retried(_) => {
+                    let now = Utc::now();
+                    let not_before = readmission_spacing(predecessor, failure, now)?;
+                    let mut schedule =
+                        crate::runtime_schedule::plan(&limits, phase, workspace, &receipts, now)?;
+                    schedule.not_before = schedule.not_before.max(not_before);
+                    Ok(schedule)
                 }
             }
         } else {
@@ -846,9 +930,122 @@ impl RuntimeCoordinator {
         self.services.wake.notify_one();
         Ok(())
     }
+    /// Retain only an actual delivery-produced obligation. Publication or a
+    /// worker summary cannot construct this capability. The producing host
+    /// phase may still be retiring; selection separately requires idle work.
+    pub(crate) fn retain_unfinished_target(
+        &self,
+        proof: Arc<crate::delivery::UnfinishedChildWork>,
+    ) -> Result<()> {
+        self.control.serialize_observation(|_| {
+            self.verify_unfinished_target(&proof, &self.control.operations()?)?;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| Error::new("runtime_unavailable", "unfinished target lock failed"))?;
+            if !state.unfinished_targets.contains_key(proof.digest())
+                && state.unfinished_targets.len() >= 4096
+            {
+                return Err(Error::new(
+                    "resource_limit",
+                    "unfinished target retention reached its finite bound",
+                ));
+            }
+            state
+                .unfinished_targets
+                .insert(proof.digest().into(), proof);
+            Ok(())
+        })
+    }
+    pub(crate) fn verified_unfinished_targets(
+        &self,
+        work: &crate::evidence::WorkIdentity,
+    ) -> Result<Vec<Arc<crate::delivery::UnfinishedChildWork>>> {
+        // DecisionManager also calls this within its serialized publication
+        // gate. It checks live ownership/holds using the supplied snapshot;
+        // this capability reader must never reenter ControlHost's mutex.
+        let receipts = self.control.operations()?;
+        let proofs: Vec<_> = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "unfinished target lock failed"))?
+            .unfinished_targets
+            .values()
+            .filter(|proof| proof.authority().work() == work)
+            .cloned()
+            .collect();
+        let mut current = Vec::new();
+        for proof in proofs {
+            match self.verify_unfinished_target(&proof, &receipts) {
+                Ok(()) => current.push(proof),
+                // A newer actual result may obsolete a retained historical
+                // obligation. It supplies no current retry authority.
+                Err(error) if error.code == "stale_result" => (),
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(current)
+    }
+    fn verify_unfinished_target(
+        &self,
+        proof: &crate::delivery::UnfinishedChildWork,
+        receipts: &[crate::control::Receipt],
+    ) -> Result<()> {
+        if proof.predecessor_receipt().runtime_id != self.runtime_id {
+            return Err(Error::new(
+                "identity_mismatch",
+                "unfinished target belongs to another runtime",
+            ));
+        }
+        proof.verify_retry_basis(receipts)?;
+        self.current_admission_authority(&WorkerAuthority::Authorized(proof.authority().clone()))?;
+        let config = self.configuration.snapshot()?;
+        let workspace = config
+            .workspaces
+            .values()
+            .find(|w| w.id == proof.authority().workspace_id())
+            .ok_or_else(|| Error::new("scope_violation", "unfinished workspace disappeared"))?;
+        let account = &config.connections[&workspace.codex_connection].account_id;
+        if account != &proof.reference().account {
+            return Err(Error::new(
+                "identity_mismatch",
+                "unfinished target account changed",
+            ));
+        }
+        self.require_provider_session_clear(account, &proof.phase().work)?;
+        crate::runtime_schedule::require_provider_clear(
+            self.runtime_id,
+            account,
+            &proof.phase().work,
+            receipts,
+        )?;
+        for operation in [proof.predecessor(), proof.failure_operation()] {
+            let completed = self.retained_completion(operation)?.ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "unfinished target lost its actual joined completion",
+                )
+            })?;
+            require_joined_readmission(&completed)?;
+        }
+        Ok(())
+    }
     pub(crate) fn retry_target(
         &self,
         work: &crate::evidence::WorkIdentity,
+    ) -> Result<crate::decisions::RetryTarget> {
+        self.retry_target_except(work, None)
+    }
+    pub(crate) fn published_retry_target(
+        &self,
+        grant: &crate::decisions::VerifiedRetryGrant,
+    ) -> Result<crate::decisions::RetryTarget> {
+        self.retry_target_except(grant.work(), Some(grant))
+    }
+    fn retry_target_except(
+        &self,
+        work: &crate::evidence::WorkIdentity,
+        published: Option<&crate::decisions::VerifiedRetryGrant>,
     ) -> Result<crate::decisions::RetryTarget> {
         let receipts = self.control.operations()?;
         let canonical = IssueKey::new(
@@ -857,17 +1054,24 @@ impl RuntimeCoordinator {
             work.child.unwrap_or(work.parent),
         )?
         .identity()?;
-        if let Some(error) = self
-            .state
-            .lock()
-            .map_err(|_| Error::new("runtime_unavailable", "retry cache lock failed"))?
-            .retry_errors
-            .get(&canonical)
+        // A poll can cache a recovery error after the provider publishes the
+        // comment but before its local acknowledgement. Finalizing that exact
+        // publication reparses all current comments and receipts below; a stale
+        // summary must not override that complete fresh evidence. Ordinary new
+        // retry selection retains the conservative cached-error gate.
+        if published.is_none()
+            && let Some(error) = self
+                .state
+                .lock()
+                .map_err(|_| Error::new("runtime_unavailable", "retry cache lock failed"))?
+                .retry_errors
+                .get(&canonical)
         {
             return Err(error.clone());
         }
+        let config = self.configuration.snapshot()?;
         let grants = crate::runtime_workflow::current_retry_grants(
-            &self.configuration.snapshot()?,
+            &config,
             &self.observations.admission_snapshot()?,
             work,
             &receipts,
@@ -880,7 +1084,20 @@ impl RuntimeCoordinator {
                 self.require_provider_session_clear(&run.account, &canonical)?;
             }
         }
-        crate::runtime_workflow::select_retry_target(self.runtime_id, work, &receipts, &grants)
+        if let Some(published) = published {
+            return crate::runtime_workflow::published_retry_target(
+                &config, published, &grants, &receipts,
+            );
+        }
+        let unfinished = self.verified_unfinished_targets(work)?;
+        crate::runtime_workflow::select_retry_target_with_unfinished(
+            self.runtime_id,
+            work,
+            &receipts,
+            &grants,
+            &unfinished,
+            &self.configuration.snapshot()?.runtime,
+        )
     }
     /// Rebuild retry capabilities from current provider records. This is also
     /// used while STOPPED; it never reserves a run or enlarges a phase budget.
@@ -1135,6 +1352,20 @@ impl RuntimeCoordinator {
             Some(WorkerReadmission::SourceAdvanced(proof)),
         )
     }
+    pub(crate) fn admit_retried_unfinished_worker(
+        &self,
+        lease: &Lease,
+        input: crate::control::RunAdmission,
+        contract: &WorkerContract,
+        proof: &crate::delivery::RetriedUnfinishedWork,
+    ) -> Result<Permit> {
+        self.admit_worker_inner(
+            lease,
+            input,
+            contract,
+            Some(WorkerReadmission::Retried(proof)),
+        )
+    }
     fn admit_worker_inner(
         &self,
         lease: &Lease,
@@ -1191,6 +1422,25 @@ impl RuntimeCoordinator {
                     ));
                 }
             }
+            if readmission.is_none() {
+                let schedule = self.plan_attempt(
+                    &reference.phase,
+                    reference.workspace,
+                    &reference.account,
+                    None,
+                    Some(snapshot),
+                )?;
+                if reference.attempt != schedule.attempt
+                    || reference.max_attempts > schedule.max_attempts
+                    || reference.max_turns > schedule.max_turns
+                    || reference.max_review_rounds > schedule.max_review_rounds
+                {
+                    return Err(Error::new(
+                        "admission_budget",
+                        "admission exceeds its current exact bounded trigger",
+                    ));
+                }
+            }
             self.require_provider_session_clear(&reference.account, &reference.phase.work)?;
             self.current_admission_authority(contract.authority())?;
             let config = self.configuration.snapshot()?;
@@ -1228,6 +1478,17 @@ impl RuntimeCoordinator {
                         })?;
                     let current =
                         crate::runtime_workflow::require_current_grant(&retained, &observed)?;
+                    if crate::runtime_schedule::grant_requires_unfinished(
+                        current.phase(),
+                        &reference.phase,
+                        &self.control.operations()?,
+                    )? && !matches!(readmission, Some(WorkerReadmission::Retried(_)))
+                    {
+                        return Err(Error::new(
+                            "unfinished_retry_required",
+                            "completed budget cannot be admitted without its sealed unfinished source and task",
+                        ));
+                    }
                     if current.phase_key() != reference.phase
                         || reference.max_attempts > current.new_budget().max_attempts
                         || reference.max_turns > current.new_budget().max_turns
@@ -1308,7 +1569,9 @@ impl RuntimeCoordinator {
                     final_gate,
                 )?
             }
-            None => self.control.admit_run_observed(lease, input, final_gate)?,
+            Some(WorkerReadmission::Retried(_)) | None => {
+                self.control.admit_run_observed(lease, input, final_gate)?
+            }
         };
         self.state
             .lock()
@@ -2329,64 +2592,109 @@ fn observed_quota(value: &Value, now: chrono::DateTime<Utc>) -> Quota {
     }
 }
 
+fn require_joined_readmission(completed: &RunCompletion) -> Result<()> {
+    if !completed.local_exit_confirmed
+        || completed.hook_error.is_some()
+        || completed.error.is_some()
+        || !matches!(completed.outcome, crate::worker_run::RunOutcome::Completed)
+        || completed.state.turn_id.is_some()
+        || completed.state.unresolved_turn.is_some()
+        || completed.state.terminal.as_deref() != Some("completed")
+        || completed.state.intervention.is_some()
+        || completed.state.input_required
+    {
+        return Err(Error::new(
+            "reconciliation_required",
+            "readmission requires a joined completed session without unresolved provider or hook state",
+        ));
+    }
+    Ok(())
+}
+
+fn readmission_spacing(
+    predecessor: &crate::control::Receipt,
+    cause: &crate::control::Receipt,
+    now: chrono::DateTime<Utc>,
+) -> Result<chrono::DateTime<Utc>> {
+    let not_before = predecessor.updated_at.max(cause.updated_at) + Duration::seconds(1);
+    if now < not_before {
+        return Err(Error::new(
+            "retry_wait",
+            "unfinished retry must wait at least one second after both actual exits",
+        )
+        .detail(json!({"not_before":not_before})));
+    }
+    Ok(not_before)
+}
+
 #[derive(Clone, Copy)]
 enum WorkerReadmission<'a> {
     Unfinished(&'a crate::delivery::UnfinishedChildWork),
     SourceAdvanced(&'a crate::delivery::VerifiedSourceAdvanced),
+    Retried(&'a crate::delivery::RetriedUnfinishedWork),
 }
 impl<'a> WorkerReadmission<'a> {
     fn authority(self) -> &'a crate::reconcile::FreshGate {
         match self {
             Self::Unfinished(p) => p.authority(),
             Self::SourceAdvanced(p) => p.authority(),
+            Self::Retried(p) => p.authority(),
         }
     }
     fn phase(self) -> &'a crate::scheduler::PhaseKey {
         match self {
             Self::Unfinished(p) => p.phase(),
             Self::SourceAdvanced(p) => p.phase(),
+            Self::Retried(p) => p.phase(),
         }
     }
     fn predecessor(self) -> Uuid {
         match self {
             Self::Unfinished(p) => p.predecessor(),
             Self::SourceAdvanced(p) => p.predecessor(),
+            Self::Retried(p) => p.original().predecessor(),
         }
     }
     fn cause_operation(self) -> Uuid {
         match self {
             Self::Unfinished(p) => p.failure_operation(),
             Self::SourceAdvanced(p) => p.source_operation(),
+            Self::Retried(p) => p.original().failure_operation(),
         }
     }
     fn cause_receipt_digest(self) -> &'a str {
         match self {
             Self::Unfinished(p) => p.failure_receipt_digest(),
             Self::SourceAdvanced(p) => p.source_receipt_digest(),
+            Self::Retried(p) => p.original().failure_receipt_digest(),
         }
     }
     fn completed_operation(self) -> Uuid {
         match self {
             Self::Unfinished(p) => p.predecessor(),
             Self::SourceAdvanced(p) => p.source_operation(),
+            Self::Retried(p) => p.original().predecessor(),
         }
     }
     fn source(self) -> &'a crate::delivery::DeliverySource {
         match self {
             Self::Unfinished(p) => p.source(),
             Self::SourceAdvanced(p) => p.source(),
+            Self::Retried(p) => p.source(),
         }
     }
     fn verify_contract(self, contract: &WorkerContract) -> Result<()> {
         match self {
             Self::Unfinished(p) => p.verify_contract(contract),
             Self::SourceAdvanced(p) => p.verify_contract(contract),
+            Self::Retried(p) => p.verify_contract(contract),
         }
     }
     fn verify_inventory(self, receipts: &[crate::control::Receipt]) -> Result<()> {
         match self {
             Self::Unfinished(proof) => proof.verify_failure_inventory(receipts),
             Self::SourceAdvanced(proof) => proof.verify_predecessor_inventory(receipts),
+            Self::Retried(proof) => proof.original().verify_failure_inventory(receipts),
         }
     }
 }
@@ -2420,6 +2728,116 @@ fn continuation_reference(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_retry_preserves_delay_after_both_actual_local_exits() {
+        let (_temp, host, lease) = admission_host();
+        let first = host
+            .admit(
+                &lease,
+                Uuid::new_v4(),
+                "fixture-first".into(),
+                canonical_digest(1, &"scope").unwrap(),
+                || Ok(()),
+            )
+            .unwrap();
+        host.retire_local(first.operation_id, json!({"fixture":"no child process"}))
+            .unwrap();
+        let first = host.operation(first.operation_id).unwrap();
+        let last = host
+            .admit(
+                &lease,
+                Uuid::new_v4(),
+                "fixture-last".into(),
+                canonical_digest(1, &"scope").unwrap(),
+                || Ok(()),
+            )
+            .unwrap();
+        host.retire_local(last.operation_id, json!({"fixture":"no child process"}))
+            .unwrap();
+        let last = host.operation(last.operation_id).unwrap();
+        let exit = first.updated_at.max(last.updated_at);
+        assert_eq!(
+            readmission_spacing(&first, &last, exit + Duration::milliseconds(999))
+                .unwrap_err()
+                .code,
+            "retry_wait"
+        );
+        assert_eq!(
+            readmission_spacing(&first, &last, exit + Duration::seconds(1)).unwrap(),
+            exit + Duration::seconds(1)
+        );
+    }
+    #[test]
+    fn unfinished_selection_requires_joined_terminal_session_without_blockers() {
+        use crate::codex::{CodexProfile, ProviderIntervention, SessionBinding, SessionState};
+        let operation = Uuid::from_u128(44);
+        let digest = canonical_digest(1, &"fixture").unwrap();
+        let mut session = SessionState::new(
+            SessionBinding {
+                schema_version: 1,
+                account_id: "fixture".into(),
+                work_identity: "fixture-child".into(),
+                operation_id: operation.to_string(),
+                generation: digest.clone(),
+                instruction_digest: digest.clone(),
+                isolation_digest: digest.clone(),
+                profile: CodexProfile {
+                    model: "fixture".into(),
+                    reasoning: "high".into(),
+                    speed: "standard".into(),
+                },
+                cwd: "/fixture".into(),
+            },
+            3,
+        )
+        .unwrap();
+        session.terminal = Some("completed".into());
+        // Diagnostic state exercises the predicate only: this deliberately has
+        // no source/contract/check capabilities and cannot mint unfinished work.
+        let completion = || RunCompletion {
+            operation_id: operation,
+            state: session.clone(),
+            outcome: crate::worker_run::RunOutcome::Completed,
+            error: None,
+            elapsed_ms: 1,
+            hook_error: None,
+            checks: vec![],
+            failed_checks: vec![],
+            execution: None,
+            contract: None,
+            local_exit_confirmed: true,
+        };
+        require_joined_readmission(&completion()).unwrap();
+        for case in 0..8 {
+            let mut value = completion();
+            match case {
+                0 => value.local_exit_confirmed = false,
+                1 => value.hook_error = Some(Error::new("operation_uncertain", "hook pending")),
+                2 => value.error = Some(Error::new("transport_closed", "missing final reply")),
+                3 => value.outcome = crate::worker_run::RunOutcome::Failed,
+                4 => value.state.turn_id = Some("still-active".into()),
+                5 => value.state.terminal = None,
+                6 => value.state.input_required = true,
+                _ => {
+                    value.state.intervention = Some(ProviderIntervention {
+                        schema_version: 1,
+                        account_id: "fixture".into(),
+                        thread_id: "thread".into(),
+                        turn_id: "turn".into(),
+                        source_method: "turn/completed".into(),
+                        reason_code: "cyberPolicy".into(),
+                        required_resolution: "provider resolution".into(),
+                        observed_at: Utc::now().to_rfc3339(),
+                        source_digest: digest.clone(),
+                    })
+                }
+            }
+            assert_eq!(
+                require_joined_readmission(&value).unwrap_err().code,
+                "reconciliation_required"
+            );
+        }
+    }
     fn admission_host() -> (tempfile::TempDir, Arc<ControlHost>, Lease) {
         // This fixture exercises actual serialized admission and durable
         // receipts, without claiming native orchestration/process ownership.

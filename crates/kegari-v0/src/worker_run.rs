@@ -907,6 +907,28 @@ impl AdmittedTrial {
     pub fn max_seconds(&self) -> u64 {
         self.lifecycle.max_seconds
     }
+    /// Rebinds only exact declared fixture data to this admitted production
+    /// worker's owned resources. It does not start the worker or grant live use.
+    pub fn bind_fixture(
+        &self,
+        variant: &crate::evaluation::Variant,
+        fixture: crate::evaluation::PreparedFixture,
+        report_root: &std::path::Path,
+    ) -> Result<crate::evaluation::PreparedFixture> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| Error::new("ownership_conflict", "trial has already been consumed"))?;
+        if self.lifecycle.before_started.load(Ordering::SeqCst)
+            || self.provider.launched.load(Ordering::SeqCst)
+        {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "cannot bind fixture after worker start",
+            ));
+        }
+        fixture.bind_worker(variant, &session.prepared.contract, report_root)
+    }
     pub fn operation<'a>(
         &'a mut self,
         fixture: &'a crate::evaluation::PreparedFixture,

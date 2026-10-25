@@ -300,6 +300,13 @@ pub fn repair_worker_assignment(
         contract_digest: unfinished.contract_digest().into(),
     })
 }
+pub fn retried_repair_worker_assignment(
+    retried: &RetriedUnfinishedWork,
+) -> Result<DeliveryWorkerAssignment> {
+    let mut assignment = repair_worker_assignment(retried.original())?;
+    assignment.context = retried.remaining_task().clone();
+    Ok(assignment)
+}
 impl DeliveryCoordinator {
     pub fn repair_assignment(
         &self,

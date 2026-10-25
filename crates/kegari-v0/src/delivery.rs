@@ -4563,6 +4563,8 @@ pub use assignment::*;
 
 #[cfg(test)]
 pub(crate) use production_release::tests::observed_merge_for_runtime;
+#[cfg(test)]
+pub(crate) use production_release::tests::{RuntimeSeedWire, runtime_candidate_seed};
 
 #[path = "delivery_objects.rs"]
 mod objects;

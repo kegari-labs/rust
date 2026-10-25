@@ -1,392 +1,27 @@
 //! Real owned Git/source seals and production contract/claim validation. The
 //! completed model protocol is synthetic; no native agent qualification claimed.
 use super::*;
-use crate::test_process_probe as probe;
 use crate::{
-    control::{RunAdmission, RunReference},
-    execution::{
-        CommandBoundary, DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass,
-        ExecutionLimits, OwnedDirectory, StartedCommand,
+    instructions::AgentRole,
+    runtime_delivery::worker_fixture::{
+        WorkerInput, complete, complete_capped, complete_retried, git, worker,
     },
-    instructions::{
-        AgentRole, AssemblyInput, PermissionManifest, ProviderDiscovery, RepositoryContext,
-        WorkerNetwork, assemble,
-    },
-    isolation::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation},
-    worker::{ContractInput, WorkerContract, WorkerExecution, operation_tool_definitions},
-    worker_run::RunOutcome,
+    test_process_probe as probe,
 };
 use serde_json::Value;
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
-struct NoCommands;
-impl CommandBoundary for NoCommands {
-    fn evidence_class(&self) -> ExecutionEvidenceClass {
-        ExecutionEvidenceClass::DeterministicFixture
-    }
-    fn start(
-        &self,
-        _: &ValidatedIsolation,
-        _: &[String],
-        _: std::time::Duration,
-        _: usize,
-    ) -> Result<Box<dyn StartedCommand>> {
-        Err(Error::new(
-            "fixture_no_execution",
-            "review fixture cannot execute repository commands",
-        ))
-    }
-}
-fn git(binary: &Path, cwd: &Path, args: &[&str]) {
-    let output = Command::new(binary)
-        .current_dir(cwd)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "Disposable Fixture")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
-        .env("GIT_COMMITTER_NAME", "Disposable Fixture")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgSign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-struct WorkerFixture {
-    contract: Arc<WorkerContract>,
-    execution: Arc<WorkerExecution>,
-}
-struct WorkerInput<'a> {
-    root: &'a Path,
-    source: &'a Path,
-    binary: &'a Path,
-    git: Arc<Git>,
-    gate: &'a FreshGate,
-    workflow: &'a crate::workflow::Workflow,
-    revision: &'a crate::git::Revision,
-    repository: &'a crate::git::RepositoryId,
-    runtime: Uuid,
-    operation: Uuid,
-    role: AgentRole,
-    phase: &'a str,
-    context: Value,
-    assignment: Option<&'a DeliveryWorkerAssignment>,
-    account: &'a str,
-}
-fn worker(input: WorkerInput<'_>) -> WorkerFixture {
-    let WorkerInput {
-        root,
-        source,
-        binary,
-        git: tool,
-        gate,
-        workflow,
-        revision,
-        repository,
-        runtime,
-        operation,
-        role,
-        phase,
-        context: task,
-        assignment,
-        account,
-    } = input;
-    fs::create_dir(root).unwrap();
-    fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
-    let repo = root.join("repository");
-    git(
-        binary,
-        root,
-        &[
-            "clone",
-            "--local",
-            "--no-hardlinks",
-            source.to_str().unwrap(),
-            repo.to_str().unwrap(),
-        ],
-    );
-    fs::set_permissions(&repo, fs::Permissions::from_mode(0o700)).unwrap();
-    let scratch = root.join("scratch");
-    let auth = root.join("auth");
-    fs::create_dir(&scratch).unwrap();
-    fs::create_dir(&auth).unwrap();
-    let writes = if role.permits_source_writes() {
-        gate.child_scope()
-            .unwrap()
-            .write_paths
-            .iter()
-            .map(|p| PathGrant {
-                path: repo.join(p.trim_end_matches('/')),
-                directory: p.ends_with('/'),
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-    let isolation = IsolationPlan {
-        schema_version: 1,
-        role: match role {
-            AgentRole::Review => ExecutionRole::Review,
-            AgentRole::Validation => ExecutionRole::Validation,
-            _ => ExecutionRole::Child,
-        },
-        execution_root: root.into(),
-        repository: repo.clone(),
-        cwd: repo.clone(),
-        scratch: scratch.clone(),
-        read_roots: vec![PathGrant {
-            path: repo.clone(),
-            directory: true,
-        }],
-        resource_writes: vec![],
-        source_writes: writes,
-        forbidden_roots: vec![source.into(), auth.clone()],
-        executables: vec![],
-    }
-    .validate()
-    .unwrap();
-    let mut context = json!({"issue":{"id":gate.work().child,"title":"Disposable assigned source fixture"},"parent":{"id":gate.work().parent},"children":[],"workspace":{"id":gate.workspace_id(),"name":"fixture"},"scope":gate.child_scope(),"dependencies":[],"corrections":[],"evidence":{"task":if assignment.is_some() {Value::Null}else{task}},"attempt":1,"phase":phase,"profile":gate.profile(),"operation":{"id":operation}});
-    if let Some(assignment) = assignment {
-        context = assignment.bind_context(context, operation).unwrap();
-    }
-    let assembled = assemble(AssemblyInput {
-        workflow,
-        role,
-        phase,
-        context: &context,
-        workspace_id: gate.workspace_id(),
-        operation_id: operation,
-        work_generation: &gate.work().digest().unwrap(),
-        correction_revision: &gate.work().generation.correction,
-        profile: gate.profile(),
-        cwd: &repo,
-        codex_home: &auth,
-        codex_version: crate::instructions::SUPPORTED_CODEX_VERSION,
-        repository: Some(RepositoryContext {
-            root: repo.clone(),
-            revision: revision.commit.clone(),
-            scope_paths: gate.child_scope().unwrap().write_paths.clone(),
-        }),
-        required_context: &[],
-        project_doc_max_bytes: 32768,
-        permissions: PermissionManifest {
-            read_roots: vec![repo.clone()],
-            resource_write_paths: vec![],
-            source_write_paths: isolation
-                .plan()
-                .source_writes
-                .iter()
-                .map(|g| g.path.clone())
-                .collect(),
-            scratch_roots: vec![scratch],
-            repository_code_execution: false,
-            enforcement_profile: isolation.digest().into(),
-            network: WorkerNetwork::BrokerOnly,
-        },
-        tools: operation_tool_definitions(role, role.permits_source_writes(), false)
-            .into_iter()
-            .map(|(tool, _)| tool)
-            .collect(),
-        provider_discovery: ProviderDiscovery::Unavailable {
-            reason: "synthetic protocol fixture".into(),
-        },
-        known_secrets: &[],
-    })
-    .unwrap();
-    let contract = Arc::new(
-        WorkerContract::new(ContractInput {
-            assembled,
-            authority: WorkerAuthority::Authorized(gate.clone()),
-            isolation: isolation.clone(),
-            workflow: workflow.clone(),
-            context,
-            review: None,
-            account_id: account.into(),
-            repository: Some(repository.clone()),
-            read_resources: BTreeMap::new(),
-        })
-        .unwrap(),
-    );
-    let ownership = Arc::new(
-        OwnedDirectory::register(
-            DirectoryIdentity {
-                schema_version: 1,
-                runtime_id: runtime,
-                directory_id: Uuid::new_v4(),
-                repository: repository.clone(),
-                work: gate.work().clone(),
-                repository_path: repo,
-                operator_checkout: source.into(),
-            },
-            &isolation,
-        )
-        .unwrap(),
-    );
-    WorkerFixture {
-        contract,
-        execution: Arc::new(WorkerExecution {
-            git: tool.clone(),
-            git_executable: binary.into(),
-            boundary: Arc::new(NoCommands),
-            ownership,
-            binding: ExecutionBinding {
-                runtime_id: runtime,
-                operation_id: operation,
-                work: gate.work().clone(),
-                repository: repository.clone(),
-                revision: revision.clone(),
-                candidate_vector_digest: None,
-                isolation_digest: isolation.digest().into(),
-            },
-            limits: ExecutionLimits::default(),
-            check_outputs: BTreeMap::new(),
-        }),
-    }
-}
-fn complete(
-    host: &crate::control::ControlHost,
-    lease: &Lease,
-    fixture: &WorkerFixture,
-    claim: Value,
-    unfinished: Option<&UnfinishedChildWork>,
-    advanced: Option<&VerifiedSourceAdvanced>,
-) -> (
-    tempfile::TempDir,
-    VerifiedAuthorizedOutcome,
-    Arc<RunCompletion>,
-) {
-    let contract = &fixture.contract;
-    let manifest = &contract.instructions().manifest;
-    let WorkerAuthority::Authorized(gate) = contract.authority() else {
-        panic!()
-    };
-    let reference = RunReference {
-        workspace: gate.workspace_id(),
-        account: contract.account_id().into(),
-        normalized_state: Some("in progress".into()),
-        phase: PhaseKey {
-            work: gate.work_key().unwrap(),
-            generation: canonical_digest(1, &gate.work().generation).unwrap(),
-            phase: manifest.phase.clone(),
-            retry_grant: None,
-        },
-        profile_digest: canonical_digest(1, &manifest.profile).unwrap(),
-        instruction_digest: contract.instructions().manifest_digest.clone(),
-        max_attempts: 3,
-        max_turns: 20,
-        max_review_rounds: 3,
-        attempt: unfinished.map_or_else(
-            || {
-                advanced.map_or_else(
-                    || {
-                        host.operations()
-                            .unwrap()
-                            .iter()
-                            .filter_map(|receipt| RunReference::from_receipt(receipt).unwrap())
-                            .filter(|run| {
-                                run.phase.phase == manifest.phase
-                                    && run.phase.work == gate.work_key().unwrap()
-                            })
-                            .map(|run| run.attempt)
-                            .max()
-                            .unwrap_or(0)
-                            + 1
-                    },
-                    |proof| proof.reference().attempt + 1,
-                )
-            },
-            |proof| proof.reference().attempt + 1,
-        ),
-    };
-    let input = RunAdmission {
-        request_id: manifest.operation_id,
-        work_key: gate.work_key().unwrap(),
-        scope_digest: contract.scope_digest().into(),
-        reference,
-    };
-    match unfinished {
-        Some(proof) => {
-            host.admit_run_continued_observed(
-                lease,
-                input,
-                crate::control::RunContinuationReference {
-                    predecessor: proof.predecessor(),
-                    predecessor_receipt_digest: proof.predecessor_receipt_digest().into(),
-                    trigger_digest: proof.digest().into(),
-                    progress_digest: proof.progress_digest().into(),
-                    failure_operation: proof.failure_operation(),
-                    review_rounds_consumed: proof.review_rounds_consumed(),
-                },
-                |_| proof.verify_contract(contract),
-            )
-            .unwrap();
-        }
-        None => match advanced {
-            Some(proof) => {
-                let inventory = host.operations().unwrap();
-                host.admit_run_source_advanced_observed(
-                    lease,
-                    input,
-                    crate::control::SourceAdvancedReference {
-                        predecessor: proof.predecessor(),
-                        predecessor_receipt_digest: proof.predecessor_receipt_digest().into(),
-                        source_operation: proof.source_operation(),
-                        source_receipt_digest: proof.source_receipt_digest().into(),
-                        trigger_digest: proof.digest().into(),
-                        progress_digest: proof.progress_digest().into(),
-                        review_rounds_consumed: proof.review_rounds_consumed(),
-                    },
-                    |_| {
-                        proof.verify_contract(contract)?;
-                        proof.verify_predecessor_inventory(&inventory)
-                    },
-                )
-                .unwrap();
-            }
-            None => {
-                host.admit_run(lease, input, || Ok(())).unwrap();
-            }
-        },
-    }
-    let (files, outcome, state) = crate::runtime_claims::test_completed_contract_fixture(
-        contract,
-        host.operation(manifest.operation_id).unwrap(),
-        claim,
-    )
-    .unwrap();
-    host.retire_local(
-        manifest.operation_id,
-        json!({"outcome":"completed","session":state}),
-    )
-    .unwrap();
-    let completion = Arc::new(RunCompletion {
-        operation_id: manifest.operation_id,
-        state,
-        outcome: RunOutcome::Completed,
-        error: None,
-        elapsed_ms: 1,
-        hook_error: None,
-        checks: vec![],
-        failed_checks: vec![],
-        execution: Some(fixture.execution.clone()),
-        contract: Some(contract.clone()),
-        local_exit_confirmed: true,
-    });
-    (files, outcome, completion)
-}
+use std::fs;
 #[tokio::test]
 async fn exact_review_findings_produce_repair_from_real_owned_source_and_contracts() {
-    let (root, built, old_service, _wire, owner) =
+    repair_cycle(false).await;
+}
+#[tokio::test]
+async fn exhausted_completed_work_uses_actual_operator_retry_budget_and_bound_repair_source() {
+    repair_cycle(true).await;
+}
+#[path = "runtime_delivery_retry_fixture.rs"]
+mod retry_fixture;
+async fn repair_cycle(explicit_retry: bool) {
+    let (root, built, old_service, wire, owner) =
         super::super::tests::fixture_authorization_with_wire(true).await;
     let binary = old_service.git_path().unwrap();
     let root = root.path().canonicalize().unwrap();
@@ -460,13 +95,12 @@ async fn exact_review_findings_produce_repair_from_real_owned_source_and_contrac
         assignment: None,
         account: &account,
     });
-    let (_original_records, outcome, completion) = complete(
+    let (_original_records, outcome, completion) = complete_capped(
         &built.runtime.control,
         &lease,
         &original,
         json!({"schema_version":1,"summary":"existing source assessed","fulfilled_criteria":["required behavior"],"disposition":{"kind":"no_change","reason":"claimed existing behavior suffices"}}),
-        None,
-        None,
+        if explicit_retry { 1 } else { 3 },
     );
     let claim = Arc::new(
         workspace
@@ -653,9 +287,201 @@ async fn exact_review_findings_produce_repair_from_real_owned_source_and_contrac
     assert_eq!(proof.phase().phase, "implementation");
     assert_eq!(proof.review_rounds_consumed(), 1);
     assert_eq!(proof.source().revision(), &revision);
-    assert_eq!(proof.reference().max_attempts, 3);
-    let assignment = repair_worker_assignment(&proof).unwrap();
-    proof.verify_assignment(&assignment).unwrap();
+    assert_eq!(
+        proof.reference().max_attempts,
+        if explicit_retry { 1 } else { 3 }
+    );
+    let proof = Arc::new(proof);
+    service
+        .retire_delivery_phase(&review_phase, json!({"findings":true}))
+        .unwrap();
+    let limits = built
+        .runtime
+        .configuration
+        .snapshot()
+        .unwrap()
+        .runtime
+        .clone();
+    let receipts = built.runtime.control.operations().unwrap();
+    // Exercise budget separation using mutated observations only. These are
+    // never written to ControlHost or used to manufacture a retry grant.
+    let mut other_budget = proof.predecessor_receipt().clone();
+    other_budget.operation_id = Uuid::new_v4();
+    other_budget.request_id = other_budget.operation_id;
+    let mut other_run = proof.reference().clone();
+    other_run.phase.retry_grant = Some(Uuid::new_v4());
+    other_budget
+        .expected
+        .insert("run".into(), serde_json::to_string(&other_run).unwrap());
+    let mut history = receipts.clone();
+    history.push(other_budget.clone());
+    proof.verify_retry_basis(&history).unwrap();
+    other_run.phase = proof.phase().clone();
+    other_run.attempt += 1;
+    other_run.max_attempts = other_run.max_attempts.max(other_run.attempt);
+    other_budget
+        .expected
+        .insert("run".into(), serde_json::to_string(&other_run).unwrap());
+    history.push(other_budget);
+    assert_eq!(
+        proof.verify_retry_basis(&history).unwrap_err().code,
+        "stale_result"
+    );
+    assert_eq!(
+        crate::runtime_workflow::select_retry_target(runtime, gate.work(), &receipts, &[])
+            .unwrap_err()
+            .code,
+        "no_retry_target"
+    );
+    let target = crate::runtime_workflow::select_retry_target_with_unfinished(
+        runtime,
+        gate.work(),
+        &receipts,
+        &[],
+        std::slice::from_ref(&proof),
+        &limits,
+    );
+    if explicit_retry {
+        assert_eq!(target.unwrap().phase, *proof.phase());
+    } else {
+        assert_eq!(target.unwrap_err().code, "no_retry_target");
+    }
+    let retried = if explicit_retry {
+        let grant = retry_fixture::publish(built.runtime.clone(), proof.clone()).await;
+        let config = built.runtime.configuration.snapshot().unwrap();
+        let current = crate::runtime_workflow::current_retry_grants(
+            &config,
+            &built.runtime.observations.snapshot().unwrap(),
+            gate.work(),
+            &built.runtime.control.operations().unwrap(),
+            &built.runtime.services.key,
+        )
+        .unwrap();
+        let retried = Arc::new(
+            workspace
+                .coordinator
+                .retry_unfinished(proof.clone(), grant, &current)
+                .unwrap(),
+        );
+        assert_eq!(retried.grant().new_budget().max_attempts, 3);
+        assert_ne!(retried.phase(), proof.phase());
+        assert!(
+            retried
+                .verify_current(&built.runtime.control.operations().unwrap(), &[])
+                .is_err()
+        );
+        let planned = crate::runtime_schedule::plan(
+            &config.runtime,
+            retried.phase(),
+            gate.workspace_id(),
+            &built.runtime.control.operations().unwrap(),
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!((planned.attempt, planned.max_attempts), (1, 3));
+        retried
+            .verify_current(&built.runtime.control.operations().unwrap(), &current)
+            .unwrap();
+        let child = gate.work().child.unwrap();
+        let saved = wire.lock().unwrap().comments[&child].clone();
+        wire.lock()
+            .unwrap()
+            .comments
+            .get_mut(&child)
+            .unwrap()
+            .retain(|comment| {
+                comment["id"].as_str() != Some(retried.grant().provenance().record_id.as_str())
+            });
+        built.runtime.observations.refresh().await.unwrap();
+        let removed = crate::runtime_workflow::current_retry_grants(
+            &config,
+            &built.runtime.observations.snapshot().unwrap(),
+            gate.work(),
+            &built.runtime.control.operations().unwrap(),
+            &built.runtime.services.key,
+        )
+        .unwrap();
+        assert!(
+            retried
+                .verify_current(&built.runtime.control.operations().unwrap(), &removed)
+                .is_err()
+        );
+        assert_eq!(
+            retry_fixture::assert_preparation_denied(&built.runtime, &lease, &retried, &account,)
+                .code,
+            "stale_result"
+        );
+        wire.lock().unwrap().comments.insert(child, saved.clone());
+        built.runtime.observations.refresh().await.unwrap();
+        let before_edit = crate::runtime_workflow::current_retry_grants(
+            &config,
+            &built.runtime.observations.snapshot().unwrap(),
+            gate.work(),
+            &built.runtime.control.operations().unwrap(),
+            &built.runtime.services.key,
+        )
+        .unwrap();
+        retried
+            .verify_current(&built.runtime.control.operations().unwrap(), &before_edit)
+            .unwrap();
+        {
+            let mut wire = wire.lock().unwrap();
+            let comment = wire
+                .comments
+                .get_mut(&child)
+                .unwrap()
+                .iter_mut()
+                .find(|comment| {
+                    comment["id"].as_str() == Some(retried.grant().provenance().record_id.as_str())
+                })
+                .unwrap();
+            let body = comment["body"].as_str().unwrap().replace(
+                "The exact finding is understood",
+                "Changed unverified retry direction",
+            );
+            comment["body"] = json!(body);
+        }
+        built.runtime.observations.refresh().await.unwrap();
+        assert!(
+            crate::runtime_workflow::current_retry_grants(
+                &config,
+                &built.runtime.observations.snapshot().unwrap(),
+                gate.work(),
+                &built.runtime.control.operations().unwrap(),
+                &built.runtime.services.key
+            )
+            .is_err()
+        );
+        assert_eq!(
+            retry_fixture::assert_preparation_denied(&built.runtime, &lease, &retried, &account,)
+                .code,
+            "invalid_attestation"
+        );
+        wire.lock().unwrap().comments.insert(child, saved);
+        built.runtime.observations.refresh().await.unwrap();
+        let restored = crate::runtime_workflow::current_retry_grants(
+            &config,
+            &built.runtime.observations.snapshot().unwrap(),
+            gate.work(),
+            &built.runtime.control.operations().unwrap(),
+            &built.runtime.services.key,
+        )
+        .unwrap();
+        retried
+            .verify_current(&built.runtime.control.operations().unwrap(), &restored)
+            .unwrap();
+        Some(retried)
+    } else {
+        None
+    };
+    let assignment = match &retried {
+        Some(retried) => retried_repair_worker_assignment(retried).unwrap(),
+        None => repair_worker_assignment(&proof).unwrap(),
+    };
+    match &retried {
+        Some(retried) => retried.verify_assignment(&assignment).unwrap(),
+        None => proof.verify_assignment(&assignment).unwrap(),
+    };
     let repair = worker(WorkerInput {
         root: &root.join("repair"),
         source: proof.source().root(),
@@ -673,27 +499,43 @@ async fn exact_review_findings_produce_repair_from_real_owned_source_and_contrac
         assignment: Some(&assignment),
         account: &account,
     });
-    proof.verify_contract(&repair.contract).unwrap();
+    match &retried {
+        Some(retried) => retried.verify_contract(&repair.contract).unwrap(),
+        None => proof.verify_contract(&repair.contract).unwrap(),
+    };
     assert!(proof.verify_contract(&original.contract).is_err());
-    let proof = Arc::new(proof);
     let request = crate::runtime_workers::LaunchRequest {
         lease: lease.clone(),
         operation_id: repair.execution.binding.operation_id,
         authority: WorkerAuthority::Authorized(gate.clone()),
-        phase: proof.phase().clone(),
+        phase: retried
+            .as_ref()
+            .map(|p| p.phase())
+            .unwrap_or_else(|| proof.phase())
+            .clone(),
         source: None,
         delivery: Some(assignment),
-        unfinished: Some(proof.clone()),
+        unfinished: if retried.is_some() {
+            None
+        } else {
+            Some(proof.clone())
+        },
+        retried_unfinished: retried.clone(),
         source_advanced: None,
         max_seconds: 60,
         max_turns: 20,
     };
     request.validate_binding().unwrap();
+    if retried.is_some() {
+        let mut wrong = request.clone();
+        wrong.phase = proof.phase().clone();
+        assert!(wrong.validate_binding().is_err());
+        let mut wrong = request.clone();
+        wrong.unfinished = Some(proof.clone());
+        assert!(wrong.validate_binding().is_err());
+    }
     proof
         .verify_failure_inventory(&built.runtime.control.operations().unwrap())
-        .unwrap();
-    service
-        .retire_delivery_phase(&review_phase, json!({"findings":true}))
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     fs::write(
@@ -706,14 +548,67 @@ async fn exact_review_findings_produce_repair_from_real_owned_source_and_contrac
         "required empty-input case covered\n",
     )
     .unwrap();
-    let (_repair_records, repair_outcome, repair_completion) = complete(
-        &built.runtime.control,
-        &lease,
-        &repair,
-        json!({"schema_version":1,"summary":"required finding corrected","fulfilled_criteria":["required behavior"],"disposition":{"kind":"changed"}}),
-        Some(&proof),
-        None,
-    );
+    let repair_claim_json = json!({"schema_version":1,"summary":"required finding corrected","fulfilled_criteria":["required behavior"],"disposition":{"kind":"changed"}});
+    let (_repair_records, repair_outcome, repair_completion) = match &retried {
+        Some(retried) => complete_retried(
+            &built.runtime.control,
+            &lease,
+            &repair,
+            repair_claim_json,
+            retried,
+        ),
+        None => complete(
+            &built.runtime.control,
+            &lease,
+            &repair,
+            repair_claim_json,
+            Some(&proof),
+            None,
+        ),
+    };
+    if let Some(retried) = &retried {
+        let run = RunReference::from_receipt(
+            &built
+                .runtime
+                .control
+                .operation(repair.execution.binding.operation_id)
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(run.attempt, 1);
+        assert_eq!(run.max_attempts, 3);
+        assert_eq!(&run.phase, retried.phase());
+        assert!(
+            retried
+                .verify_current(
+                    &built.runtime.control.operations().unwrap(),
+                    std::slice::from_ref(retried.grant())
+                )
+                .is_err()
+        );
+        // The first-session capability is consumed, but acknowledging the
+        // already published grant must remain valid after its budget starts.
+        let config = built.runtime.configuration.snapshot().unwrap();
+        let inventory = built.runtime.control.operations().unwrap();
+        let current = crate::runtime_workflow::current_retry_grants(
+            &config,
+            &built.runtime.observations.snapshot().unwrap(),
+            gate.work(),
+            &inventory,
+            &built.runtime.services.key,
+        )
+        .unwrap();
+        let original_target = crate::runtime_workflow::published_retry_target(
+            &config,
+            retried.grant(),
+            &current,
+            &inventory,
+        )
+        .unwrap();
+        assert_eq!(original_target.phase, *proof.phase());
+        assert_eq!(original_target.admissions, [proof.predecessor()].into());
+    }
     let repair_claim = Arc::new(
         workspace
             .coordinator

@@ -965,6 +965,12 @@ mod tests {
                 "retry not part of recovery fixture",
             ))
         }
+        fn published_retry_target(&self, _: &VerifiedRetryGrant) -> Result<RetryTarget> {
+            Err(Error::new(
+                "fixture_unexpected",
+                "retry not part of recovery fixture",
+            ))
+        }
         fn record_acceptance(&self, _: &IssueKey, _: VerifiedAcceptance) -> Result<()> {
             Err(Error::new(
                 "fixture_unexpected",

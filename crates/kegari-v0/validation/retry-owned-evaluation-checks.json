@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "evidence_class": "deterministic",
+  "verified_at": "2026-10-25T09:40:32.379801+00:00",
+  "scope": "Frozen offline explicit unfinished retry, typed preparation, owned evaluation binding, provider resume prerequisites and corrected successor assembly; full implementation and native qualification remain incomplete",
+  "source_inputs": {
+    "digest": "sha256:bc2f0ef33219f9f1d4fe29c085f1afd59bb2670c597908536a4936426440db19",
+    "file_count": 545,
+    "algorithm": "SHA-256 of sorted compact JSON mapping workspace-relative paths to SHA-256 file hashes",
+    "directories": [
+      "src",
+      "tests",
+      "instructions",
+      "protocol",
+      "examples",
+      "evaluations"
+    ],
+    "additional_files": [
+      "crates/kegari-v0/Cargo.toml",
+      "crates/kegari-v0/build.rs",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain.toml"
+    ]
+  },
+  "toolchain": "Rust/Cargo 1.99.1 via verified installed stable alias",
+  "test_command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0",
+  "test_exit_code": 0,
+  "test_log_sha256": "af0241f929339d13b8a90a53f9f629dab672d54574dcbde8bb6064f0c860cad9",
+  "test_groups": [
+    {
+      "group": "unittests src/lib.rs",
+      "passed": 168,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 208.79
+    },
+    {
+      "group": "unittests src/main.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.0
+    },
+    {
+      "group": "unittests src/bin/kegari-v0-evaluation.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.0
+    },
+    {
+      "group": "tests/api.rs",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.13
+    },
+    {
+      "group": "tests/app.rs",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.19
+    },
+    {
+      "group": "tests/authority_scheduler.rs",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.0
+    },
+    {
+      "group": "tests/cli.rs",
+      "passed": 24,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.46
+    },
+    {
+      "group": "tests/codex_protocol.rs",
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 1.17
+    },
+    {
+      "group": "tests/config_harness.rs",
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.04
+    },
+    {
+      "group": "tests/configuration.rs",
+      "passed": 19,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 10.97
+    },
+    {
+      "group": "tests/connections.rs",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.0
+    },
+    {
+      "group": "tests/control_preparation.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.17
+    },
+    {
+      "group": "tests/control_storage.rs",
+      "passed": 24,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 1.16
+    },
+    {
+      "group": "tests/decisions.rs",
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 10.38
+    },
+    {
+      "group": "tests/delivery.rs",
+      "passed": 21,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 17.14
+    },
+    {
+      "group": "tests/deployment.rs",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 2.76
+    },
+    {
+      "group": "tests/evaluation.rs",
+      "passed": 25,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 2.49
+    },
+    {
+      "group": "tests/evaluation_reports.rs",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 1.44
+    },
+    {
+      "group": "tests/execution.rs",
+      "passed": 18,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 12.84
+    },
+    {
+      "group": "tests/git_delivery.rs",
+      "passed": 36,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 84.58
+    },
+    {
+      "group": "tests/host_process.rs",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 7.57
+    },
+    {
+      "group": "tests/housekeeping.rs",
+      "passed": 14,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 22.56
+    },
+    {
+      "group": "tests/instruction_resume.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.04
+    },
+    {
+      "group": "tests/local_cli.rs",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 2.04
+    },
+    {
+      "group": "tests/main.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 1.12
+    },
+    {
+      "group": "tests/orchestration.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.02
+    },
+    {
+      "group": "tests/platform.rs",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2,
+      "seconds": 2.98
+    },
+    {
+      "group": "tests/process_group.rs",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.51
+    },
+    {
+      "group": "tests/process_records.rs",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.37
+    },
+    {
+      "group": "tests/providers.rs",
+      "passed": 28,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 1.79
+    },
+    {
+      "group": "tests/reconcile.rs",
+      "passed": 25,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 1.99
+    },
+    {
+      "group": "tests/runtime_schedule.rs",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.0
+    },
+    {
+      "group": "tests/secrets.rs",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.02
+    },
+    {
+      "group": "tests/snapshots.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.11
+    },
+    {
+      "group": "tests/supervisor.rs",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.56
+    },
+    {
+      "group": "tests/transport.rs",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.15
+    },
+    {
+      "group": "tests/worker.rs",
+      "passed": 34,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 9.67
+    },
+    {
+      "group": "Doc-tests kegari_v0",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.0
+    }
+  ],
+  "test_totals": {
+    "passed": 638,
+    "failed": 0,
+    "ignored": 2
+  },
+  "ignored": [
+    "test child_signal_uses_owned_unreaped_handle_and_never_adopts_pid_metadata ... ignored, native process-group qualification requires the blocked OS boot identity probe",
+    "test native_host_and_birth_identity_are_observed_without_environment_trust ... ignored, native qualification blocked: outer sandbox denies kern.bootsessionuuid; do not weaken production checks"
+  ],
+  "lint": {
+    "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy --locked -p kegari-v0 --all-targets -- -D warnings",
+    "exit_code": 0,
+    "log_sha256": "af0878f6471e986eca954408b8c73663da0d65acd34bcbda987ef0916f3953dd"
+  },
+  "other_checks": [
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo fmt --check -p kegari-v0",
+      "exit_code": 0
+    },
+    {
+      "command": "python3 crates/kegari-v0/tools/contract_inventory.py --check",
+      "exit_code": 0,
+      "contract_blocks": 363,
+      "named_requirements": 136,
+      "implicit_passes": false
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "spec_sha256": "80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326",
+  "evaluation_plan": {
+    "suite_digest": "sha256:v1:e59fa4a3e35486210374a57511a54033e6a1a334a7a728be78453d83b57647d5",
+    "trial_slots": 56,
+    "dispatch_authorized": false,
+    "log_sha256": "199688288763a403415927b32c8ad85771c5d616a6943fed76b40145c079639e"
+  },
+  "independent_review": {
+    "resolved": [
+      "Postpublication retry selector rejected its own current grant",
+      "Exact successor preparation/model work raced command acknowledgement",
+      "Advisory preparation eligibility could become stale before admission",
+      "Private scorer/report content entered through host instruction discovery",
+      "Undeclared initial scratch survived binding",
+      "Malformed history views normalized to complete history",
+      "Late or malformed policy notifications lost durable intervention provenance",
+      "Preparation receipts could be confused with release admission provenance"
+    ],
+    "limitations": "Bounded independent code reviews and deterministic fixtures; required human calibration and complete conformance review remain outstanding"
+  },
+  "not_run": [
+    "Actual-agent repetitions",
+    "Required human evaluation calibration",
+    "Native descendant containment and boot-dependent lifecycle qualifications",
+    "Real provider mutation and compatibility qualification",
+    "Background/remote HTTPS and Tailscale qualification",
+    "Media qualification",
+    "Deployment or lasting coordinator activation"
+  ],
+  "remaining_engineering": [
+    "Provider-session resume and safe directory-family reuse",
+    "Cold unfinished proof recovery",
+    "Review/validation grant lineage and cross-correction continuation",
+    "Chained historical integrations and carried acceptance",
+    "Native evaluation fixture migration and concrete live authority/CLI/result composition",
+    "Native descendant containment"
+  ]
+}

@@ -263,6 +263,9 @@ pub trait DecisionEvidence: Send + Sync {
     fn current(&self, parent: &IssueKey) -> Result<ParentDelivery>;
     fn outcomes(&self) -> Result<DependencyOutcomes>;
     fn retry_target(&self, work: &WorkIdentity) -> Result<RetryTarget>;
+    /// Revalidate the immutable prior target and sole exact published grant.
+    /// Progress in that grant's new budget does not select a different target.
+    fn published_retry_target(&self, expected: &VerifiedRetryGrant) -> Result<RetryTarget>;
     fn record_acceptance(&self, parent: &IssueKey, acceptance: VerifiedAcceptance) -> Result<()>;
     fn record_correction(&self, correction: VerifiedExplicitCorrection) -> Result<()>;
     fn retry_committed(&self, grant: VerifiedRetryGrant) -> Result<()>;
@@ -657,10 +660,32 @@ impl DecisionManager {
             linear_actor,
             generation: snapshot.intent.generation,
         };
+        if ctx.request.command == CommandName::Retry {
+            let grant = self.retry(&ctx).await?;
+            let signed = self.services.key.sign("operator_retry", grant.record())?;
+            let comment = Uuid::parse_str(&grant.provenance().record_id)
+                .map_err(|_| Error::new("invalid_attestation", "retry comment ID is invalid"))?;
+            return self
+                .services
+                .control
+                .record_retry_completion(effect, &ctx.parent_command, &grant, |snapshot| {
+                    self.current_control(&ctx, snapshot)?;
+                    let current = self.cached_fresh(&ctx)?;
+                    let verified =
+                        self.published_retry_candidate(&ctx, &current, snapshot, &signed, comment)?;
+                    if verified.digest() != grant.digest() {
+                        return Err(Error::new(
+                            "stale_result",
+                            "retry grant changed before command completion",
+                        ));
+                    }
+                    Ok(())
+                })
+                .map_err(after_write);
+        }
         let result = match ctx.request.command {
             CommandName::Correct => self.correct(&ctx).await,
             CommandName::Approve => self.approve(&ctx).await,
-            CommandName::Retry => self.retry(&ctx).await,
             CommandName::Release | CommandName::ReleaseRecover => self.release(&ctx).await,
             _ => Err(Error::invalid(
                 "command is not an authenticated workflow decision",
@@ -1202,6 +1227,17 @@ impl DecisionManager {
         parent: &ParentProjection,
         snapshot: &ControlSnapshot,
     ) -> Result<(RetryTarget, BTreeMap<Uuid, String>)> {
+        let target = self.services.evidence.retry_target(&ctx.work)?;
+        self.retry_candidate_for_target(ctx, parent, snapshot, target, None)
+    }
+    fn retry_candidate_for_target(
+        &self,
+        ctx: &Context,
+        parent: &ParentProjection,
+        snapshot: &ControlSnapshot,
+        target: RetryTarget,
+        published: Option<&VerifiedRetryGrant>,
+    ) -> Result<(RetryTarget, BTreeMap<Uuid, String>)> {
         parent.fresh_gate(
             ctx.work.child,
             GatePurpose::NewOperation,
@@ -1209,18 +1245,69 @@ impl DecisionManager {
             Utc::now(),
             Duration::seconds(30),
         )?;
-        let target = self.services.evidence.retry_target(&ctx.work)?;
+        let receipts = self.services.control.operations()?;
+        let mut successor = BTreeMap::new();
+        if let Some(grant) = published {
+            let workspace = ctx
+                .config
+                .workspaces
+                .values()
+                .find(|w| w.id == ctx.workspace)
+                .ok_or_else(|| Error::new("stale_config", "retry workspace disappeared"))?;
+            let account = &ctx.config.connections[&workspace.codex_connection].account_id;
+            for receipt in &receipts {
+                let binding = if let Some(run) = RunReference::from_receipt(receipt)? {
+                    Some((run.phase, run.workspace, run.account))
+                } else {
+                    crate::control::PreparationReference::from_receipt(receipt)?
+                        .map(|prep| (prep.phase, prep.workspace, prep.account))
+                };
+                if let Some((phase, workspace, successor_account)) = binding
+                    && phase == grant.phase_key()
+                {
+                    if receipt.runtime_id != ctx.config.runtime.id
+                        || workspace != ctx.workspace
+                        || &successor_account != account
+                    {
+                        return Err(Error::new(
+                            "identity_mismatch",
+                            "published retry successor identity changed",
+                        ));
+                    }
+                    successor.insert(receipt.operation_id, receipt);
+                }
+            }
+        }
+        let successor_effect = |id: &Uuid| -> bool {
+            if successor.contains_key(id) {
+                return true;
+            }
+            let Some(effect) = receipts.iter().find(|receipt| &receipt.operation_id == id) else {
+                return false;
+            };
+            let Some(admission) = effect
+                .expected
+                .get("admission_operation")
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .and_then(|id| successor.get(&id))
+            else {
+                return false;
+            };
+            effect.runtime_id == ctx.config.runtime.id
+                && effect.expected.get("admitted_work") == Some(&target.phase.work)
+                && effect.expected.get("admitted_scope") == admission.expected.get("scope")
+                && effect.expected.contains_key("admitted_scope")
+        };
         if target.phase.work != work_key(&ctx.work)?.identity()?
             || target.phase.generation != canonical_digest(1, &ctx.work.generation)?
             || target.admissions.is_empty()
-            || snapshot
-                .unresolved_operations
-                .keys()
-                .any(|operation| *operation != stage_id(ctx.request.request_id, "retry"))
-            || snapshot
-                .active_operations
-                .iter()
-                .any(|p| p.work_key == target.phase.work)
+            || snapshot.unresolved_operations.keys().any(|operation| {
+                *operation != stage_id(ctx.request.request_id, "retry")
+                    && !successor_effect(operation)
+            })
+            || snapshot.active_operations.iter().any(|p| {
+                p.work_key == target.phase.work && !successor.contains_key(&p.operation_id)
+            })
         {
             return Err(Error::new(
                 "reconciliation_required",
@@ -1229,7 +1316,7 @@ impl DecisionManager {
         }
         let mut found = BTreeMap::new();
         let mut ordinals = BTreeSet::new();
-        for receipt in self.services.control.operations()? {
+        for receipt in receipts {
             if let Some(run) = RunReference::from_receipt(&receipt)?
                 && run.workspace == ctx.workspace
                 && run.phase == target.phase
@@ -1258,7 +1345,42 @@ impl DecisionManager {
         }
         Ok((target, found))
     }
-    async fn retry(&self, ctx: &Context) -> Result<Value> {
+    fn published_retry_candidate(
+        &self,
+        ctx: &Context,
+        parent: &ParentProjection,
+        snapshot: &ControlSnapshot,
+        signed: &Signed<RetryGrant>,
+        comment: Uuid,
+    ) -> Result<VerifiedRetryGrant> {
+        let live = current_decision_comment(
+            parent,
+            ctx.work.child.unwrap_or(ctx.parent.key.issue),
+            comment,
+            &encode_signed_publication("operator_retry", signed)?,
+            &ctx.writer,
+        )?;
+        let verified = VerifiedRetryGrant::verify(
+            signed,
+            &publication(signed, live, &ctx.writer)?,
+            &ctx.work,
+            ctx.config.runtime.id,
+            &self.services.key,
+        )?;
+        let target = self.services.evidence.published_retry_target(&verified)?;
+        let (target, admissions) =
+            self.retry_candidate_for_target(ctx, parent, snapshot, target, Some(&verified))?;
+        if target.phase != signed.payload.previous_phase
+            || admissions != signed.payload.prior_admissions
+        {
+            return Err(Error::new(
+                "stale_result",
+                "retry phase or history changed after exact grant publication",
+            ));
+        }
+        Ok(verified)
+    }
+    async fn retry(&self, ctx: &Context) -> Result<VerifiedRetryGrant> {
         let reason = text(&ctx.request.args, "reason")?;
         check_message(reason, 4096)?;
         let fresh = self.fresh(ctx).await?;
@@ -1290,7 +1412,7 @@ impl DecisionManager {
             granted_at: Utc::now(),
         };
         let signed = self.services.key.sign("operator_retry", &record)?;
-        let (receipt, comment) = self
+        let (_receipt, comment) = self
             .publish(
                 ctx,
                 "retry",
@@ -1304,50 +1426,27 @@ impl DecisionManager {
             .await
             .map_err(after_write)?;
         let fresh = self.fresh(ctx).await.map_err(after_write)?;
-        let (target, admissions) = self
-            .retry_candidate(ctx, &fresh, &self.services.control.snapshot()?)
-            .map_err(after_write)?;
-        if target.phase != record.previous_phase || admissions != record.prior_admissions {
-            return Err(Error::new(
-                "operation_uncertain",
-                "retry phase changed after publication; reconcile exact grant",
-            ));
-        }
-        let digest = self
+        self.published_retry_candidate(
+            ctx,
+            &fresh,
+            &self.services.control.snapshot()?,
+            &signed,
+            comment.id,
+        )
+        .map_err(after_write)?;
+        let verified = self
             .services
             .control
             .serialize_observation(|snapshot| {
                 self.current_control(ctx, snapshot)?;
                 let current = self.cached_same(ctx, &fresh)?;
-                let (target, admissions) = self.retry_candidate(ctx, &current, snapshot)?;
-                if target.phase != record.previous_phase || admissions != record.prior_admissions {
-                    return Err(Error::new(
-                        "stale_result",
-                        "retry history changed after exact observation",
-                    ));
-                }
-                let live = current_decision_comment(
-                    &current,
-                    ctx.work.child.unwrap_or(ctx.parent.key.issue),
-                    comment.id,
-                    &encode_signed_publication("operator_retry", &signed)?,
-                    &ctx.writer,
-                )?;
-                let verified = VerifiedRetryGrant::verify(
-                    &signed,
-                    &publication(&signed, live, &ctx.writer)?,
-                    &ctx.work,
-                    ctx.config.runtime.id,
-                    &self.services.key,
-                )?;
-                let digest = verified.digest().to_string();
-                self.services.evidence.retry_committed(verified)?;
-                Ok(digest)
+                let verified =
+                    self.published_retry_candidate(ctx, &current, snapshot, &signed, comment.id)?;
+                self.services.evidence.retry_committed(verified.clone())?;
+                Ok(verified)
             })
             .map_err(after_write)?;
-        Ok(
-            json!({"retry_grant":record.operation_id,"grant_digest":digest,"publication_operation":receipt.operation_id,"comment_id":comment.id,"budget":record.budget,"phase":record.previous_phase.phase}),
-        )
+        Ok(verified)
     }
     async fn release(&self, ctx: &Context) -> Result<Value> {
         let fresh = self.fresh(ctx).await?;

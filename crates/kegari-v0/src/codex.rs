@@ -14,6 +14,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::time::{Instant, timeout_at};
 
+#[path = "codex_history.rs"]
+mod history;
+pub use history::RecordedThreadHistory;
+
 pub const SUPPORTED_CODEX_VERSION: &str = "codex-cli 0.164.0-alpha.11.1";
 pub const PROTOCOL_PROFILE: &str = "kegari-codex-0.164.0-alpha.11.1-v1";
 /// The installed binary that actually returned the pinned version. Construction
@@ -439,6 +443,22 @@ pub struct UsageLedger {
     pub ended_operations: BTreeMap<String, u64>,
 }
 impl UsageLedger {
+    /// Start accounting for a new admitted session of the same provider thread.
+    /// Previous totals/elapsed stay with their original operation; only the
+    /// cumulative observation baseline crosses the session boundary.
+    pub fn resumed_session(&self, account: &str, thread: &str) -> Self {
+        let key = format!("{account}\0{thread}");
+        let mut next = Self::default();
+        if let Some(value) = self.cumulative_baselines.get(&key) {
+            next.cumulative_baselines.insert(key.clone(), *value);
+        }
+        if !self.cumulative_baselines.contains_key(&key)
+            || self.earlier_usage_unknown.contains(&key)
+        {
+            next.earlier_usage_unknown.insert(key);
+        }
+        next
+    }
     pub fn observe(&mut self, account: &str, thread: &str, total: u64, fresh_thread: bool) -> u64 {
         let key = format!("{account}\0{thread}");
         let previous = self.cumulative_baselines.get(&key).copied();
@@ -471,6 +491,10 @@ pub struct SessionState {
     pub binding: SessionBinding,
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
+    /// Known acknowledged turn whose terminal provider outcome was not
+    /// observed before interruption. Process exit cannot erase its identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unresolved_turn: Option<String>,
     pub turns_started: u32,
     pub max_turns: u32,
     pub correction_required: u64,
@@ -481,6 +505,8 @@ pub struct SessionState {
     pub completed_turns: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_completed_turn: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_history: Option<RecordedThreadHistory>,
     pub provider_instruction_sources: Vec<String>,
     pub advertised_tools: BTreeSet<String>,
     pub reconciliation_digest: Option<String>,
@@ -497,6 +523,7 @@ impl SessionState {
             binding,
             thread_id: None,
             turn_id: None,
+            unresolved_turn: None,
             turns_started: 0,
             max_turns,
             correction_required: 0,
@@ -506,6 +533,7 @@ impl SessionState {
             terminal: None,
             completed_turns: BTreeMap::new(),
             last_completed_turn: None,
+            provider_history: Some(RecordedThreadHistory::default()),
             provider_instruction_sources: Vec::new(),
             advertised_tools: BTreeSet::new(),
             reconciliation_digest: None,
@@ -520,6 +548,11 @@ impl SessionState {
             || state.max_turns == 0
             || state.turns_started > state.max_turns
             || state.correction_consumed > state.correction_required
+            || state.unresolved_turn.as_ref().is_some_and(|id| {
+                id.is_empty()
+                    || state.completed_turns.contains_key(id)
+                    || state.turn_id.as_ref().is_some_and(|active| active != id)
+            })
             || state.completed_turns.len() > state.max_turns as usize
             || state
                 .last_completed_turn
@@ -530,6 +563,9 @@ impl SessionState {
                 "corrupt_receipt",
                 "inconsistent provider recovery state",
             ));
+        }
+        if let Some(history) = &state.provider_history {
+            history.validate(&state.completed_turns, state.last_completed_turn.as_deref())?;
         }
         Ok(state)
     }
@@ -550,6 +586,12 @@ impl SessionState {
             return Err(Error::new(
                 "turn_active",
                 "an existing turn must finish or be interrupted",
+            ));
+        }
+        if self.unresolved_turn.is_some() {
+            return Err(Error::new(
+                "reconciliation_required",
+                "known interrupted provider turn has no terminal reconciliation",
             ));
         }
         if self.turns_started >= self.max_turns {
@@ -575,6 +617,7 @@ impl SessionState {
     }
     pub fn completion_is_current(&self) -> bool {
         self.terminal.as_deref() == Some("completed")
+            && self.unresolved_turn.is_none()
             && self.correction_consumed == self.correction_required
             && self.intervention.is_none()
             && !self.input_required
@@ -582,6 +625,9 @@ impl SessionState {
     pub fn interruption(&mut self, reason: &str) -> SessionEvent {
         if self.intervention.is_none() {
             self.terminal = Some("interrupted".into());
+        }
+        if let Some(turn) = self.turn_id.take() {
+            self.unresolved_turn = Some(turn);
         }
         SessionEvent::new(
             if self.intervention.is_some() {
@@ -591,7 +637,7 @@ impl SessionState {
             },
             reason,
             self.thread_id.clone(),
-            self.turn_id.take(),
+            self.unresolved_turn.clone(),
             json!({"outcome":if self.intervention.is_some(){"blocked"}else{"interrupted"}}),
         )
     }
@@ -716,6 +762,12 @@ impl SessionState {
                 if self.turn_id.as_deref().is_some_and(|old| old != id) {
                     return Err(Error::new("protocol_error", "unexpected concurrent turn"));
                 }
+                if self.unresolved_turn.as_deref().is_some_and(|old| old != id) {
+                    return Err(Error::new(
+                        "protocol_error",
+                        "new turn cannot replace an unresolved known turn",
+                    ));
+                }
                 self.turn_id = Some(id.into());
                 kind = EventKind::TurnStarted;
             }
@@ -724,35 +776,9 @@ impl SessionState {
                     .get("turn")
                     .ok_or_else(|| Error::new("protocol_error", "completion lacks turn"))?;
                 let id = required_str(t, "id")?;
-                let status = required_str(t, "status")?;
-                if let Some(previous) = self.completed_turns.get(id) {
-                    if previous != status {
-                        return Err(Error::new(
-                            "protocol_error",
-                            "duplicate terminal event changed its outcome",
-                        ));
-                    }
-                    return Ok(SessionEvent::new(
-                        EventKind::Notification,
-                        method,
-                        thread,
-                        turn,
-                        json!({"duplicate":true}),
-                    ));
-                }
-                if self.turn_id.as_deref() != Some(id) {
-                    return Err(Error::new(
-                        "protocol_error",
-                        "completion is not for the active turn",
-                    ));
-                }
-                let status = required_str(t, "status")?;
-                if !["completed", "failed", "interrupted"].contains(&status) {
-                    return Err(Error::new(
-                        "protocol_error",
-                        "completion has nonterminal status",
-                    ));
-                }
+                // Actual same-thread policy signals remain authoritative even
+                // when the surrounding turn is duplicate, late or malformed.
+                // Ordinary outcome/history validation must not erase this hold.
                 if let Some(error) = t.get("error").filter(|v| !v.is_null()) {
                     let code = error
                         .get("codexErrorInfo")
@@ -770,10 +796,52 @@ impl SessionState {
                         self.block_provider(method, &p, code)?;
                     }
                 }
+                let status = required_str(t, "status")?;
+                if let Some(previous) = self.completed_turns.get(id) {
+                    if previous != status {
+                        return Err(Error::new(
+                            "protocol_error",
+                            "duplicate terminal event changed its outcome",
+                        ));
+                    }
+                    if let Some(history) = &mut self.provider_history {
+                        history.observe(t)?;
+                    }
+                    return Ok(SessionEvent::new(
+                        if self.intervention.is_some() {
+                            EventKind::ProviderIntervention
+                        } else {
+                            EventKind::Notification
+                        },
+                        method,
+                        thread,
+                        turn,
+                        json!({"duplicate":true}),
+                    ));
+                }
+                if self.turn_id.as_deref() != Some(id)
+                    && self.unresolved_turn.as_deref() != Some(id)
+                {
+                    return Err(Error::new(
+                        "protocol_error",
+                        "completion is not for the active turn",
+                    ));
+                }
+                let status = required_str(t, "status")?;
+                if !["completed", "failed", "interrupted"].contains(&status) {
+                    return Err(Error::new(
+                        "protocol_error",
+                        "completion has nonterminal status",
+                    ));
+                }
+                if let Some(history) = &mut self.provider_history {
+                    history.observe(t)?;
+                }
                 if self.intervention.is_none() {
                     self.terminal = Some(status.into());
                 }
                 self.turn_id = None;
+                self.unresolved_turn = None;
                 self.completed_turns.insert(id.into(), status.into());
                 self.last_completed_turn = Some(id.into());
                 kind = if self.intervention.is_some() {
@@ -838,6 +906,21 @@ pub trait ToolBroker: Send {
         &'a mut self,
         call: &'a ToolCall,
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
+}
+fn checkpoint_notification(
+    state: &mut SessionState,
+    broker: &mut dyn ToolBroker,
+    method: &str,
+    params: &Value,
+) -> Result<SessionEvent> {
+    let result = state.notification(method, params);
+    // A protocol inconsistency cannot hide a policy signal already observed
+    // from the bound provider thread. Persist that hold before returning either
+    // the ordinary event or its validation error.
+    if result.is_ok() || state.intervention.is_some() {
+        broker.observe_session(state)?;
+    }
+    result
 }
 pub struct DenyTools;
 impl ToolBroker for DenyTools {
@@ -1415,7 +1498,7 @@ impl RpcClient {
                     }
                     RpcMessage::Notification { method, params } => {
                         let event = if let Some(s) = state.as_deref_mut() {
-                            s.notification(&method, &params)?
+                            checkpoint_notification(s, broker, &method, &params)?
                         } else {
                             SessionEvent::new(
                                 EventKind::Notification,
@@ -1426,9 +1509,6 @@ impl RpcClient {
                             )
                         };
                         self.emit(event)?;
-                        if let Some(current) = state.as_deref() {
-                            broker.observe_session(current)?;
-                        }
                     }
                     RpcMessage::Request { id, method, params } => {
                         self.service_request(id, &method, params, state.as_deref_mut(), broker)
@@ -1799,6 +1879,7 @@ impl RpcClient {
             ));
         }
         if state.turn_id.is_some()
+            || state.unresolved_turn.is_some()
             || state.completed_turns.is_empty()
             || state.last_completed_turn.is_none()
         {
@@ -1907,6 +1988,16 @@ impl RpcClient {
                 "thread observation received a new provider blocker",
             ));
         }
+        state
+            .provider_history
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "legacy provider journal lacks full observed history provenance",
+                )
+            })?
+            .verify_readback(turns)?;
         canonical_digest(
             1,
             &json!({"binding":state.binding,"thread":state.thread_id,"turns":observed,"last_turn":last,"status":thread["status"],"response_digest":canonical_digest(1,&response)?}),
@@ -2171,8 +2262,7 @@ impl RpcClient {
             Ok(Err(e)) if e.code == "process_exit" => Ok(Some(state.interruption("process_exit"))),
             Ok(Err(e)) => Err(e),
             Ok(Ok(RpcMessage::Notification { method, params })) => {
-                let event = state.notification(&method, &params)?;
-                broker.observe_session(state)?;
+                let event = checkpoint_notification(state, broker, &method, &params)?;
                 self.emit(event.clone())?;
                 Ok(Some(event))
             }

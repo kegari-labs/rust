@@ -386,7 +386,12 @@ impl HttpTransport for Wire {
                         let head = path.split('/').nth(5).unwrap();
                         json!(f.statuses.get(head).cloned().unwrap_or_default())
                     }
-                    "/repos/fixture/repo/pulls/17" => f.prs[0].clone(),
+                    "/repos/fixture/repo/pulls/17" => {
+                        f.prs.iter().find(|pr| pr["number"] == 17).unwrap().clone()
+                    }
+                    "/repos/fixture/repo/pulls/8" => {
+                        f.prs.iter().find(|pr| pr["number"] == 8).unwrap().clone()
+                    }
                     "/repos/fixture/repo/pulls/17/merge" => {
                         assert_eq!(body["merge_method"], "squash");
                         assert_eq!(body["sha"], f.prs[0]["head"]["sha"]);
@@ -669,7 +674,7 @@ fn publish(projection: &RuntimeProjection, refs: &mut ReconcileRefs) {
 
 struct DeliveryFixture {
     _temp: tempfile::TempDir,
-    coordinator: DeliveryCoordinator,
+    coordinator: Arc<DeliveryCoordinator>,
     host: Arc<ControlHost>,
     admission: DeliveryAdmission,
     key: Arc<AttestationKey>,
@@ -678,6 +683,131 @@ struct DeliveryFixture {
     parent: ParentProjection,
     observer: crate::deployment::ProductionObserver,
     repository_contract: RepositoryContract,
+}
+
+/// Test-only provider protocol used by a real RuntimeFixture. Upstream review
+/// and check facts remain explicitly synthetic; no native sandbox proof exists.
+pub(crate) struct RuntimeSeedWire(Arc<Mutex<Fixture>>);
+impl RuntimeSeedWire {
+    pub(crate) fn new(production: &crate::git::Revision) -> Self {
+        let inner = Fixture::new();
+        {
+            let mut wire = inner.lock().unwrap();
+            wire.production = production.commit.clone();
+            wire.production_tree = production.tree.clone();
+        }
+        Self(inner)
+    }
+    pub(crate) fn transport(&self) -> Arc<dyn HttpTransport> {
+        Arc::new(Wire(self.0.clone()))
+    }
+    pub(crate) fn release_effect_count(&self) -> usize {
+        let wire = self.0.lock().unwrap();
+        wire.created_prs + wire.dispatch_count + usize::from(wire.merge_parent.is_some())
+    }
+    pub(crate) fn set_production(&self, production: &crate::git::Revision) {
+        let mut wire = self.0.lock().unwrap();
+        wire.production = production.commit.clone();
+        wire.production_tree = production.tree.clone();
+    }
+}
+pub(crate) struct RuntimeCandidateSeed {
+    _root: tempfile::TempDir,
+    pub(crate) parent: crate::evidence::VerifiedParent,
+    pub(crate) slice: IsolatedSlice,
+    pub(crate) child: PublishedChild,
+}
+impl RuntimeCandidateSeed {
+    pub(crate) fn original_parent_body(&self, coordinator: &DeliveryCoordinator) -> String {
+        coordinator
+            .fixture_original_parent_body(&self.parent, &self.slice, id(1))
+            .unwrap()
+    }
+    /// Repeat actual patch capture/assembly for the newly authorized correction.
+    /// The upstream reviewed/staged child is synthetic provider input, while
+    /// every candidate object and its control/process lineage is real.
+    pub(crate) async fn corrected_slice(
+        &self,
+        coordinator: &DeliveryCoordinator,
+        admission: &DeliveryAdmission,
+        wire: &RuntimeSeedWire,
+    ) -> IsolatedSlice {
+        let crate::evidence::ChildOutcome::Changed { delta, .. } =
+            &self.child.verified().evidence().outcome
+        else {
+            panic!("seed must retain the changed child delta")
+        };
+        let source = std::path::Path::new(
+            &coordinator
+                .contract(admission)
+                .unwrap()
+                .configuration
+                .source,
+        );
+        let captured = coordinator
+            .git
+            .capture_delta(
+                source,
+                crate::git::CaptureDelta {
+                    repository: delta.repository.clone(),
+                    parent_id: admission.scope().work.parent,
+                    child_id: delta.child_id,
+                    work_generation: &admission.scope().work.generation.definition,
+                    correction_generation: &admission.scope().work.generation.correction,
+                    scope: delta.scope.clone(),
+                    base: &delta.validated_base.commit,
+                    head: &delta.validated_head.commit,
+                    staging_parent: &delta.staging_parent.commit,
+                    staging_commit: &delta.staging_commit.commit,
+                },
+            )
+            .unwrap();
+        let root = self
+            ._root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("corrected-candidate-runs");
+        PrivateDir::create(&root).unwrap();
+        assemble_wire_slice(coordinator, admission, &wire.0, &captured, &root).await
+    }
+}
+pub(crate) async fn runtime_candidate_seed(
+    coordinator: Arc<DeliveryCoordinator>,
+    admission: DeliveryAdmission,
+    parent: ParentProjection,
+    wire: &RuntimeSeedWire,
+) -> RuntimeCandidateSeed {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().canonicalize().unwrap();
+    let contract = coordinator.contract(&admission).unwrap().clone();
+    let observer = crate::deployment::ProductionObserver::new(
+        coordinator.github().unwrap().clone(),
+        coordinator.host.clone(),
+        coordinator.key.clone(),
+        PrivateDir::create(&directory.join("deployment-proofs")).unwrap(),
+        coordinator.current_gate.clone(),
+    )
+    .unwrap();
+    let f = DeliveryFixture {
+        _temp: root,
+        host: coordinator.host.clone(),
+        key: coordinator.key.clone(),
+        coordinator,
+        admission,
+        wire: wire.0.clone(),
+        current: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        parent,
+        observer,
+        repository_contract: contract,
+    };
+    let (f, parent, slice, child) = changed_candidate_from(f, true).await;
+    RuntimeCandidateSeed {
+        _root: f._temp,
+        parent,
+        slice,
+        child,
+    }
 }
 impl DeliveryFixture {
     async fn new() -> Self {
@@ -922,7 +1052,7 @@ impl DeliveryFixture {
         .unwrap();
         Self {
             _temp: temp,
-            coordinator,
+            coordinator: Arc::new(coordinator),
             host,
             admission,
             key,
@@ -1488,7 +1618,7 @@ async fn child_ci_fixture() -> DeliveryFixture {
         )
         .unwrap();
     f.repository_contract.configuration.ci[0].workflow_id = 3;
-    f.coordinator.contracts.insert(
+    Arc::get_mut(&mut f.coordinator).unwrap().contracts.insert(
         f.repository_contract.repository.clone(),
         f.repository_contract.clone(),
     );
@@ -1637,8 +1767,90 @@ async fn changed_candidate_fixture() -> (
     IsolatedSlice,
     PublishedChild,
 ) {
+    changed_candidate_from(DeliveryFixture::build(false, true).await, false).await
+}
+async fn assemble_seed_slice(
+    f: &DeliveryFixture,
+    delta: &crate::git::DeltaArtifact,
+    root: &std::path::Path,
+) -> IsolatedSlice {
+    assemble_wire_slice(&f.coordinator, &f.admission, &f.wire, delta, root).await
+}
+async fn assemble_wire_slice(
+    coordinator: &DeliveryCoordinator,
+    admission: &DeliveryAdmission,
+    wire: &Arc<Mutex<Fixture>>,
+    delta: &crate::git::DeltaArtifact,
+    root: &std::path::Path,
+) -> IsolatedSlice {
+    // The reviewed staging source is explicit synthetic upstream input. The
+    // candidate itself must be created by the real bounded/journaled adapter.
+    let digest = delta.manifest.digest().unwrap();
+    let chunk = format!("delta-{}-0.bin", &digest[7..]);
+    coordinator
+        .records
+        .write_bytes(&chunk, &delta.patch)
+        .unwrap();
+    coordinator.records.write(
+        &format!("delta-{}.json", &digest[7..]),
+        &coordinator.key.sign("staged_delta", &json!({"manifest":delta.manifest,"patch_chunks":[chunk],"merge_request":id(818)})).unwrap(),
+    ).unwrap();
+    let pr = json!({"id":80,"number":8,"user":{"id":7},"state":"closed","draft":false,
+        "head":{"sha":delta.manifest.validated_head.commit,"ref":"fixture-child","repo":{"id":42}},
+        "base":{"sha":delta.manifest.staging_parent.commit,"ref":"staging","repo":{"id":42}},
+        "merged":true,"merge_commit_sha":delta.manifest.staging_commit.commit,
+        "html_url":"https://github.invalid/fixture/repo/pull/8"});
+    {
+        let mut current = wire.lock().unwrap();
+        current.prs.retain(|p| p["number"] != 8);
+        current.prs.push(pr);
+    }
+    let staged = StagedDelta {
+        delta: delta.clone(),
+        pull_request: 8,
+        merge_receipt: id(818),
+        protection: crate::evidence::RepositoryProtection {
+            repository: delta.manifest.repository.clone(),
+            branch: "staging".into(),
+            observed_base: delta.manifest.staging_parent.commit.clone(),
+            required_contexts: BTreeSet::from([crate::evidence::REVIEW_CONTEXT.into()]),
+            strict_current_base: true,
+            squash_allowed: true,
+            extra_approvals_satisfied: true,
+            code_owner_reviews_satisfied: true,
+            admin_bypass: false,
+            observed_at: Utc::now(),
+        },
+    };
+    coordinator
+        .assemble_isolated_slice(
+            admission,
+            SliceAssembly {
+                execution_root: root,
+                staged: &[&staged],
+                required_children: admission.gate.required_children(),
+                child_dependencies: &BTreeMap::new(),
+                satisfied_children: &BTreeSet::new(),
+                production_integrations: &[],
+                identity: crate::git::CommitIdentity {
+                    name: "Fixture".into(),
+                    email: "fixture@example.invalid".into(),
+                },
+            },
+        )
+        .await
+        .unwrap()
+}
+async fn changed_candidate_from(
+    mut f: DeliveryFixture,
+    actual_assembly: bool,
+) -> (
+    DeliveryFixture,
+    crate::evidence::VerifiedParent,
+    IsolatedSlice,
+    PublishedChild,
+) {
     use crate::evidence::*;
-    let mut f = DeliveryFixture::build(false, true).await;
     let source = std::path::PathBuf::from(&f.repository_contract.configuration.source);
     let base = f.admission.scope.revision.base.clone();
     fixture_git(&source, &["checkout", "-qb", "child"]);
@@ -1703,31 +1915,42 @@ async fn changed_candidate_fixture() -> (
         .unwrap()
         .join("candidate-runs");
     PrivateDir::create(&root).unwrap();
-    let candidate = f
-        .coordinator
-        .git
-        .assemble_candidate(
-            &source,
-            &root,
-            crate::git::CandidateRequest {
-                operation_id: Uuid::new_v4(),
-                runtime_id: id(1),
-                repository: f.repository_contract.repository.clone(),
-                parent_id: id(100),
-                work_generation: &child_work.generation.definition,
-                correction_generation: &child_work.generation.correction,
-                production_commit: &base,
-                deltas: std::slice::from_ref(&delta),
-                child_dependencies: &BTreeMap::new(),
-                satisfied_children: &BTreeSet::new(),
-                production_integrations: &[],
-                identity: crate::git::CommitIdentity {
-                    name: "Fixture".into(),
-                    email: "fixture@example.invalid".into(),
+    let actual_slice = if actual_assembly {
+        Some(assemble_seed_slice(&f, &delta, &root).await)
+    } else {
+        None
+    };
+    let candidate = if let Some(slice) = &actual_slice {
+        f.coordinator
+            .git
+            .inspect_candidate(&root, slice.operation_id())
+            .unwrap()
+    } else {
+        f.coordinator
+            .git
+            .assemble_candidate(
+                &source,
+                &root,
+                crate::git::CandidateRequest {
+                    operation_id: Uuid::new_v4(),
+                    runtime_id: id(1),
+                    repository: f.repository_contract.repository.clone(),
+                    parent_id: id(100),
+                    work_generation: &child_work.generation.definition,
+                    correction_generation: &child_work.generation.correction,
+                    production_commit: &base,
+                    deltas: std::slice::from_ref(&delta),
+                    child_dependencies: &BTreeMap::new(),
+                    satisfied_children: &BTreeSet::new(),
+                    production_integrations: &[],
+                    identity: crate::git::CommitIdentity {
+                        name: "Fixture".into(),
+                        email: "fixture@example.invalid".into(),
+                    },
                 },
-            },
-        )
-        .unwrap();
+            )
+            .unwrap()
+    };
     let child_revision = RevisionBinding {
         repository: f.repository_contract.repository.clone(),
         head: head.clone(),
@@ -1994,62 +2217,68 @@ async fn changed_candidate_fixture() -> (
         "5",
     )
     .unwrap();
-    let slice = IsolatedSlice {
-        record: f
-            .key
-            .sign(
-                "isolated_slice",
-                &SliceRecord {
-                    intent: SliceIntent {
-                        schema_version: 1,
-                        operation_id: candidate.manifest.operation_id,
-                        request_id: Uuid::new_v4(),
-                        scope: f.admission.scope.clone(),
-                        execution_root: root,
-                        production: candidate.manifest.production.clone(),
-                        selected: vec![delta.manifest.digest().unwrap()],
-                        dependencies: BTreeMap::new(),
-                        satisfied_children: BTreeSet::new(),
-                        integrations: vec![],
-                        identity: crate::git::CommitIdentity {
-                            name: "Fixture".into(),
-                            email: "fixture@example.invalid".into(),
+    let slice = if let Some(slice) = actual_slice {
+        slice
+    } else {
+        IsolatedSlice {
+            record: f
+                .key
+                .sign(
+                    "isolated_slice",
+                    &SliceRecord {
+                        intent: SliceIntent {
+                            schema_version: 1,
+                            operation_id: candidate.manifest.operation_id,
+                            request_id: Uuid::new_v4(),
+                            scope: f.admission.scope.clone(),
+                            execution_root: root,
+                            production: candidate.manifest.production.clone(),
+                            selected: vec![delta.manifest.digest().unwrap()],
+                            dependencies: BTreeMap::new(),
+                            satisfied_children: BTreeSet::new(),
+                            integrations: vec![],
+                            identity: crate::git::CommitIdentity {
+                                name: "Fixture".into(),
+                                email: "fixture@example.invalid".into(),
+                            },
                         },
+                        candidate: candidate.manifest.clone(),
+                        receipt_id: Uuid::new_v4(),
                     },
-                    candidate: candidate.manifest.clone(),
-                    receipt_id: Uuid::new_v4(),
-                },
+                )
+                .unwrap(),
+            candidate,
+        }
+    };
+    if !actual_assembly {
+        f.host
+            .finish(
+                f.admission.operation_id(),
+                json!({"fixture":"candidate complete"}),
             )
-            .unwrap(),
-        candidate,
-    };
-    f.host
-        .finish(
-            f.admission.operation_id(),
-            json!({"fixture":"candidate complete"}),
-        )
-        .unwrap();
-    let mut scope = f.admission.scope.clone();
-    scope.phase = DeliveryPhase::Release;
-    scope.revision = RevisionBinding {
-        repository: child_revision.repository,
-        head: slice.manifest().result.as_ref().unwrap().commit.clone(),
-        base: base.clone(),
-        tested_commit: slice.manifest().result.as_ref().unwrap().commit.clone(),
-        tested_tree: slice.manifest().result.as_ref().unwrap().tree.clone(),
-    };
-    scope.candidate_vector_digest = Some(manifest.candidate_vector_digest().unwrap());
-    let permit = f
-        .host
-        .admit(
-            &f.admission.permit.lease,
-            Uuid::new_v4(),
-            f.admission.gate.work_key().unwrap(),
-            scope.digest().unwrap(),
-            || Ok(()),
-        )
-        .unwrap();
-    f.admission = DeliveryAdmission::bind(permit, f.admission.gate.clone(), scope).unwrap();
+            .unwrap();
+        let mut scope = f.admission.scope.clone();
+        scope.phase = DeliveryPhase::Release;
+        scope.revision = RevisionBinding {
+            repository: child_revision.repository,
+            head: slice.manifest().result.as_ref().unwrap().commit.clone(),
+            base: base.clone(),
+            tested_commit: slice.manifest().result.as_ref().unwrap().commit.clone(),
+            tested_tree: slice.manifest().result.as_ref().unwrap().tree.clone(),
+        };
+        scope.candidate_vector_digest = Some(manifest.candidate_vector_digest().unwrap());
+        let permit = f
+            .host
+            .admit(
+                &f.admission.permit.lease,
+                Uuid::new_v4(),
+                f.admission.gate.work_key().unwrap(),
+                scope.digest().unwrap(),
+                || Ok(()),
+            )
+            .unwrap();
+        f.admission = DeliveryAdmission::bind(permit, f.admission.gate.clone(), scope).unwrap();
+    }
     let objects = f
         .coordinator
         .git

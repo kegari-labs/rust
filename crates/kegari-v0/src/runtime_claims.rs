@@ -514,6 +514,7 @@ mod tests {
             )
             .unwrap();
             session.thread_id = Some("fixture-thread".into());
+            session.provider_history = None; // synthetic claims fixture, no provider-history proof
             session.turns_started = 1;
             session.terminal = Some("completed".into());
             session

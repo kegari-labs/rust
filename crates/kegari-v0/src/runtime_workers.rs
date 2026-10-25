@@ -4,7 +4,10 @@ use crate::{
     authority::{ChildScope, Responsibility},
     config::{Config, Workspace},
     connections::ConnectionRegistry,
-    control::{Actor, Lease, MutationRequest, Permit, RunAdmission, RunReference},
+    control::{
+        Actor, Lease, MutationRequest, Permit, PreparationAdmission, PreparationReference,
+        RunAdmission, RunReference,
+    },
     digest::canonical_digest,
     error::{Error, Result},
     execution::{
@@ -218,6 +221,8 @@ pub struct LaunchRequest {
     pub unfinished: Option<Arc<crate::delivery::UnfinishedChildWork>>,
     /// Actual repaired source authorizing a repeated required check/review phase.
     pub source_advanced: Option<Arc<crate::delivery::VerifiedSourceAdvanced>>,
+    /// A current native operator grant for the retained exact unfinished task.
+    pub retried_unfinished: Option<Arc<crate::delivery::RetriedUnfinishedWork>>,
     pub max_seconds: u64,
     pub max_turns: u32,
 }
@@ -235,7 +240,15 @@ impl LaunchRequest {
             || self.max_turns == 0
             || self.phase.work != self.authority.work_key()?
             || self.phase.generation != generation
-            || self.unfinished.is_some() && self.source_advanced.is_some()
+            || [
+                self.unfinished.is_some(),
+                self.source_advanced.is_some(),
+                self.retried_unfinished.is_some(),
+            ]
+            .into_iter()
+            .filter(|present| *present)
+            .count()
+                > 1
         {
             return Err(Error::new(
                 "worker_binding",
@@ -275,6 +288,26 @@ impl LaunchRequest {
                 return Err(Error::new(
                     "worker_binding",
                     "advanced source cannot replace its phase or reuse an operation",
+                ));
+            }
+            proof.verify_assignment(assignment)?;
+            WorkerAuthority::Authorized(proof.authority().clone()).compare(&self.authority)?;
+        }
+        if let Some(proof) = &self.retried_unfinished {
+            let assignment = self.delivery.as_ref().ok_or_else(|| {
+                Error::new(
+                    "worker_binding",
+                    "explicit retry requires its sealed repair assignment",
+                )
+            })?;
+            if proof.phase() != &self.phase
+                || self.phase.retry_grant != Some(proof.grant().record().operation_id)
+                || proof.original().predecessor() == self.operation_id
+                || proof.original().failure_operation() == self.operation_id
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "explicit retry differs from its actual granted phase",
                 ));
             }
             proof.verify_assignment(assignment)?;
@@ -333,17 +366,7 @@ struct Prepared {
 /// Stable linkage between a launch intent and its preparation effects. Presence
 /// of this receipt prohibits replaying preparation under a replacement identity.
 pub(crate) fn preparation_operation(worker: Uuid) -> Result<Uuid> {
-    let digest = canonical_digest(1, &json!({"purpose":"worker_preparation","worker":worker}))?;
-    let bytes = hex::decode(digest.rsplit(':').next().unwrap_or_default())
-        .map_err(|_| Error::invalid("preparation identity digest is invalid"))?;
-    let mut id: [u8; 16] = bytes
-        .get(..16)
-        .ok_or_else(|| Error::invalid("short preparation identity"))?
-        .try_into()
-        .map_err(|_| Error::invalid("preparation identity length"))?;
-    id[6] = (id[6] & 0x0f) | 0x80;
-    id[8] = (id[8] & 0x3f) | 0x80;
-    Ok(Uuid::from_bytes(id))
+    crate::control::preparation_operation(worker)
 }
 /// The caller retains its scheduler capacity claim throughout this future. A
 /// cancellation cannot be mistaken for completion: preparation handles remain in
@@ -385,12 +408,28 @@ pub async fn prepare_admitted(
         1,
         &json!({"kind":"worker_preparation","operation":plan.request.operation_id,"authority":plan.request.authority.digest()?,"phase":plan.request.phase,"source":plan.source,"role":plan.role,"assignment":plan.request.delivery.as_ref().map(|assignment|assignment.digest()).transpose()?}),
     )?;
-    let prep_permit = runtime.control.admit(
+    let prep_permit = runtime.control.admit_preparation_observed(
         &plan.request.lease,
-        prep_id,
-        plan.request.authority.work_key()?,
-        prep_scope,
-        || fresh(&runtime, &plan.request),
+        PreparationAdmission {
+            request_id: prep_id,
+            work_key: plan.request.authority.work_key()?,
+            scope_digest: prep_scope,
+            reference: PreparationReference {
+                worker_operation: plan.request.operation_id,
+                workspace: plan.workspace.id,
+                account: plan.account.clone(),
+                phase: plan.request.phase.clone(),
+            },
+        },
+        |snapshot| {
+            let current = runtime.plan_worker_preparation(
+                &plan.request,
+                plan.workspace.id,
+                &plan.account,
+                snapshot,
+            )?;
+            require_preparation_schedule(&initial_schedule, &current, plan.request.max_turns)
+        },
     )?;
     let prepared = prepare_owned(&runtime, &plan, &prep_permit).await;
     let observed_exit = runtime
@@ -447,18 +486,28 @@ pub async fn prepare_admitted(
             attempt: schedule.attempt,
         },
     };
-    let permit = match (&plan.request.unfinished, &plan.request.source_advanced) {
-        (Some(proof), None) => {
+    let permit = match (
+        &plan.request.unfinished,
+        &plan.request.source_advanced,
+        &plan.request.retried_unfinished,
+    ) {
+        (Some(proof), None, None) => {
             runtime.admit_unfinished_worker(&plan.request.lease, admission, &contract, proof)?
         }
-        (None, Some(proof)) => runtime.admit_source_advanced_worker(
+        (None, Some(proof), None) => runtime.admit_source_advanced_worker(
             &plan.request.lease,
             admission,
             &contract,
             proof,
         )?,
-        (None, None) => runtime.admit_worker(&plan.request.lease, admission, &contract)?,
-        (Some(_), Some(_)) => {
+        (None, None, Some(proof)) => runtime.admit_retried_unfinished_worker(
+            &plan.request.lease,
+            admission,
+            &contract,
+            proof,
+        )?,
+        (None, None, None) => runtime.admit_worker(&plan.request.lease, admission, &contract)?,
+        _ => {
             return Err(Error::new(
                 "worker_binding",
                 "conflicting readmission causes",
@@ -647,18 +696,48 @@ fn fresh(runtime: &RuntimeCoordinator, request: &LaunchRequest) -> Result<()> {
     }
     Ok(())
 }
+fn require_preparation_schedule(
+    expected: &crate::runtime_schedule::RunSchedule,
+    current: &crate::runtime_schedule::RunSchedule,
+    requested_turns: u32,
+) -> Result<()> {
+    if current.attempt != expected.attempt
+        || current.max_attempts != expected.max_attempts
+        || current.max_turns != expected.max_turns
+        || current.max_review_rounds != expected.max_review_rounds
+        || current.trigger != expected.trigger
+        || requested_turns > current.max_turns
+    {
+        return Err(Error::new(
+            "admission_budget",
+            "preparation no longer binds its exact selected attempt, trigger and finite caps",
+        ));
+    }
+    if current.not_before > chrono::Utc::now() {
+        return Err(Error::new(
+            "retry_wait",
+            "current preparation trigger is not yet eligible",
+        ));
+    }
+    Ok(())
+}
 impl Plan {
     fn schedule(
         &self,
         runtime: &RuntimeCoordinator,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
-        match (&self.request.unfinished, &self.request.source_advanced) {
-            (Some(proof), None) => runtime.next_attempt_for_unfinished(proof),
-            (None, Some(proof)) => runtime.next_attempt_for_source_advanced(proof),
-            (None, None) => {
+        match (
+            &self.request.unfinished,
+            &self.request.source_advanced,
+            &self.request.retried_unfinished,
+        ) {
+            (Some(proof), None, None) => runtime.next_attempt_for_unfinished(proof),
+            (None, Some(proof), None) => runtime.next_attempt_for_source_advanced(proof),
+            (None, None, Some(proof)) => runtime.next_attempt_for_retried_unfinished(proof),
+            (None, None, None) => {
                 runtime.next_attempt(&self.request.phase, self.workspace.id, &self.account)
             }
-            (Some(_), Some(_)) => Err(Error::new(
+            _ => Err(Error::new(
                 "worker_binding",
                 "conflicting readmission causes",
             )),
@@ -1952,6 +2031,117 @@ mod source_tests {
         RepositoryIdentity,
     };
     use std::{collections::VecDeque, future::Future, pin::Pin, sync::Mutex, time::Duration};
+    #[test]
+    fn preparation_rechecks_selected_attempt_caps_trigger_and_spacing_before_receipt() {
+        use crate::control::{ControlHost, Intent, Lifecycle};
+        let temp = tempfile::tempdir().unwrap();
+        let root =
+            PrivateDir::create(&temp.path().canonicalize().unwrap().join("control")).unwrap();
+        let runtime_id = Uuid::new_v4();
+        let host = ControlHost::setup(root, runtime_id, Uuid::new_v4()).unwrap();
+        host.lifecycle(
+            MutationRequest {
+                request_id: Uuid::new_v4(),
+                runtime_id,
+                actor: Actor {
+                    identity: "preparation_fixture".into(),
+                    roles: ["lifecycle".into()].into(),
+                    principal: None,
+                },
+                kind: "lifecycle".into(),
+                canonical_targets: vec![runtime_id.to_string()],
+                expected: BTreeMap::new(),
+                payload: Value::Null,
+            },
+            Lifecycle::Start,
+            0,
+        )
+        .unwrap();
+        let lease = Lease {
+            runtime_id,
+            owner_generation: 1,
+            owner_id: Uuid::new_v4(),
+        };
+        host.attach_reconciled(lease.clone()).unwrap();
+        let expected = crate::runtime_schedule::RunSchedule {
+            attempt: 2,
+            max_attempts: 3,
+            max_turns: 4,
+            max_review_rounds: 2,
+            trigger: crate::scheduler::Trigger::VerifiedUnfinished,
+            not_before: chrono::Utc::now() - chrono::Duration::seconds(1),
+        };
+        require_preparation_schedule(&expected, &expected, 4).unwrap();
+        for field in [
+            "attempt",
+            "attempt_cap",
+            "turn_cap",
+            "review_cap",
+            "trigger",
+            "spacing",
+        ] {
+            let mut current = expected.clone();
+            match field {
+                "attempt" => current.attempt += 1,
+                "attempt_cap" => current.max_attempts -= 1,
+                "turn_cap" => current.max_turns -= 1,
+                "review_cap" => current.max_review_rounds -= 1,
+                "trigger" => current.trigger = crate::scheduler::Trigger::OperatorRetry,
+                "spacing" => {
+                    current.not_before = chrono::Utc::now() + chrono::Duration::seconds(30)
+                }
+                _ => unreachable!(),
+            }
+            let reference = PreparationReference {
+                worker_operation: Uuid::new_v4(),
+                workspace: Uuid::new_v4(),
+                account: "fixture".into(),
+                phase: crate::scheduler::PhaseKey {
+                    work: "fixture_work".into(),
+                    generation: canonical_digest(1, &"generation").unwrap(),
+                    phase: "implementation".into(),
+                    retry_grant: None,
+                },
+            };
+            let request_id = reference.operation_id().unwrap();
+            let error = host
+                .admit_preparation_observed(
+                    &lease,
+                    PreparationAdmission {
+                        request_id,
+                        work_key: reference.phase.work.clone(),
+                        scope_digest: canonical_digest(1, &"scope").unwrap(),
+                        reference,
+                    },
+                    |snapshot| {
+                        assert_eq!(snapshot.intent.desired, Intent::Running);
+                        assert!(snapshot.active_operations.is_empty());
+                        require_preparation_schedule(&expected, &current, 4)
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                if field == "spacing" {
+                    "retry_wait"
+                } else {
+                    "admission_budget"
+                }
+            );
+            assert_eq!(
+                host.operation(request_id).unwrap_err().code,
+                "record_missing"
+            );
+            assert!(host.snapshot().unwrap().active_operations.is_empty());
+            assert!(host.snapshot().unwrap().unresolved_operations.is_empty());
+        }
+        assert_eq!(
+            require_preparation_schedule(&expected, &expected, 5)
+                .unwrap_err()
+                .code,
+            "admission_budget"
+        );
+    }
     struct Wire {
         responses: Mutex<VecDeque<Value>>,
         paths: Mutex<Vec<String>>,

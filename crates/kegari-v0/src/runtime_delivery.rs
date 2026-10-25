@@ -892,3 +892,7 @@ pub use parent::ParentSources;
 mod release;
 
 pub use release::KnownPredecessorBaseline;
+
+#[cfg(test)]
+#[path = "runtime_delivery_worker_fixture.rs"]
+pub(crate) mod worker_fixture;

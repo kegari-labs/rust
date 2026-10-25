@@ -76,12 +76,28 @@ cannot copy arbitrary observed context, infer substitutions, or omit extra field
 The complete rendered context, including all native metadata and assignment
 payloads, must equal the production worker's context. Timeline input remains
 outside the initial prompt. This matcher is implemented; migration of the suite's
-native provider fixtures and owned clone binding is still incomplete.
+native provider fixtures remains incomplete; the owned-clone bridge below still
+requires complete runtime evaluation coverage.
+
+For a native worker, `prepare_worker_fixture` binds the one declared workflow
+scratch resource to the anticipated operation under the configured execution
+root. It creates only a fresh seed fixture. It neither creates that worker's
+directory nor grants admission. After ordinary production preparation/cloning
+and admission, `AdmittedTrial::bind_fixture` consumes the seed and validates the
+actual worker's operation, exact clone bytes/modes, workflow digest, complete
+native context, role/phase, scope and private grader/report boundaries. Subsequent
+grading reads the actual owned clone and scratch; the seed remains intact.
+The private binding fixes the complete instruction manifest, refuses a second
+worker/rebinding, and cannot be installed after the worker starts. An unbound
+native seed cannot enter direct assembly or live execution. This bridge is local
+implementation; it does not establish native execution qualification or complete
+the suite's provider/context migration.
 
 `verify_grader_boundary` checks actual validated filesystem
 grants, repository, scratch, private scorer and report roots. The scorer and
 report store must be explicit deny roots. The checked-in tests attempt grant
-expansion, file aliasing and grader access. These checks verify configured
+expansion, file aliasing and grader access, including executable paths through
+private grading directories. These checks verify configured
 boundaries and resolution; they do not replace the required live OS canary.
 
 ## Production integration contract
@@ -225,6 +241,13 @@ from the inspecting binary. Successful actual-agent reports require a recorded
 turn, activity and evidence references with ordered durable start/end times.
 
 ## Reports and human review
+
+Owned worker binding and live entry exclude private grader/report paths from
+global guidance, workflow and supplied/provider-discovered instruction inputs as
+well as OS grants. Current fixture declarations require empty initial scratch,
+including no hidden files or subdirectories. Binding and the final check before
+trial hooks reject undeclared scratch state. Declared hook execution can then
+create its observed outputs; arbitrary preexisting outputs are not reset silently.
 
 A run directory is exclusive. The suite snapshot is written once; each attempt
 gets an fsynced `*.started.json` before dispatch and an immutable

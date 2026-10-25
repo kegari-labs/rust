@@ -39,6 +39,22 @@ impl DeliveryCoordinator {
     ) -> Result<DeliveryAdmission> {
         let digest = plan.digest()?;
         let scope_digest = if permit.operation_id == plan.operation_id {
+            let owner = self.host.operation(permit.operation_id)?;
+            if [
+                "run",
+                "metadata",
+                "continuation",
+                "source_advanced",
+                "worker_preparation",
+                "release_resume",
+            ]
+            .iter()
+            .any(|key| owner.expected.contains_key(*key))
+            {
+                return Err(production_error(
+                    "original release permit belongs to another admission kind",
+                ));
+            }
             digest.clone()
         } else {
             let receipt = self.host.operation(permit.operation_id)?;
@@ -849,6 +865,15 @@ impl DeliveryCoordinator {
                 Err(missing) if missing.code == "record_missing" => {
                     let owner = self.host.operation(request.admission.operation_id())?;
                     if owner.kind != "admission"
+                        || [
+                            "run",
+                            "metadata",
+                            "continuation",
+                            "source_advanced",
+                            "worker_preparation",
+                        ]
+                        .iter()
+                        .any(|key| owner.expected.contains_key(*key))
                         || owner.runtime_id != request.plan.runtime_id
                         || owner.expected.get("scope")
                             != Some(&request.admission.permit.scope_digest)
@@ -1129,6 +1154,15 @@ impl DeliveryCoordinator {
             || r.work.child.is_some()
             || plan.steps.iter().find(|s| s.id == step).map(|s| &s.kind) != Some(&r.payload.kind)
             || owner.kind != "admission"
+            || [
+                "run",
+                "metadata",
+                "continuation",
+                "source_advanced",
+                "worker_preparation",
+            ]
+            .iter()
+            .any(|key| owner.expected.contains_key(*key))
             || owner.runtime_id != plan.runtime_id
             || owner.expected.get("scope") != Some(&r.admission_scope)
             || owner.canonical_targets
@@ -1395,6 +1429,15 @@ impl DeliveryCoordinator {
         )?
         .identity()?;
         if owner.kind != "admission"
+            || [
+                "run",
+                "metadata",
+                "continuation",
+                "source_advanced",
+                "worker_preparation",
+            ]
+            .iter()
+            .any(|key| owner.expected.contains_key(*key))
             || owner.runtime_id != r.scope.runtime_id
             || owner.canonical_targets != vec![work]
             || owner.expected.get("scope") != Some(&r.admission_scope_digest)

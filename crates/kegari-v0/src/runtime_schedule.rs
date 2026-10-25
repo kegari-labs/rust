@@ -44,6 +44,71 @@ pub fn occupying_runs(runtime: Uuid, receipts: &[Receipt]) -> Result<Vec<RunRefe
     Ok(active)
 }
 
+/// A grant for a completed implementation is meaningful only with the sealed
+/// remaining-work capability. It must not fall through to ordinary initial
+/// implementation dispatch and lose the retained source/findings contract.
+pub(crate) fn grant_requires_unfinished(
+    phase: &PhaseKey,
+    granted_phase: &PhaseKey,
+    receipts: &[Receipt],
+) -> Result<bool> {
+    if granted_phase.retry_grant.is_none()
+        || phase.work != granted_phase.work
+        || phase.generation != granted_phase.generation
+        || phase.phase != granted_phase.phase
+        || phase == granted_phase
+    {
+        return Err(Error::new(
+            "worker_binding",
+            "granted retry phase does not replace the original budget",
+        ));
+    }
+    let mut history = Vec::new();
+    let mut granted_admitted = false;
+    for receipt in receipts {
+        if let Some(run) = RunReference::from_receipt(receipt)? {
+            if &run.phase == phase {
+                history.push((run.attempt, receipt));
+            }
+            if &run.phase == granted_phase {
+                granted_admitted = true;
+            }
+        }
+    }
+    history.sort_by_key(|(attempt, _)| *attempt);
+    if history.is_empty()
+        || history
+            .iter()
+            .enumerate()
+            .any(|(i, (attempt, _))| *attempt as usize != i + 1)
+    {
+        return Err(Error::new(
+            "reconciliation_required",
+            "granted phase history is absent or incomplete",
+        ));
+    }
+    let latest = history.last().unwrap().1;
+    if !reconciled_exit(latest) {
+        return Err(Error::new(
+            "reconciliation_required",
+            "granted phase has no confirmed local exit",
+        ));
+    }
+    match latest
+        .observed_result
+        .as_ref()
+        .and_then(|r| r.pointer("/observation/outcome"))
+        .and_then(Value::as_str)
+    {
+        Some("completed") => Ok(!granted_admitted),
+        Some("failed" | "blocked" | "interrupted") => Ok(false),
+        _ => Err(Error::new(
+            "reconciliation_required",
+            "granted phase outcome is not known",
+        )),
+    }
+}
+
 /// Provider intervention belongs to its observed account/work, not to a phase
 /// budget. A correction, retry grant, account alias or later successful receipt
 /// cannot clear it. Only a separately verified provider resolution may do so;

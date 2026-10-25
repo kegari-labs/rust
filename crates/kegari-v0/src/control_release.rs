@@ -102,8 +102,15 @@ impl ReleaseResumeReference {
             || receipt.request_id != receipt.operation_id
             || receipt.canonical_targets != vec![reference.work_key.clone()]
             || receipt.expected.get("scope") != Some(&reference.scope_digest()?)
-            || receipt.expected.contains_key("run")
-            || receipt.expected.contains_key("metadata")
+            || [
+                "run",
+                "metadata",
+                "continuation",
+                "source_advanced",
+                "worker_preparation",
+            ]
+            .iter()
+            .any(|key| receipt.expected.contains_key(*key))
         {
             return Err(Error::new(
                 "record_corrupt",
@@ -142,8 +149,15 @@ impl VerifiedReleaseResume {
             || original.canonical_targets != vec![decision.parent().identity()?]
             || original.runtime_id != decision.request().runtime_id
             || ReleaseResumeReference::from_receipt(original)?.is_some()
-            || original.expected.contains_key("run")
-            || original.expected.contains_key("metadata")
+            || [
+                "run",
+                "metadata",
+                "continuation",
+                "source_advanced",
+                "worker_preparation",
+            ]
+            .iter()
+            .any(|key| original.expected.contains_key(*key))
         {
             return Err(Error::new(
                 "scope_violation",
@@ -292,7 +306,16 @@ impl ControlHost {
                 "release origin cannot itself be a resume",
             ));
         }
-        if original.expected.contains_key("run") || original.expected.contains_key("metadata") {
+        if [
+            "run",
+            "metadata",
+            "continuation",
+            "source_advanced",
+            "worker_preparation",
+        ]
+        .iter()
+        .any(|key| original.expected.contains_key(*key))
+        {
             return Err(Error::new(
                 "ownership_conflict",
                 "release origin is another admission kind",
@@ -393,8 +416,15 @@ impl ControlHost {
             || original.runtime_id != decision.request().runtime_id
             || original.kind != "admission"
             || original.expected.get("scope").map(String::as_str) != Some(plan_digest)
-            || original.expected.contains_key("run")
-            || original.expected.contains_key("metadata")
+            || [
+                "run",
+                "metadata",
+                "continuation",
+                "source_advanced",
+                "worker_preparation",
+            ]
+            .iter()
+            .any(|key| original.expected.contains_key(*key))
             || ReleaseResumeReference::from_receipt(original)?.is_some()
             || original.canonical_targets != vec![work_key.clone()]
         {
@@ -805,6 +835,23 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(retained, verified.reference);
+        for key in [
+            "run",
+            "metadata",
+            "continuation",
+            "source_advanced",
+            "worker_preparation",
+        ] {
+            let mut mixed = receipt.clone();
+            mixed.expected.insert(key.into(), "{}".into());
+            assert_eq!(
+                ReleaseResumeReference::from_receipt(&mixed)
+                    .unwrap_err()
+                    .code,
+                "record_corrupt",
+                "{key}"
+            );
+        }
         assert_eq!(retained.plan_operation_id(), original.operation_id);
         assert_eq!(retained.ordinal(), 1);
         let acknowledged = host
@@ -867,6 +914,69 @@ mod tests {
             "record_corrupt"
         );
     }
+    #[test]
+    fn retired_worker_preparation_cannot_become_an_original_release_admission() {
+        let (_temp, host, lease, original) = setup();
+        host.retire_local(
+            original.operation_id,
+            json!({"fixture":"prior work retired"}),
+        )
+        .unwrap();
+        let preparation = PreparationReference {
+            worker_operation: Uuid::new_v4(),
+            workspace: Uuid::new_v4(),
+            account: "fixture-codex".into(),
+            phase: crate::scheduler::PhaseKey {
+                work: original.work_key.clone(),
+                generation: canonical_digest(1, &"fixture-generation").unwrap(),
+                phase: "implementation".into(),
+                retry_grant: None,
+            },
+        };
+        let permit = host
+            .admit_preparation(
+                &lease,
+                PreparationAdmission {
+                    request_id: preparation.operation_id().unwrap(),
+                    work_key: original.work_key.clone(),
+                    scope_digest: original.scope_digest.clone(),
+                    reference: preparation,
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        let retired = host
+            .retire_local(
+                permit.operation_id,
+                json!({"fixture":"metadata preparation exited"}),
+            )
+            .unwrap();
+        assert!(
+            PreparationReference::from_receipt(&retired)
+                .unwrap()
+                .is_some()
+        );
+        let (command, authorization) = authorize(&host, &permit, "resume");
+        let verified = reference(&retired, &retired, &command, &authorization, 1);
+        assert_eq!(
+            host.admit_release_resume(&lease, &verified, |_| Ok(()))
+                .unwrap_err()
+                .code,
+            "ownership_conflict"
+        );
+        assert_eq!(
+            host.operation(verified.reference.request_id().unwrap())
+                .unwrap_err()
+                .code,
+            "record_missing"
+        );
+        assert!(host.snapshot().unwrap().active_operations.is_empty());
+        assert_eq!(
+            host.operation(retired.operation_id).unwrap().payload_digest,
+            retired.payload_digest
+        );
+    }
+
     #[test]
     fn unknown_effect_allows_only_local_recovery_intent_and_keeps_hold() {
         let (_temp, host, lease, original) = setup();

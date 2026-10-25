@@ -6,8 +6,12 @@ turn/duration bounds and, where applicable, a host-selected exact repository
 commit/tree. It derives the role from the authorized child's responsibility or
 independent-review gate. Parent coordination never receives source-write rights.
 
-The runtime checks durable retry eligibility before preparation. A separate
-preparation admission reserves the same canonical work identity. Owned Git clone
+The runtime checks durable retry eligibility before preparation. The serialized
+preparation gate checks the current native grant or sealed continuation cause
+again, including the exact selected attempt, caps, trigger and spacing. Its
+durable typed receipt binds the eventual worker ID, canonical preparation ID,
+workspace, account and exact phase. A separate preparation admission reserves
+the same canonical work identity. Owned Git clone
 creation has a durable Sent effect, cancellation registration and a fresh gate
 around every subprocess start. Waiting happens outside the control mutex.
 Creation hooks use the real LocalExecutor and retained HookLedger. Failed or
@@ -88,6 +92,17 @@ digests under the control lock, then consumes the exact latest predecessor and
 trigger in the same durable admission. Concurrent consumers cannot fork it;
 repeating the same source and unmet obligation is `no_progress`.
 
+An exhausted genuine obligation can be selected for an explicit operator retry.
+The runtime retains the opaque proof, verifies its original and failed-session
+receipts, current source/authority and actual joined completions, and binds the
+new native grant to that exact obligation. The first session of the granted
+budget requires `RetriedUnfinishedWork`; the ordinary implementation scheduler
+cannot discard its source or findings. Final admission rereads the current
+native grant and failure inventory, keeps the granted finite caps and the
+one-second exit spacing, and uses a fresh clone/thread. Later sessions in that
+same granted budget require their own actual trigger and retain its remaining
+caps. Retaining a historical failed check alone never creates a retry target.
+
 A completed repair can authorize another required validation or review only
 through a separate opaque source-advanced proof. It binds the new completed
 implementation, a materially changed source tree, the exact earlier phase
@@ -116,3 +131,11 @@ source and task context changed. This bounded path does not yet permit a repair
 across a material correction-generation change, reconstruct opaque unfinished
 proofs after restart, or establish the separate compatibility proof needed to
 resume an older provider thread. Those cases remain held for verified recovery.
+
+The assembler now retains versioned semantic component digests and a private
+assembly seal for future compatible resume. Only typed operation ID/attempt
+metadata is normalized; the actual rendered workflow, full task context,
+guidance, permissions and all other manifest fields remain exact. A workflow
+that renders a changed operation ID is incompatible. Legacy manifests retain
+their original serialization and cannot establish this new proof. The native
+resume admission/source-reuse bridge is still unfinished.

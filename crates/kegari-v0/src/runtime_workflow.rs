@@ -332,6 +332,83 @@ pub(crate) fn require_current_grant<'a>(
             )
         })
 }
+/// Finalize an already published decision even if its exact new budget has
+/// started. This observes the original history; it does not select new work or
+/// reconcile any successor process/effect.
+pub(crate) fn published_retry_target(
+    config: &crate::config::Config,
+    expected: &VerifiedRetryGrant,
+    current: &[VerifiedRetryGrant],
+    receipts: &[Receipt],
+) -> Result<RetryTarget> {
+    require_current_grant(expected, current)?;
+    if current
+        .iter()
+        .filter(|g| g.work() == expected.work() && g.phase() == expected.phase())
+        .count()
+        != 1
+    {
+        return Err(Error::new(
+            "ownership_conflict",
+            "retry publication has a competing successor grant",
+        ));
+    }
+    let workspace = config
+        .workspaces
+        .values()
+        .find(|w| w.id == expected.record().workspace_id)
+        .ok_or_else(|| Error::new("stale_config", "retry workspace disappeared"))?;
+    let account = &config.connections[&workspace.codex_connection].account_id;
+    let mut actual = BTreeMap::new();
+    let mut ordinals = BTreeSet::new();
+    for receipt in receipts {
+        let Some(run) = RunReference::from_receipt(receipt)? else {
+            continue;
+        };
+        if run.phase != *expected.phase() && run.phase != expected.phase_key() {
+            continue;
+        }
+        if receipt.runtime_id != config.runtime.id
+            || run.workspace != workspace.id
+            || &run.account != account
+        {
+            return Err(Error::new(
+                "identity_mismatch",
+                "retry history account/workspace/runtime changed",
+            ));
+        }
+        if run.phase == *expected.phase() {
+            if !matches!(
+                receipt.phase,
+                ReceiptPhase::Acknowledged | ReceiptPhase::Reconciled
+            ) || receipt.observed_result.as_ref().is_none_or(|value| {
+                value["local_execution"] != "exited"
+                    || value["unresolved_effects"]
+                        .as_array()
+                        .is_none_or(|effects| !effects.is_empty())
+            }) || !ordinals.insert(run.attempt)
+            {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "published retry original history is not completely retired",
+                ));
+            }
+            actual.insert(receipt.operation_id, receipt.payload_digest.clone());
+        }
+    }
+    if actual != expected.record().prior_admissions
+        || ordinals.iter().copied().ne(1..=ordinals.len() as u32)
+    {
+        return Err(Error::new(
+            "stale_result",
+            "published retry original admission inventory changed",
+        ));
+    }
+    Ok(RetryTarget {
+        phase: expected.phase().clone(),
+        admissions: actual.into_keys().collect(),
+    })
+}
 struct RuntimeDecisionEvidence {
     runtime: Arc<RuntimeCoordinator>,
     delivery: Arc<dyn RuntimeDeliveryDecisions>,
@@ -345,6 +422,9 @@ impl DecisionEvidence for RuntimeDecisionEvidence {
     }
     fn retry_target(&self, work: &WorkIdentity) -> Result<RetryTarget> {
         self.runtime.retry_target(work)
+    }
+    fn published_retry_target(&self, expected: &VerifiedRetryGrant) -> Result<RetryTarget> {
+        self.runtime.published_retry_target(expected)
     }
     fn record_acceptance(&self, parent: &IssueKey, acceptance: VerifiedAcceptance) -> Result<()> {
         self.runtime.retain_acceptance(parent, acceptance)
@@ -369,11 +449,57 @@ impl DecisionEvidence for RuntimeDecisionEvidence {
 /// Select an unambiguous unresolved phase from real run receipts. Ordering by
 /// last-modified time would let a late recovery of an older phase retarget retry.
 /// Superseded budgets require a verified grant, not a caller-supplied phase name.
+#[cfg(test)]
 pub(crate) fn select_retry_target(
     runtime: Uuid,
     work: &WorkIdentity,
     receipts: &[Receipt],
     grants: &[VerifiedRetryGrant],
+) -> Result<RetryTarget> {
+    select_retry_target_inner(runtime, work, receipts, grants, &BTreeMap::new())
+}
+
+/// Completed protocol outcomes become retry targets only through the genuine
+/// retained, currently blocked delivery obligation. A completed receipt alone
+/// is still excluded by the ordinary selector.
+pub(crate) fn select_retry_target_with_unfinished(
+    runtime: Uuid,
+    work: &WorkIdentity,
+    receipts: &[Receipt],
+    grants: &[VerifiedRetryGrant],
+    unfinished: &[Arc<crate::delivery::UnfinishedChildWork>],
+    limits: &crate::config::RuntimeConfig,
+) -> Result<RetryTarget> {
+    let mut completed = BTreeMap::new();
+    for proof in unfinished {
+        if proof.authority().work() != work
+            || proof.predecessor_receipt().runtime_id != runtime
+            || limits.id != runtime
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "unfinished retry target differs from current work/runtime",
+            ));
+        }
+        if proof.retry_blocker(limits, receipts)?
+            && completed
+                .insert(proof.phase().clone(), proof.predecessor())
+                .is_some()
+        {
+            return Err(Error::new(
+                "ambiguous_retry_target",
+                "multiple retained obligations target one completed budget",
+            ));
+        }
+    }
+    select_retry_target_inner(runtime, work, receipts, grants, &completed)
+}
+fn select_retry_target_inner(
+    runtime: Uuid,
+    work: &WorkIdentity,
+    receipts: &[Receipt],
+    grants: &[VerifiedRetryGrant],
+    completed: &BTreeMap<PhaseKey, Uuid>,
 ) -> Result<RetryTarget> {
     work.validate()?;
     let key = IssueKey::new(
@@ -450,6 +576,7 @@ pub(crate) fn select_retry_target(
         let last = records.last().unwrap().0;
         let observed = &last.observed_result.as_ref().unwrap()["observation"];
         match observed["outcome"].as_str() {
+            Some("completed") if completed.get(&phase) == Some(&last.operation_id) => (),
             Some("completed") => continue,
             Some("failed" | "blocked" | "interrupted") => (),
             _ => {

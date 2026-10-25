@@ -1895,6 +1895,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
             delivery: None,
             unfinished: None,
             source_advanced: None,
+            retried_unfinished: None,
             lease: f.permit.lease.clone(),
             operation_id: id(810),
             authority,

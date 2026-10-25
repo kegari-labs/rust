@@ -253,6 +253,8 @@ mod tests {
             fixture_digest: bytes_digest(b"declared fixture"),
             preparation_digest: String::new(),
             context_binding: Some(binding),
+            worker_placement: None,
+            worker_manifest: None,
         };
         fixture.preparation_digest = fixture.preparation_digest().unwrap();
         verify_fixture_context(&expected, &fixture, &host).unwrap();

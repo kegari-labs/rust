@@ -11,11 +11,13 @@ struct ObservingBroker {
     turn: Option<String>,
     called: bool,
     intervention: bool,
+    checkpoint: Option<Vec<u8>>,
 }
 impl ToolBroker for ObservingBroker {
     fn observe_session(&mut self, state: &SessionState) -> kegari_v0::error::Result<()> {
         self.turn = state.turn_id.clone();
         self.intervention = state.intervention.is_some();
+        self.checkpoint = Some(serde_json::to_vec(state).unwrap());
         Ok(())
     }
     fn call<'a>(
@@ -176,6 +178,18 @@ fn provider_policy_error_cannot_be_downgraded_by_later_completed_event() {
     }
 }
 #[test]
+fn legacy_session_fields_keep_exact_serialization_without_resume_history_authority() {
+    let mut state = active();
+    state.notification("turn/completed", &json!({"threadId":"thread-one","turn":{"id":"turn-one","status":"completed","items":[]}})).unwrap();
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy.as_object_mut().unwrap().remove("provider_history");
+    legacy.as_object_mut().unwrap().remove("unresolved_turn");
+    let restored = SessionState::restore(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+    assert!(restored.provider_history.is_none());
+    assert!(restored.unresolved_turn.is_none());
+    assert_eq!(serde_json::to_value(restored).unwrap(), legacy);
+}
+#[test]
 fn buffering_is_transient_and_a_normal_exit_alone_is_not_success() {
     let mut s = active();
     s.notification("model/safetyBuffering/updated",&json!({"threadId":"thread-one","turnId":"turn-one","model":"fixture-model","reasons":[],"useCases":[],"showBufferingUi":true})).unwrap();
@@ -217,6 +231,42 @@ fn usage_preserves_account_thread_baselines_on_recovery() {
     restored.finish_elapsed("operation", 300);
     restored.finish_elapsed("operation", 500);
     assert_eq!(restored.ended_operations["operation"], 300);
+    let prior = serde_json::to_value(&restored).unwrap();
+    let mut next = restored.resumed_session("a", "t");
+    assert!(next.observed_tokens.is_empty());
+    assert!(next.ended_operations.is_empty());
+    assert_eq!(next.observe("a", "t", 140, false), 25);
+    assert_eq!(next.observe("a", "t", 140, false), 0);
+    next.finish_elapsed("next-operation", 200);
+    assert_eq!(next.ended_operations.len(), 1);
+    assert_eq!(serde_json::to_value(&restored).unwrap(), prior);
+    let mut unknown = restored.resumed_session("a", "unobserved-thread");
+    assert!(
+        unknown
+            .earlier_usage_unknown
+            .contains("a\0unobserved-thread")
+    );
+    assert_eq!(unknown.observe("a", "unobserved-thread", 75, false), 0);
+    assert_eq!(unknown.observe("a", "unobserved-thread", 80, false), 5);
+}
+#[test]
+fn interrupted_turn_identity_survives_restart_until_exact_terminal_observation() {
+    let mut state = active();
+    let event = state.interruption("process_exit");
+    assert_eq!(event.turn_id.as_deref(), Some("turn-one"));
+    assert!(state.turn_id.is_none());
+    assert_eq!(state.unresolved_turn.as_deref(), Some("turn-one"));
+    let mut restored = SessionState::restore(&serde_json::to_vec(&state).unwrap()).unwrap();
+    assert_eq!(
+        restored.next_turn_allowed().unwrap_err().code,
+        "reconciliation_required"
+    );
+    assert!(restored.notification("turn/completed", &json!({"threadId":"thread-one","turn":{"id":"other","status":"completed","items":[]}})).is_err());
+    restored.notification("turn/completed", &json!({"threadId":"thread-one","turn":{"id":"turn-one","status":"failed","items":[],"error":{"message":"temporary disconnect","codexErrorInfo":"internalServerError"}}})).unwrap();
+    assert!(restored.unresolved_turn.is_none());
+    assert_eq!(restored.completed_turns["turn-one"], "failed");
+    assert!(!restored.completion_is_current());
+    SessionState::restore(&serde_json::to_vec(&restored).unwrap()).unwrap();
 }
 #[test]
 fn profile_and_resume_cannot_fallback_or_cross_scope() {
@@ -717,10 +767,10 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
         let tool_reply = read_json(&mut sr).await;
         assert_eq!(tool_reply["id"], "interleaved");
         assert_eq!(tool_reply["result"]["success"], true);
-        write_json(&mut sw,json!({"method":"turn/completed","params":{"threadId":"owned-thread","turn":{"id":"turn-fast","status":"completed"}}})).await;
+        write_json(&mut sw,json!({"method":"turn/completed","params":{"threadId":"owned-thread","turn":{"id":"turn-fast","status":"completed","items":[]}}})).await;
         write_json(
             &mut sw,
-            json!({"id":req["id"],"result":{"turn":{"id":"turn-fast","status":"completed"}}}),
+            json!({"id":req["id"],"result":{"turn":{"id":"turn-fast","status":"completed","items":[]}}}),
         )
         .await;
         let req = read_json(&mut sr).await;
@@ -731,7 +781,7 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
             "delivered review guidance; exact revision abc"
         );
         write_json(&mut sw,json!({"id":req["id"],"result":{"reviewThreadId":"owned-thread","turn":{"id":"turn-review","status":"inProgress"}}})).await;
-        write_json(&mut sw,json!({"method":"turn/completed","params":{"threadId":"owned-thread","turn":{"id":"turn-review","status":"completed"}}})).await;
+        write_json(&mut sw,json!({"method":"turn/completed","params":{"threadId":"owned-thread","turn":{"id":"turn-review","status":"completed","items":[]}}})).await;
         let req = read_json(&mut sr).await;
         assert_eq!(req["method"], "thread/read");
         assert_wire_schema(&req["params"], "v2_ThreadReadParams.json");
@@ -1157,6 +1207,14 @@ fn test_resource_writes_are_separate_exact_grants_and_never_reopen_source_or_con
 async fn owned_thread_history_rejects_divergence_and_retains_policy_before_resume() {
     for scenario in [
         "current",
+        "changed_content",
+        "summary",
+        "missing_items",
+        "null_view",
+        "object_view",
+        "boolean_view",
+        "unknown_view",
+        "legacy",
         "cwd",
         "unrecorded",
         "active",
@@ -1176,10 +1234,19 @@ async fn owned_thread_history_rejects_divergence_and_retains_policy_before_resum
             let request = read_json(&mut sr).await;
             assert_eq!(request["method"], "thread/read");
             assert_wire_schema(&request["params"], "v2_ThreadReadParams.json");
-            let turn = json!({"id":"turn-one","status":"completed","items":[]});
+            let turn = json!({"id":"turn-one","status":"completed","items":[{"id":"reply","type":"agentMessage","text":"original"}]});
             let mut thread = json!({"id":"thread-one","cwd":"/private/tmp/fixture/repository","modelProvider":"openai","status":{"type":"idle"},"turns":[turn.clone()]});
             match scenario {
-                "current" => (),
+                "current" | "legacy" => (),
+                "changed_content" => thread["turns"][0]["items"][0]["text"] = json!("edited"),
+                "summary" => thread["turns"][0]["itemsView"] = json!("summary"),
+                "missing_items" => {
+                    thread["turns"][0].as_object_mut().unwrap().remove("items");
+                }
+                "null_view" => thread["turns"][0]["itemsView"] = Value::Null,
+                "object_view" => thread["turns"][0]["itemsView"] = json!({"type":"full"}),
+                "boolean_view" => thread["turns"][0]["itemsView"] = json!(true),
+                "unknown_view" => thread["turns"][0]["itemsView"] = json!("future-view"),
                 "cwd" => thread["cwd"] = json!("/private/tmp/unrelated"),
                 "unrecorded" => thread["turns"][0]["id"] = json!("another-turn"),
                 "active" => thread["status"] = json!({"type":"active","activeFlags":[]}),
@@ -1211,14 +1278,20 @@ async fn owned_thread_history_rejects_divergence_and_retains_policy_before_resum
         state
             .notification(
                 "turn/completed",
-                &json!({"threadId":"thread-one","turn":{"id":"turn-one","status":"completed"}}),
+                &json!({"threadId":"thread-one","turn":{"id":"turn-one","status":"completed","items":[{"id":"reply","type":"agentMessage","text":"original"}]}}),
             )
             .unwrap();
+        if scenario == "legacy" {
+            state.provider_history = None;
+        }
         let mut broker = ObservingBroker::default();
         let result = rpc.observe_owned_thread(&mut state, &mut broker).await;
         match scenario {
             "current" => assert!(result.unwrap().starts_with("sha256:v1:")),
             "cwd" => assert_eq!(result.unwrap_err().code, "identity_mismatch"),
+            "null_view" | "object_view" | "boolean_view" | "unknown_view" => {
+                assert_eq!(result.unwrap_err().code, "protocol_error");
+            }
             "policy" => {
                 assert_eq!(result.unwrap_err().code, "provider_intervention");
                 assert!(
@@ -1236,5 +1309,99 @@ async fn owned_thread_history_rejects_divergence_and_retains_policy_before_resum
         assert!(state.turn_id.is_none());
         assert_eq!(state.turns_started, 1);
         task.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn late_policy_completions_checkpoint_before_protocol_rejection_on_both_read_paths() {
+    for request_path in [false, true] {
+        for scenario in [
+            "same_outcome",
+            "different_outcome",
+            "unknown",
+            "missing_status",
+            "malformed_history",
+            "foreign",
+        ] {
+            let (client, server) = tokio::io::duplex(16_384);
+            let (cr, cw) = tokio::io::split(client);
+            let (sr, mut sw) = tokio::io::split(server);
+            let mut sr = BufReader::new(sr);
+            let error = json!({"message":"provider policy detail","codexErrorInfo":"cyberPolicy"});
+            let mut params = json!({"threadId":"thread-one","turn":{"id":"turn-one","status":"completed","items":[],"error":error}});
+            match scenario {
+                "different_outcome" => params["turn"]["status"] = json!("failed"),
+                "unknown" => params["turn"]["id"] = json!("late-unrecorded-turn"),
+                "missing_status" => {
+                    params["turn"].as_object_mut().unwrap().remove("status");
+                }
+                "malformed_history" => params["turn"]["itemsView"] = Value::Null,
+                "foreign" => params["threadId"] = json!("unrelated-thread"),
+                _ => (),
+            }
+            let sent = params.clone();
+            let task = tokio::spawn(async move {
+                handshake(&mut sr, &mut sw).await;
+                if request_path {
+                    let request = read_json(&mut sr).await;
+                    assert_eq!(request["method"], "thread/read");
+                }
+                write_json(&mut sw, json!({"method":"turn/completed","params":sent})).await;
+            });
+            let mut rpc = RpcClient::from_transport(cr, cw, Duration::from_secs(2)).unwrap();
+            rpc.initialize().await.unwrap();
+            let mut state = active();
+            if scenario != "malformed_history" {
+                state.notification("turn/completed", &json!({"threadId":"thread-one","turn":{"id":"turn-one","status":"completed","items":[]}})).unwrap();
+            }
+            let before = state.completed_turns.clone();
+            let mut broker = ObservingBroker::default();
+            let result = if request_path {
+                rpc.request(
+                    "thread/read",
+                    json!({"threadId":"thread-one","includeTurns":true}),
+                    Some(&mut state),
+                    &mut broker,
+                )
+                .await
+                .map(|_| ())
+            } else {
+                rpc.pump(
+                    &mut state,
+                    &mut broker,
+                    Duration::from_secs(2),
+                    Duration::from_secs(2),
+                )
+                .await
+                .map(|_| ())
+            };
+            assert_eq!(result.unwrap_err().code, "protocol_error", "{scenario}");
+            assert_eq!(
+                state.completed_turns, before,
+                "invalid completion must not be adopted"
+            );
+            if scenario == "foreign" {
+                assert!(state.intervention.is_none());
+                assert!(broker.checkpoint.is_none());
+            } else {
+                assert!(
+                    broker.intervention,
+                    "{scenario} must checkpoint the native policy hold"
+                );
+                let restored = SessionState::restore(broker.checkpoint.as_ref().unwrap()).unwrap();
+                let observed = restored.intervention.as_ref().unwrap();
+                assert_eq!(observed.account_id, "account-one");
+                assert_eq!(observed.thread_id, "thread-one");
+                assert_eq!(observed.turn_id, params["turn"]["id"].as_str().unwrap());
+                assert_eq!(observed.source_method, "turn/completed");
+                assert_eq!(observed.source_digest, kegari_v0::digest::canonical_digest(1, &json!({"threadId":"thread-one","turnId":params["turn"]["id"],"error":error})).unwrap());
+                assert_eq!(
+                    restored.next_turn_allowed().unwrap_err().code,
+                    "provider_intervention"
+                );
+                assert!(!restored.completion_is_current());
+            }
+            task.await.unwrap();
+        }
     }
 }

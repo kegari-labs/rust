@@ -185,7 +185,9 @@ process can detach; this remains an explicit native qualification prerequisite.
 
 Before a recorded thread is resumed, `thread/read` with `includeTurns: true`
 reobserves its exact account, thread identity, private cwd, provider and complete
-completed-turn inventory. An active, failed, duplicate, missing or additional
+ordered completed-turn inventory and full retained item/content fingerprints.
+Summary/not-loaded views, missing item content and legacy journals without full
+provenance cannot qualify. An active, failed, duplicate, missing or additional
 turn blocks reuse. A policy or verification signal is durably reported through
 the normal broker immediately; a later history mismatch cannot erase it. The
 read is bounded by the ordinary frame limit and a 4,096-turn inventory limit.
@@ -195,3 +197,12 @@ The request/response schemas are pinned from the same installed CLI schema
 output as the original protocol inventory. Deterministic duplex fixtures cover
 history divergence and intervention retention; native resume qualification has
 not been run.
+
+An interruption preserves the known unresolved turn ID in the durable state;
+restart cannot turn it into a clean idle session. An exact late terminal event
+can resolve that identity but is not itself permission to retry or success of the
+work. The usage ledger exposes a new-session constructor that retains only the
+same account/thread cumulative baseline and unknown-history marker, leaving old
+token totals and elapsed time on the original session. These primitives are
+tested offline; the sealed recovery/readmission bridge that will consume them
+is not yet implemented.

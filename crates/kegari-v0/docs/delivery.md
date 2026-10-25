@@ -268,6 +268,21 @@ context is retained, with the exact assigned task under
 `evidence.delivery_assignment`. The deterministic integration fixture covers
 actual owned Git sealing, protected completed-protocol records, assembled
 contracts and Control admissions; it does not qualify a live model, native
-repository execution or an actual runtime joined-process cache. Corrected
-phase generations, mixed retry-grant lineages and cold reconstruction of these
-private triggers remain explicit recovery prerequisites.
+repository execution or an actual runtime joined-process cache.
+
+After that original budget reaches a real attempt, review or progress blocker,
+an explicit operator retry can select the retained obligation. The normal
+selector still excludes completed work without this private proof. The native
+signed grant must name the complete prior admission set and remain current;
+edited, deleted or competing grants cannot authorize a repair. Its first session
+uses `RetriedUnfinishedWork`, a fresh assignment/session and the grant's distinct
+finite budget. The original completed receipt and limits remain unchanged.
+Later sessions use actual history inside that budget rather than reusing the
+first-session capability. Superseded budgets cannot continue automatically.
+
+The positive deterministic fixture sends the actual retry command through
+DecisionManager, publishes and rereads the native fixture grant, and runs the
+new bounded repair/source-validation admission path. It also rejects deleted
+and edited grants. It does not manufacture native joined-process evidence.
+Corrected phase generations, mixed validation/review grant histories and cold
+reconstruction of these private triggers remain explicit recovery prerequisites.

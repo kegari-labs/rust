@@ -389,6 +389,16 @@ impl DeliveryCoordinator {
         if original.kind != "admission"
             || original.runtime_id != plan.runtime_id
             || original.expected.get("scope") != Some(&plan.digest()?)
+            || [
+                "run",
+                "metadata",
+                "continuation",
+                "source_advanced",
+                "worker_preparation",
+                "release_resume",
+            ]
+            .iter()
+            .any(|key| original.expected.contains_key(*key))
             || original.canonical_targets
                 != vec![
                     crate::authority::IssueKey::new(

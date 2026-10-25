@@ -55,8 +55,16 @@ impl DeliveryCoordinator {
         if admission.kind != "admission"
             || admission.runtime_id != plan.runtime_id
             || admission.expected.get("scope") != Some(&plan.digest()?)
-            || admission.expected.contains_key("run")
-            || admission.expected.contains_key("metadata")
+            || [
+                "run",
+                "metadata",
+                "continuation",
+                "source_advanced",
+                "worker_preparation",
+                "release_resume",
+            ]
+            .iter()
+            .any(|key| admission.expected.contains_key(*key))
         {
             return Err(Error::new(
                 "ownership_conflict",

@@ -180,6 +180,22 @@ fn preparation_leaf(workspace: Uuid, token: &str) -> Result<String> {
 }
 fn admission_scope(receipt: &crate::control::Receipt, plan: &ReleasePlan) -> Result<String> {
     if receipt.operation_id == plan.operation_id {
+        if [
+            "run",
+            "metadata",
+            "continuation",
+            "source_advanced",
+            "worker_preparation",
+            "release_resume",
+        ]
+        .iter()
+        .any(|key| receipt.expected.contains_key(*key))
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "release origin is another admission kind",
+            ));
+        }
         return plan.digest();
     }
     let reference =
@@ -2722,3 +2738,7 @@ mod recovery;
 #[path = "runtime_delivery_baseline.rs"]
 mod baseline;
 pub use baseline::KnownPredecessorBaseline;
+
+#[cfg(test)]
+#[path = "runtime_delivery_successor_fixture.rs"]
+mod successor_fixture;

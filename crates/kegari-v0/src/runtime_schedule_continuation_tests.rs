@@ -93,6 +93,72 @@ fn next(
 }
 
 #[test]
+fn explicit_grant_for_completed_work_cannot_be_dispatched_as_initial_implementation() {
+    let now = Utc::now();
+    let mut granted = phase();
+    granted.retry_grant = Some(Uuid::from_u128(700));
+    let first = receipt(1, now);
+    assert!(grant_requires_unfinished(&phase(), &granted, std::slice::from_ref(&first)).unwrap());
+    let mut admitted = receipt(1, now);
+    admitted.operation_id = Uuid::from_u128(701);
+    admitted.request_id = admitted.operation_id;
+    let mut run = RunReference::from_receipt(&admitted).unwrap().unwrap();
+    run.phase = granted.clone();
+    admitted
+        .expected
+        .insert("run".into(), serde_json::to_string(&run).unwrap());
+    let failed = failure(now);
+    let trigger = reference(&admitted, &failed);
+    let records = [first.clone(), admitted, failed];
+    assert!(!grant_requires_unfinished(&phase(), &granted, &records).unwrap());
+    assert_eq!(
+        plan(&limits(), &granted, Uuid::from_u128(2), &records, now)
+            .unwrap_err()
+            .code,
+        "no_work_trigger"
+    );
+    let continued = plan_unfinished(
+        &limits(),
+        &granted,
+        Uuid::from_u128(2),
+        &records,
+        &trigger,
+        now,
+    )
+    .unwrap();
+    assert_eq!((continued.attempt, continued.max_attempts), (2, 3));
+    let mut latest = receipt(2, now);
+    latest.observed_result.as_mut().unwrap()["observation"]["outcome"] = json!("failed");
+    assert!(
+        !grant_requires_unfinished(&phase(), &granted, &[first.clone(), latest.clone()]).unwrap()
+    );
+    latest.observed_result.as_mut().unwrap()["observation"]["outcome"] = json!("completed");
+    assert!(
+        grant_requires_unfinished(&phase(), &granted, &[first.clone(), latest.clone()]).unwrap()
+    );
+    latest.phase = ReceiptPhase::Sent;
+    assert_eq!(
+        grant_requires_unfinished(&phase(), &granted, &[first.clone(), latest])
+            .unwrap_err()
+            .code,
+        "reconciliation_required"
+    );
+    assert_eq!(
+        grant_requires_unfinished(&phase(), &granted, &[])
+            .unwrap_err()
+            .code,
+        "reconciliation_required"
+    );
+    let missing = receipt(3, now);
+    assert_eq!(
+        grant_requires_unfinished(&phase(), &granted, &[first, missing])
+            .unwrap_err()
+            .code,
+        "reconciliation_required"
+    );
+}
+
+#[test]
 fn verified_continuation_preserves_original_bounds_and_waits_for_latest_exit() {
     let now = Utc::now();
     let predecessor = receipt(1, now);

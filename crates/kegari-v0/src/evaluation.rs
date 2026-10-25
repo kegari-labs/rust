@@ -23,6 +23,10 @@ use std::time::{Duration, Instant};
 #[path = "evaluation_context.rs"]
 mod context_binding;
 use context_binding::{HostContext, NativeContextBinding};
+#[path = "evaluation_placement.rs"]
+mod placement;
+use placement::WorkerPlacement;
+pub use placement::prepare_worker_fixture;
 
 pub const SUITE_SCHEMA: u32 = 1;
 pub const GRADER_VERSION: &str = "kegari-observable-v2";
@@ -379,6 +383,8 @@ pub struct PreparedFixture {
     // fixture after preparation while retaining the original report provenance.
     preparation_digest: String,
     context_binding: Option<NativeContextBinding>,
+    worker_placement: Option<WorkerPlacement>,
+    worker_manifest: Option<String>,
 }
 impl PreparedFixture {
     fn preparation_digest(&self) -> Result<String> {
@@ -388,7 +394,8 @@ impl PreparedFixture {
                 "root":self.root,"repository":self.repository,"scratch":self.scratch,
                 "codex_home":self.codex_home,"grader_root":self.grader_root,
                 "before":self.before,"input":self.input,"prior":self.prior,
-                "fixture_digest":self.fixture_digest,"context_binding":self.context_binding
+                "fixture_digest":self.fixture_digest,"context_binding":self.context_binding,
+                "worker_placement":self.worker_placement,"worker_manifest":self.worker_manifest
             }),
         )
     }
@@ -409,6 +416,15 @@ pub fn prepare_fixture(
     destination: &Path,
     grader_root: &Path,
 ) -> Result<PreparedFixture> {
+    prepare_fixture_with_placement(suite_root, variant, destination, grader_root, None)
+}
+fn prepare_fixture_with_placement(
+    suite_root: &Path,
+    variant: &Variant,
+    destination: &Path,
+    grader_root: &Path,
+    placement: Option<WorkerPlacement>,
+) -> Result<PreparedFixture> {
     let suite_root = suite_root
         .canonicalize()
         .map_err(|e| Error::io("resolve suite", e))?;
@@ -423,18 +439,43 @@ pub fn prepare_fixture(
         ));
     }
     let captured = fixture_capture::CapturedTree::capture(&source)?;
-    prepare_captured_fixture(&suite_root, variant, &captured, destination, grader_root)
+    prepare_captured_fixture_at(
+        &suite_root,
+        variant,
+        &captured,
+        destination,
+        grader_root,
+        placement,
+    )
 }
 
 // Every source input below comes from the same immutable capture whose digest
 // is checked here. A concurrent source edit cannot enter the reset under an old
 // fixture identity, even if the source is restored before preparation ends.
+#[cfg(test)]
 fn prepare_captured_fixture(
     suite_root: &Path,
     variant: &Variant,
     captured: &fixture_capture::CapturedTree,
     destination: &Path,
     grader_root: &Path,
+) -> Result<PreparedFixture> {
+    prepare_captured_fixture_at(
+        suite_root,
+        variant,
+        captured,
+        destination,
+        grader_root,
+        None,
+    )
+}
+fn prepare_captured_fixture_at(
+    suite_root: &Path,
+    variant: &Variant,
+    captured: &fixture_capture::CapturedTree,
+    destination: &Path,
+    grader_root: &Path,
+    placement: Option<WorkerPlacement>,
 ) -> Result<PreparedFixture> {
     if canonical_digest(1, &captured.snapshot())? != variant.fixture_digest {
         return Err(Error::new(
@@ -536,7 +577,10 @@ fn prepare_captured_fixture(
     let workflow_path = repository.join("WORKFLOW.md");
     let workflow = std::str::from_utf8(captured.file("repository/WORKFLOW.md")?.bytes())
         .map_err(|_| Error::invalid("fixture workflow must be UTF-8"))?;
-    let scratch_text = scratch
+    let workflow_scratch = placement
+        .as_ref()
+        .map_or(scratch.as_path(), |p| p.scratch());
+    let scratch_text = workflow_scratch
         .to_str()
         .ok_or_else(|| Error::invalid("fixture scratch is not UTF-8"))?;
     // Only this declared fixture resource parameter is substituted; production
@@ -568,7 +612,15 @@ fn prepare_captured_fixture(
         fixture_digest: variant.fixture_digest.clone(),
         preparation_digest: String::new(),
         context_binding,
+        worker_placement: placement,
+        worker_manifest: None,
     };
+    if prepared.worker_placement.is_some() && prepared.context_binding.is_none() {
+        return Err(Error::new(
+            "evaluation_fidelity",
+            "owned-worker fixtures require a declared native context binding",
+        ));
+    }
     prepared.preparation_digest = prepared.preparation_digest()?;
     Ok(prepared)
 }
@@ -583,13 +635,17 @@ pub fn verify_grader_boundary(
         let private = private
             .canonicalize()
             .map_err(|e| Error::io("resolve grader boundary", e))?;
-        for public in [&plan.repository, &plan.scratch].into_iter().chain(
-            plan.read_roots
-                .iter()
-                .chain(&plan.source_writes)
-                .chain(&plan.resource_writes)
-                .map(|g| &g.path),
-        ) {
+        for public in [&plan.repository, &plan.scratch]
+            .into_iter()
+            .chain(
+                plan.read_roots
+                    .iter()
+                    .chain(&plan.source_writes)
+                    .chain(&plan.resource_writes)
+                    .map(|g| &g.path),
+            )
+            .chain(plan.executables.iter())
+        {
             if public.starts_with(&private) || private.starts_with(public) {
                 return Err(Error::new(
                     "grader_exposed",
@@ -602,6 +658,55 @@ pub fn verify_grader_boundary(
                 "grader_exposed",
                 "private scorer/report store must be an explicit forbidden root",
             ));
+        }
+    }
+    Ok(())
+}
+/// Host instruction discovery is also an input channel: authentication homes
+/// are denied to worker tools but their named guidance can enter the prompt.
+fn verify_grader_instructions(
+    manifest: &instructions::InstructionManifest,
+    private_roots: &[PathBuf],
+) -> Result<()> {
+    let discovered = match &manifest.provider_discovery {
+        instructions::ProviderDiscovery::Confirmed { files, .. } => files.as_slice(),
+        instructions::ProviderDiscovery::Unavailable { .. } => &[],
+    };
+    for private in private_roots {
+        let private = private
+            .canonicalize()
+            .map_err(|e| Error::io("resolve private instruction boundary", e))?;
+        for public in [&manifest.codex_home, &manifest.workflow_path]
+            .into_iter()
+            .chain(
+                manifest
+                    .supplied_files
+                    .iter()
+                    .chain(discovered)
+                    .map(|f| &f.path),
+            )
+        {
+            let public = public
+                .canonicalize()
+                .map_err(|e| Error::io("resolve actual instruction input", e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let metadata = std::fs::metadata(&public)
+                    .map_err(|e| Error::io("inspect instruction input links", e))?;
+                if metadata.is_file() && metadata.nlink() > 1 {
+                    return Err(Error::new(
+                        "grader_exposed",
+                        "multiply linked instruction input can alias private grading data",
+                    ));
+                }
+            }
+            if public.starts_with(&private) || private.starts_with(&public) {
+                return Err(Error::new(
+                    "grader_exposed",
+                    "scorer/report store overlaps host instruction discovery",
+                ));
+            }
         }
     }
     Ok(())
@@ -691,6 +796,8 @@ pub fn assemble_trial(
     isolation: &ValidatedIsolation,
     report_root: &Path,
 ) -> Result<AssembledInstructions> {
+    fixture.verify_worker_manifest(None)?;
+    fixture.verify_initial_scratch()?;
     verify_declared_phase(variant, input.role, input.phase)?;
     verify_grader_boundary(
         isolation,
@@ -737,7 +844,12 @@ pub fn assemble_trial(
                 .map(|repository| repository.revision.as_str()),
         },
     )?;
-    instructions::assemble(input)
+    let assembled = instructions::assemble(input)?;
+    verify_grader_instructions(
+        &assembled.manifest,
+        &[fixture.grader_root.clone(), report_root.to_owned()],
+    )?;
+    Ok(assembled)
 }
 
 /// Apply the same exact task-input check to direct assembly and the already
@@ -1657,6 +1769,10 @@ pub async fn run_live_trial(
         operation.tools,
         operation.work_identity,
     )?;
+    operation
+        .fixture
+        .verify_worker_manifest(Some(operation.assembled))?;
+    operation.fixture.verify_initial_scratch()?;
     verify_fixture_context(
         operation.host.bound_context(),
         operation.fixture,
@@ -1672,6 +1788,13 @@ pub async fn run_live_trial(
     )?;
     verify_grader_boundary(
         operation.isolation,
+        &[
+            operation.fixture.grader_root.clone(),
+            operation.report_root.to_owned(),
+        ],
+    )?;
+    verify_grader_instructions(
+        &operation.assembled.manifest,
         &[
             operation.fixture.grader_root.clone(),
             operation.report_root.to_owned(),
@@ -1829,6 +1952,8 @@ pub async fn run_live_trial(
     };
     let operation_deadline = tokio::time::Instant::now() + limit;
     let execution=tokio::time::timeout(limit,async {
+        operation.fixture.verify_initial_scratch()?;
+        verify_grader_instructions(&operation.assembled.manifest, &[operation.fixture.grader_root.clone(),operation.report_root.to_owned()])?;
         operation.lifecycle.before().await?;
         let spawned=operation.provider.launch().await?;
         client=Some(spawned);
