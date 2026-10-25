@@ -1,7 +1,7 @@
 //! Exact submitted-input provenance and narrowly bounded thread recovery.
 use super::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionResumeOrigin {
     pub(crate) predecessor: uuid::Uuid,
@@ -11,8 +11,139 @@ pub struct SessionResumeOrigin {
     pub(crate) historical_turns: BTreeSet<String>,
     pub(crate) thread: String,
     pub(crate) readback_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) prefix: Option<ResumeHistoryPrefix>,
+}
+
+/// Immutable, operation-scoped fingerprints. No raw submitted text or provider
+/// diagnostics are retained here; these records never construct a live worker.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeHistoryPrefix {
+    schema_version: u32,
+    segments: Vec<ResumeHistorySegment>,
+    digest: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResumeHistorySegment {
+    binding: SessionBinding,
+    reference: crate::control::RunReference,
+    admission_digest: String,
+    journal_digest: String,
+    history: RecordedThreadHistory,
+    submissions: SubmissionHistory,
+    usage: UsageLedger,
+    transition: ResumeHistoryTransition,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResumeHistoryTransition {
+    successor: uuid::Uuid,
+    recovery_digest: String,
+    instruction_digest: String,
+    history_digest: String,
+    submission_digest: String,
+    failure: TransientTurnFailure,
 }
 impl SessionResumeOrigin {
+    pub(crate) fn from_recovery(
+        recovery: &VerifiedThreadRecovery,
+        recovery_digest: &str,
+        instruction_digest: &str,
+        next: &SessionBinding,
+    ) -> Result<Self> {
+        let retained = recovery.retained();
+        let old = retained.state();
+        let mut normalized = next.clone();
+        normalized.operation_id = old.binding.operation_id.clone();
+        normalized.instruction_digest = old.binding.instruction_digest.clone();
+        let successor = next
+            .operation_id
+            .parse()
+            .map_err(|_| resume_history_error("successor operation is invalid"))?;
+        let predecessor = old
+            .binding
+            .operation_id
+            .parse()
+            .map_err(|_| resume_history_error("predecessor operation is invalid"))?;
+        if normalized != old.binding || successor == predecessor {
+            return Err(resume_history_error(
+                "history prefix crosses the exact session binding",
+            ));
+        }
+        let mut segments = match &old.resume_origin {
+            Some(origin) => origin
+                .prefix
+                .as_ref()
+                .ok_or_else(|| {
+                    resume_history_error("legacy resumed session lacks ordered history provenance")
+                })?
+                .segments
+                .clone(),
+            None => vec![],
+        };
+        segments.push(ResumeHistorySegment {
+            binding: old.binding.clone(),
+            reference: retained.reference().clone(),
+            admission_digest: retained.admission_digest().into(),
+            journal_digest: retained.journal_digest().into(),
+            history: old
+                .provider_history
+                .clone()
+                .ok_or_else(|| resume_history_error("missing predecessor history"))?,
+            submissions: old
+                .submissions
+                .clone()
+                .ok_or_else(|| resume_history_error("missing predecessor submissions"))?,
+            usage: old.usage.clone(),
+            transition: ResumeHistoryTransition {
+                successor,
+                recovery_digest: recovery_digest.into(),
+                instruction_digest: instruction_digest.into(),
+                history_digest: recovery.history_digest().into(),
+                submission_digest: recovery.submission_digest().into(),
+                failure: recovery.transient_failure().clone(),
+            },
+        });
+        let mut prefix = ResumeHistoryPrefix {
+            schema_version: 1,
+            segments,
+            digest: String::new(),
+        };
+        prefix.digest = prefix.content_digest()?;
+        let historical_turns = prefix.turns()?;
+        let origin = Self {
+            predecessor,
+            recovery_digest: recovery_digest.into(),
+            instruction_compatibility_digest: instruction_digest.into(),
+            history_digest: recovery.history_digest().into(),
+            historical_turns,
+            thread: old
+                .thread_id
+                .clone()
+                .ok_or_else(|| resume_history_error("predecessor thread missing"))?,
+            readback_digest: None,
+            prefix: Some(prefix),
+        };
+        let mut empty = SessionState::new(next.clone(), old.max_turns)?;
+        empty.thread_id = Some(origin.thread.clone());
+        origin.validate(&empty)?;
+        Ok(origin)
+    }
+    pub(crate) fn preserves(&self, previous: &Self) -> Result<()> {
+        let mut normalized = self.clone();
+        normalized.readback_digest = previous.readback_digest.clone();
+        if canonical_digest(1, &normalized)? != canonical_digest(1, previous)?
+            || previous.readback_digest.is_some()
+                && self.readback_digest != previous.readback_digest
+        {
+            return Err(resume_history_error(
+                "session replaced its immutable historical prefix or readback",
+            ));
+        }
+        Ok(())
+    }
     pub(super) fn validate(&self, state: &SessionState) -> Result<()> {
         if self.predecessor.is_nil()
             || self.predecessor.to_string() == state.binding.operation_id
@@ -45,7 +176,159 @@ impl SessionResumeOrigin {
         {
             crate::evidence::validate_digest(digest)?;
         }
+        if let Some(prefix) = &self.prefix {
+            prefix.validate(self, &state.binding)?;
+        }
         Ok(())
+    }
+}
+
+fn resume_history_error(message: &str) -> Error {
+    Error::new("resume_incompatible", message)
+}
+impl ResumeHistoryPrefix {
+    fn content_digest(&self) -> Result<String> {
+        canonical_digest(
+            1,
+            &json!({"schema_version":self.schema_version,"segments":self.segments}),
+        )
+    }
+    fn turns(&self) -> Result<BTreeSet<String>> {
+        let mut ids = BTreeSet::new();
+        for segment in &self.segments {
+            for id in segment.history.ordered_ids() {
+                if !ids.insert(id.to_owned()) || ids.len() > 4096 {
+                    return Err(resume_history_error(
+                        "historical turn inventory is duplicate or exceeds its bound",
+                    ));
+                }
+            }
+        }
+        Ok(ids)
+    }
+    fn validate(&self, origin: &SessionResumeOrigin, current: &SessionBinding) -> Result<()> {
+        if self.schema_version != 1
+            || self.segments.is_empty()
+            || self.segments.len() > 4096
+            || self.content_digest()? != self.digest
+            || self.turns()? != origin.historical_turns
+        {
+            return Err(resume_history_error(
+                "historical prefix digest or complete turn inventory changed",
+            ));
+        }
+        let mut operations = BTreeSet::new();
+        let mut previous: Option<&ResumeHistorySegment> = None;
+        for (index, segment) in self.segments.iter().enumerate() {
+            segment.binding.validate()?;
+            let operation: uuid::Uuid = segment
+                .binding
+                .operation_id
+                .parse()
+                .map_err(|_| resume_history_error("historical operation is invalid"))?;
+            let mut normalized = segment.binding.clone();
+            normalized.operation_id = current.operation_id.clone();
+            normalized.instruction_digest = current.instruction_digest.clone();
+            let (completed, last) = segment.history.completed_inventory()?;
+            if operation.is_nil()
+                || !operations.insert(operation)
+                || segment.transition.successor == operation
+                || normalized != *current
+                || segment.reference.account != current.account_id
+                || segment.reference.phase.work != current.work_identity
+                || segment.reference.instruction_digest != segment.binding.instruction_digest
+                || segment.reference.workspace.is_nil()
+                || [
+                    segment.reference.attempt,
+                    segment.reference.max_attempts,
+                    segment.reference.max_turns,
+                    segment.reference.max_review_rounds,
+                ]
+                .contains(&0)
+                || segment.reference.attempt > segment.reference.max_attempts
+                || segment.history.ordered_ids().len() > segment.reference.max_turns as usize
+                || completed.get(&last).map(String::as_str) != Some("failed")
+                || completed
+                    .iter()
+                    .any(|(id, status)| id != &last && status != "completed")
+            {
+                return Err(resume_history_error(
+                    "historical segment changed identity, budget or terminal shape",
+                ));
+            }
+            segment
+                .submissions
+                .validate_segment(&origin.thread, &segment.history)?;
+            if submission_digest(&self.segments[..index], &segment.submissions)?
+                != segment.transition.submission_digest
+            {
+                return Err(resume_history_error(
+                    "historical submitted-input prefix changed",
+                ));
+            }
+            if let Some(prior) = previous
+                && (prior.transition.successor != operation
+                    || prior.reference.phase != segment.reference.phase
+                    || prior.reference.workspace != segment.reference.workspace
+                    || prior.reference.profile_digest != segment.reference.profile_digest
+                    || prior.reference.attempt.checked_add(1) != Some(segment.reference.attempt)
+                    || segment.reference.max_attempts > prior.reference.max_attempts
+                    || segment.reference.max_turns > prior.reference.max_turns
+                    || segment.reference.max_review_rounds > prior.reference.max_review_rounds)
+            {
+                return Err(resume_history_error(
+                    "historical operation chain reordered or enlarged its original phase budget",
+                ));
+            }
+            for digest in [
+                &segment.admission_digest,
+                &segment.journal_digest,
+                &segment.transition.recovery_digest,
+                &segment.transition.instruction_digest,
+                &segment.transition.history_digest,
+                &segment.transition.submission_digest,
+            ] {
+                crate::evidence::validate_digest(digest)?;
+            }
+            previous = Some(segment);
+        }
+        let last = self.segments.last().unwrap();
+        if last.binding.operation_id != origin.predecessor.to_string()
+            || last.transition.successor.to_string() != current.operation_id
+            || operations
+                .iter()
+                .any(|operation| operation.to_string() == current.operation_id)
+            || last.transition.recovery_digest != origin.recovery_digest
+            || last.transition.instruction_digest != origin.instruction_compatibility_digest
+            || last.transition.history_digest != origin.history_digest
+        {
+            return Err(resume_history_error(
+                "historical prefix does not end at the exact admitted predecessor",
+            ));
+        }
+        Ok(())
+    }
+    fn verify_readback(&self, turns: &[Value]) -> Result<usize> {
+        let mut end = 0usize;
+        for segment in &self.segments {
+            let start = end;
+            end = end
+                .checked_add(segment.history.ordered_ids().len())
+                .ok_or_else(|| resume_history_error("historical prefix length overflow"))?;
+            let observed = turns
+                .get(start..end)
+                .ok_or_else(|| resume_history_error("provider truncated historical sessions"))?;
+            segment.history.verify_readback(observed)?;
+            segment.submissions.verify_turns(observed)?;
+            if terminal_failure(observed)? != segment.transition.failure
+                || canonical_digest(1, &turns[..end])? != segment.transition.history_digest
+            {
+                return Err(resume_history_error(
+                    "provider changed an already verified transient boundary or ordered prefix",
+                ));
+            }
+        }
+        Ok(end)
     }
 }
 
@@ -73,6 +356,32 @@ enum SubmissionOutcome {
     Rejected,
 }
 impl SubmissionHistory {
+    fn validate_segment(&self, thread: &str, history: &RecordedThreadHistory) -> Result<()> {
+        let turns = history.ordered_ids();
+        let mut ids = BTreeSet::new();
+        if self.records.len() != turns.len() || self.records.len() > 4096 {
+            return Err(resume_history_error(
+                "historical inputs do not cover every terminal turn",
+            ));
+        }
+        for (record, turn) in self.records.iter().zip(turns) {
+            if !ids.insert(record.rpc_id)
+                || record.method != "turn/start"
+                || record.thread != thread
+                || record.expected_turn.is_some()
+                || !matches!(&record.outcome, SubmissionOutcome::Acknowledged { turn: observed } if observed == turn)
+            {
+                return Err(resume_history_error(
+                    "historical input changed its exact operation-scoped turn binding",
+                ));
+            }
+            crate::evidence::validate_digest(&record.frame_digest)?;
+            crate::evidence::validate_digest(record.input_digest.as_deref().ok_or_else(|| {
+                resume_history_error("historical submitted text digest is absent")
+            })?)?;
+        }
+        Ok(())
+    }
     pub(super) fn prepare(&mut self, rpc_id: u64, method: &str, params: &Value) -> Result<()> {
         if self.records.len() >= 4096 || self.records.iter().any(|record| record.rpc_id == rpc_id) {
             return Err(Error::new(
@@ -286,7 +595,6 @@ impl RetainedResumeSession {
             || state.correction_consumed != 0
             || state.provider_history.is_none()
             || state.submissions.is_none()
-            || state.resume_origin.is_some()
             || state.completed_turns.is_empty()
             || state.completed_turns.len() != state.turns_started as usize
             || state
@@ -300,6 +608,29 @@ impl RetainedResumeSession {
                 "resume_incompatible",
                 "only a fully observed uncorrected terminal failure can be recovered",
             ));
+        }
+        if let Some(origin) = &state.resume_origin {
+            origin.validate(&state)?;
+            let prefix = origin.prefix.as_ref().ok_or_else(|| {
+                resume_history_error("legacy resumed session lacks ordered history provenance")
+            })?;
+            let last = prefix
+                .segments
+                .last()
+                .ok_or_else(|| resume_history_error("empty historical prefix"))?;
+            if origin.readback_digest.is_none()
+                || last.reference.attempt.checked_add(1) != Some(reference.attempt)
+                || last.reference.phase != reference.phase
+                || last.reference.workspace != reference.workspace
+                || last.reference.profile_digest != reference.profile_digest
+                || reference.max_attempts > last.reference.max_attempts
+                || reference.max_turns > last.reference.max_turns
+                || reference.max_review_rounds > last.reference.max_review_rounds
+            {
+                return Err(resume_history_error(
+                    "resumed candidate changed its historical budget or lacks actual readback",
+                ));
+            }
         }
         let digest = canonical_digest(
             1,
@@ -327,6 +658,107 @@ impl RetainedResumeSession {
     }
     pub fn digest(&self) -> &str {
         &self.digest
+    }
+    /// Data linkage only: the native consumer still requires its genuine joined
+    /// completion and independent source, ownership and current authority proofs.
+    pub(crate) fn verify_prior_receipts(&self, receipts: &[crate::control::Receipt]) -> Result<()> {
+        let operation: uuid::Uuid = self
+            .state
+            .binding
+            .operation_id
+            .parse()
+            .map_err(|_| resume_history_error("candidate operation is invalid"))?;
+        let current = receipts
+            .iter()
+            .find(|receipt| receipt.operation_id == operation)
+            .ok_or_else(|| resume_history_error("candidate actual admission disappeared"))?;
+        if canonical_digest(1, current)? != self.admission_digest {
+            return Err(resume_history_error("candidate actual receipt changed"));
+        }
+        let Some(prefix) = self
+            .state
+            .resume_origin
+            .as_ref()
+            .and_then(|origin| origin.prefix.as_ref())
+        else {
+            return Ok(());
+        };
+        for segment in &prefix.segments {
+            let predecessor: uuid::Uuid = segment
+                .binding
+                .operation_id
+                .parse()
+                .map_err(|_| resume_history_error("historical operation is invalid"))?;
+            let prior = receipts
+                .iter()
+                .find(|receipt| receipt.operation_id == predecessor)
+                .ok_or_else(|| resume_history_error("historical admission disappeared"))?;
+            let run = crate::control::RunReference::from_receipt(prior)?
+                .ok_or_else(|| resume_history_error("historical run reference disappeared"))?;
+            let next = receipts
+                .iter()
+                .find(|receipt| receipt.operation_id == segment.transition.successor)
+                .ok_or_else(|| {
+                    resume_history_error("historical successor admission disappeared")
+                })?;
+            let resume =
+                crate::control::RunResumeReference::from_receipt(next)?.ok_or_else(|| {
+                    resume_history_error("historical successor lost its typed resume admission")
+                })?;
+            if prior.runtime_id != current.runtime_id
+                || next.runtime_id != current.runtime_id
+                || canonical_digest(1, prior)? != segment.admission_digest
+                || canonical_digest(1, &run)? != canonical_digest(1, &segment.reference)?
+                || resume.predecessor() != predecessor
+                || resume.predecessor_receipt_digest != segment.admission_digest
+                || resume.recovery_digest() != segment.transition.recovery_digest
+                || resume.instruction_compatibility_digest != segment.transition.instruction_digest
+            {
+                return Err(resume_history_error(
+                    "historical submitted-input chain differs from actual Control lineage",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn submission_digest(
+    prior: &[ResumeHistorySegment],
+    current: &SubmissionHistory,
+) -> Result<String> {
+    if prior.is_empty() {
+        return canonical_digest(1, current);
+    }
+    let prefix = prior.iter().map(|segment| json!({"operation":segment.binding.operation_id,"submissions":segment.submissions})).collect::<Vec<_>>();
+    canonical_digest(1, &json!({"prefix":prefix,"current":current}))
+}
+fn terminal_failure(turns: &[Value]) -> Result<TransientTurnFailure> {
+    let (last, previous) = turns
+        .split_last()
+        .ok_or_else(|| resume_history_error("empty provider session history"))?;
+    if previous
+        .iter()
+        .any(|turn| turn["status"] != "completed" || !turn["error"].is_null())
+        || last["status"] != "failed"
+        || last
+            .pointer("/error/misalignment")
+            .is_some_and(|value| !value.is_null())
+    {
+        return Err(resume_history_error(
+            "session history does not end at one verified transient boundary",
+        ));
+    }
+    match last
+        .pointer("/error/codexErrorInfo")
+        .and_then(Value::as_str)
+    {
+        Some("serverOverloaded") => Ok(TransientTurnFailure::ServerOverloaded),
+        Some("internalServerError") => Ok(TransientTurnFailure::InternalServerError),
+        _ => Err(Error::new(
+            "persistent_blocker",
+            "terminal failure is outside the narrow supported transient recovery profile",
+        )),
     }
 }
 
@@ -654,45 +1086,41 @@ impl RpcClient {
                 "thread changed or requested work during metadata recovery",
             ));
         }
+        let prefix = state
+            .resume_origin
+            .as_ref()
+            .map(|origin| {
+                origin.prefix.as_ref().ok_or_else(|| {
+                    resume_history_error("legacy resumed session has no complete prefix")
+                })
+            })
+            .transpose()?;
+        let prefix_len = prefix
+            .map(|prefix| prefix.verify_readback(turns))
+            .transpose()?
+            .unwrap_or(0);
+        let current_turns = turns
+            .get(prefix_len..)
+            .ok_or_else(|| resume_history_error("provider truncated current session history"))?;
         state
             .provider_history
             .as_ref()
             .ok_or_else(|| Error::new("resume_incompatible", "missing retained full history"))?
-            .verify_readback(turns)?;
+            .verify_readback(current_turns)?;
         let submissions = state
             .submissions
             .as_ref()
             .ok_or_else(|| Error::new("resume_incompatible", "missing actual submitted inputs"))?;
-        submissions.verify_turns(turns)?;
-        let (last, previous) = turns
-            .split_last()
-            .ok_or_else(|| Error::new("resume_incompatible", "empty provider history"))?;
-        if previous
-            .iter()
-            .any(|turn| turn["status"] != "completed" || !turn["error"].is_null())
-            || last["status"] != "failed"
-        {
-            return Err(Error::new(
-                "resume_incompatible",
-                "recovery requires one final observed transient failure",
-            ));
-        }
-        let transient_failure = match last
-            .pointer("/error/codexErrorInfo")
-            .and_then(Value::as_str)
-        {
-            Some("serverOverloaded") => TransientTurnFailure::ServerOverloaded,
-            Some("internalServerError") => TransientTurnFailure::InternalServerError,
-            _ => {
-                return Err(Error::new(
-                    "persistent_blocker",
-                    "terminal failure is outside the narrow supported transient recovery profile",
-                ));
-            }
-        };
+        submissions.verify_turns(current_turns)?;
+        let transient_failure = terminal_failure(current_turns)?;
         let response_digest = canonical_digest(1, &response)?;
         let history_digest = canonical_digest(1, turns)?;
-        let submission_digest = canonical_digest(1, submissions)?;
+        let submission_digest = submission_digest(
+            prefix
+                .map(|prefix| prefix.segments.as_slice())
+                .unwrap_or_default(),
+            submissions,
+        )?;
         let digest = canonical_digest(
             1,
             &json!({"retained":retained.digest,"response":response_digest,"history":history_digest,"submissions":submission_digest,"failure":transient_failure}),
@@ -830,12 +1258,16 @@ fn input_digest(input: &Value) -> Result<String> {
 }
 
 #[cfg(test)]
+#[path = "codex_resume_chain_tests.rs"]
+mod chain_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    struct Observed(Arc<Mutex<Vec<SessionState>>>);
+    pub(super) struct Observed(pub(super) Arc<Mutex<Vec<SessionState>>>);
     impl ToolBroker for Observed {
         fn observe_session(&mut self, state: &SessionState) -> Result<()> {
             self.0.lock().unwrap().push(state.clone());
@@ -848,12 +1280,17 @@ mod tests {
             Box::pin(async { panic!("metadata recovery invoked a privileged broker") })
         }
     }
-    async fn read(reader: &mut BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>) -> Value {
+    pub(super) async fn read(
+        reader: &mut BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    ) -> Value {
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
         serde_json::from_str(&line).unwrap()
     }
-    async fn write(writer: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>, value: Value) {
+    pub(super) async fn write(
+        writer: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
+        value: Value,
+    ) {
         writer
             .write_all(format!("{value}\n").as_bytes())
             .await
@@ -1029,6 +1466,11 @@ mod tests {
             let thread = server.await.unwrap();
             if scenario == "current" {
                 resumed_wire_sequence(current_proof.as_ref().unwrap(), thread.clone()).await;
+                super::chain_tests::repeated_resume_sequence(
+                    current_proof.as_ref().unwrap(),
+                    thread.clone(),
+                )
+                .await;
                 metadata_sequence(&candidate, thread).await;
                 response_policy_sequence(current_proof.as_ref().unwrap()).await;
             }
@@ -1187,15 +1629,15 @@ mod tests {
             binding.operation_id = uuid::Uuid::new_v4().to_string();
             let mut state = SessionState::new(binding, old.max_turns).unwrap();
             state.thread_id = old.thread_id.clone();
-            state.resume_origin = Some(SessionResumeOrigin {
-                predecessor: old.binding.operation_id.parse().unwrap(),
-                recovery_digest: proof.digest().into(),
-                instruction_compatibility_digest: canonical_digest(1, &"wire component").unwrap(),
-                history_digest: proof.history_digest().into(),
-                historical_turns: old.completed_turns.keys().cloned().collect(),
-                thread: "thread-one".into(),
-                readback_digest: None,
-            });
+            state.resume_origin = Some(
+                SessionResumeOrigin::from_recovery(
+                    proof,
+                    proof.digest(),
+                    &canonical_digest(1, &"wire component").unwrap(),
+                    &state.binding,
+                )
+                .unwrap(),
+            );
             let review = matches!(
                 scenario,
                 "inline_review" | "foreign_review" | "missing_review_thread"
@@ -1316,15 +1758,15 @@ mod tests {
             state.usage = old
                 .usage
                 .resumed_session(&old.binding.account_id, "thread-one");
-            state.resume_origin = Some(SessionResumeOrigin {
-                predecessor: old.binding.operation_id.parse().unwrap(),
-                recovery_digest: proof.digest().into(),
-                instruction_compatibility_digest: canonical_digest(1, &"wire component").unwrap(),
-                history_digest: proof.history_digest().into(),
-                historical_turns: old.completed_turns.keys().cloned().collect(),
-                thread: "thread-one".into(),
-                readback_digest: None,
-            });
+            state.resume_origin = Some(
+                SessionResumeOrigin::from_recovery(
+                    proof,
+                    proof.digest(),
+                    &canonical_digest(1, &"wire component").unwrap(),
+                    &state.binding,
+                )
+                .unwrap(),
+            );
             let observations = Arc::new(Mutex::new(Vec::<SessionState>::new()));
             let persisted = observations.clone();
             let (client, server) = tokio::io::duplex(32_768);

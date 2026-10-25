@@ -4,37 +4,197 @@ use super::*;
 use crate::{
     instructions::AgentRole,
     runtime_delivery::worker_fixture::{
-        WorkerInput, complete, complete_capped, complete_retried, git, worker,
+        WorkerInput, complete, complete_capped, complete_retried, git, maintain_phase_observations,
+        worker,
     },
     test_process_probe as probe,
 };
 use serde_json::Value;
 use std::fs;
+
+#[tokio::test]
+async fn owned_observation_maintenance_reads_native_changes_while_phase_remains_admitted() {
+    use crate::runtime_driver::{ObservationMaintenance, ObservationTick};
+
+    let (_root, built, _service, wire, owner) =
+        super::super::tests::fixture_authorization_with_wire(true).await;
+    let before = built.runtime.observations.snapshot().unwrap();
+    let gate = before
+        .parent(Uuid::from_u128(2), Uuid::from_u128(100))
+        .unwrap()
+        .fresh_gate(
+            Some(Uuid::from_u128(101)),
+            GatePurpose::NewOperation,
+            &crate::reconcile::DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    let _active = built
+        .runtime
+        .observations
+        .capture_active(
+            gate.workspace_id(),
+            gate.config_revision(),
+            gate.workflow_digest(),
+        )
+        .unwrap();
+    let (lease, _owner_lock) = owner.start(&built.runtime);
+    let permit = built
+        .runtime
+        .control
+        .admit(
+            &lease,
+            Uuid::new_v4(),
+            gate.work_key().unwrap(),
+            canonical_digest(1, &json!({"purpose":"observation-maintenance-barrier"})).unwrap(),
+            || {
+                built
+                    .runtime
+                    .observations
+                    .active_gate(&gate, &crate::reconcile::DependencyOutcomes::default())?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    let admission_digest = canonical_digest(
+        1,
+        &built
+            .runtime
+            .control
+            .operation(permit.operation_id)
+            .unwrap(),
+    )
+    .unwrap();
+    let request_count = {
+        let mut provider = wire.lock().unwrap();
+        provider.set_parent_title("Changed native parent while a delivery phase is pending");
+        provider.requests.len()
+    };
+    let maintenance = ObservationMaintenance::new(
+        built.runtime.observations.clone(),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let tick = maintenance.tick(30_000, true).await;
+    // Joining the real bounded read task is the deterministic barrier. There is
+    // no elapsed-age sleep, injected observation, or synthetic execution result.
+    let refreshed = maintenance.join().await;
+    let pending = maintenance.pending();
+    let still_admitted = built
+        .runtime
+        .control
+        .snapshot()
+        .unwrap()
+        .active_operations
+        .iter()
+        .any(|p| p.operation_id == permit.operation_id);
+    let unchanged_admission = canonical_digest(
+        1,
+        &built
+            .runtime
+            .control
+            .operation(permit.operation_id)
+            .unwrap(),
+    )
+    .unwrap();
+    let current_authority = built
+        .runtime
+        .observations
+        .active_gate(&gate, &crate::reconcile::DependencyOutcomes::default());
+    let (request_count_after, issue_reads) = {
+        let provider = wire.lock().unwrap();
+        // Reconciliation observes issues through these bulk queries; the wire's
+        // single-issue KegariIssue hook is not on this production refresh path.
+        let issue_reads = provider.requests[request_count..]
+            .iter()
+            .filter(|(_, body)| {
+                body["query"].as_str().is_some_and(|query| {
+                    query.contains("KegariParents") || query.contains("KegariRefresh")
+                })
+            })
+            .count();
+        (provider.requests.len(), issue_reads)
+    };
+    built
+        .runtime
+        .control
+        .retire_local(
+            permit.operation_id,
+            json!({"phase":"observation-maintenance-barrier","result":"no local process or external effect was launched"}),
+        )
+        .unwrap();
+
+    assert!(matches!(tick.unwrap(), ObservationTick::Started));
+    let refreshed = refreshed.unwrap().unwrap();
+    assert!(issue_reads > 0);
+    assert!(request_count_after > request_count);
+    assert!(refreshed.observed_at >= before.observed_at);
+    assert_eq!(
+        refreshed
+            .parent(Uuid::from_u128(2), Uuid::from_u128(100))
+            .unwrap()
+            .issue
+            .as_ref()
+            .unwrap()
+            .title,
+        "Changed native parent while a delivery phase is pending"
+    );
+    assert!(still_admitted);
+    assert_eq!(unchanged_admission, admission_digest);
+    assert!(current_authority.is_err());
+    assert!(!pending.unwrap());
+}
+
 #[tokio::test]
 async fn exact_review_findings_produce_repair_from_real_owned_source_and_contracts() {
-    repair_cycle(false, false, None).await;
+    repair_cycle(false, false, None, false).await;
 }
 #[tokio::test]
 async fn exhausted_completed_work_uses_actual_operator_retry_budget_and_bound_repair_source() {
-    repair_cycle(true, false, None).await;
+    repair_cycle(true, false, None, false).await;
 }
 #[path = "runtime_delivery_retry_fixture.rs"]
 mod retry_fixture;
 #[tokio::test]
 async fn failed_review_uses_exact_source_and_actual_native_grant_before_clean_review() {
-    repair_cycle(false, true, None).await;
+    repair_cycle(false, true, None, false).await;
 }
 #[tokio::test]
 async fn granted_review_retries_another_known_failure_with_same_budget_and_source() {
-    repair_cycle(false, true, Some("serverOverloaded")).await;
+    repair_cycle(false, true, Some("serverOverloaded"), false).await;
 }
 #[tokio::test]
 async fn granted_review_does_not_automatically_retry_auth_unknown_or_nontransient_failure() {
     for code in ["unauthorized", "other", "badRequest"] {
-        Box::pin(repair_cycle(false, true, Some(code))).await;
+        repair_cycle(false, true, Some(code), false).await;
     }
 }
-async fn repair_cycle(explicit_retry: bool, review_retry: bool, failure_code: Option<&str>) {
+#[tokio::test]
+async fn granted_findings_preserve_implementation_budget_and_follow_changed_source_in_granted_review_budget()
+ {
+    repair_cycle(false, true, None, true).await;
+}
+fn repair_cycle(
+    explicit_retry: bool,
+    review_retry: bool,
+    failure_code: Option<&str>,
+    findings: bool,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>> {
+    // The owned Git/protocol fixture has large nested futures. Allocate its
+    // frame independently rather than expanding every test's stack frame.
+    Box::pin(repair_cycle_inner(
+        explicit_retry,
+        review_retry,
+        failure_code,
+        findings,
+    ))
+}
+async fn repair_cycle_inner(
+    explicit_retry: bool,
+    review_retry: bool,
+    failure_code: Option<&str>,
+    findings: bool,
+) {
     let retry_again = failure_code.is_some();
     let (root, built, old_service, wire, owner) =
         super::super::tests::fixture_authorization_with_wire(true).await;
@@ -153,7 +313,25 @@ async fn repair_cycle(explicit_retry: bool, review_retry: bool, failure_code: Op
         )
         .await
         .unwrap();
-    let source_proof=sealing.coordinator.seal_child_source(&sealing.admission,&claim,&original.execution,original.contract.isolation(),crate::git::SourceCommitMetadata {identity:crate::git::CommitIdentity {name:"Disposable Fixture".into(),email:"fixture@example.invalid".into()},timestamp:chrono::DateTime::from_timestamp(1_767_225_600,0).unwrap(),message:"test: seal disposable source\n\nSigned-off-by: Disposable Fixture <fixture@example.invalid>\n".into()}).await.unwrap();
+    let source_proof = maintain_phase_observations(
+        &built.runtime,
+        sealing.coordinator.seal_child_source(
+            &sealing.admission,
+            &claim,
+            &original.execution,
+            original.contract.isolation(),
+            crate::git::SourceCommitMetadata {
+                identity: crate::git::CommitIdentity {
+                    name: "Disposable Fixture".into(),
+                    email: "fixture@example.invalid".into(),
+                },
+                timestamp: chrono::DateTime::from_timestamp(1_767_225_600, 0).unwrap(),
+                message: "test: seal disposable source\n\nSigned-off-by: Disposable Fixture <fixture@example.invalid>\n".into(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
     service
         .retire_delivery_phase(&sealing, json!({"sealed":true}))
         .unwrap();
@@ -295,6 +473,8 @@ async fn repair_cycle(explicit_retry: bool, review_retry: bool, failure_code: Op
     });
     if review_retry {
         review_retry_fixture::run(ReviewFixture {
+            findings,
+            source_proof: &source_proof,
             retry_again,
             failure_code,
             service: &service,
@@ -341,21 +521,24 @@ async fn repair_cycle(explicit_retry: bool, review_retry: bool, failure_code: Op
         )
         .await
         .unwrap();
-    let proof = review_phase
-        .coordinator
-        .unfinished_review(ReviewRepairRequest {
-            source: RepairSource {
-                admission: &review_phase.admission,
-                original: claim,
-                source: &source_proof,
-                completion,
-            },
-            assignment: &review,
-            outcome: &review_outcome,
-            completion: review_completion.clone(),
-        })
-        .await
-        .unwrap();
+    let proof = maintain_phase_observations(
+        &built.runtime,
+        review_phase
+            .coordinator
+            .unfinished_review(ReviewRepairRequest {
+                source: RepairSource {
+                    admission: &review_phase.admission,
+                    original: claim,
+                    source: &source_proof,
+                    completion,
+                },
+                assignment: &review,
+                outcome: &review_outcome,
+                completion: review_completion.clone(),
+            }),
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.predecessor(), original.execution.binding.operation_id);
     assert_eq!(proof.phase().phase, "implementation");
     assert_eq!(proof.review_rounds_consumed(), 1);
@@ -577,10 +760,13 @@ async fn repair_cycle(explicit_retry: bool, review_retry: bool, failure_code: Op
         None => proof.verify_contract(&repair.contract).unwrap(),
     };
     assert!(proof.verify_contract(&original.contract).is_err());
+    built.runtime.observations.refresh().await.unwrap();
     let request = crate::runtime_workers::LaunchRequest {
         lease: lease.clone(),
         operation_id: repair.execution.binding.operation_id,
-        authority: WorkerAuthority::Authorized(gate.clone()),
+        authority: service
+            .current_delivery_worker_authority(proof.authority())
+            .unwrap(),
         phase: retried
             .as_ref()
             .map(|p| p.phase())
@@ -702,7 +888,25 @@ async fn repair_cycle(explicit_retry: bool, review_retry: bool, failure_code: Op
         )
         .await
         .unwrap();
-    let changed=repair_sealing.coordinator.seal_child_source(&repair_sealing.admission,&repair_claim,&repair.execution,repair.contract.isolation(),crate::git::SourceCommitMetadata {identity:crate::git::CommitIdentity {name:"Disposable Fixture".into(),email:"fixture@example.invalid".into()},timestamp:chrono::DateTime::from_timestamp(1_767_225_601,0).unwrap(),message:"test: repair disposable required case\n\nSigned-off-by: Disposable Fixture <fixture@example.invalid>\n".into()}).await.unwrap();
+    let changed = maintain_phase_observations(
+        &built.runtime,
+        repair_sealing.coordinator.seal_child_source(
+            &repair_sealing.admission,
+            &repair_claim,
+            &repair.execution,
+            repair.contract.isolation(),
+            crate::git::SourceCommitMetadata {
+                identity: crate::git::CommitIdentity {
+                    name: "Disposable Fixture".into(),
+                    email: "fixture@example.invalid".into(),
+                },
+                timestamp: chrono::DateTime::from_timestamp(1_767_225_601, 0).unwrap(),
+                message: "test: repair disposable required case\n\nSigned-off-by: Disposable Fixture <fixture@example.invalid>\n".into(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
     service
         .retire_delivery_phase(&repair_sealing, json!({"sealed":true}))
         .unwrap();
@@ -732,21 +936,24 @@ async fn repair_cycle(explicit_retry: bool, review_retry: bool, failure_code: Op
             json!({"task":"validate corrected exact source"}),
         )
         .unwrap();
-    let advanced = revalidate
-        .coordinator
-        .source_advanced(SourceAdvancedRequest {
-            source: RepairSource {
-                admission: &revalidate.admission,
-                original: repair_claim,
-                source: &changed,
-                completion: repair_completion,
-            },
-            assignment: &assignment,
-            predecessor: &validation_outcome,
-            completion: validation_completion,
-        })
-        .await
-        .unwrap();
+    let advanced = maintain_phase_observations(
+        &built.runtime,
+        revalidate
+            .coordinator
+            .source_advanced(SourceAdvancedRequest {
+                source: RepairSource {
+                    admission: &revalidate.admission,
+                    original: repair_claim,
+                    source: &changed,
+                    completion: repair_completion,
+                },
+                assignment: &assignment,
+                predecessor: &validation_outcome,
+                completion: validation_completion,
+            }),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         advanced.predecessor(),
         validator.execution.binding.operation_id

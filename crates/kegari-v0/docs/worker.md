@@ -28,6 +28,13 @@ no always-allow production implementation. Application-level composition of
 these callbacks remains an integration responsibility; the deterministic test
 host is not a production substitute.
 
+Registration accepts only actual OS lock contention as proof that the observed
+runtime owns its lock; directory replacement and other storage errors reject the
+check. Record updates use separate lexical section guards that explicitly unlock
+at scope exit, so an unrelated fork cannot extend their lifetime. Control,
+runtime, worker, hook and inherited process guards retain descriptor ownership
+until their actual last owner exits or releases the guard.
+
 The shipped definitions expose these capabilities according to role:
 
 | Tool | Host behavior |
@@ -175,8 +182,14 @@ are exposed in account observations. A metadata reservation releases only after
 its actual task joins and its admission records confirmed exit with no remaining
 holds; later reconciliation is rechecked without inventing a join from disk.
 
-This first consumer excludes configured before/after-run hooks, corrected or
-previously resumed sessions, review sessions and cold reconstruction of owned
-execution. Offline
+Repeated compatible sessions retain an ordered operation-scoped provider/input
+prefix and each original usage ledger. Each metadata and model planning gate
+revalidates its exact typed Control predecessor chain; the immediate predecessor
+must still be the actual joined worker retained in this process. Original phase
+caps, current source proof and directory-family enrollment remain mandatory.
+Legacy resumed journals without that complete prefix are ineligible.
+
+This consumer excludes configured before/after-run hooks, corrected sessions,
+review sessions and cold reconstruction of owned execution. Offline
 protocol, control, source/family and hook tests establish component behavior;
 no native resume/model call or complete runtime recovery qualification was run.

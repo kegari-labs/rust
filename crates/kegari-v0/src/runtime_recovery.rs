@@ -284,6 +284,7 @@ impl RuntimeCoordinator {
         };
         let run = candidate.retained.reference();
         let receipts = self.control.operations()?;
+        candidate.retained.verify_prior_receipts(&receipts)?;
         self.require_provider_session_clear(&run.account, &run.phase.work)?;
         crate::runtime_schedule::require_provider_clear(
             self.runtime_id,

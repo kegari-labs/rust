@@ -165,12 +165,12 @@ impl LogSink {
                 "redacted event exceeds the configured file bound",
             ));
         }
-        // A fork may briefly retain a just-closed descriptor before exec closes
-        // CLOEXEC files. Bound contention recovery instead of losing a healthy
-        // event or blocking scheduling indefinitely on a foreign writer.
+        // Section guards explicitly unlock at scope exit, including across
+        // incidental fork inheritance. Bound contention with actual concurrent
+        // writers instead of losing an event or blocking scheduling indefinitely.
         let deadline = std::time::Instant::now() + Duration::from_millis(100);
         let _lock = loop {
-            match self.directory.lock("log.lock") {
+            match self.directory.section_lock("log.lock") {
                 Ok(lock) => break lock,
                 Err(error)
                     if error.code == "ownership_conflict"
@@ -684,7 +684,7 @@ impl Housekeeping {
         }
         OwnedDirectory::reopen(directory.marker(), directory.digest(), isolation)?;
         let storage = self.root.child("cleanup")?;
-        let _registration_lock = storage.lock("families.lock")?;
+        let _registration_lock = storage.section_lock("families.lock")?;
         let name = format!("{}.json", binding.operation_id);
         match storage.read::<ExecutionRegistration>(&name) {
             Ok(old) => {
@@ -766,7 +766,7 @@ impl Housekeeping {
         self.control.serialize_observation(|state| {
             self.registration_updates_allowed(state)?;
             let storage = self.root.child("cleanup")?;
-            let _guard = storage.lock("families.lock")?;
+            let _guard = storage.section_lock("families.lock")?;
             let mut registration = self.registration(operation)?;
             update(&mut registration)?;
             self.save(&registration)
@@ -791,7 +791,7 @@ impl Housekeeping {
         self.control.serialize_observation(|state| {
             self.registration_updates_allowed(state)?;
             let storage = self.root.child("cleanup")?;
-            let _guard = storage.lock("families.lock")?;
+            let _guard = storage.section_lock("families.lock")?;
             let registration = self.registration(operation)?;
             if ledger.binding_digest != canonical_digest(1, &registration.binding)? {
                 return Err(Error::new(

@@ -68,6 +68,12 @@ struct Fixture {
     comment_response_lost: bool,
     duplicate_publication: bool,
     fail_issue_once: bool,
+    observation_barrier: Option<Arc<ObservationBarrier>>,
+}
+#[derive(Default)]
+struct ObservationBarrier {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 impl Fixture {
     fn new() -> Arc<Mutex<Self>> {
@@ -94,6 +100,7 @@ impl Fixture {
             comment_response_lost: false,
             duplicate_publication: false,
             fail_issue_once: false,
+            observation_barrier: None,
         }))
     }
 }
@@ -104,6 +111,11 @@ impl HttpTransport for Wire {
         request: HttpRequest,
     ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
         Box::pin(async move {
+            let barrier = self.0.lock().unwrap().observation_barrier.clone();
+            if let Some(barrier) = barrier {
+                barrier.entered.notify_one();
+                barrier.release.notified().await;
+            }
             let mut f = self.0.lock().unwrap();
             let body: Value = if request.body.is_empty() {
                 Value::Null
@@ -1641,6 +1653,72 @@ impl ActiveFixture {
             .active_gate(&self.gate, &DependencyOutcomes::default())
     }
 }
+#[tokio::test]
+async fn bounded_observation_timeout_invalidates_active_gates_until_actual_refresh() {
+    let f = ActiveFixture::new().await;
+    f.active().unwrap();
+    let before = f.cache.snapshot().unwrap();
+    let receipts = canonical_digest(1, &f.control.operations().unwrap()).unwrap();
+    let requests = f.wire.lock().unwrap().requests.len();
+    let barrier = Arc::new(ObservationBarrier::default());
+    f.wire.lock().unwrap().observation_barrier = Some(barrier.clone());
+    let (result, ()) = tokio::join!(f.cache.refresh_bounded(StdDuration::from_secs(5)), async {
+        tokio::time::timeout(StdDuration::from_secs(10), barrier.entered.notified())
+            .await
+            .expect("an actual provider read must reach the fixture barrier");
+    });
+    assert_eq!(result.unwrap_err().code, "timeout");
+    assert_eq!(f.cache.health().unwrap()["status"], "observation_failed");
+    assert_eq!(f.cache.snapshot().unwrap().observed_at, before.observed_at);
+    assert_eq!(
+        f.cache.admission_snapshot().unwrap_err().code,
+        "observation_unavailable"
+    );
+    let error = f.active().unwrap_err();
+    assert_eq!(error.code, "observation_unavailable");
+    assert_eq!(f.cache.health().unwrap()["error"]["code"], "timeout");
+    assert_eq!(
+        canonical_digest(1, &f.control.operations().unwrap()).unwrap(),
+        receipts,
+        "observation failure cannot admit or retire work"
+    );
+
+    f.wire.lock().unwrap().observation_barrier = None;
+    let after = f
+        .cache
+        .refresh_bounded(StdDuration::from_secs(30))
+        .await
+        .unwrap();
+    assert!(after.observed_at > before.observed_at);
+    assert!(f.wire.lock().unwrap().requests.len() > requests);
+    f.active().unwrap();
+    f.cache.admission_snapshot().unwrap();
+    assert_eq!(
+        canonical_digest(1, &f.control.operations().unwrap()).unwrap(),
+        receipts
+    );
+}
+
+#[tokio::test]
+async fn failed_observation_invalidates_retained_gates_without_redating_them() {
+    let f = ActiveFixture::new().await;
+    f.active().unwrap();
+    let before = f.cache.snapshot().unwrap();
+    let root = f._directory.path().canonicalize().unwrap();
+    let original = root.join("retained-references");
+    std::fs::rename(root.join("references"), &original).unwrap();
+    let error = f.cache.refresh().await.unwrap_err();
+    assert_eq!(error.code, "io_error");
+    assert_eq!(f.cache.snapshot().unwrap().observed_at, before.observed_at);
+    assert_eq!(f.active().unwrap_err().code, "observation_unavailable");
+    assert!(f.cache.admission_snapshot().is_err());
+
+    std::fs::rename(original, root.join("references")).unwrap();
+    f.cache.refresh().await.unwrap();
+    f.active().unwrap();
+    f.cache.admission_snapshot().unwrap();
+}
+
 #[tokio::test]
 async fn active_snapshot_survives_profile_capacity_and_invalid_workflow_reload_only_while_authority_holds()
  {

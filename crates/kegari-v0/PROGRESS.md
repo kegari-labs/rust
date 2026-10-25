@@ -1,55 +1,144 @@
 # Kegari v0 build progress
 
-Local implementation remains in progress. The native recovery/history checkpoint
-passed **683 tests, zero failures and two explicitly ignored native qualifications**
-across 38 groups. Strict all-target Clippy, formatting, contract inventory and diff
-checks passed. All 564 final inputs retained
+Local implementation and validation remain in progress; the Goal is incomplete.
+The current uncommitted increment implements terminal release-chain completion,
+complete retained receipt/effect/target history, granted Findings-to-repair and
+changed-source review, repeated same-thread session history, and diagnostic
+operator release inspection. It also fixes record-lock lifetime across incidental
+forks and prevents storage errors from passing runtime ownership checks.
+
+The current verified source has 572 inputs:
+`sha256:3bfec4117bfb7351341085b47a72a4210b2365a19bfbcdc406f17ddb989797c2`.
+Full unfiltered suite 31 passed **705 tests, zero failures and two explicitly
+ignored native qualifications across 39 groups**, in 633.682 seconds wall time.
+All 205 library tests passed under normal parallelism. Strict all-target Clippy 31
+and formatting 31 passed on the same unchanged source. Inventory 32 and diff 31
+also passed. Evaluation plan 31 passed with 56 declared slots and dispatch
+disabled. The [machine-readable evidence](validation/terminal-grant-session-checks.json)
+verifies retained log hashes, before/after source inventories and complete test
+groups. Inventory 33 additionally binds the checker, coverage ledger and SPEC
+hashes. No Cargo command is active; the authorized local commit is next.
+
+Full suite 30 at the preceding source passed 204/205 library tests, then stopped.
+The retention fixture used a random unattached lease, so the new owner preflight
+correctly rejected it before its intended worker_binding failure. The corrected
+fixture holds its actual attached owner, lease and runtime lock, with every error
+and Arc-retention assertion preserved. Focused retention 31 passed before the
+complete run. No production change followed full suite 30.
+
+Earlier focused evidence: all seven continuation tests 27 passed, including both
+source-sealing failures from full suite 23 and the stack-overflow case. All 27
+reconciliation tests 26 passed, including actual timeout invalidation/recovery.
+Their exact input hashes, failures and limitations are preserved in the
+[working report](validation/LOCAL-TERMINAL-GRANT-SESSION.md). These are focused
+results, not a complete current-suite pass. Strict checks 23 and the bounded
+84/84 delivery repetition precede later changes and remain historical.
+
+Full suite 18 exposed file-lock contention; a synchronized owned-fork test then
+proved an inherited record descriptor could retain the lock after parent drop.
+All 28 lexical record sections now explicitly unlock; ownership guards retain
+intentional descriptor/clone lifetime. Full suite 23 passed 192/194 library tests
+and exposed current provider-observation starvation during long phases. Retained
+progression tasks and concurrent bounded observation reads correct that path.
+Neither passing reruns nor fixture input are treated as native qualification.
+The complete current run establishes deterministic component evidence only.
+
+Next: commit the verified increment. Further engineering includes authenticated released-parent
+dependency propagation, ordinary release completion seals,
+paired review-round ancestry/recurring Findings, validation retry lineage,
+cold/corrected/hook recovery, carried acceptance, historical Overview/Show and
+concrete native evaluation composition. Detailed designs and limits follow.
+
+The previous committed checkpoint is
+`71e63e261ea52ad640eff70f828eb43eff99b635` —
+`feat(kegari-v0): schedule bounded recovery and retain target history`.
+It passed 683 tests, zero failures and two explicitly ignored native qualifications
+across 38 groups, plus strict Clippy, formatting, contract inventory and diff
+checks, at 564 inputs
 `sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58`.
-The [checkpoint report](validation/LOCAL-NATIVE-RECOVERY-HISTORY.md) and
-[machine-readable evidence](validation/native-recovery-history-checks.json) retain
-exact source versions, commands, review corrections and failed attempts. The
-freshly built evaluation plan still declares 56 slots with dispatch disabled.
-All validation sessions closed. The verified increment is ready for its authorized
-signed-off local commit; all code/test owners remain held until it is recorded.
+Its [report](validation/LOCAL-NATIVE-RECOVERY-HISTORY.md) and
+[machine-readable evidence](validation/native-recovery-history-checks.json) are
+historical; they do not validate current edits. Its evaluation plan declares
+56 slots with dispatch disabled. The commit has human signoff and
+`Assisted-by: Codex`; no consolidation or push was performed.
 
-Automatic same-process recovery now selects an actual joined child completion,
-acquires bounded provider metadata and fresh retained-clone inspection, and
-consumes the sealed resumed admission through shared scheduling. Same-grant
-review retries require recorded transient terminal provenance. Historical target
-readback binds immutable original effects; current-proof recovery handles absent
-or authenticated-old indexes without creating new effects. These paths are
-locally checked, with no native/live qualification claim.
-
-Previous local checkpoint: `c6b4b4b8d1aacfc8a860c34851c57cb11b7f4e2d` —
-`feat(kegari-v0): enforce bounded worker and release recovery` (668 base passes,
-two native ignores, then 122 affected repetitions). Earlier checkpoints are
-`63f4b1e39bc4dd08f3193c8556215a11bf973daa` —
-`feat(kegari-v0): bind retry preparation and owned evaluation` (638 passes),
+Earlier local checkpoints: `c6b4b4b8d1aacfc8a860c34851c57cb11b7f4e2d` —
+`feat(kegari-v0): enforce bounded worker and release recovery` (668 passes, two
+native ignores, then 122 affected repetitions); `63f4b1e39bc4dd08f3193c8556215a11bf973daa`
+— `feat(kegari-v0): bind retry preparation and owned evaluation` (638 passes);
 `bd2964319bdb6722d219fc97ace1ab0e91f04aa8` —
-`feat(kegari-v0): resume unfinished delivery with bounded proofs` (613 passes),
-and `90ce6d4631dc605a43ba1aa4033c839832b9cf95` —
+`feat(kegari-v0): resume unfinished delivery with bounded proofs` (613 passes);
+`90ce6d4631dc605a43ba1aa4033c839832b9cf95` —
 `feat(kegari-v0): connect corrections and delivery recovery` (577 passes).
-The new scheduler consumption and immutable target history form a distinct
-reviewed increment beyond the preceding recovery primitives. A separate commit
-preserves that verification boundary; no consolidation, history rewrite or push
-is planned. The preceding checkpoint's clean worktree and source hash were
-verified before this increment began.
 
-Next work: terminal transitive hold completion, granted findings-to-repair and
-changed-source review/validation lineage, cold/corrected/repeated recovery,
-configured-hook recovery, carried acceptance and native evaluation composition.
-The next bounded plans have been reviewed read-only; no next-slice edits have
-started. Root owns integration/progress/commits, delivery owns review lineage,
-release owns terminal chain completion, and Codex owns session recovery.
+Current branch is `main`; HEAD and the existing `origin/main` reference both name
+71e63e2, so it is treated as published. Index remains empty. No fetch, push, remote
+mutation, branch/worktree creation or history rewrite was performed. SPEC retains
+approved SHA-256 `80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326`.
+All current edits are task-owned and remain uncommitted until validation closes.
 
-Native descendant containment remains incomplete. Arbitrary repository commands
-fail closed before unqualified execution. Actual-agent/native qualifications and
-human calibration remain unrun; this checkpoint does not establish readiness to
-coordinate the lasting build.
+The operator remains **unattended**. Native descendant containment, actual-agent
+and real-provider qualifications, and required human calibration remain incomplete.
+Arbitrary repository commands fail closed before unqualified execution. No live
+agents, remote mutations, installation, deployment, denied native probes or host
+security changes are authorized or performed. This increment does not establish
+readiness to coordinate the lasting build. Independent local work continues.
 
-The operator remains **unattended**. Live agents, remote mutations, installation,
-deployment and required human calibration have not been authorized or run.
-Independent local work continues on the same branch; no remote changes are allowed.
+## Active correction and ownership
+
+Full suite 23's source-sealing failures used current retained provider projections
+at each journaled Git spawn/completion. RuntimeDriver previously awaited a whole
+delivery phase under its cycle lock; supervisor heartbeats refreshed process and
+intent only, and the driver-step deadline was 30 seconds. A long phase could
+expire observation gates or lose its waiting future. The implementation now owns
+one retained progression task and one separate bounded read task, counts both in
+drain checks, joins before clearance, and keeps fenced cancellation independent.
+Real refresh failures invalidate current and retained gates without redating them.
+Production freshness/deadline limits are unchanged; no uncertain effect is replayed.
+
+Codex agent's driver changes and tests are saved and held. Git agent's continuation
+fixtures are saved and held: actual shared observation ownership surrounds Git
+sealing; boxed futures avoid nested stack expansion; actual bulk provider requests
+prove refresh. Driver composition covers nonblocking polls, actual data changes,
+pause/force-stop, preserved permit ownership, real task join and truthful no-process
+retirement. Diagnostic incomplete projections are tolerated only while fresh
+authority remains closed. Driver 28 passed 13/13 in 22.204s wall.
+
+Config agent's active-contract correction is saved in runtime_delivery_parent.rs,
+runtime_delivery_baseline.rs, delivery.rs and a narrow type re-export. The new
+input is minted only from an actual ActivePhase under exact permit/current owner/
+fence checks and a parent fetched from the retained observation registry. Its
+adjusted observation revision is distinct from the admitted execution revision.
+Ordinary parent_contract retains exact configuration equality; all other scope,
+definition, child, target, dependency and workflow checks remain shared. Both
+baseline derivation and parent progression now use the active path. Codex agent's
+independent review found no material issue; the Result<()> callback shape was
+corrected before compilation. Root owns integration and commits.
+
+Progression 28 closed 101 after 11.612s (three passes, one stale_result at parent
+contract construction). The fix passed progression 29 (4/4, 41.576s wall). The
+nonempty A-to-B held-baseline reload regression preserves exact origin, effect,
+source/target and receipt identities while feeding the retained proof into real
+successor import and assembly. Chain 29 closed 101 after 130.262s at a later B
+admission after synthetic origin publication (chain_fixture.rs:523); the latest
+reconciliation was unavailable. Config agent investigates the explicit fresh-read
+boundary and background observation ordering, without changing production refusal.
+That fixture correction passed chain 30 (1/1, 223.875s wall). Inventory 31
+and diff 30 pass at the latest source (363 blocks/136 named requirements).
+Clippy30 and formatting30 passed at3535f1 source. Full30 subsequently closed101
+with204/205 library passes; its sole old retention-fixture lease mismatch is
+corrected without changing production checks. Focused retention31 passed1/1.
+Full 31 completed with 705 passes, zero failures and two native ignores across
+39 groups; its session is closed. Clippy 31, formatting 31 and the dispatch-disabled
+plan 31 also passed at the source above. Final independent bounded reviews found
+no new material defect in active contracts, completion or driver/resume ownership.
+The report collector now verifies retained log and snapshot hashes, complete test
+groups and separate inventory checker inputs. It found no mismatched runner
+artifacts; legacy records are explicitly unverified and cannot qualify final checks.
+Inventory invocation 29 used an incorrect script path and
+never ran the check; its failure remains in the command evidence.
+All earlier compile, fixture mismatch, stack and partial-observation failures are
+retained in the detailed report; they have not been replaced by later passes.
 
 ## Baseline and authority
 
@@ -79,10 +168,59 @@ complete SC/V0-T scenario or real-provider qualification.
 
 ## Remaining engineering slices
 
+- Native evaluation composition remains an implementation obligation. The
+  checked-in binary exposes only Plan/Inspect/Compare; no concrete
+  `LiveAuthority` implementation or native suite executor is present. The 28
+  fixtures have legacy synthetic contexts rather than declared complete native
+  contexts. Production `authorized_context` includes canonical issues, child
+  projections, native observations, scoped evidence and work identity, all of
+  which must be declared and matched without normalizing away fields. Several
+  scorers also expect synthetic state paths (for example coordination children
+  and repeated-step counts) absent from `RuntimeCoordinator::observed_state`.
+  Required next composition must establish those facts from actual verified
+  coordination/continuation receipts, install declared corrections through
+  ordinary intake, and use genuine prior-session proofs for recovery variants.
+  A fixture JSON or authority-reference string must not mint these capabilities.
+  Existing owned preparation, `AdmittedTrial`, `finish_trial` and grading APIs
+  supply reusable pieces; their presence is not evidence that a native suite
+  can execute. Keep all 56 slots unqualified until this composition and the
+  separately authorized live/human checks are complete.
+  Independent inspection also found a grading-contract mismatch: shipped
+  review instructions require a structured verdict/findings/links claim, while
+  `ScopedWorker::observe` looks for an `AgentSummary` under `claim.summary` and
+  current review graders expect summary/review-state fields. Migrate the
+  versioned graders to the authenticated structured claim, retaining independent
+  source/effect/publication checks; a verdict must not become authoritative
+  completion. Coordination uses a production substrate without a repository,
+  whereas the existing owned-clone fixture binder requires seeded repository
+  bytes. These need explicit separate fixture paths. A read-only independent
+  review is the proposed first complete native composition case.
+
 - Exact-source failed child review retry now has producer, consumer and component
   tests through repeated transient failures and clean publication. Review
   findings/repair across mixed grant budgets and cold lineage remain to be
   completed; old phase records and caps must stay visible.
+  Independent design review confirmed the next correction: new ordinary and
+  granted review admissions need an authenticated, versioned round identity
+  scoped to their complete review PhaseKey and exact reviewed source. Transient
+  retries retain that identity while consuming a session attempt; Findings pairs
+  its required repair with the same round. Final-round repairs remain bounded by
+  the original implementation attempts, while another review is rejected beyond
+  the review ceiling. Existing scalar histories must not be silently reinterpreted
+  or have counters reduced. Completed source-advanced reviews must retain their
+  exact completion/claim/receipt lineage for recurring Findings and transient
+  retry; persisted references alone cannot recreate execution authority.
+  Proposed integration seam (not implemented): a separate typed
+  `ReviewRoundReference` on preparation and run admissions, atomically persisted
+  by the existing Control admission transactions, with a sealed
+  `VerifiedReviewRoundPlan` produced from actual completed child/source/review
+  assignment capabilities. Initial, transient-retry, paired-repair and
+  after-repair causes bind exact operations, whole receipts and source/claim
+  digests. `LaunchRequest` carries that opaque plan; preparation and final
+  admission recheck current grant, inventory, assignment, contract and capacities.
+  Keep `RunReference`'s session budget independent and require preparation/model
+  references to agree. New ordinary and granted review producers must both emit
+  round provenance, while unmarked legacy chains remain conservative.
 - Cold recovery cannot recreate original `WorkerContract`/`RunCompletion` from
   current digests. First persist a bounded signed recovery record at the genuine
   unfinished producer, then reconstruct a separate obligation capability only
@@ -105,20 +243,73 @@ complete SC/V0-T scenario or real-provider qualification.
   deduplicating original contributions. The actual A/B/C Git/Control/native-wire
   fixture retains A exactly once through a held deployment-only B and corrected
   C after restart; it still blocks at missing genuine integrated evidence.
-  Carried acceptance needs a later
-  sealed direct-or-carried selection, original human decision/publication lineage,
-  fresh baseline/production validation and durable visible carry publication.
-- Exact original target proof recovery now uses immutable authenticated identity
-  and complete historical observations, separately from current readiness. The
-  next release slice adds terminal transitive completion projection
-  from actually successful, retired descendants and the authenticated chain,
-  preserving original failed outcomes and unrelated holds.
-- Same-grant transient failed reviews now mint fresh per-attempt capabilities
+  Carried acceptance remains a producer/integration gap, not only a historical
+  reader gap: all concrete runtime release paths currently pass `carried: None`.
+  The pure evidence constructor and negative tests do not supply an actual
+  producer or durable native publication. The next slice needs original and
+  current verified parent results, the unchanged ordered patch proof, actual
+  fresh production validation and a sealed known-released baseline lineage.
+  Its signed publication must retain the original human-reviewed token/time and
+  both parent/vector references while the plan names the newer machine result.
+  History/completion then needs tagged direct-or-carried reference inventories;
+  no JSON record may recreate current carry authority.
+- Exact original target proof recovery uses immutable authenticated identity
+  and complete historical observations separately from current readiness. The
+  current increment implements terminal transitive completion projection from
+  actually successful, retired descendants and the authenticated chain, preserving
+  original failed outcomes and unrelated holds. Focused and prior library checks
+  pass; its latest nonempty reload chain is being checked before the final suite.
+- Released-parent dependency propagation is a separate production gap:
+  `DependencyOutcomes::released` has no callers and accepts a raw attempt, while
+  `effective_evidence` merges only fresh delivery snapshots. Independent design
+  review recommends a separate cache of sealed release completions. Generalize
+  `VerifiedReleaseCompletion` from two-or-more attempts to one-or-more; ordinary
+  successful retired releases need the same complete authenticated inventory but
+  clear no ancestor holds. Insert dependency credit only from that opaque proof,
+  using the queue's exact generation/outcome digest. Install outside existing
+  Control/release locks, and revalidate immutable references before consumption.
+  Missing/replaced references revoke only that exact credit with diagnostics.
+  Keep current runtime/workspace/account binding and actual observation gates.
+  SPEC §5.2 requires B pinned to released A1 to remain satisfied after A2 is
+  authorized; A1 cannot satisfy a dependency pinned to A2. Historical release
+  facts therefore must not expire with current delivery snapshots or require
+  production to remain at the historical revision. Native missing/inaccessible
+  prerequisites still block. Tests need ordinary completion, C without failed
+  ancestor credit, A1/A2 pins, reference deletion/restoration, cold recovery after
+  production moves, config removal/remapping, failed observations and unrelated
+  credit preservation. This design is not implemented in the current increment.
+- Operator history still needs a typed Overview projection for successful
+  releases: current release inspection enriches Show details, while the only
+  `HistoryRow` producer feeds no-release-required outcomes. Ordinary excluded or
+  inaccessible parents are retained and remain resolvable. Authenticated release
+  history absent from the current parent projection needs a separate read-only
+  canonical resolver; it must never expand scheduling or mutation targets.
+  Next-slice design (not implemented): inspection identity is workspace UUID plus
+  full `IssueKey`; each attempt retains exact recorded `WorkIdentity`. Return a
+  sorted typed vector rather than a JSON map keyed only by issue. Merge it into
+  `RuntimeInspection`, never `RuntimeProjection.parents`, retained scheduling
+  refs or dependency outcomes. Overview appends/filter/sorts history outside the
+  current-parent loop; Show combines exact current/historical identities and
+  rejects ambiguity. An authenticated removed workspace UUID may be selected
+  only by this read-only resolver. Missing legacy name/title/key/URL stays unknown;
+  Open requires an actually observed URL. General workspace and approve/release/
+  correct resolution remains current-only. Existing release proof validation
+  requires a current repository contract; do not weaken it for removed-workspace
+  display. Those records may expose authenticated recorded outcomes plus explicit
+  diagnostics, not recreated success/readiness. Only existing terminal completion
+  validation for the exact work/generation may suppress that generation's active
+  display. `DependencyOutcomes::released` currently has no production caller;
+  this separate delivery integration gap cannot be filled with a UI predicate.
+  Tests must cover removed workspace/root, cross-workspace ambiguity, later
+  corrections, missing actual completion/owner/step refs, missing/unsafe URL,
+  unchanged mutation targeting and unchanged receipt/permit counts.
+- Same-grant transient failed reviews mint fresh per-attempt capabilities
   preserving assignment/source, original caps, backoff and contiguous history.
-  Findings-to-repair and later source-advanced review need their own retained
-  grant lineage rechecked during advisory, preparation, admission and publication;
-  stale/deleted/forked grants
-  must not authorize repair. Validation retry lineage follows separately.
+  The current Findings-to-repair and later source-advanced review implementation
+  rechecks retained grant lineage during advisory, preparation, admission and
+  publication; focused checks pass and stale/deleted/forked grants cannot authorize
+  repair. Recurring Findings and transient failures after changed-source review
+  still need exact paired-round provenance. Validation retry follows separately.
 
 
 ## Requirement-to-evidence checklist

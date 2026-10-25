@@ -579,6 +579,7 @@ impl RuntimeCoordinator {
             crate::runtime_workflow::require_current_grant(&grant, &observed)?;
             if phase.phase == "child_codex_review"
                 && !matches!(readmission, Some(WorkerReadmission::ReviewRetry(_)))
+                && !matches!(readmission, Some(WorkerReadmission::SourceAdvanced(proof)) if proof.has_granted_review())
             {
                 return Err(Error::new(
                     "review_retry_required",
@@ -647,8 +648,19 @@ impl RuntimeCoordinator {
             if let WorkerReadmission::Retried(proof) = proof {
                 self.verify_unfinished_target(proof.original(), &receipts)?;
             }
-            if let WorkerReadmission::ReviewRetry(proof) = proof {
-                proof.verify_current(&receipts, &current_grants)?;
+            match proof {
+                WorkerReadmission::ReviewRetry(proof) => {
+                    proof.verify_current(&receipts, &current_grants)?
+                }
+                WorkerReadmission::Unfinished(proof) => {
+                    proof.verify_current(&receipts, &current_grants)?
+                }
+                WorkerReadmission::SourceAdvanced(proof) => {
+                    proof.verify_current(&receipts, &current_grants)?
+                }
+                WorkerReadmission::Retried(proof) => {
+                    proof.verify_current(&receipts, &current_grants)?
+                }
             }
             if proof.phase() != phase
                 || proof.authority().workspace_id() != workspace
@@ -1040,6 +1052,14 @@ impl RuntimeCoordinator {
         proof.verify_retry_basis(receipts)?;
         self.current_admission_authority(&WorkerAuthority::Authorized(proof.authority().clone()))?;
         let config = self.configuration.snapshot()?;
+        let grants = crate::runtime_workflow::current_retry_grants(
+            &config,
+            &self.observations.admission_snapshot()?,
+            proof.authority().work(),
+            receipts,
+            &self.services.key,
+        )?;
+        proof.verify_current(receipts, &grants)?;
         let workspace = config
             .workspaces
             .values()
@@ -2243,7 +2263,7 @@ impl OutcomeSink for RuntimeCoordinator {
                 ));
             }
             let leaf = format!("pending-worker-{}.json", outcome.proposal_id);
-            let _lock = self.claims.lock("pending-worker.lock")?;
+            let _lock = self.claims.section_lock("pending-worker.lock")?;
             match self.claims.read_bytes(&leaf, 8 * 1024 * 1024) {
                 Ok(prior) if prior == bytes => {}
                 Ok(_) => {

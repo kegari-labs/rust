@@ -39,6 +39,7 @@ async fn run_successor_fixture(chained: bool) {
             }
         })
         .await;
+    let root = Arc::new(root);
     let binary = original.git_path().unwrap();
     let source = root.path().canonicalize().unwrap().join("source");
     git(&binary, &source, &["init", "-b", "main"]);
@@ -94,9 +95,18 @@ async fn run_successor_fixture(chained: bool) {
     // Long real Git operations retain their original gate but require actual
     // fresh provider observations, just as an active runtime poller does.
     let observations = built.runtime.observations.clone();
+    let poll_root = root.clone();
+    let observation_barrier = Arc::new(tokio::sync::Mutex::new(()));
+    let poll_barrier = observation_barrier.clone();
     let _poll = ObservationPoll(tokio::spawn(async move {
+        // A failed joined phase can unwind before cancellation is polled. Keep
+        // owned storage alive until this task has actually stopped observing it.
+        let _root = poll_root;
         for _ in 0..1800 {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // Tamper tests wait for any in-flight refresh before changing a
+            // retained reference. Their explicit reads still see missing data.
+            let _observation = poll_barrier.lock().await;
             match observations.refresh().await {
                 Ok(_) => (),
                 // Signed publication can change between the two strict read
@@ -359,6 +369,7 @@ async fn run_successor_fixture(chained: bool) {
         }],
     };
     if chained {
+        let route = fixture_deployment_route(repository);
         plan.deployment_free.clear();
         plan.resources.insert(domain::ResourceKey::Target {
             provider: "github".into(),
@@ -373,10 +384,10 @@ async fn run_successor_fixture(chained: bool) {
                     provider: "github".into(),
                     id: "service-production".into(),
                 },
-                workflow_id: 3,
-                workflow_revision: "1".repeat(40),
-                dispatch_ref: "trusted".into(),
-                source_input: "source_sha".into(),
+                workflow_id: route.workflow_id,
+                workflow_revision: route.workflow_revision.clone(),
+                dispatch_ref: fixture_dispatch_ref(route),
+                source_input: route.source_input.clone(),
                 source_merge_step: "merge".into(),
                 expected_tree: seed.slice.manifest().result.as_ref().unwrap().tree.clone(),
                 expected_artifact: None,
@@ -507,6 +518,43 @@ async fn run_successor_fixture(chained: bool) {
         delivery.git_path().unwrap(),
     )
     .unwrap();
+    if let Some((_, observed)) = &merged {
+        // A native acknowledgement plus a synthetic upstream successful state
+        // is insufficient historical evidence. Commit the actual observed merge
+        // through the same receipt reconciliation used by runtime progression.
+        let error = workspace
+            .coordinator
+            .release_history_references(&held.attempt)
+            .err()
+            .expect("unreconciled merge acknowledgement must not seal history");
+        assert_eq!(error.code, "production_validation");
+        assert_eq!(
+            error.message,
+            "archived release effect lacks its exact reconciled outcome"
+        );
+        delivery.restore_releases().unwrap();
+        delivery
+            .record_release_observation(plan.operation_id, observed)
+            .unwrap();
+        held = delivery.releases.state.lock().unwrap().attempts[&plan.operation_id].clone();
+        let actual = built
+            .runtime
+            .control
+            .operation(observed.receipt().unwrap().operation_id)
+            .unwrap();
+        assert_eq!(actual.phase, ReceiptPhase::Reconciled);
+        assert_eq!(
+            actual.observed_result,
+            Some(
+                json!({"release_plan":observed.plan_digest(),"step":observed.step_id(),
+                "outcome":observed.outcome(),"effect":observed.effect()})
+            )
+        );
+        workspace
+            .coordinator
+            .release_history_references(&held.attempt)
+            .unwrap();
+    }
     let corrected = correct_parent(&built, &data, &lease).await;
     assert_ne!(
         corrected.work().generation.correction,
@@ -532,6 +580,7 @@ async fn run_successor_fixture(chained: bool) {
             held: &held,
             gate: &corrected,
             merged,
+            observation_barrier: &observation_barrier,
         })
         .await;
         _poll.stop().await;
@@ -743,12 +792,39 @@ async fn run_successor_fixture(chained: bool) {
             .is_err()
     );
     github.set_production(&production);
+    let tamper_window = observation_barrier.lock().await;
     let mut changed_record = held.clone();
     changed_record.attempt.hold_reason = Some("retained state changed after observation".into());
     delivery.save_release(&changed_record).unwrap();
     assert_eq!(predecessor.revalidate().err().unwrap().code, "stale_result");
     delivery.save_release(&held).unwrap();
+    drop(tamper_window);
     _poll.stop().await;
+}
+
+fn fixture_deployment_route(
+    contract: &RepositoryContract,
+) -> &crate::config::ExactRevisionWorkflow {
+    let crate::config::Deployment::Steps { steps } = &contract.configuration.deployment else {
+        panic!("lineage fixture requires an actual configured deployment route")
+    };
+    let selected = steps
+        .iter()
+        .filter(|step| step.id == "deploy" && step.target_id == "service-production")
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 1);
+    &selected[0].workflow
+}
+
+fn fixture_dispatch_ref(route: &crate::config::ExactRevisionWorkflow) -> String {
+    route
+        .proof
+        .workflow_ref
+        .rsplit_once('@')
+        .and_then(|(_, reference)| reference.strip_prefix("refs/"))
+        .filter(|reference| reference.starts_with("heads/") || reference.starts_with("tags/"))
+        .expect("configured fixture workflow must have a pinned canonical dispatch reference")
+        .into()
 }
 
 async fn correct_parent(

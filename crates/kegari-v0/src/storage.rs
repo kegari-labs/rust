@@ -386,19 +386,39 @@ impl PrivateDir {
     }
 
     pub fn lock(&self, leaf: &str) -> Result<ExclusiveLock> {
+        self.try_lock(leaf)?.ok_or_else(lock_contended)
+    }
+
+    /// `None` means the OS reported actual contention. Storage validation and
+    /// other OS failures remain errors, never evidence that an owner is live.
+    pub fn try_lock(&self, leaf: &str) -> Result<Option<ExclusiveLock>> {
         let file = self.open_file(leaf, libc::O_RDWR | libc::O_CREAT)?;
-        fs2::FileExt::try_lock_exclusive(&file).map_err(|_| {
-            Error::new(
-                "ownership_conflict",
-                "another process holds this runtime lock",
-            )
-        })?;
+        if !try_exclusive(&file)? {
+            return Ok(None);
+        }
         self.dir
             .sync_all()
             .map_err(|e| Error::io("flush lock directory", e))?;
-        Ok(ExclusiveLock {
+        Ok(Some(ExclusiveLock {
             _file: Arc::new(file),
-        })
+        }))
+    }
+
+    /// Exclude other record writers for this lexical section only. Unlike an
+    /// ownership guard, an unrelated fork must not extend this lock's lifetime.
+    /// This guard cannot be cloned or exported to an owned child.
+    pub fn section_lock(&self, leaf: &str) -> Result<SectionLock> {
+        let file = self.open_file(leaf, libc::O_RDWR | libc::O_CREAT)?;
+        if !try_exclusive(&file)? {
+            return Err(lock_contended());
+        }
+        // Construct before fsync so its failure also releases the lock even
+        // while an unrelated child retains a pre-exec duplicate descriptor.
+        let guard = SectionLock { file };
+        self.dir
+            .sync_all()
+            .map_err(|e| Error::io("flush lock directory", e))?;
+        Ok(guard)
     }
 
     /// Observe only the recorded inode; missing/replaced locks are never created
@@ -414,15 +434,58 @@ impl PrivateDir {
                 "retained lock inode was replaced",
             ));
         }
-        fs2::FileExt::try_lock_exclusive(&file).map_err(|_| {
-            Error::new(
-                "ownership_conflict",
-                "another process holds this runtime lock",
-            )
-        })?;
+        if !try_exclusive(&file)? {
+            return Err(lock_contended());
+        }
         Ok(ExclusiveLock {
             _file: Arc::new(file),
         })
+    }
+}
+
+fn try_exclusive(file: &File) -> Result<bool> {
+    match fs2::FileExt::try_lock_exclusive(file) {
+        Ok(()) => Ok(true),
+        Err(error)
+            if error.raw_os_error().is_some()
+                && error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+        {
+            Ok(false)
+        }
+        Err(error) => {
+            let details = serde_json::json!({
+                "os_error": error.raw_os_error(),
+                "os_error_kind": format!("{:?}", error.kind()),
+            });
+            Err(Error::io("acquire runtime lock", error).detail(details))
+        }
+    }
+}
+
+fn lock_contended() -> Error {
+    let error = fs2::lock_contended_error();
+    Error::new(
+        "ownership_conflict",
+        "another process holds this runtime lock",
+    )
+    .detail(serde_json::json!({
+        "os_error": error.raw_os_error(),
+        "os_error_kind": format!("{:?}", error.kind()),
+    }))
+}
+
+/// Lexically scoped record exclusion. Unlocking the shared open-file description
+/// is intentional here; durable process ownership must use `ExclusiveLock`.
+#[must_use = "hold the section guard until the record operation completes"]
+pub struct SectionLock {
+    file: File,
+}
+impl Drop for SectionLock {
+    fn drop(&mut self) {
+        // No record operation can outlive this non-cloneable guard. If unlock
+        // fails, closing our descriptor still preserves conservative exclusion
+        // while any forked duplicate remains; it never authorizes another writer.
+        let _ = fs2::FileExt::unlock(&self.file);
     }
 }
 

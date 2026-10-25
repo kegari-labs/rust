@@ -241,16 +241,67 @@ impl ObservationCache {
         let _guard = self.refresh.lock().await;
         let result = self.refresh_inner().await;
         if let Err(error) = &result {
-            self.control.serialize_observation(|_| {
-                self.current
-                    .write()
-                    .map_err(|_| Error::new("observation_unavailable", "health cache lock failed"))?
-                    .health =
-                    json!({"status":"observation_failed","observed_at":Utc::now(),"error":error});
-                Ok(())
-            })?;
+            self.record_refresh_failure(error)?;
         }
         result
+    }
+
+    /// Bound a read-only observation attempt, including serialization wait.
+    /// A timeout invalidates current and retained gates before returning; it
+    /// cannot turn the previous successful observation into a new one.
+    pub async fn refresh_bounded(&self, bound: std::time::Duration) -> Result<RuntimeProjection> {
+        if bound.is_zero() || bound > std::time::Duration::from_secs(300) {
+            return Err(Error::invalid(
+                "observation refresh bound must be positive and at most 300 seconds",
+            ));
+        }
+        match tokio::time::timeout(bound, self.refresh()).await {
+            Ok(result) => result,
+            Err(_) => {
+                let error = Error::new(
+                    "timeout",
+                    "complete provider observation exceeded its finite bound",
+                );
+                self.record_refresh_failure(&error)?;
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn record_refresh_failure(&self, error: &Error) -> Result<()> {
+        self.control.serialize_observation(|_| {
+            self.current
+                .write()
+                .map_err(|_| Error::new("observation_unavailable", "health cache lock failed"))?
+                .health =
+                json!({"status":"observation_failed","observed_at":Utc::now(),"error":error});
+            let active: Vec<_> = self
+                .active
+                .lock()
+                .map_err(|_| {
+                    Error::new(
+                        "observation_unavailable",
+                        "active snapshot registry unavailable",
+                    )
+                })?
+                .values()
+                .filter_map(std::sync::Weak::upgrade)
+                .collect();
+            for snapshot in active {
+                snapshot
+                    .current
+                    .write()
+                    .map_err(|_| {
+                        Error::new("observation_unavailable", "active snapshot lock failed")
+                    })?
+                    .projection = Err(Error::new(
+                    "observation_unavailable",
+                    "latest complete provider observation failed",
+                )
+                .detail(json!({"cause":error.code})));
+            }
+            Ok(())
+        })
     }
     pub fn admission_snapshot(&self) -> Result<RuntimeProjection> {
         let current = self

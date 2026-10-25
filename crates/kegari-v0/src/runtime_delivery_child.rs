@@ -9,7 +9,7 @@ use crate::{
     git::{GitExecutionScope, SourceCommitMetadata},
     runtime::VerifiedAuthorizedOutcome,
     scheduler::PhaseKey,
-    worker::WorkerAuthority,
+    worker::{WorkerAuthority, WorkerHost},
     worker_run::RunCompletion,
 };
 use serde::{Deserialize, Serialize};
@@ -403,6 +403,9 @@ impl RuntimeDelivery {
     ) -> Result<ActivePhase> {
         let PhaseRequest { operation, scope } = request;
         let broker = self.provider_broker(&workspace.configuration, gate.workspace_id())?;
+        let github = broker.github.clone().ok_or_else(|| {
+            Error::new("missing_secret", "delivery GitHub connection unavailable")
+        })?;
         let active = self.runtime.observations.capture_active(
             gate.workspace_id(),
             gate.config_revision(),
@@ -487,13 +490,20 @@ impl RuntimeDelivery {
             },
             workspace.contracts.clone(),
         )?);
+        let mut retained_workspace = workspace.clone();
+        retained_workspace.coordinator = coordinator.clone();
+        retained_workspace.observer = Arc::new(ProductionObserver::new(
+            github,
+            self.runtime.control.clone(),
+            self.runtime.services.key.clone(),
+            workspace.records.child("deployment")?,
+            self.retained_gate(),
+        )?);
         setup.armed = false;
         self.phase_holds
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .remove(&operation);
-        let mut retained_workspace = workspace.clone();
-        retained_workspace.coordinator = coordinator.clone();
         Ok(ActivePhase {
             admission,
             permit,
@@ -670,7 +680,7 @@ impl RuntimeDelivery {
                 crate::runtime_workers::LaunchRequest {
                     lease: lease.clone(),
                     operation_id: operation,
-                    authority: WorkerAuthority::Authorized(proof.authority().clone()),
+                    authority: self.current_delivery_worker_authority(proof.authority())?,
                     phase: proof.phase().clone(),
                     source: None,
                     delivery: Some(proof.assignment().clone()),
@@ -703,6 +713,12 @@ impl RuntimeDelivery {
         self.launch_assignment_with_source(lease, operation_id, assignment, None)
             .await
     }
+    fn current_delivery_worker_authority(&self, expected: &FreshGate) -> Result<WorkerAuthority> {
+        let expected = WorkerAuthority::Authorized(expected.clone());
+        let current = self.runtime.current_authority(&expected)?;
+        expected.compare(&current)?;
+        Ok(current)
+    }
     async fn launch_assignment_with_source(
         &self,
         lease: &Lease,
@@ -710,12 +726,15 @@ impl RuntimeDelivery {
         assignment: DeliveryWorkerAssignment,
         source_advanced: Option<Arc<VerifiedSourceAdvanced>>,
     ) -> Result<Uuid> {
-        let authority = WorkerAuthority::Authorized(assignment.authority().clone());
-        let phase = PhaseKey {
-            work: authority.work_key()?,
-            generation: canonical_digest(1, &assignment.authority().work().generation)?,
-            phase: assignment.phase().into(),
-            retry_grant: None,
+        let phase = if let Some(proof) = &source_advanced {
+            proof.phase().clone()
+        } else {
+            PhaseKey {
+                work: assignment.authority().work_key()?,
+                generation: canonical_digest(1, &assignment.authority().work().generation)?,
+                phase: assignment.phase().into(),
+                retry_grant: None,
+            }
         };
         let config = self.runtime.configuration.snapshot()?;
         let workspace = config
@@ -745,7 +764,7 @@ impl RuntimeDelivery {
             crate::runtime_workers::LaunchRequest {
                 lease: lease.clone(),
                 operation_id,
-                authority,
+                authority: self.current_delivery_worker_authority(assignment.authority())?,
                 phase,
                 source: None,
                 delivery: Some(assignment),
@@ -773,6 +792,42 @@ impl RuntimeDelivery {
             && proof.phase().phase == assignment.phase()
         {
             return Ok((proof.assignment().clone(), Some(proof.clone())));
+        }
+        if assignment.phase() == "child_codex_review"
+            && let Some(repair) = self.granted_review_repair(child).await?
+        {
+            let lineage = repair.granted_review().ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "granted review lineage disappeared",
+                )
+            })?;
+            let receipts = self.runtime.control.operations()?;
+            let grants = crate::runtime_workflow::current_retry_grants(
+                &self.runtime.configuration.snapshot()?,
+                &self.runtime.observations.admission_snapshot()?,
+                repair.authority().work(),
+                &receipts,
+                &self.runtime.services.key,
+            )?;
+            let proof = coordinator
+                .source_advanced_retried_review(
+                    SourceAdvancedRequest {
+                        source: RepairSource {
+                            admission,
+                            original: child.claim.clone(),
+                            source: required(&child.source, "sealed source")?,
+                            completion: child.completion.clone(),
+                        },
+                        assignment: &assignment,
+                        predecessor: lineage.outcome(),
+                        completion: lineage.completion().clone(),
+                    },
+                    &repair,
+                    &grants,
+                )
+                .await?;
+            return Ok((assignment, Some(Arc::new(proof))));
         }
         let phase = PhaseKey {
             work: assignment.authority().work_key()?,
@@ -814,6 +869,43 @@ impl RuntimeDelivery {
             })
             .await?;
         Ok((assignment, Some(Arc::new(proof))))
+    }
+    async fn granted_review_repair(
+        &self,
+        child: &ChildPipeline,
+    ) -> Result<Option<Arc<UnfinishedChildWork>>> {
+        let candidates: Vec<_> = self
+            .children
+            .pipelines
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+            .iter()
+            .filter(|(operation, _)| **operation != child.reference.operation)
+            .map(|(_, pipeline)| pipeline.clone())
+            .collect();
+        let mut found = None;
+        for candidate in candidates {
+            let candidate = candidate.lock().await;
+            if candidate.reference.repair_operation != Some(child.reference.operation) {
+                continue;
+            }
+            let repair = required(&candidate.unfinished, "original repair capability")?;
+            if candidate.reference.work != child.reference.work
+                || candidate.reference.unfinished_digest.as_deref() != Some(repair.digest())
+            {
+                return Err(Error::new(
+                    "stale_result",
+                    "repair pipeline lineage differs",
+                ));
+            }
+            if repair.granted_review().is_some() && found.replace(repair.clone()).is_some() {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "repair has multiple retained predecessors",
+                ));
+            }
+        }
+        Ok(found)
     }
     fn retain_unfinished(
         &self,
@@ -912,7 +1004,7 @@ impl RuntimeDelivery {
             crate::runtime_workers::LaunchRequest {
                 lease: lease.clone(),
                 operation_id: operation,
-                authority: WorkerAuthority::Authorized(assignment.authority().clone()),
+                authority: self.current_delivery_worker_authority(assignment.authority())?,
                 phase,
                 source: None,
                 delivery: Some(assignment),
@@ -1120,7 +1212,20 @@ impl RuntimeDelivery {
         let mut reporting_error = None;
         for retained in retained {
             let mut child = retained.lock().await;
-            let result = self.advance_one_child(lease, projection, &mut child).await;
+            // A preceding child may have spent a full bounded phase in Git or
+            // provider I/O. New admissions use the latest complete observation.
+            let result = async {
+                self.runtime.registration.verify_active_owner(lease)?;
+                let current = if child.phase.is_some() {
+                    // Existing phases derive their actual gate and parent from
+                    // the retained observation below, even on an invalid reload.
+                    self.runtime.observations.snapshot()?
+                } else {
+                    self.runtime.observations.admission_snapshot()?
+                };
+                self.advance_one_child(lease, &current, &mut child).await
+            }
+            .await;
             if let Err(error) = result {
                 if let Err(retirement) = self.block_terminal_child(&mut child, &error) {
                     reporting_error.get_or_insert(retirement);
@@ -1162,11 +1267,22 @@ impl RuntimeDelivery {
             .instructions()
             .manifest
             .workspace_id;
-        let parent = projection.parent(workspace_id, child.reference.work.parent)?;
+        let outcomes = self.runtime.dependency_outcomes()?;
+        let parent = if let Some(phase) = &child.phase {
+            self.runtime
+                .observations
+                .active_parent(phase.admission.fresh_gate(), &outcomes)?
+        } else {
+            projection
+                .parent(workspace_id, child.reference.work.parent)?
+                .clone()
+        };
         let gate = if let Some(phase) = &child.phase {
-            self.runtime.observations.active_gate(
+            parent.retain_active_gate(
                 phase.admission.fresh_gate(),
-                &self.runtime.dependency_outcomes()?,
+                &outcomes,
+                Utc::now(),
+                Duration::seconds(30),
             )?
         } else {
             parent.fresh_gate(
@@ -1278,7 +1394,7 @@ impl RuntimeDelivery {
                 .as_ref()
                 .is_some_and(|m| Some(m.e2e_child) == child.reference.work.child)
             && !self
-                .integrated_responsibility_ready(&workspace, parent, &gate)
+                .integrated_responsibility_ready(&workspace, &parent, &gate)
                 .await?
         {
             return Ok(());
@@ -1694,6 +1810,31 @@ impl RuntimeDelivery {
                             current,
                         )
                         .await
+                } else if let Some(proof) = &child.source_advanced {
+                    let checked = proof.clone();
+                    let runtime = self.runtime.clone();
+                    let operation = completion.operation_id;
+                    let current: GateCheck = Arc::new(move |_| {
+                        let receipts = runtime.control.operations()?;
+                        let grants = crate::runtime_workflow::current_retry_grants(
+                            &runtime.configuration.snapshot()?,
+                            &runtime.observations.admission_snapshot()?,
+                            checked.authority().work(),
+                            &receipts,
+                            &runtime.services.key,
+                        )?;
+                        checked.verify_completed_inventory(&receipts, &grants, operation)
+                    });
+                    coordinator
+                        .publish_source_advanced_review(
+                            &admission,
+                            required(&child.assignment, "review assignment")?,
+                            &outcome,
+                            &completion,
+                            proof,
+                            current,
+                        )
+                        .await
                 } else {
                     coordinator
                         .publish_completed_review(
@@ -1707,19 +1848,32 @@ impl RuntimeDelivery {
                 child.review = Some(match published {
                     Ok(review) => review,
                     Err(error) if terminal_gate_failure(&error) => {
-                        let proof = coordinator
-                            .unfinished_review(ReviewRepairRequest {
-                                source: RepairSource {
-                                    admission: &admission,
-                                    original: child.claim.clone(),
-                                    source: required(&child.source, "sealed source")?,
-                                    completion: child.completion.clone(),
-                                },
-                                assignment: required(&child.assignment, "review assignment")?,
-                                outcome: &outcome,
-                                completion: completion.clone(),
-                            })
-                            .await;
+                        let request = ReviewRepairRequest {
+                            source: RepairSource {
+                                admission: &admission,
+                                original: child.claim.clone(),
+                                source: required(&child.source, "sealed source")?,
+                                completion: child.completion.clone(),
+                            },
+                            assignment: required(&child.assignment, "review assignment")?,
+                            outcome: &outcome,
+                            completion: completion.clone(),
+                        };
+                        let proof = if let Some(retry) = &child.review_retry {
+                            let receipts = self.runtime.control.operations()?;
+                            let grants = crate::runtime_workflow::current_retry_grants(
+                                &self.runtime.configuration.snapshot()?,
+                                &self.runtime.observations.admission_snapshot()?,
+                                retry.authority().work(),
+                                &receipts,
+                                &self.runtime.services.key,
+                            )?;
+                            coordinator
+                                .unfinished_retried_review(request, retry, &grants)
+                                .await
+                        } else {
+                            coordinator.unfinished_review(request).await
+                        };
                         return match proof {
                             Ok(proof) => self.retain_unfinished(child, proof, error),
                             Err(unavailable) if unavailable.code == "no_work_trigger" => Err(error),
@@ -2029,7 +2183,9 @@ mod retention_tests {
     }
     #[tokio::test]
     async fn reporting_failure_keeps_actual_child_claim_and_completion_in_pipeline() {
-        let (_root, fixture, service) = super::super::tests::fixture().await;
+        let (_root, fixture, service, _wire, owner) =
+            super::super::tests::fixture_authorization_with_wire(false).await;
+        let (lease, _ownership) = owner.start(&fixture.runtime);
         let projection = fixture.runtime.observations.snapshot().unwrap();
         let parent = projection
             .workspaces
@@ -2129,11 +2285,6 @@ mod retention_tests {
         std::fs::create_dir(path).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let lease = Lease {
-            runtime_id: fixture.runtime.configuration.snapshot().unwrap().runtime.id,
-            owner_generation: 1,
-            owner_id: Uuid::new_v4(),
-        };
         assert_eq!(
             service
                 .advance_children(&lease, &projection)

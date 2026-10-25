@@ -541,6 +541,48 @@ impl RuntimeDelivery {
     /// A failed read invalidates old readiness immediately and remains diagnostic.
     pub async fn refresh(&self, projection: &RuntimeProjection) -> Result<()> {
         let _refresh = self.refresh_lock.lock().await;
+        self.refresh_current_delivery(projection).await
+    }
+    async fn refresh_for_inspection(&self, projection: &RuntimeProjection) -> Result<()> {
+        let _refresh = self.refresh_lock.lock().await;
+        let mut blockers = BTreeMap::new();
+        let mut blocked_releases = 0;
+        for row in self.release_history()? {
+            // Historical observation errors on resolved records are not current
+            // prerequisites. Invalid owners/completions retain diagnostic holds.
+            if row.active_hold
+                && let Some(error) = row.completion_error
+            {
+                blocked_releases += 1;
+                blockers
+                    .entry(row.parent)
+                    .or_insert((row.attempt.plan.operation_id, error));
+            }
+        }
+        let Some((first_parent, (first_operation, first_error))) = blockers.first_key_value()
+        else {
+            return self.refresh_current_delivery(projection).await;
+        };
+        // The strict queue is deliberately not rebuilt or modified here. Its
+        // unavailable prerequisites also prevent presenting previously cached
+        // delivery/no-release evidence as freshly verified product readiness.
+        for observed in projection.workspaces.values() {
+            for parent in observed.parents.values() {
+                let (blocked_parent, operation, root_error) = match blockers.get(&parent.key) {
+                    Some((operation, error)) => (&parent.key, operation, error),
+                    None => (first_parent, first_operation, first_error),
+                };
+                self.runtime.invalidate_delivery(&parent.key, Error::new(
+                    "release_gates_unavailable",
+                    "Current delivery gates are unavailable while retained release evidence is unverified",
+                ).detail(json!({"blocked_parent":blocked_parent,"blocked_operation":operation,
+                    "root_error":root_error,"blocked_release_count":blocked_releases}))
+                    .next("Inspect the per-parent release history and reconcile its exact unavailable references; do not repeat external effects."))?;
+            }
+        }
+        Ok(())
+    }
+    async fn refresh_current_delivery(&self, projection: &RuntimeProjection) -> Result<()> {
         self.clear_no_release_observations()?;
         for observed in projection.workspaces.values() {
             let workspace = self.workspace(projection, observed.workspace_id);
@@ -723,7 +765,7 @@ impl RuntimeDelivery {
             gate(&current)
         }, |_| {
             let leaf=format!("release-intent-{}.json",intent.request_id);
-            let _lock=self.records.lock("release-intents.lock")?;
+            let _lock=self.records.section_lock("release-intents.lock")?;
             match self.records.read::<crate::evidence::Signed<ReleaseIntent>>(&leaf) {
                 Ok(existing)=> {self.runtime.services.key.verify("manual_release_intent",&existing)?;if existing.digest()?!=signed.digest()? {return Err(Error::new("request_conflict","release request already names another immutable intent"));}},
                 Err(error) if error.code=="record_missing"=>self.records.write(&leaf,&signed)?,
@@ -839,16 +881,33 @@ impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
             self.refresh(&projection).await
         })
     }
+    fn reconcile_for_inspection(&self) -> crate::supervisor::SupervisorFuture<'_, ()> {
+        Box::pin(async move {
+            let projection = self.runtime.observations.refresh().await?;
+            self.runtime.refresh_retry_references(&projection)?;
+            self.runtime.recover_provider_holds()?;
+            self.refresh_for_inspection(&projection).await
+        })
+    }
     fn advance<'a>(
         &'a self,
         lease: &'a crate::control::Lease,
     ) -> crate::supervisor::SupervisorFuture<'a, ()> {
         Box::pin(async move {
             self.runtime.registration.verify_active_owner(lease)?;
-            let projection = self.runtime.observations.admission_snapshot()?;
+            let projection = self.runtime.observations.snapshot()?;
             let children = self.advance_children(lease, &projection).await;
-            let parents = self.advance_parents(lease, &projection).await;
-            children.and(parents)
+            let parents = async {
+                let current = self.runtime.observations.snapshot()?;
+                self.advance_parents(lease, &current).await
+            }
+            .await;
+            let releases = async {
+                let current = self.runtime.observations.snapshot()?;
+                self.advance_releases(lease, &current).await
+            }
+            .await;
+            children.and(parents).and(releases)
         })
     }
     fn maintain(&self) -> crate::supervisor::SupervisorFuture<'_, ()> {
@@ -858,8 +917,17 @@ impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
             let projection = self.runtime.observations.snapshot()?;
             let children = self.maintain_child_phases(&projection).await;
             let parents = self.maintain_parent_phases().await;
-            let refreshed = self.refresh(&projection).await;
-            children.and(parents).and(refreshed)
+            let releases = async {
+                let current = self.runtime.observations.snapshot()?;
+                self.maintain_releases(&current).await
+            }
+            .await;
+            let refreshed = async {
+                let current = self.runtime.observations.snapshot()?;
+                self.refresh(&current).await
+            }
+            .await;
+            children.and(parents).and(releases).and(refreshed)
         })
     }
     fn cancel_fenced<'a>(
@@ -879,13 +947,14 @@ impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
 
 #[path = "runtime_delivery_parent.rs"]
 mod parent;
+pub(crate) use parent::ActiveParentContractInput;
 pub use parent::ParentSources;
 
 #[path = "runtime_delivery_release.rs"]
 mod release;
 
 pub use release::KnownPredecessorBaseline;
-pub(crate) use release::VerifiedSuccessorHolds;
+pub(crate) use release::{VerifiedReleaseCompletion, VerifiedSuccessorHolds};
 
 #[cfg(test)]
 #[path = "runtime_delivery_worker_fixture.rs"]

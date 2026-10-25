@@ -24,7 +24,7 @@ impl Housekeeping {
         self.control.serialize_observation(|state| {
             self.registration_updates_allowed(state)?;
             let storage = self.root.child("cleanup")?;
-            let _guard = storage.lock("families.lock")?;
+            let _guard = storage.section_lock("families.lock")?;
             let registration = self.registration(operation)?;
             if !records.path().starts_with(self.root.path())
                 || records

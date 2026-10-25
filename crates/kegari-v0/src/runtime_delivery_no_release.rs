@@ -147,7 +147,7 @@ impl RuntimeDelivery {
         self.restore_releases()?;
         let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
         state.no_release.clear();
-        state.queue = rebuild_queue(&state.attempts, &state.no_release)?;
+        state.queue = rebuild_queue(&state.attempts, &state.no_release, &state.completions)?;
         Ok(())
     }
     async fn observe_no_release_targets(

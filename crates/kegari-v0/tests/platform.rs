@@ -229,6 +229,140 @@ fn runtime_lock_requires_running_and_exact_reserved_owner() {
     drop(runtime_lock);
 }
 
+fn fixture_child() -> ProcessIdentity {
+    let mut child = FixtureProbe.current().unwrap();
+    child.parent_pid = child.pid;
+    child.pid += 1;
+    child.process_group = child.pid;
+    child
+}
+
+/// The fixture observes a registered parent and its reserved child without
+/// invoking native process discovery or launching a subprocess.
+struct RunningChildProbe;
+impl ProcessProbe for RunningChildProbe {
+    fn current(&self) -> kegari_v0::error::Result<ProcessIdentity> {
+        FixtureProbe.current()
+    }
+    fn observe(&self, process: &ProcessIdentity) -> kegari_v0::error::Result<ProcessObservation> {
+        Ok(
+            if *process == self.current()? || *process == fixture_child() {
+                ProcessObservation::Running
+            } else {
+                ProcessObservation::DifferentIdentity
+            },
+        )
+    }
+    fn matching_executable(&self, _: &Path) -> kegari_v0::error::Result<Vec<ProcessIdentity>> {
+        Ok(vec![self.current()?, fixture_child()])
+    }
+}
+
+#[test]
+fn orchestration_authority_requires_actual_runtime_lock_contention() {
+    let (_temporary, host) = host_fixture();
+    let runtime = Uuid::new_v4();
+    let (registration, control) = Registration::bootstrap_with_probe(
+        &host,
+        runtime,
+        binary(),
+        Uuid::new_v4(),
+        Arc::new(RunningChildProbe),
+    )
+    .unwrap();
+    registration
+        .complete_setup(&config(&host, runtime))
+        .unwrap();
+    let lease = registration.prepare_owner().unwrap();
+    start(&control, runtime);
+    let before = serde_json::to_value(registration.snapshot().unwrap()).unwrap();
+    let error = registration
+        .record_orchestration(lease.clone(), fixture_child())
+        .unwrap_err();
+    assert_eq!(
+        error.message,
+        "orchestration handshake has no held runtime lock"
+    );
+    assert_eq!(
+        serde_json::to_value(registration.snapshot().unwrap()).unwrap(),
+        before
+    );
+
+    let lock = registration.root().lock("runtime.lock").unwrap();
+    registration
+        .record_orchestration(lease.clone(), fixture_child())
+        .unwrap();
+    registration.verify_active_owner(&lease).unwrap();
+    let mut wrong_lease = lease.clone();
+    wrong_lease.owner_id = Uuid::new_v4();
+    assert!(registration.verify_active_owner(&wrong_lease).is_err());
+    drop(lock);
+    let error = registration.verify_active_owner(&lease).unwrap_err();
+    assert_eq!(
+        error.message,
+        "orchestration process no longer holds runtime.lock"
+    );
+}
+
+#[test]
+fn replaced_directory_cannot_prove_orchestration_lock_ownership() {
+    for attached in [false, true] {
+        let (_temporary, host) = host_fixture();
+        let runtime = Uuid::new_v4();
+        let (registration, control) = Registration::bootstrap_with_probe(
+            &host,
+            runtime,
+            binary(),
+            Uuid::new_v4(),
+            Arc::new(RunningChildProbe),
+        )
+        .unwrap();
+        registration
+            .complete_setup(&config(&host, runtime))
+            .unwrap();
+        let lease = registration.prepare_owner().unwrap();
+        start(&control, runtime);
+        let _lock = registration.root().lock("runtime.lock").unwrap();
+        if attached {
+            registration
+                .record_orchestration(lease.clone(), fixture_child())
+                .unwrap();
+            registration.verify_active_owner(&lease).unwrap();
+        }
+        let before = serde_json::to_value(registration.snapshot().unwrap()).unwrap();
+        let original_record = registration
+            .root()
+            .read_bytes("owner.json", 256 * 1024)
+            .unwrap();
+        let original = host.home.join("original-control-directory");
+        std::fs::rename(registration.root().path(), &original).unwrap();
+        let replacement = PrivateDir::create(&host.state_root()).unwrap();
+
+        let error = if attached {
+            registration.verify_active_owner(&lease).unwrap_err()
+        } else {
+            registration
+                .record_orchestration(lease, fixture_child())
+                .unwrap_err()
+        };
+        assert_eq!(error.code, "ownership_conflict");
+        assert_eq!(error.message, "control directory was replaced");
+        assert_eq!(
+            serde_json::to_value(registration.snapshot().unwrap()).unwrap(),
+            before
+        );
+        assert_eq!(
+            PrivateDir::open(&original)
+                .unwrap()
+                .read_bytes("owner.json", 256 * 1024)
+                .unwrap(),
+            original_record
+        );
+        assert!(!replacement.path().join("owner.json").exists());
+        assert!(!replacement.path().join("runtime.lock").exists());
+    }
+}
+
 #[test]
 fn partial_setup_and_corrupt_recovery_preserve_all_records() {
     let (_temporary, host) = host_fixture();

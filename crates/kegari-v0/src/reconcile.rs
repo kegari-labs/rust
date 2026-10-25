@@ -1806,6 +1806,12 @@ impl FreshGate {
         max_age: Duration,
     ) -> Result<()> {
         fresh_time(current.observed_at, now, max_age)?;
+        self.compare_admitted_authority(current)
+    }
+    /// Compare immutable authority in retained proof/contract records. This
+    /// supplies no current observation or admission permission; live callers
+    /// must still use `compare_current` with freshly observed provider facts.
+    pub(crate) fn compare_admitted_authority(&self, current: &FreshGate) -> Result<()> {
         let allowed_filter_drain = current.purpose == GatePurpose::DrainExisting
             && matches!(
                 self.purpose,
@@ -2828,5 +2834,53 @@ impl IndependentReviewGate {
         current.pull_request = self.pull_request.clone();
         self.compare_current(&current, now, age)?;
         Ok(current)
+    }
+}
+
+#[cfg(test)]
+mod historical_authority_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn historical_compatibility_preserves_semantics_without_supplying_freshness() {
+        let (_root, transition) = crate::corrections::test_transition_fixture().await;
+        let original = transition.current_authority();
+        let mut observed = original.clone();
+        observed.sources_digest = crate::digest::bytes_digest(b"new raw native observation");
+        observed.observed_at = Utc::now() - Duration::minutes(10);
+        assert_ne!(original.digest().unwrap(), observed.digest().unwrap());
+        original.compare_admitted_authority(&observed).unwrap();
+        assert!(
+            original
+                .compare_current(&observed, Utc::now(), Duration::seconds(30))
+                .is_err()
+        );
+        observed.observed_at = Utc::now();
+        original
+            .compare_current(&observed, Utc::now(), Duration::seconds(30))
+            .unwrap();
+
+        let mut profile = observed.clone();
+        profile.profile.model = "another-model".into();
+        profile.profile_digest = canonical_digest(1, &profile.profile).unwrap();
+        let mut work = observed.clone();
+        work.work.generation.definition = crate::digest::bytes_digest(b"new definition");
+        let mut scope = observed.clone();
+        scope
+            .child_scope
+            .as_mut()
+            .unwrap()
+            .write_paths
+            .push("other/".into());
+        scope.child_scope_digest =
+            Some(canonical_digest(1, scope.child_scope.as_ref().unwrap()).unwrap());
+        for changed in [profile, work, scope] {
+            assert!(original.compare_admitted_authority(&changed).is_err());
+            assert!(
+                original
+                    .compare_current(&changed, Utc::now(), Duration::seconds(30))
+                    .is_err()
+            );
+        }
     }
 }

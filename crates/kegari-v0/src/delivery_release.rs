@@ -531,8 +531,14 @@ pub struct ObservedReleaseStep {
     outcome: ReleaseStepOutcome,
     effect: Option<ObservedEffect>,
     observed_at: DateTime<Utc>,
+    historical_target: Option<crate::deployment::HistoricalTargetDeployment>,
 }
 impl ObservedReleaseStep {
+    pub(crate) fn historical_target(
+        &self,
+    ) -> Option<&crate::deployment::HistoricalTargetDeployment> {
+        self.historical_target.as_ref()
+    }
     pub fn plan_digest(&self) -> &str {
         &self.plan_digest
     }
@@ -553,6 +559,126 @@ impl ObservedReleaseStep {
     }
     pub fn observed_at(&self) -> DateTime<Utc> {
         self.observed_at
+    }
+}
+pub(crate) struct ReleaseHistoryReferences {
+    pub files: Vec<(String, String, String)>,
+    pub receipts: Vec<Receipt>,
+}
+impl DeliveryCoordinator {
+    /// Read every immutable step ordinal, including failed attempts archived by
+    /// explicit resume. This is local historical evidence, not a provider poll.
+    pub(crate) fn release_history_references(
+        &self,
+        attempt: &crate::release::ReleaseAttempt,
+    ) -> Result<ReleaseHistoryReferences> {
+        use crate::release::StepState;
+        attempt.validate_recovered()?;
+        let plan = &attempt.plan;
+        let mut result = ReleaseHistoryReferences {
+            files: vec![],
+            receipts: vec![],
+        };
+        for (step, current) in &attempt.steps {
+            let mut states = attempt
+                .step_history
+                .get(step)
+                .into_iter()
+                .flatten()
+                .filter(|state| {
+                    matches!(
+                        state,
+                        StepState::Failed { .. } | StepState::Cancelled { .. }
+                    )
+                })
+                .collect::<Vec<_>>();
+            states.push(current);
+            if states.len() != attempt.step_attempt(step)? as usize {
+                return Err(production_error("release step history ordinal differs"));
+            }
+            for (index, state) in states.into_iter().enumerate() {
+                let ordinal = index as u32 + 1;
+                let no_dispatch = self.read_no_dispatch(plan, step, ordinal)?;
+                let effect = match self.load_release_effect(plan, step, ordinal) {
+                    Ok(record) => Some(record),
+                    Err(error) if error.code == "record_missing" => None,
+                    Err(error) => return Err(error),
+                };
+                if no_dispatch.is_none() && effect.is_none() {
+                    if matches!(state, StepState::NotStarted | StepState::Retired { .. }) {
+                        continue;
+                    }
+                    return Err(production_error(
+                        "terminal release history has no protected step record",
+                    ));
+                }
+                if result.files.len() >= 4095 {
+                    return Err(production_error("release history exceeds reference bound"));
+                }
+                if let Some(observed) = &no_dispatch {
+                    if !matches!(state, StepState::Failed { reason, .. } if observed.outcome() == &ReleaseStepOutcome::Failed(reason.clone()))
+                    {
+                        return Err(production_error(
+                            "archived no-dispatch outcome differs from release history",
+                        ));
+                    }
+                    let leaf = no_dispatch_leaf(plan.operation_id, step, ordinal);
+                    let signed: Signed<NoDispatchRecord> = self.records.read(&leaf)?;
+                    self.key.verify("release_no_dispatch", &signed)?;
+                    result
+                        .receipts
+                        .push(self.host.operation(signed.payload.admission_operation)?);
+                    if let Some(receipt) = observed.receipt() {
+                        result.receipts.push(receipt.clone());
+                    }
+                    result
+                        .files
+                        .push((leaf, "release_no_dispatch".into(), signed.digest()?));
+                }
+                if let Some(effect) = effect {
+                    let receipt = self.release_record_receipt(&effect)?;
+                    if no_dispatch.is_none()
+                        && let Some(receipt) = &receipt
+                    {
+                        let expected = match state {
+                            StepState::Succeeded { effect, .. } => {
+                                json!({"release_plan":plan.digest()?,"step":step,"outcome":ReleaseStepOutcome::Succeeded,"effect":effect})
+                            }
+                            StepState::Failed { reason, .. } => {
+                                json!({"release_plan":plan.digest()?,"step":step,"outcome":ReleaseStepOutcome::Failed(reason.clone()),"effect":Value::Null})
+                            }
+                            // Cancellation needs its distinct owned cancellation proof;
+                            // current runtime records provider cancellations as Failed.
+                            _ => {
+                                return Err(production_error(
+                                    "release history outcome lacks a reconciled terminal observation",
+                                ));
+                            }
+                        };
+                        if receipt.phase != crate::control::ReceiptPhase::Reconciled
+                            || receipt.observed_result.as_ref() != Some(&expected)
+                        {
+                            return Err(production_error(
+                                "archived release effect lacks its exact reconciled outcome",
+                            ));
+                        }
+                    }
+                    result
+                        .receipts
+                        .push(self.host.operation(effect.admission_operation)?);
+                    if let Some(receipt) = receipt {
+                        result.receipts.push(receipt);
+                    }
+                    let leaf = release_effect_leaf(plan.operation_id, step, ordinal);
+                    let signed: Signed<ReleaseEffectRecord> = self.records.read(&leaf)?;
+                    self.key.verify("release_effect", &signed)?;
+                    result
+                        .files
+                        .push((leaf, "release_effect".into(), signed.digest()?));
+                }
+            }
+        }
+        Ok(result)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -860,7 +986,7 @@ impl DeliveryCoordinator {
             // This owned future has ended. Intent persistence precedes every
             // broker call; absence under the same lock proves no dispatch path
             // was entered, rather than making any claim about remote absence.
-            let _lock = self.records.lock("release-effects.lock")?;
+            let _lock = self.records.section_lock("release-effects.lock")?;
             let leaf =
                 release_effect_leaf(request.plan.operation_id, &payload.step_id, payload.attempt);
             match self.records.read::<Signed<ReleaseEffectRecord>>(&leaf) {
@@ -1034,7 +1160,7 @@ impl DeliveryCoordinator {
         self.host.validate_permit(&a.permit, || {
             (self.current_gate)(&a.gate)?;
             (request.final_gate)(request.plan, &payload.step_id)?;
-            let _lock = self.records.lock("release-effects.lock")?;
+            let _lock = self.records.section_lock("release-effects.lock")?;
             if self
                 .read_no_dispatch(request.plan, &payload.step_id, payload.attempt)?
                 .is_some()
@@ -1226,6 +1352,7 @@ impl DeliveryCoordinator {
             outcome: ReleaseStepOutcome::Failed(r.reason),
             effect: None,
             observed_at: r.observed_at,
+            historical_target: None,
         }))
     }
     fn read_release_effect(
@@ -1529,6 +1656,7 @@ impl DeliveryCoordinator {
                     outcome: ReleaseStepOutcome::Succeeded,
                     effect: Some(effect),
                     observed_at: Utc::now(),
+                    historical_target: Some(target),
                 }
             }
         };
@@ -1662,6 +1790,7 @@ impl DeliveryCoordinator {
             outcome: ReleaseStepOutcome::Pending,
             effect: None,
             observed_at: Utc::now(),
+            historical_target: None,
         };
         if let Some(receipt) = receipt.as_ref().filter(|receipt| {
             receipt.phase == crate::control::ReceiptPhase::Reconciled
@@ -1681,7 +1810,7 @@ impl DeliveryCoordinator {
                 reason: "authenticated provider preflight did not dispatch".into(),
                 observed_at: Utc::now(),
             };
-            let _lock = self.records.lock("release-effects.lock")?;
+            let _lock = self.records.section_lock("release-effects.lock")?;
             let leaf = no_dispatch_leaf(plan.operation_id, &r.payload.step_id, r.payload.attempt);
             match self.records.read::<Signed<NoDispatchRecord>>(&leaf) {
                 Ok(_) => {}

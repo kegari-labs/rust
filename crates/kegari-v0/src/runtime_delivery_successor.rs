@@ -358,7 +358,7 @@ impl RuntimeDelivery {
                     .services
                     .key
                     .sign("release_successor_intent", &intent)?;
-                let _lock = self.records.lock("release-successors.lock")?;
+                let _lock = self.records.section_lock("release-successors.lock")?;
                 match self
                     .records
                     .read::<Signed<SuccessorIntent>>(&leaf(plan.operation_id))
@@ -594,6 +594,17 @@ impl RuntimeDelivery {
                 )?;
                 self.persist_recovery_transition(original, receipt, "supersede", |record| {
                     record.attempt.assigned_successor = Some(child.attempt.plan.operation_id);
+                    record
+                        .attempt
+                        .recovery_records
+                        .push(domain::RecoveryRecord {
+                            actor: decision.actor().identity.clone(),
+                            action: "supersede".into(),
+                            reason: "synthetic upstream successor; actual operator transition"
+                                .into(),
+                            baseline_digest: None,
+                            observed_at: receipt.updated_at,
+                        });
                     Ok(())
                 })
             },

@@ -42,6 +42,7 @@ impl RetriedUnfinishedWork {
         grants: &[VerifiedRetryGrant],
     ) -> Result<()> {
         self.original.verify_retry_basis(receipts)?;
+        self.original.verify_current(receipts, grants)?;
         crate::runtime_workflow::require_current_grant(&self.grant, grants)?;
         let successors: Vec<_> = grants
             .iter()

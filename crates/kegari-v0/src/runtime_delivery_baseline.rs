@@ -186,17 +186,52 @@ impl RuntimeDelivery {
         self.restore_releases()?;
         (self.current_gate())(gate)?;
         let workspace = self.workspace(projection, gate.workspace_id())?;
+        let parent = projection.parent(gate.workspace_id(), gate.work().parent)?;
+        self.known_predecessor_baseline_inner(&workspace, parent, gate, None)
+            .await
+    }
+    pub(in crate::runtime_delivery) async fn active_predecessor_baseline(
+        &self,
+        phase: &super::super::child::ActivePhase,
+    ) -> Result<Option<Arc<KnownPredecessorBaseline>>> {
+        let admitted = phase.admission.fresh_gate();
+        self.runtime.control.validate_permit(&phase.permit, || {
+            self.runtime
+                .registration
+                .verify_active_owner(&phase.permit.lease)?;
+            (self.retained_gate())(admitted)
+        })?;
+        let outcomes = self.runtime.dependency_outcomes()?;
+        let parent = self
+            .runtime
+            .observations
+            .active_parent(admitted, &outcomes)?;
+        let gate =
+            parent.retain_active_gate(admitted, &outcomes, Utc::now(), Duration::seconds(30))?;
+        self.known_predecessor_baseline_inner(&phase.workspace, &parent, &gate, Some(phase))
+            .await
+    }
+    async fn known_predecessor_baseline_inner(
+        &self,
+        workspace: &WorkspaceDelivery,
+        parent: &ParentProjection,
+        gate: &FreshGate,
+        active: Option<&super::super::child::ActivePhase>,
+    ) -> Result<Option<Arc<KnownPredecessorBaseline>>> {
+        self.restore_releases()?;
         let configured = workspace
             .configuration
             .workspaces
             .values()
             .find(|w| w.id == gate.workspace_id())
             .ok_or_else(|| Error::new("scope_violation", "successor workspace disappeared"))?;
-        let parent = projection.parent(gate.workspace_id(), gate.work().parent)?;
-        let contract =
+        let contract = if let Some(phase) = active {
+            self.active_parent_contract(phase)?
+        } else {
             workspace
                 .coordinator
-                .parent_contract(gate.clone(), parent, &workspace.workflow)?;
+                .parent_contract(gate.clone(), parent, &workspace.workflow)?
+        };
         let resources = workspace
             .contracts
             .iter()
@@ -216,24 +251,25 @@ impl RuntimeDelivery {
                 resources
             })
             .collect::<BTreeSet<_>>();
-        let candidates = self
-            .releases
-            .state
-            .lock()
-            .map_err(|_| unavailable())?
-            .attempts
-            .values()
-            .filter(|record| {
-                record.workspace == gate.workspace_id()
-                    && record.work.parent == gate.work().parent
-                    && record.work.linear_endpoint == gate.work().linear_endpoint
-                    && record.work.linear_workspace == gate.work().linear_workspace
-                    && record.work.generation != gate.work().generation
-                    && record.attempt.hold_reason.is_some()
-                    && !record.attempt.resolved
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let candidates = {
+            let state = self.releases.state.lock().map_err(|_| unavailable())?;
+            let consumed = state.completed_ancestors()?;
+            state
+                .attempts
+                .values()
+                .filter(|record| {
+                    record.workspace == gate.workspace_id()
+                        && !consumed.contains_key(&record.attempt.plan.operation_id)
+                        && record.work.parent == gate.work().parent
+                        && record.work.linear_endpoint == gate.work().linear_endpoint
+                        && record.work.linear_workspace == gate.work().linear_workspace
+                        && record.work.generation != gate.work().generation
+                        && record.attempt.hold_reason.is_some()
+                        && !record.attempt.resolved
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
         if candidates.is_empty() {
             return Ok(None);
         }
@@ -272,7 +308,7 @@ impl RuntimeDelivery {
                 "recovery cannot widen or replace held repository/target scope",
             ));
         }
-        self.known_record_baseline(&workspace, gate, record)
+        self.known_record_baseline_inner(workspace, gate, record, active)
             .await
             .map(Some)
     }
@@ -281,6 +317,16 @@ impl RuntimeDelivery {
         workspace: &WorkspaceDelivery,
         gate: &FreshGate,
         record: &AttemptRecord,
+    ) -> Result<Arc<KnownPredecessorBaseline>> {
+        self.known_record_baseline_inner(workspace, gate, record, None)
+            .await
+    }
+    async fn known_record_baseline_inner(
+        &self,
+        workspace: &WorkspaceDelivery,
+        gate: &FreshGate,
+        record: &AttemptRecord,
+        active: Option<&super::super::child::ActivePhase>,
     ) -> Result<Arc<KnownPredecessorBaseline>> {
         if record.workspace != gate.workspace_id()
             || issue(record)?.identity()? != gate.work_key()?
@@ -322,16 +368,22 @@ impl RuntimeDelivery {
             baselines.push(workspace.observer.observe_recovery(contract).await?);
         }
         verify_known_baseline(&origin, &baselines, &effects)?;
-        let current = self.runtime.observations.admission_snapshot()?;
-        let observed_gate = current
-            .parent(gate.workspace_id(), gate.work().parent)?
-            .fresh_gate(
-                gate.work().child,
-                gate.purpose(),
-                &self.runtime.dependency_outcomes()?,
-                Utc::now(),
-                Duration::seconds(30),
-            )?;
+        let outcomes = self.runtime.dependency_outcomes()?;
+        let observed_gate = if active.is_some() {
+            self.runtime.observations.active_gate(gate, &outcomes)?
+        } else {
+            self.runtime
+                .observations
+                .admission_snapshot()?
+                .parent(gate.workspace_id(), gate.work().parent)?
+                .fresh_gate(
+                    gate.work().child,
+                    gate.purpose(),
+                    &outcomes,
+                    Utc::now(),
+                    Duration::seconds(30),
+                )?
+        };
         gate.compare_current(&observed_gate, Utc::now(), Duration::seconds(30))?;
         let cap = Arc::new(KnownPredecessorBaseline {
             record: record.clone(),
@@ -347,7 +399,31 @@ impl RuntimeDelivery {
             observed_at: Utc::now(),
         });
         self.runtime.control.serialize_observation(|snapshot| {
-            (self.current_gate())(gate)?;
+            if let Some(phase) = active {
+                self.runtime
+                    .registration
+                    .verify_active_owner(&phase.permit.lease)?;
+                if snapshot
+                    .fenced_operations
+                    .contains(&phase.permit.operation_id)
+                    || !snapshot.active_operations.iter().any(|actual| {
+                        actual.operation_id == phase.permit.operation_id
+                            && actual.lease == phase.permit.lease
+                            && actual.scope_digest == phase.permit.scope_digest
+                            && actual.work_key == phase.permit.work_key
+                            && actual.control_generation == phase.permit.control_generation
+                            && actual.registered_at == phase.permit.registered_at
+                    })
+                {
+                    return Err(Error::new(
+                        "access_denied",
+                        "retained baseline admission is absent or fenced",
+                    ));
+                }
+                (self.retained_gate())(gate)?;
+            } else {
+                (self.current_gate())(gate)?;
+            }
             let work = gate.work_key()?;
             if snapshot
                 .unresolved_operations
@@ -453,7 +529,7 @@ type KnownState = (
     BTreeMap<RepositoryId, crate::git::Revision>,
     BTreeMap<(RepositoryId, String), (crate::git::Revision, String)>,
 );
-fn verify_known_baseline(
+pub(super) fn verify_known_baseline(
     origin: &VerifiedReleaseOrigin,
     baselines: &[VerifiedRecoveryBaseline],
     effects: &BTreeMap<String, Arc<ObservedReleaseStep>>,

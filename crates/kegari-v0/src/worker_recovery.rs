@@ -147,6 +147,7 @@ impl RecoveryProviderLaunch {
             scope,
             |snapshot| {
                 fresh(snapshot)?;
+                candidate.verify_prior_receipts(&input.control.operations()?)?;
                 input.host.verify_owner(&input.lease)?;
                 contract
                     .authority()
@@ -487,15 +488,12 @@ impl VerifiedSessionResume {
         state.advertised_tools = old.advertised_tools.clone();
         state.provider_instruction_sources = old.provider_instruction_sources.clone();
         state.usage = old.usage.resumed_session(&old.binding.account_id, thread);
-        state.resume_origin = Some(crate::codex::SessionResumeOrigin {
-            predecessor: self.previous.operation_id,
-            recovery_digest: self.recovery.digest().into(),
-            instruction_compatibility_digest: self.instructions.digest().into(),
-            history_digest: self.recovery.observation().history_digest().into(),
-            historical_turns: old.completed_turns.keys().cloned().collect(),
-            thread: thread.clone(),
-            readback_digest: None,
-        });
+        state.resume_origin = Some(crate::codex::SessionResumeOrigin::from_recovery(
+            self.recovery.observation(),
+            self.recovery.digest(),
+            self.instructions.digest(),
+            &state.binding,
+        )?);
         Ok(state)
     }
     pub(crate) fn verify_session(&self, state: &SessionState) -> Result<()> {

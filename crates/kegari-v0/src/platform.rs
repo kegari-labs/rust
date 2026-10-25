@@ -715,15 +715,11 @@ impl Registration {
                 "orchestration handshake does not match the reserved owner and executable",
             ));
         }
-        match self.root.lock("runtime.lock") {
-            Ok(_) => {
-                return Err(Error::new(
-                    "ownership_conflict",
-                    "orchestration handshake has no held runtime lock",
-                ));
-            }
-            Err(error) if error.code == "ownership_conflict" => (),
-            Err(error) => return Err(error),
+        if self.root.try_lock("runtime.lock")?.is_some() {
+            return Err(Error::new(
+                "ownership_conflict",
+                "orchestration handshake has no held runtime lock",
+            ));
         }
         owner.orchestration = Some(RuntimeOwner {
             lease,
@@ -826,13 +822,12 @@ impl Registration {
                 "orchestration process identity is no longer current",
             ));
         }
-        match self.root.lock("runtime.lock") {
-            Ok(_) => Err(Error::new(
+        match self.root.try_lock("runtime.lock")? {
+            Some(_) => Err(Error::new(
                 "ownership_conflict",
                 "orchestration process no longer holds runtime.lock",
             )),
-            Err(error) if error.code == "ownership_conflict" => Ok(()),
-            Err(error) => Err(error),
+            None => Ok(()),
         }
     }
 }

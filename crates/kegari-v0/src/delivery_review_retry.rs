@@ -263,7 +263,109 @@ pub struct ReviewRetryRequest<'a> {
     pub grant: VerifiedRetryGrant,
     pub current_grants: &'a [VerifiedRetryGrant],
 }
+
+/// A completed exact-head review inside an authenticated granted budget. This
+/// carries its actual completion; serialized receipts alone cannot recreate it.
+#[derive(Clone)]
+pub(crate) struct CompletedGrantedReview {
+    basis: Arc<ReviewRetryWork>,
+    outcome: crate::runtime::VerifiedAuthorizedOutcome,
+    completion: Arc<RunCompletion>,
+    reference: RunReference,
+    receipt_digest: String,
+    inventory_digest: String,
+    digest: String,
+}
+impl CompletedGrantedReview {
+    pub(crate) fn digest(&self) -> &str {
+        &self.digest
+    }
+    pub(crate) fn outcome(&self) -> &crate::runtime::VerifiedAuthorizedOutcome {
+        &self.outcome
+    }
+    pub(crate) fn completion(&self) -> &Arc<RunCompletion> {
+        &self.completion
+    }
+    pub(crate) fn phase(&self) -> &PhaseKey {
+        &self.reference.phase
+    }
+    pub(crate) fn verify_current(
+        &self,
+        receipts: &[Receipt],
+        grants: &[VerifiedRetryGrant],
+    ) -> Result<()> {
+        if review_inventory(receipts, self.basis.receipt.runtime_id, &self.reference)?
+            != self.inventory_digest
+        {
+            return Err(Error::new(
+                "stale_result",
+                "completed granted review inventory changed",
+            ));
+        }
+        let receipt = receipts
+            .iter()
+            .find(|r| r.operation_id == self.completion.operation_id)
+            .ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "completed granted review receipt disappeared",
+                )
+            })?;
+        if canonical_digest(1, receipt)? != self.receipt_digest {
+            return Err(Error::new(
+                "stale_result",
+                "completed granted review receipt changed",
+            ));
+        }
+        self.basis
+            .verify_completed_inventory(receipts, grants, self.completion.operation_id)?;
+        child::completed_run(&self.outcome, &self.completion)?;
+        self.basis.verify_contract(
+            self.completion
+                .contract
+                .as_ref()
+                .ok_or_else(|| Error::new("worker_binding", "completed review contract missing"))?,
+        )
+    }
+}
 impl DeliveryCoordinator {
+    pub(crate) async fn completed_granted_review(
+        &self,
+        admission: &DeliveryAdmission,
+        assignment: &ChildReviewAssignment,
+        outcome: &crate::runtime::VerifiedAuthorizedOutcome,
+        completion: &Arc<RunCompletion>,
+        proof: &ReviewRetryWork,
+        grants: &[VerifiedRetryGrant],
+    ) -> Result<CompletedGrantedReview> {
+        self.current(
+            admission,
+            &[DeliveryPhase::ReviewPublication, DeliveryPhase::NoChange],
+        )?;
+        Self::completed_review_claim(admission, assignment, outcome, completion)?;
+        self.verify_retried_review_source(admission, outcome, completion, proof)
+            .await?;
+        let receipts = self.host.operations()?;
+        proof.verify_completed_inventory(&receipts, grants, completion.operation_id)?;
+        let receipt = self.host.operation(completion.operation_id)?;
+        let reference = RunReference::from_receipt(&receipt)?
+            .ok_or_else(|| Error::new("worker_binding", "completed review admission missing"))?;
+        let receipt_digest = canonical_digest(1, &receipt)?;
+        let inventory_digest = review_inventory(&receipts, receipt.runtime_id, &reference)?;
+        let digest = canonical_digest(
+            1,
+            &json!({"purpose":"completed_granted_review","basis":proof.digest(),"outcome":outcome.digest(),"receipt":receipt_digest,"inventory":inventory_digest}),
+        )?;
+        Ok(CompletedGrantedReview {
+            basis: Arc::new(proof.clone()),
+            outcome: outcome.clone(),
+            completion: completion.clone(),
+            reference,
+            receipt_digest,
+            inventory_digest,
+            digest,
+        })
+    }
     pub async fn publish_retried_review(
         &self,
         admission: &DeliveryAdmission,
@@ -273,6 +375,28 @@ impl DeliveryCoordinator {
         proof: &ReviewRetryWork,
         current_grant: GateCheck,
     ) -> Result<PublishedReview> {
+        self.verify_retried_review_source(admission, outcome, completion, proof)
+            .await?;
+        self.publish_completed_review_guarded(
+            admission,
+            assignment,
+            outcome,
+            completion,
+            Some(current_grant),
+        )
+        .await
+    }
+    async fn verify_retried_review_source(
+        &self,
+        admission: &DeliveryAdmission,
+        outcome: &crate::runtime::VerifiedAuthorizedOutcome,
+        completion: &Arc<RunCompletion>,
+        proof: &ReviewRetryWork,
+    ) -> Result<()> {
+        self.current(
+            admission,
+            &[DeliveryPhase::ReviewPublication, DeliveryPhase::NoChange],
+        )?;
         proof.verify_contract(completion.contract.as_ref().ok_or_else(|| {
             Error::new("worker_binding", "retried review contract unavailable")
         })?)?;
@@ -313,14 +437,7 @@ impl DeliveryCoordinator {
                 "retried review source validation was lost",
             )
         })??;
-        self.publish_completed_review_guarded(
-            admission,
-            assignment,
-            outcome,
-            completion,
-            Some(current_grant),
-        )
-        .await
+        Ok(())
     }
     pub async fn retry_failed_review(
         &self,
@@ -514,12 +631,7 @@ fn review_contract(assignment: &DeliveryWorkerAssignment, contract: &WorkerContr
     // These are immutable admission records, potentially retained long after
     // the review finished. Fresh authority is checked separately at producer,
     // preparation, final model admission and publication gates.
-    if assignment.authority().digest()? != gate.digest()? {
-        return Err(Error::new(
-            "worker_binding",
-            "review contract changed its admitted authority",
-        ));
-    }
+    assignment.authority().compare_admitted_authority(gate)?;
     if assignment.role() != AgentRole::Review
         || assignment.phase() != "child_codex_review"
         || !assignment.read_sources().is_empty()

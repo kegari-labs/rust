@@ -690,6 +690,7 @@ struct DeliveryFixture {
 
 /// Test-only provider protocol used by a real RuntimeFixture. Upstream review
 /// and check facts remain explicitly synthetic; no native sandbox proof exists.
+#[derive(Clone)]
 pub(crate) struct RuntimeSeedWire(Arc<Mutex<Fixture>>);
 impl RuntimeSeedWire {
     pub(crate) fn new(production: &crate::git::Revision) -> Self {
@@ -3259,7 +3260,7 @@ async fn original_release_reader_requires_actual_native_publications_and_immutab
 
 #[path = "lineage_wire.rs"]
 mod lineage_wire;
-pub(crate) use lineage_wire::RuntimeLineageWire;
+pub(crate) use lineage_wire::{RuntimeLineageWire, TargetReleaseFixture};
 
 /// Accepted upstream plan/scope are explicit synthetic inputs. This regression
 /// uses actual host admissions, provider broker receipts, signed artifacts/OIDC,

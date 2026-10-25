@@ -212,10 +212,24 @@ completion. Stopped Git hydration must use the separately authenticated host-loc
 process scope; a fabricated worker lease is not permitted.
 
 `RuntimeDelivery` composes current-provider hydration, protected manual release
-intent records, and finite child/parent phase progression. Child validation and
+intent records, and finite child/parent/release phase progression. Child validation and
 review launch from opaque assignments preserving the exact original source and
 context. Parent progression assembles every repository, validates the complete
 candidate vector, and binds the coordination result to the integrated evidence.
+The driver retains one progression task while short supervisor polls continue;
+an interrupted poll cannot discard the phase's join handle. A separate owned
+observation task refreshes actual provider facts during long phases, with one
+read in flight and a bounded timeout. Refresh failure blocks both new and retained
+gates without changing earlier observation timestamps. Pending progression and
+observation joins prevent a claim of local clearance. Pause/stop drain existing
+finite work; force-stop still fences before cancellation. New work rechecks current
+observations between candidates, while active phases retain their admitted settings.
+Retained parent contracts use a distinct borrowed input from the actual live
+phase and its retained observation registry. Current permission observations
+keep their own configuration revision; they are not relabeled as the admitted
+configuration. The phase keeps its original workflow and repository contracts,
+and exact permit, owner, scope and authority checks still apply. Ordinary parent
+contract construction continues to require an exact current revision.
 The permanent capability maps retain original runs and admitted phases even if
 an error-report write fails. Tests replace an owned private-directory inode to
 exercise that failure path. These runtime paths still require broader integrated
@@ -308,8 +322,28 @@ unknown and other persistent failures require explicit resolution. Historical
 assignment/contract identity is compared independently of observation age, while
 every current admission and publication still requires fresh native authority.
 A clean result must match that proof's exact next completed admission before
-publication. Repair after new findings still requires additional lineage
-integration; cross-correction and cold recovery remain unavailable.
+publication. A granted Findings result can now produce a repair within the original
+implementation budget. Its opaque completed-review lineage preserves the native
+grant and complete review inventory. A materially changed repair tree can then
+use the next ordinal of the same granted review budget; source advancement does
+not renew either budget. Admission and final publication reread the current grant,
+and ordinary mixed-grant continuation remains rejected.
+
+The new fixture proves actual Findings, scoped repair admission and changed Git
+source sealing, then asserts the genuine missing-qualified-local-check blocker.
+Its downstream changed-PR assignment is an explicitly test-only upstream fact;
+that separate component exercises granted new-head admission, clean result and
+provider publication. It does not establish the production local-validation/PR
+path or populate a native joined-run cache. Further Findings after that changed-
+head review, validation retry lineage, cross-correction and cold reconstruction
+remain unsupported.
+
+Review-round accounting remains conservative: every admitted review, including a
+transient failed review, is counted. For example, the original failed review plus
+a granted Findings result consumes two recorded rounds before repair. This
+retains all historical limits but can block earlier than the specification's
+review-followed-by-fix semantics. Exact authenticated review/fix ancestry is a
+separate remaining correction; this slice does not decrement old counters.
 The deterministic review fixture uses a real in-process RPC failure notification,
 real Control receipts, owned Git objects and actual synthetic provider publication.
 It deliberately cannot populate the native runtime joined-run cache or establish
@@ -330,9 +364,50 @@ is retained once. Historical proof does not populate generic current readiness.
 For admission, an opaque verified lineage can project ancestor hold assignments
 onto one exact successor plan in a temporary queue view. The durable holds and
 receipts are unchanged; unrelated holds, resource owners, dependencies and spacing
-still block. Terminal completion accounting for transitive ancestor holds remains
-a separate incomplete path: an older ancestor can conservatively keep later
-unrelated work blocked after the final descendant succeeds.
+still block. Terminal completion uses a separate sealed proof: every required
+step of the final descendant must have succeeded, its actual admission must be
+retired, and the finite signed supersede chain and owned effects must still match.
+The first observation also requires the complete current production inventory to
+be coherent. Provider reads finish before the serialized local commit.
+
+A small signed completion reference binds every actual resumed admission and
+completed recovery command/authorization, every prior step effect or no-dispatch
+record, the original publication receipts and parent vector, and the immutable
+target proofs/challenges. The mutable current-target pointer is excluded. Only after persistence can queue reconstruction
+remove those exact ancestor holds. Ancestor failure outcomes remain unchanged;
+only the successful descendant supplies release-queue completion and spacing.
+Propagation into the runtime's generic released-parent dependency outcomes is
+still an implementation gap; inspection history does not fill it.
+The same-parent predecessor selector excludes only ancestors covered by a valid
+completion. `release_history()` separates historical failures from `active_hold`
+and names `completed_by`; recovery cannot rewrite the completed terminal or its
+consumed ancestor records. The control inspection facade includes these rows and
+per-chain `completion_error` values.
+
+Later production changes do not invalidate an already observed completion.
+Restart recovery checks the immutable local references without requiring the
+descendant to remain the current deployed version. Missing, corrupt or changed
+references block queue authority; unrelated holds remain intact. Initial
+completion observations are checked independently, so one observation failure
+does not stop other chains from being checked. An invalid cached completion
+reference keeps the queue conservative until its exact evidence is restored or
+reconciled. Inspection still presents authenticated attempt history, marks the
+affected chain's diagnostic holds and errors, and preserves unrelated rows; this
+partial diagnostic view grants no queue, recovery, or baseline authority. The
+inspection-specific refresh still reads current provider observations, but active
+missing release prerequisites explicitly invalidate cached product readiness
+before historical rows are rendered. It does not rebuild or bypass the strict
+release queue; normal reconciliation retains its failure. Old errors on resolved
+records alone do not trigger this path. Cold inspection has the same behavior for
+missing completion or owner references; unsafe storage or unauthenticated attempt
+records still fail explicitly.
+
+Local deterministic validation of this terminal completion path is recorded in
+[the terminal/session report](../validation/LOCAL-TERMINAL-GRANT-SESSION.md). The actual
+`chained_runtime_retains_merged_contribution_through_deployment_only_predecessor`
+fixture includes cached/cold inspection during an exact target-proof deletion,
+owner-reference diagnostics, and strict queue/restore refusal. Its upstream
+accepted evidence remains explicitly synthetic.
 
 Historical successful target actions now use a separate immutable proof selected
 by the original challenge/dispatch or exact verification digest. The terminal
@@ -340,8 +415,8 @@ consumer requires the exact signed step and effect, locally retired admission,
 reconciled dispatch and reread original deployment/status/run-attempt identities.
 Replacing the current target does not rewrite that history; the final complete
 current baseline is still checked separately. This path cannot reconcile unknown
-effects or populate current readiness. Carried-acceptance release history and
-terminal transitive hold completion remain incomplete. The historical-target
+effects or populate current readiness. Carried-acceptance release history remains
+incomplete. The historical-target
 recovery boundary passes the local component/full-suite checks recorded in
 [the recovery report](../validation/LOCAL-NATIVE-RECOVERY-HISTORY.md).
 Deterministic historical accepted-input fixtures are synthetic upstream evidence;

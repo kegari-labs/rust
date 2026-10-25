@@ -29,6 +29,30 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 use uuid::Uuid;
+
+/// Component adapter around the production observation task owner. The caller
+/// supplies an already admitted finite phase; no worker, execution result or
+/// authority is manufactured here. Finish/join observation work on either phase
+/// outcome before returning to assertions in the fixture.
+pub(crate) fn maintain_phase_observations<'a, T: 'a>(
+    runtime: &'a crate::runtime::RuntimeCoordinator,
+    phase: impl std::future::Future<Output = Result<T>> + 'a,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + 'a>> {
+    // Keep the large Git/provider phase out of both nested async frames. This
+    // changes fixture allocation only; the production owner still awaits it.
+    let phase = Box::pin(phase);
+    Box::pin(async move {
+        let owner = crate::runtime_driver::ObservationMaintenance::new(
+            runtime.observations.clone(),
+            Arc::new(tokio::sync::Notify::new()),
+        );
+        let poll_ms = runtime.configuration.snapshot()?.runtime.poll_ms;
+        let (result, observed) = owner.maintain_while(poll_ms, phase).await;
+        observed?;
+        result
+    })
+}
+
 struct NoCommands;
 impl CommandBoundary for NoCommands {
     fn evidence_class(&self) -> ExecutionEvidenceClass {
@@ -362,11 +386,30 @@ pub(crate) fn complete_review_retry(
     VerifiedAuthorizedOutcome,
     Arc<RunCompletion>,
 ) {
+    complete_review_retry_claim(
+        host,
+        lease,
+        fixture,
+        proof,
+        json!({"schema_version":1,"verdict":"pass","unresolved_findings":[],"supporting_links":[proof.grant().provenance().url]}),
+    )
+}
+pub(crate) fn complete_review_retry_claim(
+    host: &crate::control::ControlHost,
+    lease: &Lease,
+    fixture: &WorkerFixture,
+    proof: &ReviewRetryWork,
+    claim: Value,
+) -> (
+    tempfile::TempDir,
+    VerifiedAuthorizedOutcome,
+    Arc<RunCompletion>,
+) {
     complete_inner(
         host,
         lease,
         fixture,
-        json!({"schema_version":1,"verdict":"pass","unresolved_findings":[],"supporting_links":[proof.grant().provenance().url]}),
+        claim,
         FixtureRunOptions {
             unfinished: None,
             advanced: None,
@@ -442,6 +485,14 @@ fn complete_inner(
         reference.attempt = 1;
         reference.max_turns = proof.grant().new_budget().max_turns;
         reference.max_review_rounds = proof.grant().new_budget().max_review_rounds;
+    }
+    if let Some(proof) = advanced {
+        reference.phase = proof.phase().clone();
+        reference.max_attempts = reference.max_attempts.min(proof.reference().max_attempts);
+        reference.max_turns = reference.max_turns.min(proof.reference().max_turns);
+        reference.max_review_rounds = reference
+            .max_review_rounds
+            .min(proof.reference().max_review_rounds);
     }
     if let Some(proof) = review_retry {
         reference.phase = proof.phase().clone();

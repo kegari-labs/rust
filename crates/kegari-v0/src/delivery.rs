@@ -29,6 +29,9 @@ use uuid::Uuid;
 /// adapter. Implementations must execute/reconcile retained effects; this trait
 /// deliberately provides no default or unsupported-operation implementation.
 pub trait RuntimeDeliveryDecisions: Send + Sync {
+    /// Read-only canonical parent history, including retained completion errors.
+    /// This projection supplies no release eligibility or execution authority.
+    fn release_inspection(&self) -> Result<BTreeMap<crate::authority::IssueKey, Value>>;
     fn release(
         &self,
         decision: crate::decisions::AuthorizedDecision,
@@ -403,7 +406,7 @@ impl DeliveryCoordinator {
             &bytes_digest(format!("{}:{action}", admission.operation_id()).as_bytes())[7..]
         );
         let mut record = {
-            let _lock = self.records.lock("delivery-effects.lock")?;
+            let _lock = self.records.section_lock("delivery-effects.lock")?;
             match self.records.read::<EffectRecord>(&leaf) {
                 Ok(record) => {
                     self.key.verify("delivery_mutation", &record.command)?;
@@ -675,7 +678,7 @@ impl crate::worker::OutcomeSink for DeliveryCoordinator {
         let bytes = serde_json::to_vec(&signed)
             .map_err(|_| Error::invalid("cannot encode pending claim attestation"))?;
         let leaf = format!("pending-worker-{}.json", outcome.proposal_id);
-        let _lock = self.records.lock("pending-worker.lock")?;
+        let _lock = self.records.section_lock("pending-worker.lock")?;
         match self.records.read_bytes(&leaf, 8 * 1024 * 1024) {
             Ok(prior) if prior == bytes => {}
             Ok(_) => {
@@ -2645,7 +2648,7 @@ impl DeliveryCoordinator {
         }
         let intent_leaf = format!("child-closure-intent-{}.json", admission.operation_id());
         let intent: Signed<ProviderMutation> = {
-            let _lock = self.records.lock("delivery-effects.lock")?;
+            let _lock = self.records.section_lock("delivery-effects.lock")?;
             match self.records.read(&intent_leaf) {
                 Ok(existing) => existing,
                 Err(e) if e.code == "record_missing" => {
@@ -2732,7 +2735,7 @@ impl DeliveryCoordinator {
             ],
         )?;
         let leaf = format!("hosted-challenge-{}.json", admission.operation_id());
-        let _lock = self.records.lock("delivery-effects.lock")?;
+        let _lock = self.records.section_lock("delivery-effects.lock")?;
         let signed: Signed<HostedChallenge> = match self.records.read(&leaf) {
             Ok(s) => s,
             Err(e) if e.code == "record_missing" => {
@@ -2944,7 +2947,7 @@ impl DeliveryCoordinator {
             "delivery-time-{}.json",
             &bytes_digest(format!("{}:{purpose}", admission.operation_id()).as_bytes())[7..]
         );
-        let _lock = self.records.lock("delivery-effects.lock")?;
+        let _lock = self.records.section_lock("delivery-effects.lock")?;
         let record: Signed<(String, DateTime<Utc>)> = match self.records.read(&leaf) {
             Ok(r) => r,
             Err(e) if e.code == "record_missing" => {
@@ -4094,7 +4097,7 @@ impl DeliveryCoordinator {
         };
         let intent_leaf = format!("slice-intent-{}.json", admission.operation_id());
         let intent: SliceIntent = {
-            let _lock = self.records.lock("delivery-effects.lock")?;
+            let _lock = self.records.section_lock("delivery-effects.lock")?;
             match self.records.read::<Signed<SliceIntent>>(&intent_leaf) {
                 Ok(existing) => {
                     self.key.verify("slice_intent", &existing)?;
@@ -4408,12 +4411,57 @@ impl DeliveryCoordinator {
         workflow: &Workflow,
     ) -> Result<ParentContract> {
         (self.current_gate)(&gate)?;
+        if projection.config_revision != gate.config_revision() {
+            return Err(Error::new(
+                "stale_result",
+                "parent contract differs from the current complete authorized generation",
+            ));
+        }
+        self.parent_contract_body(gate, projection, workflow)
+    }
+
+    /// Only the runtime's serialized check of a real active phase can mint
+    /// this borrowed input. Keep the observed revision intact; pinned execution
+    /// settings and current adjusted observation are distinct proven inputs.
+    pub(crate) fn active_parent_contract(
+        &self,
+        input: crate::runtime_delivery::ActiveParentContractInput<'_>,
+    ) -> Result<ParentContract> {
+        if input.contracts().len() != self.contracts.len() {
+            return Err(Error::new(
+                "scope_violation",
+                "active parent coordinator differs from its pinned repository contracts",
+            ));
+        }
+        for admitted in input.contracts() {
+            let current = self.contracts.get(&admitted.repository).ok_or_else(|| {
+                Error::new(
+                    "scope_violation",
+                    "active parent repository contract is unavailable",
+                )
+            })?;
+            if current.digest()? != admitted.digest()? {
+                return Err(Error::new(
+                    "scope_violation",
+                    "active parent repository contract changed",
+                ));
+            }
+        }
+        (self.current_gate)(input.gate())?;
+        self.parent_contract_body(input.gate().clone(), input.parent(), input.workflow())
+    }
+
+    fn parent_contract_body(
+        &self,
+        gate: FreshGate,
+        projection: &crate::reconcile::ParentProjection,
+        workflow: &Workflow,
+    ) -> Result<ParentContract> {
         if gate.work().child.is_some()
             || gate.purpose() == crate::reconcile::GatePurpose::Coordination
             || projection.work.as_ref() != Some(gate.work())
             || projection.workspace_id != gate.workspace_id()
             || projection.required_children != *gate.required_children()
-            || projection.config_revision != gate.config_revision()
             || projection.workflow_digest != workflow.digest
             || workflow.digest != gate.workflow_digest()
         {
@@ -4600,7 +4648,8 @@ pub use assignment::*;
 pub(crate) use production_release::tests::observed_merge_for_runtime;
 #[cfg(test)]
 pub(crate) use production_release::tests::{
-    RuntimeCandidateSeed, RuntimeLineageWire, RuntimeSeedWire, runtime_candidate_seed,
+    RuntimeCandidateSeed, RuntimeLineageWire, RuntimeSeedWire, TargetReleaseFixture,
+    runtime_candidate_seed,
 };
 
 #[path = "delivery_objects.rs"]
@@ -4612,4 +4661,5 @@ pub use continuation::*;
 
 #[path = "delivery_review_retry.rs"]
 mod review_retry;
+pub(crate) use review_retry::CompletedGrantedReview;
 pub use review_retry::{ReviewRetryRequest, ReviewRetryWork};

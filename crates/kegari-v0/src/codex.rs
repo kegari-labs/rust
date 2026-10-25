@@ -482,6 +482,14 @@ impl UsageLedger {
         }
         if !self.cumulative_baselines.contains_key(&key)
             || self.earlier_usage_unknown.contains(&key)
+            || self
+                .prior_unattributed_usage
+                .get(&key)
+                .is_some_and(|usage| {
+                    usage.known_increase > 0
+                        || usage.retained_baseline_missing
+                        || usage.timing_unknown
+                })
         {
             next.earlier_usage_unknown.insert(key);
         }

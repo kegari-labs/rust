@@ -12,7 +12,7 @@ struct IdentityFixture {
     observed: Arc<std::sync::Mutex<Vec<ProcessIdentity>>>,
 }
 #[derive(Clone)]
-pub(super) struct FixtureOwner {
+pub(crate) struct FixtureOwner {
     current: ProcessIdentity,
     observed: Arc<std::sync::Mutex<Vec<ProcessIdentity>>>,
 }
@@ -24,7 +24,7 @@ impl FixtureOwner {
             .retain(|process| process == &self.current);
     }
 
-    pub(super) fn start(
+    pub(crate) fn start(
         &self,
         runtime: &RuntimeCoordinator,
     ) -> (crate::control::Lease, crate::storage::ExclusiveLock) {
@@ -104,7 +104,7 @@ pub(crate) async fn fixture_authorization(
     let (temp, built, delivery, _, _) = fixture_authorization_with_wire(authorized).await;
     (temp, built, delivery)
 }
-pub(super) async fn fixture_authorization_with_wire(
+pub(crate) async fn fixture_authorization_with_wire(
     authorized: bool,
 ) -> (
     tempfile::TempDir,
@@ -526,6 +526,78 @@ async fn admitted_delivery_gate_survives_harmless_reload_but_not_permission_revo
         "permission_fenced"
     );
     assert!(fixture.runtime.control.operations().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn parent_progression_reselects_current_observation_between_admissions() {
+    let (_temp, fixture, service, _wire, owner) = fixture_authorization_with_wire(true).await;
+    let (lease, _ownership) = owner.start(&fixture.runtime);
+    let previous = fixture.runtime.observations.admission_snapshot().unwrap();
+    let key = previous
+        .parent(wire::id(2), wire::id(100))
+        .unwrap()
+        .key
+        .clone();
+    fixture
+        .configuration
+        .config
+        .lock()
+        .unwrap()
+        .runtime
+        .max_agents = 3;
+    let workflow = fixture.configuration.snapshot().unwrap().workspaces["example"]
+        .workflow
+        .clone();
+    let mut contents = fs::read_to_string(&workflow).unwrap();
+    contents.push_str("\nA new admission must use this current workflow revision.\n");
+    fs::write(workflow, contents).unwrap();
+    let current = fixture.runtime.observations.refresh().await.unwrap();
+    assert_ne!(previous.config_revision, current.config_revision);
+    assert_ne!(
+        previous.workspaces[&wire::id(2)].workflow_digest,
+        current.workspaces[&wire::id(2)].workflow_digest
+    );
+
+    // The caller's selection inventory may predate another bounded phase. It
+    // cannot supply the settings or authority of the next parent admission.
+    service.advance_parents(&lease, &previous).await.unwrap();
+    let health = fixture.runtime.account_observations().unwrap();
+    assert!(
+        health["delivery"].as_object().unwrap().is_empty(),
+        "{health}"
+    );
+    assert!(
+        fixture
+            .runtime
+            .control
+            .snapshot()
+            .unwrap()
+            .active_operations
+            .is_empty()
+    );
+
+    fixture
+        .configuration
+        .fences
+        .lock()
+        .unwrap()
+        .workspaces
+        .insert(wire::id(2));
+    service.advance_parents(&lease, &previous).await.unwrap();
+    let health = fixture.runtime.account_observations().unwrap();
+    assert_eq!(
+        health["delivery"][key.identity().unwrap()]["code"],
+        "permission_fenced"
+    );
+    assert!(
+        fixture
+            .runtime
+            .control
+            .snapshot()
+            .unwrap()
+            .active_operations
+            .is_empty()
+    );
 }
 
 #[tokio::test]

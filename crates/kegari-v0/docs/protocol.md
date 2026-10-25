@@ -260,9 +260,27 @@ ambiguous first increase nor `tokenUsage.last` is guessed to belong to a turn.
 Duplex tests cover the absence of a final old-turn update, delayed old-turn
 updates before and after the new boundary, repeated/lower counters, and later
 new-turn increments, as well as changed history
-and policy signals arriving between metadata preparation and resume. This first
-profile excludes corrected, cold, active, effectful, review and previously
-resumed histories. Runtime selection and native qualification remain incomplete.
+and policy signals arriving between metadata preparation and resume.
+
+Repeated recovery uses a versioned ordered prefix with one immutable segment per
+original operation: exact full-turn fingerprints, submitted text/frame digests,
+original run/receipt/journal identities, verified transient boundary and original
+usage ledger. Each full readback must match every prior segment and the current
+session, including its actual submitted text. Earlier failed turns are allowed
+only at those exact previously verified transient boundaries. RPC identifiers
+are local to each operation; reusing a number on a new transport cannot replace
+an earlier operation's input. Native gates recheck the actual typed resume receipt
+chain as well as the immediate genuine joined worker and current source/family.
+Missing legacy prefixes, changed/reordered/truncated history and unknown or
+nontransient prior boundaries remain ineligible. Earlier usage and unattributed
+summaries remain under their original operations. A successor carries the last
+cumulative baseline and sticky unknown-attribution marker, then establishes its
+own unqualified first-turn boundary without charging inherited totals again.
+The same phase history and minimum retained caps govern every successor.
+Duplex component coverage exercises two consecutive resumes, repeated RPC IDs,
+changed prefixes and new-session usage deltas; it does not manufacture a native
+joined cache or qualify a live provider. This profile still excludes corrected,
+cold, active, effectful and review histories.
 The sealed origin retains the bounded actual historical turn-ID inventory.
 Replayed historical IDs in a new start acknowledgement, start notification or
 completion are rejected without copying old results into the new session;

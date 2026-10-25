@@ -28,11 +28,21 @@ use std::{
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+#[path = "runtime_driver_tasks.rs"]
+mod tasks;
+pub(crate) use tasks::{ObservationMaintenance, ObservationTick};
+use tasks::{ProgressionSlot, ProgressionTaskStatus};
+
 /// Concrete delivery services schedule bounded owned phases. Target-specific
 /// prerequisite failures remain diagnostics; global ownership/storage failures
 /// are returned. Recovery and maintenance never create new autonomous effects.
 pub trait RuntimeProgression: Send + Sync {
     fn reconcile(&self) -> SupervisorFuture<'_, ()>;
+    /// Inspection may expose authenticated diagnostics without establishing
+    /// current delivery authority. The default retains strict reconciliation.
+    fn reconcile_for_inspection(&self) -> SupervisorFuture<'_, ()> {
+        self.reconcile()
+    }
     fn advance<'a>(&'a self, lease: &'a Lease) -> SupervisorFuture<'a, ()>;
     fn maintain(&self) -> SupervisorFuture<'_, ()>;
     fn cancel_fenced<'a>(&'a self, operations: &'a [Uuid]) -> SupervisorFuture<'a, ()>;
@@ -134,7 +144,6 @@ struct DriverState {
     recovery: Vec<ProcessRecovery>,
     recovery_errors: BTreeMap<Uuid, Error>,
     recovery_cursor: Option<Uuid>,
-    last_refresh: Option<tokio::time::Instant>,
     last_error: Option<Error>,
     dispatch_errors: BTreeMap<String, Error>,
     // Populated only after awaiting this process's actual metadata task. Loaded
@@ -149,8 +158,11 @@ pub struct RuntimeDriver {
     processes: Arc<ProcessJournal>,
     records: Arc<PrivateDir>,
     limits: DriverLimits,
-    state: Mutex<DriverState>,
+    state: Arc<Mutex<DriverState>>,
     cycle: tokio::sync::Mutex<()>,
+    observations: Arc<ObservationMaintenance>,
+    progression: tokio::sync::Mutex<ProgressionSlot>,
+    progression_status: Mutex<ProgressionTaskStatus>,
 }
 impl RuntimeDriver {
     pub fn new(services: RuntimeDriverServices, limits: DriverLimits) -> Result<Arc<Self>> {
@@ -205,6 +217,10 @@ impl RuntimeDriver {
             Arc::new(move |lease| owner.verify_owner(lease)),
         ));
         let processes = services.processes;
+        let observations = Arc::new(ObservationMaintenance::new(
+            runtime.observations.clone(),
+            runtime.services.wake.clone(),
+        ));
         Ok(Arc::new(Self {
             runtime,
             publisher,
@@ -213,19 +229,21 @@ impl RuntimeDriver {
             processes,
             records,
             limits,
-            state: Mutex::new(DriverState {
+            state: Arc::new(Mutex::new(DriverState {
                 scheduler: Scheduler::new(scheduler_limits(&config))?,
                 tasks: BTreeMap::new(),
                 records: retained,
                 recovery: vec![],
                 recovery_errors: BTreeMap::new(),
                 recovery_cursor: None,
-                last_refresh: None,
                 last_error: None,
                 dispatch_errors: BTreeMap::new(),
                 joined_recovery: BTreeMap::new(),
-            }),
+            })),
             cycle: tokio::sync::Mutex::new(()),
+            observations,
+            progression: Default::default(),
+            progression_status: Default::default(),
         }))
     }
     fn state(&self) -> Result<std::sync::MutexGuard<'_, DriverState>> {
@@ -236,7 +254,7 @@ impl RuntimeDriver {
     pub fn diagnostics(&self) -> Result<Value> {
         let state = self.state()?;
         Ok(
-            json!({"pending_launches":state.tasks.len(),"allocations":state.scheduler.running(),"dispatches":state.records.values().collect::<Vec<_>>(),"process_recovery":state.recovery,"receipt_recovery":state.recovery_errors,"dispatch_errors":state.dispatch_errors,"error":state.last_error,"completion":"dispatch_and_process_observations_are_not_delivery_evidence"}),
+            json!({"pending_launches":state.tasks.len(),"allocations":state.scheduler.running(),"dispatches":state.records.values().collect::<Vec<_>>(),"process_recovery":state.recovery,"receipt_recovery":state.recovery_errors,"dispatch_errors":state.dispatch_errors,"error":state.last_error,"progression":self.progression_status()?,"observations":self.observations.status()?,"completion":"dispatch_and_process_observations_are_not_delivery_evidence"}),
         )
     }
     fn fresh(&self, lease: &Lease) -> Result<()> {
@@ -304,130 +322,22 @@ impl RuntimeDriver {
         self.state()?.recovery = pending;
         Ok(())
     }
-    async fn recover_authorizations(&self) -> Result<()> {
-        self.runtime.registration.verify_control_owner()?;
-        let snapshot = self.runtime.control.snapshot()?;
-        let mut pending: Vec<_> = self
-            .runtime
-            .control
-            .operations()?
-            .into_iter()
-            .filter(|receipt| {
-                matches!(receipt.phase, ReceiptPhase::Prepared | ReceiptPhase::Sent)
-                    && receipt.expected.get("preparation").map(String::as_str)
-                        == Some("parent_authorization")
-                    && !snapshot.active_operations.iter().any(|permit| {
-                        receipt.expected.get("admission_operation")
-                            == Some(&permit.operation_id.to_string())
-                    })
-            })
-            .map(|receipt| receipt.operation_id)
-            .collect();
-        pending.sort();
-        let cursor = self.state()?.recovery_cursor;
-        pending.sort_by_key(|operation| {
-            (
-                cursor.is_some_and(|cursor| *operation <= cursor),
-                *operation,
-            )
-        });
-        let active: std::collections::BTreeSet<_> = pending.iter().copied().collect();
-        self.state()?
-            .recovery_errors
-            .retain(|operation, _| active.contains(operation));
-        for operation in pending.into_iter().take(self.limits.authorization_tasks) {
-            let registration = self.runtime.registration.clone();
-            let result = self
-                .publisher
-                .recover_receipt(operation, move || registration.verify_control_owner())
-                .await;
-            let mut state = self.state()?;
-            state.recovery_cursor = Some(operation);
-            match result {
-                Ok(_) => {
-                    state.recovery_errors.remove(&operation);
-                }
-                Err(error) => {
-                    state.recovery_errors.insert(operation, error);
-                }
-            }
-            // A missing/ambiguous provider record retains its exact receipt hold.
-            // It cannot prevent unrelated, independently authorized scheduling.
+    async fn initial_refresh(&self) -> Result<()> {
+        let poll_ms = self.runtime.configuration.snapshot()?.runtime.poll_ms;
+        if let ObservationTick::Joined(result) = self.observations.tick(poll_ms, true).await? {
+            self.runtime.refresh_retry_references(&result?)?;
         }
-        Ok(())
-    }
-    async fn recover_corrections(&self) -> Result<()> {
-        let pending = {
-            let state = self.state()?;
-            let mut records = state
-                .records
-                .values()
-                .filter(|record| {
-                    record.correction.is_some()
-                        && !matches!(record.state, DispatchState::Returned)
-                        && !state.tasks.contains_key(&record.operation)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            records.sort_by_key(|record| (record.observed_at, record.operation));
-            records.truncate(self.limits.authorization_tasks);
-            records
-        };
-        for mut record in pending {
-            let reference = record
-                .correction
-                .as_ref()
-                .expect("filtered correction reference");
-            let observed = async {
-                let outcome = self
-                    .runtime
-                    .coordination_outcome(reference.worker_operation, reference.proposal)?;
-                if outcome.digest() != reference.digest {
-                    return Err(Error::new(
-                        "record_corrupt",
-                        "correction recovery refers to another completed proposal",
-                    ));
-                }
-                self.corrections.recover(&outcome).await
-            }
-            .await;
-            record.observed_at = Utc::now();
-            match observed {
-                Ok(Some(_)) => {
-                    record.state = DispatchState::Returned;
-                    record.error = None;
-                }
-                Ok(None) => {
-                    record.state = DispatchState::Blocked;
-                    record.error = Some(Error::new(
-                        "correction_pending",
-                        "existing publication prefix is observed; final classification still requires current RUNNING authority",
-                    ));
-                }
-                Err(error) => {
-                    record.state = DispatchState::Blocked;
-                    record.error = Some(error);
-                }
-            }
-            self.record_observation(&record)?;
+        if let Some(projection) = self.observations.join().await? {
+            self.runtime.refresh_retry_references(&projection)?;
         }
-        Ok(())
-    }
-    async fn refresh(&self, force: bool) -> Result<()> {
-        let config = self.runtime.configuration.snapshot()?;
-        let due = force
-            || self
-                .state()?
-                .last_refresh
-                .is_none_or(|last| last.elapsed() >= Duration::from_millis(config.runtime.poll_ms));
-        if due {
-            self.runtime.observations.refresh().await?;
-            self.runtime.recover_provider_holds()?;
-            self.recover_authorizations().await?;
-            self.recover_corrections().await?;
-            self.state()?.last_refresh = Some(tokio::time::Instant::now());
+        if let Some(error) = self.observations.status()?.error {
+            return Err(error);
         }
-        Ok(())
+        self.runtime.observations.admission_snapshot()?;
+        self.runtime.recover_provider_holds()?;
+        let recovery = self.recovery_maintenance();
+        recovery.recover_authorizations().await?;
+        recovery.recover_corrections().await
     }
     fn record(&self, record: &DispatchRecord) -> Result<()> {
         self.records.write(&record_file(&record.action)?, record)?;
@@ -922,7 +832,9 @@ impl RuntimeDriver {
         let state = self.state()?;
         Ok(drain_observation(
             snapshot,
-            state.tasks.len(),
+            state.tasks.len()
+                + usize::from(self.progression_status()?.pending)
+                + usize::from(self.observations.pending()?),
             self.runtime.executions.active_operations()?.len(),
             state.recovery.len(),
         ))
@@ -1148,7 +1060,7 @@ impl SupervisorDriver for RuntimeDriver {
             self.runtime.registration.verify_control_owner()?;
             self.runtime.recover_provider_holds()?;
             self.recover_processes()?;
-            self.refresh(true).await?;
+            self.initial_refresh().await?;
             self.delivery.reconcile().await
         })
     }
@@ -1158,7 +1070,7 @@ impl SupervisorDriver for RuntimeDriver {
             self.runtime.verify_owner(lease)?;
             self.runtime.recover_provider_holds()?;
             self.recover_processes()?;
-            self.refresh(true).await?;
+            self.initial_refresh().await?;
             self.delivery.reconcile().await
         })
     }
@@ -1167,11 +1079,13 @@ impl SupervisorDriver for RuntimeDriver {
             let _cycle = self.cycle.lock().await;
             self.drain_finished().await?;
             self.fresh(lease)?;
-            self.refresh(false).await?;
-            self.runtime
-                .refresh_active_corrections(&self.corrections)
-                .await?;
-            self.delivery.advance(lease).await?;
+            self.tick_observations(true).await?;
+            self.request_advance(lease).await;
+            self.tick_progression(lease, false).await?;
+            if !self.take_completed_advance(lease).await {
+                return Ok(());
+            }
+            self.fresh(lease)?;
             for completed in self.runtime.pending_coordination_outcomes()? {
                 self.launch_correction(lease, completed).await?;
             }
@@ -1253,18 +1167,19 @@ impl SupervisorDriver for RuntimeDriver {
     }
     fn maintain<'a>(
         &'a self,
-        _lease: &'a Lease,
+        lease: &'a Lease,
         _snapshot: &'a ControlSnapshot,
     ) -> SupervisorFuture<'a, DrainState> {
         Box::pin(async move {
             let _cycle = self.cycle.lock().await;
             self.drain_finished().await?;
-            self.delivery.maintain().await?;
             self.recover_processes()?;
-            self.refresh(false).await?;
-            self.runtime
-                .refresh_active_corrections(&self.corrections)
-                .await?;
+            let snapshot = self.runtime.control.snapshot()?;
+            let active = snapshot.intent.desired == Intent::Running
+                || !self.drain_without_observer(&snapshot)?;
+            let observation = self.tick_observations(active).await;
+            let progression = self.tick_progression(lease, true).await;
+            observation.and(progression)?;
             self.drain_state(&self.runtime.control.snapshot()?)
         })
     }
@@ -1285,13 +1200,17 @@ impl SupervisorDriver for RuntimeDriver {
             error.map_or(Ok(()), Err)
         })
     }
-    fn exited<'a>(&'a self, _lease: &'a Lease) -> SupervisorFuture<'a, DrainState> {
+    fn exited<'a>(&'a self, lease: &'a Lease) -> SupervisorFuture<'a, DrainState> {
         Box::pin(async move {
             let _cycle = self.cycle.lock().await;
             self.drain_finished().await?;
-            self.delivery.maintain().await?;
             self.recover_processes()?;
-            self.refresh(false).await?;
+            let snapshot = self.runtime.control.snapshot()?;
+            let observation = self
+                .tick_observations(!self.drain_without_observer(&snapshot)?)
+                .await;
+            let progression = self.tick_progression(lease, true).await;
+            observation.and(progression)?;
             self.drain_state(&self.runtime.control.snapshot()?)
         })
     }

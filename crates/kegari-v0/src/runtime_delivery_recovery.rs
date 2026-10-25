@@ -50,6 +50,16 @@ impl RuntimeDelivery {
                 "recovery operation belongs to another canonical parent or workspace",
             ));
         }
+        {
+            let state = self.releases.state.lock().map_err(|_| unavailable())?;
+            let consumed = state.completed_ancestors()?;
+            if consumed.contains_key(&operation) || state.completions.contains_key(&operation) {
+                return Err(Error::new(
+                    "release_completed",
+                    "verified terminal completion and its consumed ancestor history are immutable",
+                ));
+            }
+        }
         Ok(record)
     }
     fn recovery_gate(
@@ -384,7 +394,7 @@ impl RuntimeDelivery {
                     next.workflow_digest = gate.workflow_digest().into();
                     let mut proposed = state.attempts.clone();
                     proposed.insert(plan.operation_id, next.clone());
-                    let queue = rebuild_queue(&proposed, &state.no_release)?;
+                    let queue = rebuild_queue(&proposed, &state.no_release, &state.completions)?;
                     self.save_release(&next)?;
                     state.attempts = proposed;
                     state.queue = queue;
@@ -889,7 +899,7 @@ impl RuntimeDelivery {
         record.attempt.validate_recovered()?;
         let mut proposed = state.attempts.clone();
         proposed.insert(operation, record.clone());
-        let queue = rebuild_queue(&proposed, &state.no_release)?;
+        let queue = rebuild_queue(&proposed, &state.no_release, &state.completions)?;
         self.save_release(&record)?;
         let observed = json!({"release_operation":operation,"action":action,"attempt_digest":canonical_digest(1,&record)?,"resolved":record.attempt.resolved,"abandoned":record.attempt.abandoned,"hold":record.attempt.hold_reason,"unknown":record.attempt.has_unknown(),"released":false});
         state.attempts = proposed;
@@ -1371,6 +1381,16 @@ mod tests {
 mod successor;
 
 impl crate::delivery::RuntimeDeliveryDecisions for RuntimeDelivery {
+    fn release_inspection(&self) -> Result<BTreeMap<IssueKey, Value>> {
+        let mut grouped = BTreeMap::<IssueKey, Vec<super::ReleaseHistory>>::new();
+        for row in self.release_history()? {
+            grouped.entry(row.parent.clone()).or_default().push(row);
+        }
+        Ok(grouped
+            .into_iter()
+            .map(|(parent, rows)| (parent, json!({"attempts":rows})))
+            .collect())
+    }
     fn release(&self, decision: AuthorizedDecision) -> crate::app::HostFuture<'_, Receipt> {
         Box::pin(self.queue_release(decision))
     }

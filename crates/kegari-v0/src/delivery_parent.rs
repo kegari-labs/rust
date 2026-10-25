@@ -196,7 +196,7 @@ impl DeliveryCoordinator {
         let leaf = format!("parent-vector-{}.json", &digest[7..]);
         let signed = self.key.sign("parent_candidate_vector", &record)?;
         // Timestamp differences do not justify replacing an immutable vector.
-        let _lock = self.records.lock("parent-vectors.lock")?;
+        let _lock = self.records.section_lock("parent-vectors.lock")?;
         match self.records.read::<Signed<VectorRecord>>(&leaf) {
             Ok(prior) => {
                 self.key.verify("parent_candidate_vector", &prior)?;

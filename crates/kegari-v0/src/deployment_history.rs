@@ -96,7 +96,67 @@ fn proof_leaf(signed: &Signed<TargetRecord>) -> Result<String> {
     ))
 }
 
+pub(crate) struct TargetHistoryReferences {
+    pub files: Vec<(String, String, String)>,
+    pub receipts: Vec<Receipt>,
+}
+
 impl ProductionObserver {
+    /// Retain the exact immutable local inputs of an already observed historical
+    /// target. The mutable current-target pointer is deliberately not a dependency.
+    pub(crate) fn historical_references(
+        &self,
+        contract: &RepositoryContract,
+        historical: &HistoricalTargetDeployment,
+    ) -> Result<TargetHistoryReferences> {
+        let record = &historical.record;
+        let dispatch = self.retained_proof_receipt(contract, record)?;
+        let mut receipts = self
+            .control
+            .closed_release_resume_receipts(record.challenge.operation)?;
+        receipts.push(dispatch);
+        let expected = self.key.sign("target_deployment", record)?;
+        let proof = proof_leaf(&expected)?;
+        let actual: Signed<TargetRecord> = self.records.read(&proof)?;
+        self.key.verify("target_deployment", &actual)?;
+        if canonical_digest(1, &actual)? != canonical_digest(1, &expected)? {
+            return Err(blocked("historical target immutable proof changed"));
+        }
+        let challenge = challenge_file(record.challenge.challenge);
+        let actual_challenge: Signed<ChallengeRecord> = self.records.read(&challenge)?;
+        self.key.verify("deployment_challenge", &actual_challenge)?;
+        if actual_challenge.payload != record.challenge {
+            return Err(blocked("historical target challenge changed"));
+        }
+        let mut files = vec![
+            (proof.clone(), "target_deployment".into(), actual.digest()?),
+            (
+                challenge,
+                "deployment_challenge".into(),
+                actual_challenge.digest()?,
+            ),
+        ];
+        for leaf in [
+            dispatch_leaf(record.challenge.dispatch),
+            digest_leaf(&canonical_digest(1, record)?)?,
+        ] {
+            let index: Signed<TargetIndex> = match self.records.read(&leaf) {
+                Ok(value) => value,
+                Err(error) if error.code == "record_missing" => continue,
+                Err(error) => return Err(error),
+            };
+            self.key.verify("target_deployment_index", &index)?;
+            if index.payload.proof_file != proof
+                || index.payload.proof_digest != actual.digest()?
+                || index.payload.contract_digest != record.challenge.contract_digest
+                || index.payload.step != record.challenge.step
+            {
+                return Err(blocked("historical target immutable locator changed"));
+            }
+            files.push((leaf, "target_deployment_index".into(), index.digest()?));
+        }
+        Ok(TargetHistoryReferences { files, receipts })
+    }
     // A crash can leave the immutable proof complete but its current pointer
     // absent or pointing to an older authenticated proof. This read-only lookup
     // grants no new observation or execution authority: callers still revalidate

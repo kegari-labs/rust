@@ -3729,7 +3729,7 @@ impl HostedProofVerifier {
         directory: &crate::storage::PrivateDir,
     ) -> Result<VerifiedHostedJob> {
         let candidate = self.verify(token, expected, now)?;
-        let _lock = directory.lock("hosted-proof.lock")?;
+        let _lock = directory.section_lock("hosted-proof.lock")?;
         let leaf = format!(
             "hosted-proof-{}.json",
             candidate

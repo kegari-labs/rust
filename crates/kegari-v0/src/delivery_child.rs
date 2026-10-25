@@ -579,7 +579,7 @@ impl DeliveryCoordinator {
         };
         let leaf = format!("source-seal-intent-{}.json", admission.operation_id());
         let intent = {
-            let _lock = self.records.lock("source-sealing.lock")?;
+            let _lock = self.records.section_lock("source-sealing.lock")?;
             match self.records.read::<Signed<SourceSealIntent>>(&leaf) {
                 Ok(prior) => {
                     self.key.verify("child_source_intent", &prior)?;
@@ -753,6 +753,40 @@ pub struct ReviewResultClaim {
     pub supporting_links: Vec<String>,
 }
 impl DeliveryCoordinator {
+    /// Component fixture only: supplies the upstream PR-assignment fact after a
+    /// separately asserted real local-validation barrier. No local check or PR
+    /// publication capability is manufactured, and this is absent in runtime.
+    #[cfg(test)]
+    pub(crate) fn fixture_upstream_changed_review(
+        &self,
+        admission: &DeliveryAdmission,
+        claim: &CompletedChildClaim,
+        source: &SealedChildSource,
+        completion: &Arc<RunCompletion>,
+    ) -> Result<(ChildReviewAssignment, DeliveryWorkerAssignment)> {
+        self.current(admission, &[DeliveryPhase::ReviewPublication])?;
+        self.current_child_claim(admission, claim)?;
+        source.matches(admission, claim)?;
+        let change = source.change().ok_or_else(|| {
+            Error::new(
+                "candidate_provenance",
+                "fixture requires actual changed sealed Git source",
+            )
+        })?;
+        change.matches(admission)?;
+        let review = ChildReviewAssignment {
+            work: admission.scope.work.clone(),
+            revision: admission.scope.revision.clone(),
+            delta_digest: change.review_digest()?,
+            pull_request: Some(1),
+            context: json!({"fixture_upstream_pr_assignment":true,"revision":admission.scope.revision,"claim":claim.claim()}),
+            config_revision: admission.gate.config_revision().into(),
+            workflow_digest: admission.gate.workflow_digest().into(),
+        };
+        let assignment =
+            self.child_review_worker_assignment(admission, claim, source, completion, &review)?;
+        Ok((review, assignment))
+    }
     pub fn prepare_child_review(
         &self,
         admission: &DeliveryAdmission,

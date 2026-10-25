@@ -29,6 +29,7 @@ use uuid::Uuid;
 pub struct RuntimeWorkflow {
     runtime: Arc<RuntimeCoordinator>,
     decisions: DecisionManager,
+    delivery: Arc<dyn RuntimeDeliveryDecisions>,
     progression: Arc<dyn crate::runtime_driver::RuntimeProgression>,
 }
 impl RuntimeWorkflow {
@@ -48,7 +49,7 @@ impl RuntimeWorkflow {
             key: services.key.clone(),
             evidence: Arc::new(RuntimeDecisionEvidence {
                 runtime: runtime.clone(),
-                delivery,
+                delivery: delivery.clone(),
             }),
             housekeeping: services.housekeeping.clone(),
             inputs: services.inputs.clone(),
@@ -56,6 +57,7 @@ impl RuntimeWorkflow {
         Self {
             runtime,
             decisions,
+            delivery,
             progression,
         }
     }
@@ -72,8 +74,29 @@ impl WorkflowControl for RuntimeWorkflow {
                         "provider journal recovery task failed",
                     )
                 })??;
-            self.progression.reconcile().await?;
-            self.runtime.inspection()
+            self.progression.reconcile_for_inspection().await?;
+            let mut view = self.runtime.inspection()?;
+            for (parent, details) in self.delivery.release_inspection()? {
+                let fields = details.as_object().ok_or_else(|| {
+                    Error::new(
+                        "record_corrupt",
+                        "release inspection is not a parent object",
+                    )
+                })?;
+                let current = view
+                    .release_details
+                    .entry(parent)
+                    .or_insert_with(|| json!({}));
+                let object = current.as_object_mut().ok_or_else(|| {
+                    Error::new("record_corrupt", "retained release inspection is malformed")
+                })?;
+                object.extend(
+                    fields
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
+            }
+            Ok(view)
         })
     }
     fn health(&self) -> Result<Value> {

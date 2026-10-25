@@ -4,6 +4,9 @@ use super::*;
 use crate::{api::CommandName, decisions::AuthorizedDecision, evidence::validate_digest};
 use serde_json::json;
 
+#[path = "control_release_history.rs"]
+mod history;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseResumeReference {
@@ -822,6 +825,162 @@ mod tests {
             },
         }
     }
+    fn closed_resume_fixture(
+        host: &ControlHost,
+        lease: &Lease,
+        original: &Permit,
+        origin: &Receipt,
+        previous: &Receipt,
+        ordinal: u32,
+    ) -> Receipt {
+        let (command, authorization) = authorize(host, original, "resume");
+        let verified = reference(origin, previous, &command, &authorization, ordinal);
+        let resumed = host
+            .admit_release_resume(lease, &verified, |_| Ok(()))
+            .unwrap();
+        assert!(
+            host.closed_release_resume_receipts(resumed.operation_id)
+                .is_err()
+        );
+        let backend = host.operation(resumed.operation_id).unwrap();
+        let effect = host
+            .record_release_recovery_completion(
+                completion(original, &command, "resume"),
+                &command,
+                json!({"release_operation":backend.operation_id,"receipt":backend}),
+                |_| Ok(()),
+            )
+            .unwrap();
+        let closed = host
+            .retire_local(
+                resumed.operation_id,
+                json!({"fixture":"closed actual Control admission; no provider execution"}),
+            )
+            .unwrap();
+        // A retired model/step admission does not prove that its operator
+        // command completed with a known acknowledged result.
+        assert!(
+            host.closed_release_resume_receipts(closed.operation_id)
+                .is_err()
+        );
+        host.complete_command(
+            command.operation_id,
+            Ok(json!({"effect_operation_id":effect.operation_id,"receipt":effect})),
+        )
+        .unwrap();
+        closed
+    }
+
+    #[test]
+    fn closed_release_history_retains_every_resume_command_and_authorization() {
+        let (_temp, host, lease, original) = setup();
+        let origin = host
+            .retire_local(
+                original.operation_id,
+                json!({"fixture":"known original exit"}),
+            )
+            .unwrap();
+        assert_eq!(
+            host.closed_release_resume_receipts(origin.operation_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        let first = closed_resume_fixture(&host, &lease, &original, &origin, &origin, 1);
+        let second = closed_resume_fixture(&host, &lease, &original, &origin, &first, 2);
+        let records = host
+            .closed_release_resume_receipts(second.operation_id)
+            .unwrap();
+        assert_eq!(records.len(), 9);
+        let ids: BTreeSet<_> = records.iter().map(|r| r.operation_id).collect();
+        assert_eq!(ids.len(), records.len());
+        let linked = host
+            .closed_release_recovery_receipts(
+                origin.operation_id,
+                &original.scope_digest,
+                second.operation_id,
+            )
+            .unwrap();
+        assert_eq!(
+            canonical_digest(1, &linked).unwrap(),
+            canonical_digest(1, &records).unwrap()
+        );
+        assert!(
+            host.closed_release_recovery_receipts(
+                origin.operation_id,
+                &canonical_digest(1, &"wrong plan").unwrap(),
+                second.operation_id
+            )
+            .is_err()
+        );
+        for record in &records {
+            let path = host
+                .receipts
+                .directory
+                .path()
+                .join(format!("{}.json", record.operation_id));
+            std::fs::remove_file(&path).unwrap();
+            assert!(
+                host.closed_release_resume_receipts(second.operation_id)
+                    .is_err(),
+                "missing {} {}",
+                record.kind,
+                record.operation_id
+            );
+            host.receipts.save(record).unwrap();
+        }
+        for record in &records {
+            let mut changed = record.clone();
+            if changed.kind == "admission" {
+                changed.observed_result.as_mut().unwrap()["unresolved_effects"] =
+                    json!(["unconfirmed"]);
+            } else if changed.kind == "command/ReleaseRecover" {
+                changed.observed_result = Some(json!({"error":{"code":"operation_uncertain"}}));
+            } else {
+                changed.payload_digest =
+                    canonical_digest(1, &"changed protected decision").unwrap();
+            }
+            host.receipts.save(&changed).unwrap();
+            assert!(
+                host.closed_release_resume_receipts(second.operation_id)
+                    .is_err(),
+                "changed {} {}",
+                record.kind,
+                record.operation_id
+            );
+            host.receipts.save(record).unwrap();
+        }
+        let mut broken = first.clone();
+        let mut reference = ReleaseResumeReference::from_receipt(&broken)
+            .unwrap()
+            .unwrap();
+        reference.ordinal = 2;
+        broken.expected.insert(
+            "release_resume".into(),
+            serde_json::to_string(&reference).unwrap(),
+        );
+        broken
+            .expected
+            .insert("scope".into(), reference.scope_digest().unwrap());
+        host.receipts.save(&broken).unwrap();
+        assert!(
+            host.closed_release_resume_receipts(second.operation_id)
+                .is_err()
+        );
+        host.receipts.save(&first).unwrap();
+        // The read-only collector must not reenter the Control state mutex.
+        host.serialize_observation(|_| {
+            assert_eq!(
+                host.closed_release_resume_receipts(second.operation_id)?
+                    .len(),
+                9
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert!(host.snapshot().unwrap().active_operations.is_empty());
+    }
+
     #[test]
     fn resume_uses_new_actual_admission_and_cannot_fork_consumed_lineage() {
         let (_temp, host, lease, original) = setup();

@@ -5,6 +5,10 @@ use crate::digest::canonical_digest;
 
 const MAX_RELEASE_LINKS: usize = 64;
 
+#[path = "runtime_delivery_completion.rs"]
+mod completion;
+pub(crate) use completion::VerifiedReleaseCompletion;
+
 #[derive(Clone)]
 struct Link {
     record: AttemptRecord,
@@ -19,6 +23,7 @@ pub(super) struct VerifiedReleaseLineage {
     links: Vec<Link>,
     receipts: Vec<(Uuid, String)>,
     intents: Vec<(Uuid, String)>,
+    terminal_root: bool,
 }
 impl VerifiedReleaseLineage {
     pub(super) fn require_origin(&self, origin: &VerifiedReleaseOrigin) -> Result<()> {
@@ -83,7 +88,7 @@ impl VerifiedReleaseLineage {
         control: &crate::control::ControlHost,
         key: &evidence::AttestationKey,
     ) -> Result<()> {
-        for link in &self.links {
+        for (index, link) in self.links.iter().enumerate() {
             let stored: Signed<AttemptRecord> =
                 records.read(&attempt_leaf(link.record.attempt.plan.operation_id))?;
             key.verify("runtime_release_attempt", &stored)?;
@@ -93,7 +98,11 @@ impl VerifiedReleaseLineage {
                     "historical release state changed",
                 ));
             }
-            super::baseline::validate_known_owner(control, &link.record)?;
+            if self.terminal_root && index + 1 == self.links.len() {
+                completion::validate_completed_owner(control, &link.record)?;
+            } else {
+                super::baseline::validate_known_owner(control, &link.record)?;
+            }
         }
         for (id, digest) in &self.receipts {
             if canonical_digest(1, &control.operation(*id)?)? != *digest {
@@ -125,6 +134,17 @@ impl RuntimeDelivery {
         origin: VerifiedReleaseOrigin,
         effects: BTreeMap<String, Arc<ObservedReleaseStep>>,
     ) -> Result<VerifiedReleaseLineage> {
+        self.release_lineage_inner(workspace, root, origin, effects, false)
+            .await
+    }
+    async fn release_lineage_inner(
+        &self,
+        workspace: &WorkspaceDelivery,
+        root: &AttemptRecord,
+        origin: VerifiedReleaseOrigin,
+        effects: BTreeMap<String, Arc<ObservedReleaseStep>>,
+        terminal_root: bool,
+    ) -> Result<VerifiedReleaseLineage> {
         let mut result = VerifiedReleaseLineage {
             links: vec![Link {
                 record: root.clone(),
@@ -134,6 +154,7 @@ impl RuntimeDelivery {
             }],
             receipts: vec![],
             intents: vec![],
+            terminal_root,
         };
         let mut seen = BTreeSet::from([root.attempt.plan.operation_id]);
         loop {

@@ -60,6 +60,14 @@ pub(crate) struct Fixture {
     pub(crate) edit_route_on_read: bool,
 }
 impl Fixture {
+    pub(crate) fn set_parent_title(&mut self, title: &str) {
+        self.issues.get_mut(&id(100)).unwrap()["title"] = json!(title);
+    }
+
+    pub(crate) fn set_selected(&mut self, selected: bool) {
+        self.selected = selected;
+    }
+
     pub(crate) fn set_production_targets(&mut self, targets: &BTreeSet<String>) {
         let issue = self.issues.get_mut(&id(100)).unwrap();
         issue["description"] = json!(issue["description"].as_str().unwrap().replace(

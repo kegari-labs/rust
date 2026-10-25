@@ -240,7 +240,7 @@ impl Housekeeping {
         self.control.serialize_observation(|state| {
             self.registration_updates_allowed(state)?;
             let storage = self.root.child("cleanup")?;
-            let _guard = storage.lock("families.lock")?;
+            let _guard = storage.section_lock("families.lock")?;
             binding.validate(isolation)?;
             directory.verify(binding, isolation)?;
             let registration = self.registration(binding.operation_id)?;
@@ -377,7 +377,7 @@ impl Housekeeping {
         self.control.serialize_observation(|state| {
             self.registration_updates_allowed(state)?;
             let storage = self.root.child("cleanup")?;
-            let _guard = storage.lock("families.lock")?;
+            let _guard = storage.section_lock("families.lock")?;
             let binding = source.binding();
             binding.validate(isolation)?;
             directory.verify(binding, isolation)?;
@@ -428,7 +428,7 @@ impl Housekeeping {
         let mut enrolled = None;
         self.control.validate_permit(permit, || {
             let storage = self.root.child("cleanup")?;
-            let _guard = storage.lock("families.lock")?;
+            let _guard = storage.section_lock("families.lock")?;
             binding.validate(isolation)?;
             directory.verify(binding, isolation)?;
             let old = &proof.registration;

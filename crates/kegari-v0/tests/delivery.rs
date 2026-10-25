@@ -953,14 +953,12 @@ async fn exact_dispatch_is_one_owned_request_and_proves_source_distinct_from_tri
 async fn exact_dispatch_unknown_and_failed_or_other_challenge_do_not_pass() {
     let f = DeliveryFixture::new().await;
     f.wire.lock().unwrap().lose_write = true;
-    assert_eq!(
-        f.coordinator
-            .dispatch_exact_validation(&f.admission)
-            .await
-            .unwrap_err()
-            .code,
-        "operation_uncertain"
-    );
+    let error = f
+        .coordinator
+        .dispatch_exact_validation(&f.admission)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "operation_uncertain", "{error:?}");
     f.wire.lock().unwrap().lose_write = false;
     let unknown = f
         .coordinator

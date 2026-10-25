@@ -1,6 +1,7 @@
 //! Historical accepted input is explicitly synthetic. Actual owner receipts,
 //! supersede authorization, native wire, object import and assembly are exercised.
 use super::*;
+use crate::app::ConfigurationControl;
 use crate::decisions::{
     AuthorizedDecision, AuthorizedOperationRecovery, DecisionEvidence, RetryTarget,
     VerifiedExplicitCorrection, VerifiedRetryGrant,
@@ -19,6 +20,223 @@ pub(super) struct ChainFixture<'a> {
     pub held: &'a AttemptRecord,
     pub gate: &'a FreshGate,
     pub merged: &'a crate::git::Revision,
+    pub observation_barrier: &'a Arc<tokio::sync::Mutex<()>>,
+}
+
+struct BaselineReload {
+    configuration: crate::config::Config,
+    workflow: std::path::PathBuf,
+    contents: Vec<u8>,
+    admissions: String,
+    release_effects: usize,
+}
+type ReloadedPredecessor = (Arc<KnownPredecessorBaseline>, BaselineReload);
+
+/// Compare provenance and actual product identity, excluding only observation
+/// timestamps that necessarily change after a fresh complete native read.
+fn baseline_identity(proof: &KnownPredecessorBaseline) -> String {
+    let origin = |origin: &VerifiedReleaseOrigin| {
+        json!({"plan":origin.plan(),"manifest":origin.manifest(),"targets":origin.targets(),
+            "admission":origin.admission_digest(),"retained":origin.retained_references()})
+    };
+    let effect = |effect: &ObservedReleaseStep| {
+        json!({"plan":effect.plan_digest(),"step":effect.step_id(),"attempt":effect.attempt(),
+            "receipt":effect.receipt(),"outcome":effect.outcome(),"effect":effect.effect()})
+    };
+    canonical_digest(1, &json!({
+        "predecessor":proof.predecessor(),"record":proof.record_digest(),"work":proof.work(),
+        "origin":origin(proof.origin()),
+        "effects":proof.effects().map(effect).collect::<Vec<_>>(),
+        "merges":proof.integration_sources().map(|(o,e)| (origin(o),effect(e))).collect::<Vec<_>>(),
+        "baselines":proof.baselines().iter().map(|b| json!({
+            "repository":b.repository(),"production":b.production(),"contract":b.contract_digest(),
+            "coherent":b.coherent(),"targets":b.targets().iter().map(|target| json!({
+                "provider":target.provider,"target":target.target,"repository":target.repository,
+                "source":target.source,"artifact":target.artifact_digest,"record":target.provider_record
+            })).collect::<Vec<_>>()
+        })).collect::<Vec<_>>()
+    })).unwrap()
+}
+
+fn reloaded_predecessor<'a>(
+    f: &'a ChainFixture<'_>,
+    phase: &'a ActivePhase,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ReloadedPredecessor> + 'a>> {
+    Box::pin(async move {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            let snapshot = f.built.runtime.observations.admission_snapshot().unwrap();
+            let original = f
+                .delivery
+                .known_predecessor_baseline(&snapshot, f.gate)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(original.predecessor(), f.held.attempt.plan.operation_id);
+            assert_eq!(original.integration_sources().count(), 1);
+            let original_contract = f
+                .delivery
+                .active_parent_contract(phase)
+                .unwrap()
+                .digest()
+                .unwrap();
+            let before = baseline_identity(&original);
+            let receipts =
+                canonical_digest(1, &f.built.runtime.control.operations().unwrap()).unwrap();
+            let admissions = canonical_digest(
+                1,
+                &f.built
+                    .runtime
+                    .control
+                    .operations()
+                    .unwrap()
+                    .into_iter()
+                    .filter(|receipt| receipt.kind == "admission")
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            let permit = canonical_digest(1, &phase.permit).unwrap();
+            let release_effects = f.github.release_effect_count();
+            let configuration = f.built.configuration.snapshot().unwrap();
+            let workflow = std::path::PathBuf::from(&configuration.workspaces["example"].workflow);
+            let contents = std::fs::read(&workflow).unwrap();
+            {
+                let _refresh = f.observation_barrier.lock().await;
+                let mut changed = configuration.clone();
+                changed.runtime.max_agents += 1;
+                changed.workspaces.get_mut("example").unwrap().linear.teams =
+                    crate::config::Selector::Ids(vec![wire::id(999).to_string()]);
+                *f.built.configuration.config.lock().unwrap() = changed;
+                let mut changed_workflow = contents.clone();
+                changed_workflow
+                    .extend_from_slice(b"\nHarmless reload applies only to new work.\n");
+                std::fs::write(&workflow, changed_workflow).unwrap();
+                f.data.lock().unwrap().set_selected(false);
+                let current = f.built.runtime.observations.refresh().await.unwrap();
+                assert!(
+                    current.workspaces[&f.gate.workspace_id()].complete,
+                    "{:?}",
+                    current.workspaces[&f.gate.workspace_id()].error
+                );
+                assert!(
+                    !current
+                        .parent(f.gate.workspace_id(), f.gate.work().parent)
+                        .unwrap()
+                        .included
+                );
+                assert_ne!(current.config_revision, f.gate.config_revision());
+                assert_ne!(
+                    current.workspaces[&f.gate.workspace_id()].workflow_digest,
+                    f.gate.workflow_digest()
+                );
+            }
+            let parent = f
+                .built
+                .runtime
+                .observations
+                .active_parent(f.gate, &f.built.runtime.dependency_outcomes().unwrap())
+                .unwrap();
+            let active = parent
+                .retain_active_gate(
+                    f.gate,
+                    &f.built.runtime.dependency_outcomes().unwrap(),
+                    Utc::now(),
+                    Duration::seconds(30),
+                )
+                .unwrap();
+            assert_ne!(parent.config_revision, active.config_revision());
+            assert_eq!(
+                phase
+                    .workspace
+                    .coordinator
+                    .parent_contract(active, &parent, &phase.workspace.workflow,)
+                    .err()
+                    .unwrap()
+                    .code,
+                "stale_result"
+            );
+            assert_eq!(
+                f.delivery
+                    .active_parent_contract(phase)
+                    .unwrap()
+                    .digest()
+                    .unwrap(),
+                original_contract
+            );
+            let observed = f
+                .delivery
+                .active_predecessor_baseline(phase)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(baseline_identity(&observed), before);
+            assert_eq!(observed.gate().config_revision(), f.gate.config_revision());
+            assert_eq!(observed.gate().workflow_digest(), f.gate.workflow_digest());
+            assert_eq!(canonical_digest(1, &phase.permit).unwrap(), permit);
+            f.built
+                .runtime
+                .control
+                .validate_permit(&phase.permit, || f.delivery.retained_gate()(f.gate))
+                .unwrap();
+            assert_eq!(
+                canonical_digest(1, &f.built.runtime.control.operations().unwrap()).unwrap(),
+                receipts
+            );
+            assert_eq!(f.github.release_effect_count(), release_effects);
+            (
+                observed,
+                BaselineReload {
+                    configuration,
+                    workflow,
+                    contents,
+                    admissions,
+                    release_effects,
+                },
+            )
+        })
+        .await
+        .expect("retained predecessor reload read completes within its fixture bound")
+    })
+}
+
+fn restore_baseline_reload<'a>(
+    f: &'a ChainFixture<'_>,
+    reload: BaselineReload,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>> {
+    Box::pin(async move {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            assert_eq!(
+                canonical_digest(
+                    1,
+                    &f.built
+                        .runtime
+                        .control
+                        .operations()
+                        .unwrap()
+                        .into_iter()
+                        .filter(|receipt| receipt.kind == "admission")
+                        .collect::<Vec<_>>()
+                )
+                .unwrap(),
+                reload.admissions
+            );
+            assert_eq!(f.github.release_effect_count(), reload.release_effects);
+            let _refresh = f.observation_barrier.lock().await;
+            *f.built.configuration.config.lock().unwrap() = reload.configuration;
+            std::fs::write(reload.workflow, reload.contents).unwrap();
+            f.data.lock().unwrap().set_selected(true);
+            let current = f.built.runtime.observations.refresh().await.unwrap();
+            assert!(current.workspaces[&f.gate.workspace_id()].complete);
+            assert!(
+                current
+                    .parent(f.gate.workspace_id(), f.gate.work().parent)
+                    .unwrap()
+                    .included
+            );
+            f.delivery.current_gate()(f.gate).unwrap();
+        })
+        .await
+        .expect("restored fixture configuration receives an actual complete observation")
+    })
 }
 
 pub(super) fn fixture_phase<'a>(
@@ -183,12 +401,7 @@ pub(super) fn chained_after_merge(
             DeliveryPhase::CandidateAssembly,
         )
         .await;
-        let predecessor = f
-            .delivery
-            .known_predecessor_baseline(&snapshot, f.gate)
-            .await
-            .unwrap()
-            .unwrap();
+        let (predecessor, reload) = reloaded_predecessor(&f, &phase).await;
         let integrations = phase
             .coordinator
             .acquire_successor_integrations(&phase.admission, predecessor)
@@ -222,6 +435,7 @@ pub(super) fn chained_after_merge(
             .unwrap();
         assert!(slice.manifest().ordered_delta_digests.is_empty());
         assert_eq!(slice.manifest().result.as_ref(), Some(f.merged));
+        restore_baseline_reload(&f, reload).await;
         f.delivery
             .retire_delivery_phase(&phase, json!({"fixture":"actual no-replay B assembly"}))
             .unwrap();
@@ -257,6 +471,7 @@ pub(super) fn chained_after_merge(
             baseline.targets(),
         )
         .await;
+        let route = fixture_deployment_route(&workspace.contracts[0]);
         let mut plan = f.held.attempt.plan.clone();
         plan.operation_id = Uuid::new_v4();
         plan.generation = f.gate.work().generation.clone();
@@ -271,10 +486,10 @@ pub(super) fn chained_after_merge(
                     provider: "github".into(),
                     id: "service-production".into(),
                 },
-                workflow_id: 3,
-                workflow_revision: "1".repeat(40),
-                dispatch_ref: "trusted".into(),
-                source_input: "source_sha".into(),
+                workflow_id: route.workflow_id,
+                workflow_revision: route.workflow_revision.clone(),
+                dispatch_ref: fixture_dispatch_ref(route),
+                source_input: route.source_input.clone(),
                 source: f.merged.clone(),
                 expected_artifact: None,
             },
@@ -294,18 +509,48 @@ pub(super) fn chained_after_merge(
             },
         });
         plan.validate().unwrap();
-        let permit = f
-            .built
-            .runtime
-            .control
-            .admit(
-                f.lease,
-                plan.operation_id,
-                f.gate.work_key().unwrap(),
-                plan.digest().unwrap(),
-                || (f.delivery.current_gate())(f.gate),
-            )
-            .unwrap();
+        let permit = {
+            // The two acknowledged origin publications can invalidate a
+            // concurrent two-pass poll. A new admission needs a complete
+            // observation after both writes, not whichever poll last finished.
+            // Keep the fixture poll out until this read and admission finish;
+            // the real native reads and final current_gate remain mandatory.
+            let _observation = f.observation_barrier.lock().await;
+            let current = f
+                .built
+                .runtime
+                .observations
+                .refresh_bounded(std::time::Duration::from_secs(30))
+                .await
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "B interrupted admission refresh: {error:?}; health={:?}",
+                        f.built.runtime.observations.health()
+                    )
+                });
+            assert!(
+                current.workspaces[&f.gate.workspace_id()].complete,
+                "B interrupted admission workspace incomplete: {:?}; health={:?}",
+                current.workspaces[&f.gate.workspace_id()].error,
+                f.built.runtime.observations.health()
+            );
+            f.built
+                .runtime
+                .control
+                .admit(
+                    f.lease,
+                    plan.operation_id,
+                    f.gate.work_key().unwrap(),
+                    plan.digest().unwrap(),
+                    || (f.delivery.current_gate())(f.gate),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "B interrupted admission after complete refresh: {error:?}; health={:?}",
+                        f.built.runtime.observations.health()
+                    )
+                })
+        };
         f.built.runtime.control.fence(plan.operation_id).unwrap();
         f.built
             .runtime
@@ -458,19 +703,44 @@ pub(super) fn chained_after_merge(
                 .iter()
                 .all(|a| a.hold_reason.is_some())
         );
-        // A final explicit C assignment is upstream fixture input, not a release
-        // admission: genuine integrated evidence above is still missing. Exercise
-        // only the queue's exact authenticated lineage projection.
+        // Explicit historical accepted input for C. This does not grant the
+        // runtime genuine integrated evidence; that barrier was asserted above.
+        let mut c_manifest = f.seed.parent.manifest().clone();
+        c_manifest.work = corrected.work().clone();
+        c_manifest.publication_operation = Uuid::new_v4();
+        c_manifest.created_at = Utc::now();
+        c_manifest.candidates = vec![slice.manifest().clone()];
+        c_manifest.baselines = vec![baseline.baseline().clone()];
+        c_manifest.production_targets = baseline
+            .targets()
+            .iter()
+            .map(|t| t.target.clone())
+            .collect();
+        c_manifest.integrated_results[0].candidate_vector_digest =
+            c_manifest.candidate_vector_digest().unwrap();
+        let (c_manifest, c_acceptance, c_refs) = publish_origin(
+            &fresh,
+            &workspace,
+            &corrected,
+            f.lease,
+            c_manifest,
+            &slice,
+            baseline.targets(),
+        )
+        .await;
         let mut c = held.clone();
         c.work = corrected.work().clone();
         c.attempt.plan.operation_id = Uuid::new_v4();
         c.attempt.plan.generation = corrected.work().generation.clone();
-        c.attempt.plan.evidence_token = crate::digest::bytes_digest(b"synthetic C accepted token");
-        c.attempt.plan.acceptance_digest = crate::digest::bytes_digest(b"synthetic C acceptance");
+        c.attempt.plan.evidence_token = c_manifest.token().unwrap();
+        c.attempt.plan.acceptance_digest = c_acceptance.digest().unwrap();
+        c.attempt.plan.spacing_seconds = 60;
+        c.parent_publication = c_refs[0].clone();
+        c.acceptance_publication = c_refs[1].clone();
         c.admission_operation = c.attempt.plan.operation_id;
         c.config_revision = corrected.config_revision().into();
         c.workflow_digest = corrected.workflow_digest().into();
-        authorize_link(&fresh, &held, &c, Utc::now()).await;
+        authorize_link(&fresh, &held, &c, c_acceptance.payload.accepted_at).await;
         eprintln!("lineage fixture: C integrated gate remains blocked; checking exact hold chain");
         let projection = f.built.runtime.observations.refresh().await.unwrap();
         let predecessor = fresh
@@ -530,6 +800,7 @@ pub(super) fn chained_after_merge(
                 .code,
             "release_hold"
         );
+        let tamper_window = f.observation_barrier.lock().await;
         let mut changed = original_a.payload.clone();
         changed.attempt.hold_reason = Some("tampered historical lineage".into());
         fresh.save_release(&changed).unwrap();
@@ -611,6 +882,7 @@ pub(super) fn chained_after_merge(
                 .find(|comment| comment["id"] == json!(f.held.parent_publication.id))
                 .unwrap() = original_comment;
         }
+        drop(tamper_window);
         assert!(
             f.built
                 .runtime
@@ -621,9 +893,21 @@ pub(super) fn chained_after_merge(
         // The only external effects were an initial fixture deployment and A's
         // actual wire merge; C never dispatches without genuine integrated checks.
         assert_eq!(f.github.release_effect_count(), 2);
-        let _ = &f.native;
+        completion_fixture::complete_and_recover(
+            &f,
+            &fresh,
+            &workspace,
+            &corrected,
+            c,
+            &c_manifest,
+        )
+        .await
+        .expect("owned terminal fixture task must complete");
     })
 }
+
+#[path = "runtime_delivery_completion_fixture.rs"]
+mod completion_fixture;
 
 struct LinkEvidence {
     delivery: Arc<RuntimeDelivery>,
@@ -729,15 +1013,40 @@ async fn authorize_link(
         .unwrap();
     assert!(fresh);
     request.request_id = crate::app::command_effect_id(parent.operation_id);
-    let result = manager
-        .execute(actor, request, parent.clone())
+    // Operator commands are separate owned tasks in HostDispatcher. Preserve
+    // that boundary instead of polling its provider refresh on the deep Git
+    // fixture's task stack.
+    let command_parent = parent.clone();
+    eprintln!("lineage fixture: starting owned successor command task");
+    let result = tokio::spawn(async move {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(300),
+            manager.execute(actor, request, command_parent),
+        )
         .await
-        .unwrap();
+        .unwrap_or_else(|_| {
+            Err(Error::new(
+                "operation_uncertain",
+                "fixture owned command exceeded its production bound",
+            ))
+        })
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(Error::new(
+            "operation_uncertain",
+            "fixture owned command ended without a verified result",
+        ))
+    });
+    eprintln!("lineage fixture: owned successor command task completed");
     runtime
         .control
         .complete_command(
             parent.operation_id,
-            Ok(serde_json::to_value(result).unwrap()),
+            result
+                .clone()
+                .map(|result| json!({"effect_operation_id":result.operation_id,"receipt":result})),
         )
         .unwrap();
+    result.unwrap();
 }

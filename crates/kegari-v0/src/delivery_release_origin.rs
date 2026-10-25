@@ -8,8 +8,13 @@ pub struct VerifiedReleaseOrigin {
     vector: ParentCandidateVector,
     original_admission_digest: String,
     observed_at: DateTime<Utc>,
+    publication_receipts: Vec<Receipt>,
+    vector_reference: (String, String, String),
 }
 impl VerifiedReleaseOrigin {
+    pub(crate) fn retained_references(&self) -> (&[Receipt], &(String, String, String)) {
+        (&self.publication_receipts, &self.vector_reference)
+    }
     pub fn plan(&self) -> &ReleasePlan {
         &self.plan
     }
@@ -144,8 +149,9 @@ impl DeliveryCoordinator {
             ));
         }
         let receipts = self.host.operations()?;
+        let mut publication_receipts = Vec::new();
         for comment in [parent, acceptance] {
-            if receipts
+            let matches = receipts
                 .iter()
                 .filter(|receipt| {
                     receipt.kind == "linear_comment"
@@ -172,20 +178,18 @@ impl DeliveryCoordinator {
                                 key.endpoint, key.workspace, key.issue
                             )]
                 })
-                .count()
-                != 1
-            {
+                .collect::<Vec<_>>();
+            let [receipt] = matches.as_slice() else {
                 return Err(Error::new(
                     "reconciliation_required",
                     "original publication has no unique immutable host receipt",
                 ));
-            }
+            };
+            publication_receipts.push((*receipt).clone());
         }
         evidence::validate_digest(&signed.payload.vector_digest)?;
-        let vector: Signed<VectorRecord> = self.records.read(&format!(
-            "parent-vector-{}.json",
-            &signed.payload.vector_digest[7..]
-        ))?;
+        let vector_leaf = format!("parent-vector-{}.json", &signed.payload.vector_digest[7..]);
+        let vector: Signed<VectorRecord> = self.records.read(&vector_leaf)?;
         self.key.verify("parent_candidate_vector", &vector)?;
         let v = &vector.payload;
         let planned_repos: BTreeSet<_> = plan
@@ -290,6 +294,12 @@ impl DeliveryCoordinator {
         Ok(VerifiedReleaseOrigin {
             plan: plan.clone(),
             manifest: manifest.clone(),
+            publication_receipts,
+            vector_reference: (
+                vector_leaf,
+                "parent_candidate_vector".into(),
+                vector.digest()?,
+            ),
             vector: ParentCandidateVector {
                 signed: vector,
                 digest: signed.payload.vector_digest,

@@ -7,6 +7,8 @@ use crate::runtime_delivery::worker_fixture::{
 };
 use std::{path::Path, sync::Mutex};
 pub(super) struct ReviewFixture<'a> {
+    pub findings: bool,
+    pub source_proof: &'a SealedChildSource,
     pub retry_again: bool,
     pub failure_code: Option<&'a str>,
     pub service: &'a RuntimeDelivery,
@@ -231,7 +233,7 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
         root: &f.root.join("retried-review"),
         source: f.source,
         binary: f.binary,
-        git: f.tool,
+        git: f.tool.clone(),
         gate: f.gate,
         workflow: &f.workspace.workflow,
         revision: f.revision,
@@ -263,10 +265,14 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
         account: f.account,
     });
     assert!(proof.verify_contract(&wrong_role.contract).is_err());
+    f.built.runtime.observations.refresh().await.unwrap();
     let request = crate::runtime_workers::LaunchRequest {
         lease: f.lease.clone(),
         operation_id: next.contract.instructions().manifest.operation_id,
-        authority: crate::worker::WorkerAuthority::Authorized(f.gate.clone()),
+        authority: f
+            .service
+            .current_delivery_worker_authority(proof.authority())
+            .unwrap(),
         phase: proof.phase().clone(),
         source: None,
         delivery: Some(proof.assignment().clone()),
@@ -284,8 +290,17 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
     let mut wrong_generation = request.clone();
     wrong_generation.phase.generation = crate::digest::bytes_digest(b"different correction");
     assert!(wrong_generation.validate_binding().is_err());
-    let (_records, outcome, completion) =
-        complete_review_retry(&f.built.runtime.control, f.lease, &next, &proof);
+    let (_records, outcome, completion) = if f.findings {
+        crate::runtime_delivery::worker_fixture::complete_review_retry_claim(
+            &f.built.runtime.control,
+            f.lease,
+            &next,
+            &proof,
+            json!({"schema_version":1,"verdict":"findings","unresolved_findings":["Required empty-input behavior is missing"],"supporting_links":[]}),
+        )
+    } else {
+        complete_review_retry(&f.built.runtime.control, f.lease, &next, &proof)
+    };
     if f.retry_again {
         assert!(
             first_proof
@@ -314,11 +329,22 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
             f.lease,
             PhaseRequest {
                 operation: Uuid::new_v4(),
-                scope: f.scope,
+                scope: f.scope.clone(),
             },
         )
         .await
         .unwrap();
+    if f.findings {
+        Box::pin(findings::run(
+            &f,
+            &publication,
+            &proof,
+            &outcome,
+            &completion,
+        ))
+        .await;
+        return;
+    }
     let runtime = f.built.runtime.clone();
     let checked = proof.clone();
     let completed = completion.operation_id;
@@ -722,3 +748,6 @@ async fn another_failed_review(
     );
     Some(next)
 }
+
+#[path = "runtime_delivery_review_findings_tests.rs"]
+mod findings;

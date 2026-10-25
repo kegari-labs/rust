@@ -166,7 +166,7 @@ impl TargetStore {
         if !target.remote() {
             return Err(Error::new("invalid_input", "named targets must use HTTPS"));
         }
-        let _lock = self.directory.lock("targets.lock")?;
+        let _lock = self.directory.section_lock("targets.lock")?;
         let mut records = self.records()?;
         if let Some(old) = records.named.get(&target.name) {
             if old == &target {
@@ -189,7 +189,7 @@ impl TargetStore {
                 "local registration must use the protected Unix socket",
             ));
         }
-        let _lock = self.directory.lock("targets.lock")?;
+        let _lock = self.directory.section_lock("targets.lock")?;
         let mut records = self.records()?;
         if records.local.as_ref().is_some_and(|old| old != &target) {
             return Err(Error::new(

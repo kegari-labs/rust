@@ -57,6 +57,29 @@ struct ParentPipeline {
 }
 type ParentKey = (Uuid, Uuid, String);
 type RetainedParents = BTreeMap<ParentKey, Arc<tokio::sync::Mutex<ParentPipeline>>>;
+
+/// A borrowed input used only during the host's serialized active-permit
+/// check. Its fields are private and no method returns or stores this token.
+/// The observation is read directly from the retained registry, never relabeled.
+pub(crate) struct ActiveParentContractInput<'a> {
+    gate: &'a FreshGate,
+    parent: &'a ParentProjection,
+    workspace: &'a WorkspaceDelivery,
+}
+impl ActiveParentContractInput<'_> {
+    pub(crate) fn gate(&self) -> &FreshGate {
+        self.gate
+    }
+    pub(crate) fn parent(&self) -> &ParentProjection {
+        self.parent
+    }
+    pub(crate) fn workflow(&self) -> &Workflow {
+        &self.workspace.workflow
+    }
+    pub(crate) fn contracts(&self) -> &[RepositoryContract] {
+        &self.workspace.contracts
+    }
+}
 #[derive(Default)]
 pub(super) struct Parents {
     pipelines: Mutex<RetainedParents>,
@@ -94,6 +117,53 @@ impl ParentSources {
     }
 }
 impl RuntimeDelivery {
+    pub(super) fn active_parent_contract(&self, phase: &ActivePhase) -> Result<ParentContract> {
+        let mut contract = None;
+        self.runtime.control.validate_permit(&phase.permit, || {
+            self.runtime
+                .registration
+                .verify_active_owner(&phase.permit.lease)?;
+            let admitted = phase.admission.fresh_gate();
+            (self.retained_gate())(admitted)?;
+            if phase.workspace.configuration.revision()? != admitted.config_revision()
+                || phase.workspace.workflow.digest != admitted.workflow_digest()
+                || phase.admission.operation_id() != phase.permit.operation_id
+                || phase.admission.scope().digest()? != phase.permit.scope_digest
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "active parent settings differ from the actual admitted phase",
+                ));
+            }
+            let outcomes = self.runtime.dependency_outcomes()?;
+            let parent = self
+                .runtime
+                .observations
+                .active_parent(admitted, &outcomes)?;
+            let gate = parent.retain_active_gate(
+                admitted,
+                &outcomes,
+                Utc::now(),
+                Duration::seconds(30),
+            )?;
+            // The retained coordinator's callback is cache-only. No provider
+            // wait or ControlHost reentry occurs while this permit is checked.
+            contract = Some(phase.workspace.coordinator.active_parent_contract(
+                ActiveParentContractInput {
+                    gate: &gate,
+                    parent: &parent,
+                    workspace: &phase.workspace,
+                },
+            )?);
+            Ok(())
+        })?;
+        contract.ok_or_else(|| {
+            Error::new(
+                "ownership_conflict",
+                "active parent contract was not validated",
+            )
+        })
+    }
     fn persist_parent(&self, parent: &ParentPipeline) -> Result<()> {
         let key = canonical_digest(
             1,
@@ -306,6 +376,11 @@ impl RuntimeDelivery {
     }
     pub(super) async fn maintain_parent_phases(&self) -> Result<()> {
         let _serial = self.parents.advancing.lock().await;
+        self.maintain_parent_phases_inner().await.map(|_| ())
+    }
+    /// Advance only already-admitted phases and retain their identities so the
+    /// same driver pass cannot also admit another phase for the same parent.
+    async fn maintain_parent_phases_inner(&self) -> Result<BTreeSet<(Uuid, Uuid)>> {
         let retained: Vec<_> = self
             .parents
             .pipelines
@@ -315,11 +390,13 @@ impl RuntimeDelivery {
             .cloned()
             .collect();
         let mut reporting_error = None;
+        let mut handled = BTreeSet::new();
         for retained in retained {
             let mut parent = retained.lock().await;
             let Some(phase) = &parent.phase else {
                 continue;
             };
+            handled.insert((parent.reference.workspace, parent.reference.work.parent));
             let lease = phase.permit.lease.clone();
             let workspace = phase.workspace.clone();
             let expected = phase.admission.fresh_gate().clone();
@@ -328,10 +405,12 @@ impl RuntimeDelivery {
                     .runtime
                     .observations
                     .active_parent(&expected, &self.runtime.dependency_outcomes()?)?;
-                let gate = self
-                    .runtime
-                    .observations
-                    .active_gate(&expected, &self.runtime.dependency_outcomes()?)?;
+                let gate = projection.retain_active_gate(
+                    &expected,
+                    &self.runtime.dependency_outcomes()?,
+                    Utc::now(),
+                    Duration::seconds(30),
+                )?;
                 if matches!(
                     parent.reference.stage,
                     ParentStage::LaunchIntegrated | ParentStage::LaunchReview
@@ -354,7 +433,7 @@ impl RuntimeDelivery {
                 }
             }
         }
-        reporting_error.map_or(Ok(()), Err)
+        reporting_error.map_or(Ok(handled), Err)
     }
     pub(super) async fn advance_parents(
         &self,
@@ -362,10 +441,28 @@ impl RuntimeDelivery {
         projection: &RuntimeProjection,
     ) -> Result<()> {
         let _serial = self.parents.advancing.lock().await;
+        // Active phases can remain selected after an ordinary filter/workflow
+        // reload; their retained snapshot is the only execution context.
+        let handled = self.maintain_parent_phases_inner().await?;
         let mut reporting_error = None;
         for observed in projection.workspaces.values() {
             for parent in observed.parents.values() {
-                let result = self.advance_parent_target(lease, projection, parent).await;
+                if handled.contains(&(observed.workspace_id, parent.key.issue)) {
+                    continue;
+                }
+                let result = async {
+                    self.runtime.registration.verify_active_owner(lease)?;
+                    let current = self.runtime.observations.admission_snapshot()?;
+                    let selected = current.parent(observed.workspace_id, parent.key.issue)?;
+                    if selected.key != parent.key {
+                        return Err(Error::new(
+                            "identity_mismatch",
+                            "parent selection changed provider identity during progression",
+                        ));
+                    }
+                    self.advance_parent_target(lease, &current, selected).await
+                }
+                .await;
                 if let Err(error) = result
                     && let Err(reporting) = self.runtime.invalidate_delivery(&parent.key, error)
                 {
@@ -569,17 +666,24 @@ impl RuntimeDelivery {
         ) {
             return Ok(());
         }
-        let snapshot = self.runtime.observations.admission_snapshot()?;
-        let predecessor = self.known_predecessor_baseline(&snapshot, gate).await?;
+        let predecessor = if let Some(phase) = &parent.phase {
+            self.active_predecessor_baseline(phase).await?
+        } else {
+            let snapshot = self.runtime.observations.admission_snapshot()?;
+            self.known_predecessor_baseline(&snapshot, gate).await?
+        };
         let observer = predecessor
             .as_ref()
             .map(|proof| workspace.observer.with_successor(proof.clone()))
             .transpose()?;
         let observer = observer.as_ref().unwrap_or(workspace.observer.as_ref());
-        let contract =
+        let contract = if let Some(phase) = &parent.phase {
+            self.active_parent_contract(phase)?
+        } else {
             workspace
                 .coordinator
-                .parent_contract(gate.clone(), projection, &workspace.workflow)?;
+                .parent_contract(gate.clone(), projection, &workspace.workflow)?
+        };
         if contract.digest() != Ok(parent.reference.contract_digest.clone()) {
             return Err(Error::new(
                 "stale_result",
@@ -906,6 +1010,7 @@ fn complete_inventory(required: &BTreeSet<Uuid>, observed: &BTreeSet<Uuid>, coun
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    use crate::app::ConfigurationControl;
     fn reference(workspace: Uuid, work: crate::evidence::WorkIdentity) -> ParentReference {
         ParentReference {
             schema_version: 1,
@@ -1021,6 +1126,257 @@ mod lifecycle_tests {
             .await
             .unwrap();
     }
+    #[tokio::test]
+    async fn running_progression_drains_retained_parent_without_new_admission_after_reload() {
+        let (_root, fixture, service, wire, owner) =
+            super::super::tests::fixture_authorization_with_wire(true).await;
+        let (lease, _ownership) = owner.start(&fixture.runtime);
+        let projection = fixture.runtime.observations.admission_snapshot().unwrap();
+        let observed = projection
+            .parent(Uuid::from_u128(2), Uuid::from_u128(100))
+            .unwrap();
+        let gate = observed
+            .fresh_gate(
+                None,
+                GatePurpose::NewOperation,
+                &crate::reconcile::DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(30),
+            )
+            .unwrap();
+        let workspace = service
+            .release_workspace(
+                &service.workspace(&projection, gate.workspace_id()).unwrap(),
+                gate.workspace_id(),
+            )
+            .unwrap();
+        let repository = &workspace.contracts[0];
+        let operation = Uuid::new_v4();
+        // A real finite admission with no spawned process; this fixture grants
+        // no integrated execution, review or candidate evidence capability.
+        let scope = DeliveryScope {
+            schema_version: 1,
+            runtime_id: lease.runtime_id,
+            phase: DeliveryPhase::ParentEvidence,
+            work: gate.work().clone(),
+            repository: repository.repository.clone(),
+            revision: RevisionBinding {
+                repository: repository.repository.clone(),
+                head: "a".repeat(40),
+                base: "a".repeat(40),
+                tested_commit: "a".repeat(40),
+                tested_tree: "b".repeat(40),
+            },
+            fresh_gate_digest: gate.digest().unwrap(),
+            contract_digest: repository.digest().unwrap(),
+            candidate_vector_digest: Some(
+                canonical_digest(1, &"scope fixture, no evidence").unwrap(),
+            ),
+        };
+        let permit = fixture
+            .runtime
+            .control
+            .admit(
+                &lease,
+                operation,
+                gate.work_key().unwrap(),
+                scope.digest().unwrap(),
+                || service.current_gate()(&gate),
+            )
+            .unwrap();
+        let active = fixture
+            .runtime
+            .observations
+            .capture_active(
+                gate.workspace_id(),
+                gate.config_revision(),
+                gate.workflow_digest(),
+            )
+            .unwrap();
+        let original_contract = workspace
+            .coordinator
+            .parent_contract(gate.clone(), observed, &workspace.workflow)
+            .unwrap()
+            .digest()
+            .unwrap();
+        let original_title = observed.issue.as_ref().unwrap().title.clone();
+        let mut retained = pipeline(reference(gate.workspace_id(), gate.work().clone()));
+        retained.reference.contract_digest = original_contract.clone();
+        retained.reference.stage = ParentStage::LaunchIntegrated;
+        retained.reference.phase_operation = Some(operation);
+        retained.phase = Some(ActivePhase {
+            admission: DeliveryAdmission::bind(permit.clone(), gate.clone(), scope).unwrap(),
+            permit,
+            coordinator: workspace.coordinator.clone(),
+            git: workspace.git.clone(),
+            workspace: Arc::new(workspace),
+            _active: active,
+        });
+        let retained = Arc::new(tokio::sync::Mutex::new(retained));
+        service.parents.pipelines.lock().unwrap().insert(
+            parent_key(gate.workspace_id(), gate.work()).unwrap(),
+            retained.clone(),
+        );
+
+        {
+            let mut config = fixture.configuration.config.lock().unwrap();
+            config.runtime.max_agents = 3;
+            config.workspaces.get_mut("example").unwrap().linear.teams =
+                crate::config::Selector::Ids(vec![Uuid::from_u128(999).to_string()]);
+        }
+        // Discovery obeys the new team selector; ID refresh still returns the
+        // retained parent and its child for current active authority checks.
+        wire.lock().unwrap().set_selected(false);
+        let workflow = fixture.configuration.snapshot().unwrap().workspaces["example"]
+            .workflow
+            .clone();
+        let mut contents = std::fs::read_to_string(&workflow).unwrap();
+        contents.push_str("\nOnly new admissions receive this revision.\n");
+        std::fs::write(workflow, contents).unwrap();
+        let current = fixture.runtime.observations.refresh().await.unwrap();
+        assert!(
+            current.workspaces[&gate.workspace_id()].complete,
+            "{:?}",
+            current.workspaces[&gate.workspace_id()].error
+        );
+        assert!(
+            !current
+                .parent(gate.workspace_id(), gate.work().parent)
+                .unwrap()
+                .included
+        );
+        {
+            let retained = retained.lock().await;
+            let phase = retained.phase.as_ref().unwrap();
+            let parent = fixture
+                .runtime
+                .observations
+                .active_parent(&gate, &crate::reconcile::DependencyOutcomes::default())
+                .unwrap();
+            let active_gate = parent
+                .retain_active_gate(
+                    &gate,
+                    &crate::reconcile::DependencyOutcomes::default(),
+                    Utc::now(),
+                    Duration::seconds(30),
+                )
+                .unwrap();
+            assert_ne!(parent.config_revision, active_gate.config_revision());
+            assert_eq!(
+                phase
+                    .workspace
+                    .coordinator
+                    .parent_contract(active_gate, &parent, &phase.workspace.workflow,)
+                    .err()
+                    .unwrap()
+                    .code,
+                "stale_result"
+            );
+            assert_eq!(
+                service
+                    .active_parent_contract(phase)
+                    .unwrap()
+                    .digest()
+                    .unwrap(),
+                original_contract
+            );
+            assert!(
+                service
+                    .active_predecessor_baseline(phase)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            fixture
+                .configuration
+                .fences
+                .lock()
+                .unwrap()
+                .workspaces
+                .insert(gate.workspace_id());
+            assert_eq!(
+                service.active_parent_contract(phase).err().unwrap().code,
+                "permission_fenced"
+            );
+            assert_eq!(
+                service
+                    .active_predecessor_baseline(phase)
+                    .await
+                    .err()
+                    .unwrap()
+                    .code,
+                "permission_fenced"
+            );
+            fixture
+                .configuration
+                .fences
+                .lock()
+                .unwrap()
+                .workspaces
+                .remove(&gate.workspace_id());
+
+            // A native definition change is authority, unlike the settings
+            // reload. The same live permit cannot retain the old contract.
+            wire.lock()
+                .unwrap()
+                .set_parent_title("Changed authorized parent definition");
+            let changed = fixture.runtime.observations.refresh().await.unwrap();
+            let changed_parent = changed
+                .parent(gate.workspace_id(), gate.work().parent)
+                .unwrap();
+            assert!(changed.workspaces[&gate.workspace_id()].complete);
+            assert_ne!(changed_parent.work.as_ref(), Some(gate.work()));
+            let reason = changed_parent
+                .blockers
+                .iter()
+                .find(|reason| reason.code != "excluded")
+                .unwrap();
+            assert_eq!(
+                service.active_parent_contract(phase).err().unwrap().code,
+                reason.code
+            );
+            wire.lock().unwrap().set_parent_title(&original_title);
+            fixture.runtime.observations.refresh().await.unwrap();
+            assert_eq!(
+                service
+                    .active_parent_contract(phase)
+                    .unwrap()
+                    .digest()
+                    .unwrap(),
+                original_contract
+            );
+        }
+        service.advance_parents(&lease, &current).await.unwrap();
+        let after = retained.lock().await;
+        assert!(after.phase.is_none());
+        assert!(after.reference.stage == ParentStage::LaunchIntegrated);
+        assert!(after.reference.integrated.is_none());
+        assert!(after.reference.error.is_none());
+        let actual = fixture.runtime.control.operation(operation).unwrap();
+        assert_eq!(actual.phase, crate::control::ReceiptPhase::Reconciled);
+        assert_eq!(actual.observed_result.unwrap()["local_execution"], "exited");
+        assert!(
+            fixture
+                .runtime
+                .control
+                .snapshot()
+                .unwrap()
+                .active_operations
+                .is_empty()
+        );
+        assert_eq!(
+            fixture
+                .runtime
+                .control
+                .operations()
+                .unwrap()
+                .iter()
+                .filter(|r| r.kind == "admission")
+                .count(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn terminal_gate_failure_retires_admission_without_authorizing_retry_and_unknown_stays_held()
      {

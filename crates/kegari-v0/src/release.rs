@@ -1983,9 +1983,50 @@ pub struct ReleaseQueue {
     owners: BTreeMap<ResourceKey, Uuid>,
     holds: BTreeMap<Uuid, ResourceHold>,
     successes: Vec<SuccessfulRelease>,
+    completions: BTreeMap<Uuid, crate::runtime_delivery::VerifiedReleaseCompletion>,
 }
 
 impl ReleaseQueue {
+    fn validate_completions(&self) -> Result<()> {
+        for proof in self.completions.values() {
+            proof.validate()?;
+        }
+        Ok(())
+    }
+    /// Remove only the exact ancestor holds of a successful, retired chain.
+    /// Other owners/holds remain intact; only the terminal's ordinary success
+    /// contributes dependency history and spacing during the subsequent rebuild.
+    pub(crate) fn apply_completion(
+        &mut self,
+        proof: &crate::runtime_delivery::VerifiedReleaseCompletion,
+    ) -> Result<()> {
+        let expected = proof.validate()?;
+        let terminal = proof.terminal();
+        if let Some(prior) = self.completions.get(&terminal.plan.operation_id) {
+            if prior.digest() != proof.digest() {
+                return Err(Error::new("release_hold", "terminal completion changed"));
+            }
+            return Ok(());
+        }
+        if expected.is_empty()
+            || expected.iter().any(|(operation, hold)| {
+                self.holds.get(operation) != Some(hold)
+                    || hold.resources != terminal.plan.resources
+                    || *operation == terminal.plan.operation_id
+            })
+        {
+            return Err(Error::new(
+                "release_hold",
+                "queue differs from exact completed ancestor hold inventory",
+            ));
+        }
+        for operation in expected.keys() {
+            self.holds.remove(operation);
+        }
+        self.completions
+            .insert(terminal.plan.operation_id, proof.clone());
+        Ok(())
+    }
     pub fn restore_hold(&mut self, attempt: &ReleaseAttempt) -> Result<()> {
         attempt.validate_recovered()?;
         if attempt.hold_reason.is_some() && !attempt.resolved {
@@ -2044,10 +2085,7 @@ impl ReleaseQueue {
         }
         self.owners
             .retain(|_, owner| *owner != attempt.plan.operation_id);
-        self.holds.retain(|_, hold| {
-            hold.operation_id != attempt.plan.operation_id
-                && hold.assigned_successor != Some(attempt.plan.operation_id)
-        });
+        self.holds.remove(&attempt.plan.operation_id);
         self.successes.push(record.clone());
         Ok(record)
     }
@@ -2103,6 +2141,7 @@ impl ReleaseQueue {
         &self,
         record: &crate::evidence::NoReleaseRequired,
     ) -> Result<()> {
+        self.validate_completions()?;
         let mut resources: BTreeSet<_> = record
             .baselines
             .iter()
@@ -2129,6 +2168,7 @@ impl ReleaseQueue {
     }
 
     pub fn earliest_start(&self, plan: &ReleasePlan, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
+        self.validate_completions()?;
         let mut earliest = now;
         for previous in &self.successes {
             if previous.no_release_required || previous.resources.is_disjoint(&plan.resources) {
@@ -2171,6 +2211,7 @@ impl ReleaseQueue {
     }
 
     pub fn eligible(&self, plan: &ReleasePlan, now: DateTime<Utc>) -> Result<()> {
+        self.validate_completions()?;
         plan.validate()?;
         for dependency in &plan.dependencies {
             if !self.successes.iter().any(|s| {
@@ -2228,7 +2269,8 @@ impl ReleaseQueue {
     }
 
     pub fn owns_all(&self, plan: &ReleasePlan) -> bool {
-        !plan.resources.is_empty()
+        self.validate_completions().is_ok()
+            && !plan.resources.is_empty()
             && plan
                 .resources
                 .iter()

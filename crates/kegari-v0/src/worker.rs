@@ -2481,6 +2481,16 @@ pub fn recover_session(
                 .ok_or_else(|| Error::new("record_corrupt", "submission history disappeared"))?
                 .preserves(prior)?;
         }
+        if let Some(prior) = latest
+            .as_ref()
+            .and_then(|prior| prior.state.resume_origin.as_ref())
+        {
+            state
+                .resume_origin
+                .as_ref()
+                .ok_or_else(|| Error::new("record_corrupt", "session history prefix disappeared"))?
+                .preserves(prior)?;
+        }
         if let Some(observed) = &state.intervention {
             if observed.account_id != run.account {
                 return Err(Error::new(

@@ -33,6 +33,7 @@ struct UnfinishedProof {
     contract_digest: String,
     review_round: bool,
     review_rounds_consumed: u32,
+    granted_review: Option<CompletedGrantedReview>,
 }
 impl UnfinishedChildWork {
     pub fn predecessor(&self) -> Uuid {
@@ -85,6 +86,20 @@ impl UnfinishedChildWork {
         }
         Ok(())
     }
+    pub fn verify_current(
+        &self,
+        receipts: &[Receipt],
+        grants: &[crate::decisions::VerifiedRetryGrant],
+    ) -> Result<()> {
+        self.verify_failure_inventory(receipts)?;
+        if let Some(review) = &self.inner.granted_review {
+            review.verify_current(receipts, grants)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn granted_review(&self) -> Option<&CompletedGrantedReview> {
+        self.inner.granted_review.as_ref()
+    }
     pub fn reference(&self) -> &RunReference {
         &self.inner.reference
     }
@@ -112,8 +127,8 @@ impl UnfinishedChildWork {
             &self.phase().phase,
             task,
         )?;
-        if gate.digest()? != self.authority().digest()?
-            || manifest.role != self.role()
+        self.authority().compare_admitted_authority(gate)?;
+        if manifest.role != self.role()
             || manifest.phase != self.phase().phase
             || manifest.repository_revision.as_deref()
                 != Some(self.source().revision().commit.as_str())
@@ -167,6 +182,11 @@ impl UnfinishedChildWork {
     pub(super) fn contract_digest(&self) -> &str {
         &self.inner.contract_digest
     }
+}
+
+enum RepairReview {
+    None,
+    Findings(Option<Box<CompletedGrantedReview>>),
 }
 
 pub struct RepairSource<'a> {
@@ -260,13 +280,38 @@ impl DeliveryCoordinator {
             request.completion,
             cause,
             json!({"kind":"required_local_checks","checks":names}),
-            false,
+            RepairReview::None,
         )
         .await
     }
     pub async fn unfinished_review(
         &self,
         request: ReviewRepairRequest<'_>,
+    ) -> Result<UnfinishedChildWork> {
+        self.unfinished_review_inner(request, None).await
+    }
+    pub(crate) async fn unfinished_retried_review(
+        &self,
+        request: ReviewRepairRequest<'_>,
+        proof: &ReviewRetryWork,
+        grants: &[crate::decisions::VerifiedRetryGrant],
+    ) -> Result<UnfinishedChildWork> {
+        let lineage = self
+            .completed_granted_review(
+                request.source.admission,
+                request.assignment,
+                request.outcome,
+                &request.completion,
+                proof,
+                grants,
+            )
+            .await?;
+        self.unfinished_review_inner(request, Some(lineage)).await
+    }
+    async fn unfinished_review_inner(
+        &self,
+        request: ReviewRepairRequest<'_>,
+        granted_review: Option<CompletedGrantedReview>,
     ) -> Result<UnfinishedChildWork> {
         let admission = request.source.admission;
         self.current(
@@ -300,7 +345,7 @@ impl DeliveryCoordinator {
             request.completion,
             cause,
             json!({"kind":"review_findings"}),
-            true,
+            RepairReview::Findings(granted_review.map(Box::new)),
         )
         .await
     }
@@ -357,8 +402,12 @@ impl DeliveryCoordinator {
         failure: Arc<RunCompletion>,
         cause: Value,
         obligation: Value,
-        review_round: bool,
+        review: RepairReview,
     ) -> Result<UnfinishedChildWork> {
+        let (review_round, granted_review) = match review {
+            RepairReview::None => (false, None),
+            RepairReview::Findings(lineage) => (true, lineage.map(|value| *value)),
+        };
         self.current_child_claim(input.admission, &input.original)?;
         let original = input.original.outcome();
         let original_contract = input
@@ -474,7 +523,20 @@ impl DeliveryCoordinator {
             ));
         }
         let inventory = self.host.operations()?;
-        require_latest_phase(&inventory, predecessor_receipt.runtime_id, &failure_phase)?;
+        if let Some(review) = &granted_review {
+            if !review_round
+                || review.outcome().digest() != outcome.digest()
+                || !Arc::ptr_eq(review.completion(), &failure)
+                || review.phase() != &failure_phase.phase
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "granted findings differ from actual completed review lineage",
+                ));
+            }
+        } else {
+            require_latest_phase(&inventory, predecessor_receipt.runtime_id, &failure_phase)?;
+        }
         let failure_phase_inventory_digest =
             phase_inventory(&inventory, predecessor_receipt.runtime_id, &failure_phase)?;
         let predecessor_receipt_digest = canonical_digest(1, &predecessor_receipt)?;
@@ -493,7 +555,7 @@ impl DeliveryCoordinator {
             1,
             &json!({"purpose":"unfinished_child_work","predecessor":predecessor_receipt_digest,
             "failure":failure_receipt_digest,"failure_inventory":failure_phase_inventory_digest,"source":owned.digest()?,"authority":input.admission.gate.digest()?,
-            "remaining_task":remaining_task,"progress":progress_digest,"review_round":review_round}),
+            "remaining_task":remaining_task,"progress":progress_digest,"review_round":review_round,"granted_review":granted_review.as_ref().map(CompletedGrantedReview::digest)}),
         )?;
         let role = original.outcome().instructions.role;
         Ok(UnfinishedChildWork {
@@ -516,6 +578,7 @@ impl DeliveryCoordinator {
                 contract_digest: input.admission.scope.contract_digest.clone(),
                 review_round,
                 review_rounds_consumed,
+                granted_review,
             }),
         })
     }
@@ -631,6 +694,7 @@ pub struct VerifiedSourceAdvanced {
     review_rounds_consumed: u32,
     _original: Arc<CompletedChildClaim>,
     _previous_completion: Arc<RunCompletion>,
+    granted_review: Option<CompletedGrantedReview>,
 }
 impl VerifiedSourceAdvanced {
     pub fn assignment(&self) -> &DeliveryWorkerAssignment {
@@ -652,6 +716,94 @@ impl VerifiedSourceAdvanced {
             return Err(Error::new(
                 "stale_result",
                 "another required-check admission superseded source advancement",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn has_granted_review(&self) -> bool {
+        self.granted_review.is_some()
+    }
+    pub fn verify_current(
+        &self,
+        receipts: &[Receipt],
+        grants: &[crate::decisions::VerifiedRetryGrant],
+    ) -> Result<()> {
+        self.verify_predecessor_inventory(receipts)?;
+        if let Some(review) = &self.granted_review {
+            review.verify_current(receipts, grants)?;
+        }
+        self.source().revalidate_filesystem()
+    }
+    pub(crate) fn verify_completed_inventory(
+        &self,
+        receipts: &[Receipt],
+        grants: &[crate::decisions::VerifiedRetryGrant],
+        operation: Uuid,
+    ) -> Result<()> {
+        let receipt = receipts
+            .iter()
+            .find(|r| r.operation_id == operation)
+            .ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "advanced review admission disappeared",
+                )
+            })?;
+        self.verify_admission_reference(receipt)?;
+        let run = RunReference::from_receipt(receipt)?
+            .ok_or_else(|| Error::new("worker_binding", "advanced review admission missing"))?;
+        let result = receipt.observed_result.as_ref().ok_or_else(|| {
+            Error::new(
+                "reconciliation_required",
+                "advanced review has no terminal observation",
+            )
+        })?;
+        if receipt.runtime_id != self.predecessor.runtime_id
+            || run.workspace != self.reference.workspace
+            || run.account != self.reference.account
+            || run.phase != self.reference.phase
+            || Some(run.attempt) != self.reference.attempt.checked_add(1)
+            || run.attempt > run.max_attempts
+            || [run.max_attempts, run.max_turns, run.max_review_rounds].contains(&0)
+            || run.max_attempts > self.reference.max_attempts
+            || run.max_turns > self.reference.max_turns
+            || run.max_review_rounds > self.reference.max_review_rounds
+            || run.profile_digest != self.reference.profile_digest
+            || receipt.phase != ReceiptPhase::Reconciled
+            || result["local_execution"] != "exited"
+            || result["unresolved_effects"]
+                .as_array()
+                .is_none_or(|v| !v.is_empty())
+            || result["observation"]["outcome"] != "completed"
+        {
+            return Err(Error::new(
+                "stale_result",
+                "advanced review differs from exact completed next admission",
+            ));
+        }
+        let prior: Vec<_> = receipts
+            .iter()
+            .filter(|r| r.operation_id != operation)
+            .cloned()
+            .collect();
+        self.verify_current(&prior, grants)
+    }
+    fn verify_admission_reference(&self, receipt: &Receipt) -> Result<()> {
+        let expected = crate::control::SourceAdvancedReference {
+            predecessor: self.predecessor(),
+            predecessor_receipt_digest: self.predecessor_receipt_digest().into(),
+            source_operation: self.source_operation(),
+            source_receipt_digest: self.source_receipt_digest().into(),
+            trigger_digest: self.digest().into(),
+            progress_digest: self.progress_digest().into(),
+            review_rounds_consumed: self.review_rounds_consumed(),
+        };
+        if crate::control::SourceAdvancedReference::from_receipt(receipt)?.as_ref()
+            != Some(&expected)
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "completed review was not admitted by this exact source advancement",
             ));
         }
         Ok(())
@@ -727,6 +879,124 @@ impl DeliveryCoordinator {
     pub async fn source_advanced(
         &self,
         request: SourceAdvancedRequest<'_>,
+    ) -> Result<VerifiedSourceAdvanced> {
+        self.source_advanced_inner(request, None).await
+    }
+    pub(crate) async fn source_advanced_retried_review(
+        &self,
+        request: SourceAdvancedRequest<'_>,
+        repair: &UnfinishedChildWork,
+        grants: &[crate::decisions::VerifiedRetryGrant],
+    ) -> Result<VerifiedSourceAdvanced> {
+        let lineage = repair.granted_review().ok_or_else(|| {
+            Error::new(
+                "worker_binding",
+                "repair lacks completed granted review lineage",
+            )
+        })?;
+        lineage.verify_current(&self.host.operations()?, grants)?;
+        let source_receipt = self
+            .host
+            .operation(request.source.original.operation_id())?;
+        let continuation = crate::control::RunContinuationReference::from_receipt(&source_receipt)?
+            .ok_or_else(|| {
+                Error::new(
+                    "worker_binding",
+                    "changed source lacks its actual scoped repair admission",
+                )
+            })?;
+        if continuation.predecessor != repair.predecessor()
+            || continuation.predecessor_receipt_digest != repair.predecessor_receipt_digest()
+            || continuation.failure_operation != repair.failure_operation()
+            || continuation.trigger_digest != repair.digest()
+            || continuation.progress_digest != repair.progress_digest()
+            || continuation.review_rounds_consumed != repair.review_rounds_consumed()
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "changed source follows another repair obligation",
+            ));
+        }
+        if request.assignment.phase() != "child_codex_review"
+            || request.predecessor.digest() != lineage.outcome().digest()
+            || !Arc::ptr_eq(&request.completion, lineage.completion())
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "advanced source does not follow its actual granted review",
+            ));
+        }
+        self.source_advanced_inner(request, Some(lineage.clone()))
+            .await
+    }
+    pub(crate) async fn publish_source_advanced_review(
+        &self,
+        admission: &DeliveryAdmission,
+        assignment: &ChildReviewAssignment,
+        outcome: &VerifiedAuthorizedOutcome,
+        completion: &Arc<RunCompletion>,
+        proof: &VerifiedSourceAdvanced,
+        current_grant: GateCheck,
+    ) -> Result<PublishedReview> {
+        child::completed_run(outcome, completion)?;
+        proof.verify_contract(
+            completion
+                .contract
+                .as_ref()
+                .ok_or_else(|| Error::new("worker_binding", "advanced review contract missing"))?,
+        )?;
+        let receipt = self.host.operation(completion.operation_id)?;
+        proof.verify_admission_reference(&receipt)?;
+        let run = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+            Error::new("worker_binding", "advanced review lacks actual admission")
+        })?;
+        if run.phase != *proof.phase()
+            || run.instruction_digest != outcome.outcome().instruction_digest
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "advanced result differs from its completed admission",
+            ));
+        }
+        let git = self.git.clone();
+        let source = proof.source().clone();
+        let execution = completion
+            .execution
+            .clone()
+            .ok_or_else(|| Error::new("worker_binding", "advanced review lacks owned source"))?;
+        let isolation = completion.contract.as_ref().unwrap().isolation().clone();
+        tokio::task::spawn_blocking(move || {
+            source.verify_for_clone(&git)?;
+            execution.ownership.verify(&execution.binding, &isolation)?;
+            if execution.binding.revision != *source.revision() {
+                return Err(Error::new("stale_result", "advanced review source differs"));
+            }
+            git.verify_execution_tree(
+                &isolation.plan().repository,
+                source.revision(),
+                &BTreeSet::new(),
+            )
+        })
+        .await
+        .map_err(|_| {
+            Error::new(
+                "operation_uncertain",
+                "advanced review source verification was lost",
+            )
+        })??;
+        self.publish_completed_review_guarded(
+            admission,
+            assignment,
+            outcome,
+            completion,
+            Some(current_grant),
+        )
+        .await
+    }
+    async fn source_advanced_inner(
+        &self,
+        request: SourceAdvancedRequest<'_>,
+        granted_review: Option<CompletedGrantedReview>,
     ) -> Result<VerifiedSourceAdvanced> {
         let admission = request.source.admission;
         self.current_child_claim(admission, &request.source.original)?;
@@ -861,7 +1131,9 @@ impl DeliveryCoordinator {
             }
         }
         let inventory = self.host.operations()?;
-        require_latest_phase(&inventory, predecessor.runtime_id, &reference)?;
+        if granted_review.is_none() {
+            require_latest_phase(&inventory, predecessor.runtime_id, &reference)?;
+        }
         let phase_inventory_digest =
             phase_inventory(&inventory, predecessor.runtime_id, &reference)?;
         let predecessor_digest = canonical_digest(1, &predecessor)?;
@@ -875,7 +1147,7 @@ impl DeliveryCoordinator {
         let digest = canonical_digest(
             1,
             &json!({"purpose":"source_advanced","previous":predecessor_digest,"previous_inventory":phase_inventory_digest,"source":source_receipt_digest,
-            "source_seal":request.source.source.receipt().payload_digest,"assignment":request.assignment.digest()?,"progress":progress_digest,"review_rounds_consumed":review_rounds_consumed}),
+            "source_seal":request.source.source.receipt().payload_digest,"assignment":request.assignment.digest()?,"progress":progress_digest,"review_rounds_consumed":review_rounds_consumed,"granted_review":granted_review.as_ref().map(CompletedGrantedReview::digest)}),
         )?;
         Ok(VerifiedSourceAdvanced {
             assignment: request.assignment.clone(),
@@ -890,6 +1162,7 @@ impl DeliveryCoordinator {
             review_rounds_consumed,
             _original: request.source.original,
             _previous_completion: request.completion,
+            granted_review,
         })
     }
 }

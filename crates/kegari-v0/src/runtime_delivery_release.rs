@@ -8,6 +8,7 @@ use crate::{
     config::ReleaseMode,
     control::{ControlSnapshot, Intent, Lease, Permit, ReceiptPhase},
     delivery::*,
+    digest::canonical_digest,
     evidence::{
         self, Signed, VerifiedAcceptance, VerifiedParent, VerifiedProduction, WorkIdentity,
     },
@@ -107,7 +108,36 @@ struct ReleaseState {
     restored: bool,
     attempts: BTreeMap<Uuid, AttemptRecord>,
     no_release: BTreeMap<Uuid, evidence::VerifiedNoReleaseRequired>,
+    completions: BTreeMap<Uuid, VerifiedReleaseCompletion>,
+    completion_errors: BTreeMap<Uuid, Error>,
     queue: ReleaseQueue,
+}
+impl ReleaseState {
+    fn completed_ancestors(&self) -> Result<BTreeMap<Uuid, Uuid>> {
+        let mut consumed = BTreeMap::new();
+        for (terminal, proof) in &self.completions {
+            for ancestor in proof.validate()?.keys() {
+                if consumed.insert(*ancestor, *terminal).is_some() {
+                    return Err(Error::new(
+                        "release_completion",
+                        "ancestor has multiple terminal completions",
+                    ));
+                }
+            }
+        }
+        Ok(consumed)
+    }
+}
+
+/// Historical failure state is preserved separately from its current resource
+/// hold. A successful descendant consumes a hold without rewriting that state.
+#[derive(Clone, Serialize)]
+pub struct ReleaseHistory {
+    pub parent: IssueKey,
+    pub attempt: ReleaseAttempt,
+    pub active_hold: bool,
+    pub completed_by: Option<Uuid>,
+    pub completion_error: Option<Error>,
 }
 // JSON object keys cannot encode RepositoryId structs. Preserve canonical
 // repository ordering as strict tuple arrays in authenticated records.
@@ -237,6 +267,7 @@ fn ready_for_local_retirement(record: &AttemptRecord) -> bool {
 fn rebuild_queue(
     attempts: &BTreeMap<Uuid, AttemptRecord>,
     no_release: &BTreeMap<Uuid, evidence::VerifiedNoReleaseRequired>,
+    completions: &BTreeMap<Uuid, VerifiedReleaseCompletion>,
 ) -> Result<ReleaseQueue> {
     let mut queue = ReleaseQueue::default();
     // These proofs were admitted against the then-current queue and reobserved
@@ -261,6 +292,9 @@ fn rebuild_queue(
         }
         queue.reconcile_attempt(&ownership)?;
     }
+    for proof in completions.values() {
+        queue.apply_completion(proof)?;
+    }
     for record in attempts
         .values()
         .filter(|r| r.attempt.completed() && r.pending_receipts.is_empty() && r.local_retired)
@@ -282,11 +316,7 @@ impl RuntimeDelivery {
                 .sign("runtime_release_attempt", record)?,
         )
     }
-    fn restore_releases(&self) -> Result<()> {
-        let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
-        if state.restored {
-            return Ok(());
-        }
+    fn read_release_attempts(&self) -> Result<BTreeMap<Uuid, AttemptRecord>> {
         let config = self.runtime.configuration.snapshot()?;
         let mut records = BTreeMap::new();
         for name in self.records.records_bounded(65536)? {
@@ -301,7 +331,7 @@ impl RuntimeDelivery {
                 .services
                 .key
                 .verify("runtime_release_attempt", &signed)?;
-            let mut record = signed.payload;
+            let record = signed.payload;
             let plan = &record.attempt.plan;
             if record.schema_version != 1
                 || record.runtime != config.runtime.id
@@ -319,21 +349,37 @@ impl RuntimeDelivery {
                 ));
             }
             record.attempt.validate_recovered()?;
-            if record.admission_confirmed {
-                let receipt = self.runtime.control.operation(record.admission_operation)?;
-                let expected_scope = admission_scope(&receipt, plan)?;
-                if receipt.kind != "admission"
-                    || receipt.runtime_id != record.runtime
-                    || receipt.expected.get("scope") != Some(&expected_scope)
-                    || receipt.owner_generation != record.attempt.owner_generation
-                    || receipt.canonical_targets != vec![issue(&record)?.identity()?]
-                {
-                    return Err(Error::new(
-                        "ownership_conflict",
-                        "release record lacks exact actual plan admission",
-                    ));
-                }
+            records.insert(record.attempt.plan.operation_id, record);
+        }
+        Ok(records)
+    }
+    fn validate_release_admission(&self, record: &AttemptRecord) -> Result<()> {
+        let plan = &record.attempt.plan;
+        if record.admission_confirmed {
+            let receipt = self.runtime.control.operation(record.admission_operation)?;
+            let expected_scope = admission_scope(&receipt, plan)?;
+            if receipt.kind != "admission"
+                || receipt.runtime_id != record.runtime
+                || receipt.expected.get("scope") != Some(&expected_scope)
+                || receipt.owner_generation != record.attempt.owner_generation
+                || receipt.canonical_targets != vec![issue(record)?.identity()?]
+            {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "release record lacks exact actual plan admission",
+                ));
             }
+        }
+        Ok(())
+    }
+    fn restore_releases(&self) -> Result<()> {
+        let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
+        if state.restored {
+            return Ok(());
+        }
+        let mut records = self.read_release_attempts()?;
+        for record in records.values_mut() {
+            self.validate_release_admission(record)?;
             if !record.attempt.completed() && !record.attempt.resolved {
                 // Never adopt a prior host's live permit or assume its network
                 // tasks stopped. Metadata recovery may later establish outcomes.
@@ -341,9 +387,10 @@ impl RuntimeDelivery {
                     "recovered release requires explicit known-outcome reconciliation".into()
                 });
             }
-            records.insert(record.attempt.plan.operation_id, record);
         }
-        state.queue = rebuild_queue(&records, &state.no_release)?;
+        let completions = self.restore_completions()?;
+        state.queue = rebuild_queue(&records, &state.no_release, &completions)?;
+        state.completions = completions;
         state.attempts = records;
         state.restored = true;
         Ok(())
@@ -363,7 +410,7 @@ impl RuntimeDelivery {
             record.attempt.validate_recovered()?;
             let mut proposed = state.attempts.clone();
             proposed.insert(operation, record.clone());
-            let queue = rebuild_queue(&proposed, &state.no_release)?;
+            let queue = rebuild_queue(&proposed, &state.no_release, &state.completions)?;
             self.save_release(&record)?;
             state.attempts = proposed;
             state.queue = queue;
@@ -609,6 +656,64 @@ impl RuntimeDelivery {
             .values()
             .map(|r| r.attempt.clone())
             .collect())
+    }
+    pub fn release_history(&self) -> Result<Vec<ReleaseHistory>> {
+        // Inspection authenticates the attempt inventory without requiring a
+        // completion proof to grant authority or mutating restart recovery state.
+        let mut attempts = self.read_release_attempts()?;
+        let mut ownership_errors = BTreeMap::new();
+        for (operation, record) in &attempts {
+            if let Err(error) = self.validate_release_admission(record) {
+                if error.code == "unsafe_storage" {
+                    return Err(error);
+                }
+                ownership_errors.insert(*operation, error
+                    .detail(json!({"release_operation":operation,"completion_stage":"owner_reference"}))
+                    .next("Inspect and restore the exact retained owner receipt; do not readmit or repeat uncertain effects."));
+            }
+        }
+        let diagnostics = self.inspect_release_completions(&attempts, &ownership_errors)?;
+        {
+            let state = self.releases.state.lock().map_err(|_| unavailable())?;
+            for (operation, record) in &mut attempts {
+                if let Some(cached) = state.attempts.get(operation) {
+                    let mut normalized = cached.clone();
+                    normalized.attempt.hold_reason = record.attempt.hold_reason.clone();
+                    if canonical_digest(1, &normalized)? == canonical_digest(1, record)? {
+                        record.attempt.hold_reason = cached.attempt.hold_reason.clone();
+                    }
+                } else if !state.restored && !record.attempt.completed() && !record.attempt.resolved
+                {
+                    record.attempt.hold_reason.get_or_insert_with(|| {
+                        "retained release requires explicit known-outcome reconciliation".into()
+                    });
+                }
+            }
+        }
+        attempts
+            .values()
+            .map(|record| {
+                let completed_by = diagnostics
+                    .consumed
+                    .get(&record.attempt.plan.operation_id)
+                    .copied();
+                Ok(ReleaseHistory {
+                    parent: issue(record)?,
+                    attempt: record.attempt.clone(),
+                    completed_by,
+                    completion_error: diagnostics
+                        .errors
+                        .get(&record.attempt.plan.operation_id)
+                        .cloned(),
+                    active_hold: ownership_errors.contains_key(&record.attempt.plan.operation_id)
+                        || (completed_by.is_none()
+                            && !record.attempt.resolved
+                            && (record.attempt.hold_reason.is_some()
+                                || !record.pending_receipts.is_empty()
+                                || (record.attempt.completed() && !record.local_retired))),
+                })
+            })
+            .collect()
     }
 }
 impl RuntimeDelivery {
@@ -1439,7 +1544,7 @@ impl RuntimeDelivery {
                 Self::check_release_publications(&self.runtime, &record, None)?;
                 let mut proposed = state.attempts.clone();
                 proposed.insert(operation, record.clone());
-                let queue = rebuild_queue(&proposed, &state.no_release)?;
+                let queue = rebuild_queue(&proposed, &state.no_release, &state.completions)?;
                 self.save_release(&record)?;
                 state.queue = queue;
                 state.attempts = proposed;
@@ -1870,6 +1975,14 @@ impl RuntimeDelivery {
             return Ok(());
         }
         self.runtime.registration.verify_active_owner(lease)?;
+        let projection = self.runtime.observations.admission_snapshot()?;
+        // Only the ordinary live publication/evidence hydration may populate
+        // readiness. Retained terminal attempt state alone grants nothing.
+        // Drain above remains independent of new-admission hydration failures.
+        self.refresh(&projection).await?;
+        // Draining an existing phase may have taken a full provider/Git bound.
+        // Preserve candidate ordering, not an expired observation snapshot.
+        let projection = self.runtime.observations.admission_snapshot()?;
         let mut first = None;
         let mut candidates = Vec::new();
         for workspace in projection.workspaces.values() {
@@ -1891,10 +2004,12 @@ impl RuntimeDelivery {
         order_candidates(&mut candidates);
         for candidate in candidates {
             let result = async {
+                self.runtime.registration.verify_active_owner(lease)?;
+                let projection = self.release_candidate_projection(&candidate)?;
                 if self
                     .advance_no_release(
                         lease,
-                        projection,
+                        &projection,
                         candidate.workspace,
                         candidate.parent.issue,
                     )
@@ -1902,10 +2017,11 @@ impl RuntimeDelivery {
                 {
                     return Ok(());
                 }
+                let projection = self.release_candidate_projection(&candidate)?;
                 let Some(prepared) = self
                     .prepare_release(
                         lease,
-                        projection,
+                        &projection,
                         candidate.workspace,
                         candidate.parent.issue,
                     )
@@ -1913,7 +2029,8 @@ impl RuntimeDelivery {
                 else {
                     return Ok(());
                 };
-                self.admit_release(lease, projection, prepared, &candidate)
+                let projection = self.release_candidate_projection(&candidate)?;
+                self.admit_release(lease, &projection, prepared, &candidate)
                     .await
             }
             .await;
@@ -1924,6 +2041,23 @@ impl RuntimeDelivery {
             }
         }
         first.map_or(Ok(()), Err)
+    }
+    fn release_candidate_projection(
+        &self,
+        candidate: &ReleaseCandidate,
+    ) -> Result<RuntimeProjection> {
+        let current = self.runtime.observations.admission_snapshot()?;
+        if current
+            .parent(candidate.workspace, candidate.parent.issue)?
+            .key
+            != candidate.parent
+        {
+            return Err(Error::new(
+                "identity_mismatch",
+                "release selection changed provider identity during progression",
+            ));
+        }
+        Ok(current)
     }
     pub(super) async fn drain_releases(&self, projection: &RuntimeProjection) -> Result<()> {
         let preparations = self
@@ -1995,6 +2129,9 @@ impl RuntimeDelivery {
                     first.get_or_insert(error);
                 }
             }
+        }
+        if let Err(error) = self.maintain_release_completions(projection).await {
+            first.get_or_insert(error);
         }
         first.map_or(Ok(()), Err)
     }
@@ -2081,6 +2218,9 @@ impl RuntimeDelivery {
                 first.get_or_insert(error);
             }
         }
+        if let Err(error) = self.maintain_release_completions(projection).await {
+            first.get_or_insert(error);
+        }
         first.map_or(Ok(()), Err)
     }
     /// Maintenance may drain an existing finite plan; it never creates another
@@ -2143,7 +2283,7 @@ fn release_revision(
     ))
 }
 impl RuntimeDelivery {
-    fn release_workspace(
+    pub(super) fn release_workspace(
         &self,
         admitted: &WorkspaceDelivery,
         workspace: Uuid,
@@ -2520,6 +2660,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_progression_preserves_missing_release_owner_as_a_blocker() {
+        let (_root, fixture, delivery, wire, owner) =
+            super::super::tests::fixture_authorization_with_wire(true).await;
+        let (lease, _ownership) = owner.start(&fixture.runtime);
+        let (plan, work, _) = crate::delivery::observed_merge_for_runtime().await;
+        let operation = plan.operation_id;
+        // Authenticated retained state is not its missing actual admission.
+        // The production facade must visit release recovery before admitting
+        // more work, while never adopting this record as a live permit.
+        delivery.save_release(&record(plan, work)).unwrap();
+        let before = fixture.runtime.control.operations().unwrap().len();
+        let mutations = || {
+            wire.lock()
+                .unwrap()
+                .requests
+                .iter()
+                .filter(|(_, body)| {
+                    body["query"]
+                        .as_str()
+                        .is_some_and(|q| q.contains("mutation "))
+                })
+                .count()
+        };
+        let writes = mutations();
+        assert_eq!(
+            crate::runtime_driver::RuntimeProgression::advance(delivery.as_ref(), &lease)
+                .await
+                .unwrap_err()
+                .code,
+            "record_missing"
+        );
+        assert_eq!(
+            crate::runtime_driver::RuntimeProgression::maintain(delivery.as_ref())
+                .await
+                .unwrap_err()
+                .code,
+            "record_missing"
+        );
+        assert_eq!(fixture.runtime.control.operations().unwrap().len(), before);
+        assert_eq!(mutations(), writes);
+        assert_eq!(
+            fixture
+                .runtime
+                .control
+                .operation(operation)
+                .unwrap_err()
+                .code,
+            "record_missing"
+        );
+        assert!(
+            fixture
+                .runtime
+                .control
+                .snapshot()
+                .unwrap()
+                .active_operations
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn known_failed_release_retires_local_claim_but_keeps_resource_hold() {
         let (_root, built, delivery) = super::super::tests::fixture().await;
         let (plan, work, _) = crate::delivery::observed_merge_for_runtime().await;
@@ -2766,7 +2967,7 @@ pub use baseline::KnownPredecessorBaseline;
 
 #[path = "runtime_delivery_lineage.rs"]
 mod lineage;
-pub(crate) use lineage::VerifiedSuccessorHolds;
+pub(crate) use lineage::{VerifiedReleaseCompletion, VerifiedSuccessorHolds};
 
 #[cfg(test)]
 #[path = "runtime_delivery_successor_fixture.rs"]

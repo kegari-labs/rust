@@ -170,6 +170,7 @@ impl RuntimeCoordinator {
             return Err(error.clone());
         }
         let receipts = self.control.operations()?;
+        old.verify_prior_receipts(&receipts)?;
         crate::runtime_schedule::require_provider_clear(
             self.runtime_id,
             &original.account,

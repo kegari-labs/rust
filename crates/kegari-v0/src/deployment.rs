@@ -494,7 +494,7 @@ impl ProductionObserver {
         );
         self.control.validate_permit(permit, || {
             (self.current)(admission.fresh_gate())?;
-            let _lock = self.records.lock("deployment-challenges.lock")?;
+            let _lock = self.records.section_lock("deployment-challenges.lock")?;
             match self.records.read::<Signed<ChallengeRecord>>(&index) {
                 Ok(prior) => {
                     self.key.verify("deployment_challenge", &prior)?;
@@ -605,7 +605,7 @@ impl ProductionObserver {
             self.reobserve_record(contract, &record).await?;
             self.control.validate_permit(permit, || {
                 (self.current)(admission.fresh_gate())?;
-                let _lock = self.records.lock("deployment-proofs.lock")?;
+                let _lock = self.records.section_lock("deployment-proofs.lock")?;
                 record = self.persist_target_proof(contract, record.clone())?;
                 Ok(())
             })?;
@@ -720,7 +720,7 @@ impl ProductionObserver {
         self.reobserve_record(contract, &record).await?;
         self.control.validate_permit(permit, || {
             (self.current)(admission.fresh_gate())?;
-            let _lock = self.records.lock("deployment-proofs.lock")?;
+            let _lock = self.records.section_lock("deployment-proofs.lock")?;
             record = self.persist_target_proof(contract, record.clone())?;
             Ok(())
         })?;

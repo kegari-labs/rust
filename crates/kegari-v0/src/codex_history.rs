@@ -25,6 +25,35 @@ struct RecordedTransientFailure {
     policy_free: bool,
 }
 impl RecordedThreadHistory {
+    pub(super) fn completed_inventory(&self) -> Result<(BTreeMap<String, String>, String)> {
+        let completed = self
+            .turns
+            .iter()
+            .map(|turn| (turn.id.clone(), turn.status.clone()))
+            .collect();
+        let last = self
+            .turns
+            .last()
+            .ok_or_else(|| {
+                Error::new(
+                    "resume_incompatible",
+                    "historical session has no terminal turn",
+                )
+            })?
+            .id
+            .clone();
+        self.validate(&completed, Some(&last))?;
+        if self.turns.iter().any(|turn| turn.content_digest.is_none()) {
+            return Err(Error::new(
+                "resume_incompatible",
+                "historical session lacks full observed contents",
+            ));
+        }
+        Ok((completed, last))
+    }
+    pub(super) fn ordered_ids(&self) -> Vec<&str> {
+        self.turns.iter().map(|turn| turn.id.as_str()).collect()
+    }
     pub(super) fn observe(&mut self, turn: &Value) -> Result<()> {
         let id = required_str(turn, "id")?;
         let status = required_str(turn, "status")?;
