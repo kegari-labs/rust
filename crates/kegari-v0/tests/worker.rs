@@ -1964,6 +1964,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
             unfinished: None,
             source_advanced: None,
             retried_unfinished: None,
+            validation_retry: None,
             review_retry: None,
             review_round: None,
             lease: f.permit.lease.clone(),

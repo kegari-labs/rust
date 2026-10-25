@@ -298,6 +298,7 @@ pub(super) async fn continued_pair_component(input: PairFixture<'_, '_>) {
         previous_round_reference_digest: canonical_digest(1, paired.reference()).unwrap(),
         current_source: Box::new(current_source),
         validation: Box::new(RepairValidationReference {
+            lineage: crate::control::RepairValidationLineage::Direct {},
             validation: exact(&validation),
             phase: validation_run.phase.clone(),
             source_advanced: validation_link,

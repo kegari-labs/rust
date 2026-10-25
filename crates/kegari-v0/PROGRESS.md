@@ -1,6 +1,60 @@
 # Kegari v0 build progress
 
 Local implementation and validation remain in progress; the Goal is incomplete.
+
+The exact-source validation retry increment passed **760 tests,
+zero failures and two required native ignores across 39 groups** in
+737.369s. Full5 retained612 unchanged build inputs at
+`sha256:0c7431dfd4c037d499a2320f3fb440c34a6e7742d6b2400ffe2bd50d2c318402`,
+with before/after Rust/Cargo1.99.1 identities. StrictClippy5, formatting,496-block
+inventory consistency, diff and dispatch-disabled evaluation plan also passed.
+Root session1423 is closed. The collector verified 23 retained invocation
+artifacts, including failures. Native ignores remain incomplete requirements;
+this deterministic evidence does not qualify live/native operation or complete
+the Goal.
+The coordinator is preparing the exact diff/index and local signed-off checkpoint.
+The actual iterative Drop fix keeps long histories bounded without changing retry
+budgets; two65,536-node data-only regressions verify unique and shared tails.
+Full4's11 fixture-probe timeouts, its same-source12/12 diagnostic and the source5
+owned journaled-probe correction remain retained in the detailed report. No
+production timeout or assertion was changed; source5 release5 also passed12/12.
+Future source-successor, paired recovery and carry layers remain TEMP only.
+
+Source1 check1 failed13.181s on a missing chrono Duration import, parent visibility
+and one optional fixture field. Source2 check2 passed20.073s. StrictClippy2 then
+failed17.379s on four get/is_none lookups and one test Box replacement; source3
+fixes only those lint findings. Every invocation retains unchanged source/tool
+snapshots and logs; unrun suffixes after failures have no inferred result.
+The installed31-file layer includes actual native retry/paired-failure/passed
+successor paths and the shared65,536-record resource bound; configured session
+caps and16KiB round limits remain independent. Current data/native-join refusal
+fixtures pass without a manufactured success capability.
+
+The destructor fix is installed from
+`/private/tmp/kegari-validation-iterative-drop-overlay` (manifestfd5f836f741e1099344beb19c9cf840c196fdd308a6e8049c6d3241cfd2b8f9f).
+No retry cap or thread stack was altered. This fixes the direct ValidationRetryWork
+previous-chain destruction, not every separate existing review/source graph.
+
+The later changed-source path after a genuine granted validation pass, review
+Findings and paired repair remains incomplete. Codex prepares an opaque
+ValidationBudgetLineage extension, independently reviewed by Config, so the new
+validation retains actual G ancestry/remaining caps and rejects old-source cache
+reuse. That layer is TEMP only and must update every transitive joined reader.
+Git prepares carried acceptance with actual known-released baseline proofs.
+Its further prerequisite is typed same-generation parent reassembly: Complete
+currently stops, and plain integrated/review admissions cannot reset budgets.
+Generic ArtifactReference data cannot supply either capability. Config now owns
+TEMP paired Control metadata/resume admissions; root's native seams/design are in
+`/private/tmp/kegari-paired-recovery-control-design`. Original paired producer
+still lacks dedicated native consumption and repeated resumed-failure bridge.
+
+The inventory correction is committed as
+`4d2a62030012ef81cacc0409cdcc5439c39587dd` —
+`fix(kegari-v0): retain all implementation contract blocks`.
+Seven exact file bodies and the clean tree were verified before this retry
+installation; no commits were consolidated or pushed. Source8's core suite below
+is historical evidence for its exact603 inputs, not a pass for current612 inputs.
+
 The child review-round core passed **747 tests, zero failures and
 two required native ignores across 39 groups** in 727.152s.
 Full8 and its strict Clippy, formatting, inventory, diff and dispatch-disabled
@@ -19,7 +73,7 @@ for missing trusted explicit authorization; exact authorization in the
 user-designated objective was reverified and normal automatic re-review approved.
 No bypass/manual gate or remote mutation occurred. Verification:
 `/private/tmp/kegari-v0-review-round-core-commit-verification.json`.
-No later retry source is installed.
+The later retry source is now installed as source5 above; prior core evidence remains exact.
 
 Full6 failed405.337s with241 library passes/3 failures, later groups unrun.
 Source7 corrected the obsolete validation-as-review-round assertion; schedule7
@@ -38,7 +92,8 @@ Exact original/base/draft hashes were checked in order: native3 f302b548,
 paired Direct/Retried9 8acacb87, final clean round9 f68e7241, final pipeline5
 5089ae7b and fixtures/defaults10 b329f12f. Known final integration includes the
 PassedValidationReference reexport; obsolete TEMP comments also need removal.
-This composition is not installed or compiled. Final independent reviews cover
+This original v1 composition is retained as history; its corrected v3 successor
+is installed and source5 is under full validation above. Independent reviews cover
 the actual cause/bounds/current-successor/grant seams; genuine passed/native
 execution qualification is still absent. Original layers remain preserved.
 
@@ -49,12 +104,13 @@ ledger consistency and diff checks pass with unchanged603 Rust inputs. No Cargo
 repeat or product evidence upgrade was needed. Two independent reviews confirm
 all559 in-scope nonstructural lines are indexed once. Historical completeness
 claims are corrected explicitly in the [inventory report](validation/LOCAL-CONTRACT-INVENTORY.md).
-This evidence-tool increment is ready for its separate local commit.
+This evidence-tool increment is committed as4d2a620 above.
 
 Root's next retry composition is `/private/tmp/kegari-validation-combined-core8-v3`,
 31 files, manifest5df0414b2f0429e171cfb83e091653365acf13853855d4f00e628c5ade906196.
 It adds the reviewed shared65,536-record resource bound, required type reexport,
-and obsolete-comment cleanup; it is formatted but still uninstalled/uncompiled.
+and obsolete-comment cleanup; it was installed as source1 and corrected through
+the source5 validation checkpoint recorded above.
 The failed partial v2 TEMP preparation is retained (wrong overlay source path;
 no repository write). A separate changed-source validation successor must keep
 actual granted G ancestry and remaining caps after passed retry/Findings/repair;
@@ -1330,3 +1386,15 @@ it introduces new historical dependency and inspection consumers, whereas the
 previous checkpoint also contains independent worker/driver ownership changes.
 Keeping the validated consumer increment separate makes both changes reviewable;
 no published history is rewritten and no remote action is authorized.
+
+
+### Held paired recovery provider bridge
+
+Root prepared the one-file metadata provider bridge at
+`/private/tmp/kegari-paired-recovery-provider-draft`, manifest
+c03351f2e5424784cc4c9462f0fd428d4b5b386b495338cbc834a1d90fbb753a.
+It adds a mandatory-callback paired entry point over the unchanged original
+metadata protections and binds exact round/recovery provenance into paired scope.
+It depends on Config's typed Control layer and a real native candidate/caller;
+syntax-only, not installed/compiled. It does not create model/source/ownership
+capabilities or solve repeated resumed failures. Root owns future native integration.

@@ -113,6 +113,7 @@ fn setup_with_bounds(round_limit: u32, implementation_attempts: u32) -> Fixture 
         round_id: String::new(),
         ordinal: 1,
         round_limit,
+        passed_validation: None,
         source: ReviewedSourceReference {
             implementation_phase: implementation.phase.clone(),
             implementation: exact(&source),
@@ -851,6 +852,7 @@ fn continued_final_round_pair_uses_latest_validation_and_original_attempt_cap() 
         previous_round_reference_digest: canonical_digest(1, &pair).unwrap(),
         current_source: Box::new(current_source),
         validation: Box::new(RepairValidationReference {
+            lineage: crate::control::RepairValidationLineage::Direct {},
             validation: exact(&validation),
             phase: validation_run.phase.clone(),
             source_advanced: validation_link,
@@ -1020,3 +1022,164 @@ fn continued_final_round_pair_uses_latest_validation_and_original_attempt_cap() 
     );
     assert_eq!(f.host.operations().unwrap().len(), before);
 }
+
+// Data-only inventory reader check. The snapshot comes from actual Control, but
+// the following receipt observations are explicitly synthetic and never written
+// or admitted. They mint no retry, source, check, joined or round capability.
+#[test]
+fn retried_pair_validation_keeps_origin_separate_and_checks_complete_actual_prefix() {
+    let f = setup();
+    let template = f
+        .host
+        .operation(f.round.source.implementation.operation)
+        .unwrap();
+    let make = |id: Uuid, attempt: u32, grant: Option<Uuid>, outcome: &str| {
+        let mut receipt = template.clone();
+        receipt.operation_id = id;
+        receipt.request_id = id;
+        receipt.updated_at = Utc::now() - chrono::Duration::seconds(2);
+        let mut run = f.implementation.clone();
+        run.phase.phase = "child_local_validation".into();
+        run.phase.retry_grant = grant;
+        run.attempt = attempt;
+        receipt
+            .expected
+            .insert("run".into(), serde_json::to_string(&run).unwrap());
+        receipt.observed_result = Some(json!({"local_execution":"exited","unresolved_effects":[],
+            "observation":{"outcome":outcome,"local_exit_confirmed":true,"hook_error":null,
+                "session":{"terminal":outcome,"input_required":false,"intervention":null}}}));
+        receipt
+    };
+    let prior = make(Uuid::new_v4(), 1, None, "completed");
+    let mut origin = make(Uuid::new_v4(), 2, None, "failed");
+    let link = SourceAdvancedReference {
+        predecessor: prior.operation_id,
+        predecessor_receipt_digest: canonical_digest(1, &prior).unwrap(),
+        source_operation: f.round.source.implementation.operation,
+        source_receipt_digest: f.round.source.implementation.receipt_digest.clone(),
+        trigger_digest: digest("actual opaque source reference only"),
+        progress_digest: digest("source progress"),
+        review_rounds_consumed: 1,
+    };
+    origin.expected.insert(
+        "source_advanced".into(),
+        serde_json::to_string(&link).unwrap(),
+    );
+    let grant_id = Uuid::new_v4();
+    let latest = make(Uuid::new_v4(), 1, Some(grant_id), "completed");
+    assert!(!latest.expected.contains_key("source_advanced"));
+    let mut grant = template.clone();
+    grant.operation_id = grant_id;
+    grant.request_id = grant_id;
+    grant.kind = "linear_comment".into();
+    grant.phase = ReceiptPhase::Acknowledged;
+    grant.observed_result = None;
+    let native_target =
+        "linear:https://linear.invalid/graphql:native-workspace:native-issue".to_string();
+    assert_ne!(native_target, f.round.review_phase.work);
+    grant.canonical_targets = vec![native_target.clone()];
+    grant.expected = [
+        (
+            "provider_body_digest".into(),
+            digest("actual native body reference"),
+        ),
+        ("provider_writer".into(), "fixture writer".into()),
+        ("parent_command_id".into(), Uuid::new_v4().to_string()),
+    ]
+    .into();
+    grant
+        .remote_ids
+        .insert("comment_id".into(), Uuid::new_v4().to_string());
+    let phase = RunReference::from_receipt(&latest).unwrap().unwrap().phase;
+    let origin_phase = RunReference::from_receipt(&origin).unwrap().unwrap().phase;
+    let inventory: BTreeMap<_, _> = [prior.clone(), origin.clone(), latest.clone()]
+        .into_iter()
+        .map(|r| (r.operation_id, r))
+        .collect();
+    let validation = crate::control::RepairValidationReference {
+        validation: exact(&latest),
+        phase,
+        source_advanced: link,
+        outcome_proposal: Uuid::new_v4(),
+        outcome_claim_digest: digest("protected validation claim reference"),
+        failure_inventory_digest: canonical_digest(1, &inventory).unwrap(),
+        lineage: crate::control::RepairValidationLineage::Retried {
+            origin: Box::new(exact(&origin)),
+            origin_phase,
+            completed_retry_digest: digest("completed opaque validation reference"),
+            native_target,
+            inventory: inventory
+                .iter()
+                .map(|(id, r)| (*id, canonical_digest(1, r).unwrap()))
+                .collect(),
+            grants: [(grant_id, canonical_digest(1, &grant).unwrap())].into(),
+        },
+    };
+    let snapshot = f.host.snapshot().unwrap();
+    let receipts = vec![prior, origin.clone(), latest.clone(), grant];
+    let verify = |items: &[Receipt], current| {
+        pair_chain::verify_validation(
+            &snapshot,
+            &f.round,
+            &f.round.source,
+            &validation,
+            items,
+            current,
+        )
+    };
+    verify(&receipts, true).unwrap();
+    let mut wrong_target = receipts.clone();
+    let changed = wrong_target
+        .iter_mut()
+        .find(|r| r.operation_id == grant_id)
+        .unwrap();
+    changed.canonical_targets = vec![f.round.review_phase.work.clone()];
+    let mut wrong_reference = validation.clone();
+    let crate::control::RepairValidationLineage::Retried { grants, .. } =
+        &mut wrong_reference.lineage
+    else {
+        unreachable!()
+    };
+    // Adjust only the DATA hash so the actual incompatible identity comparison
+    // is tested, not just the preceding whole-record equality check.
+    grants.insert(grant_id, canonical_digest(1, changed).unwrap());
+    assert!(
+        pair_chain::verify_validation(
+            &snapshot,
+            &f.round,
+            &f.round.source,
+            &wrong_reference,
+            &wrong_target,
+            true
+        )
+        .is_err()
+    );
+    for omitted in [origin.operation_id, grant_id, latest.operation_id] {
+        assert!(
+            verify(
+                &receipts
+                    .iter()
+                    .filter(|r| r.operation_id != omitted)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                true
+            )
+            .is_err()
+        );
+    }
+    let mut changed = receipts.clone();
+    changed
+        .iter_mut()
+        .find(|r| r.operation_id == origin.operation_id)
+        .unwrap()
+        .expected
+        .remove("source_advanced");
+    assert!(verify(&changed, true).is_err());
+    let mut later = receipts;
+    later.push(make(Uuid::new_v4(), 2, Some(grant_id), "completed"));
+    assert!(verify(&later, true).is_err());
+    verify(&later, false).unwrap(); // An authenticated historical prefix stays a fact.
+}
+
+#[path = "control_review_passed_admission_tests.rs"]
+mod passed_admission_tests;

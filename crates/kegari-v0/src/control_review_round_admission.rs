@@ -381,6 +381,37 @@ fn verify_source(
     receipts: &[Receipt],
     current: bool,
 ) -> Result<()> {
+    if let Some(passed) = &round.passed_validation {
+        passed.validate_for_round(round)?;
+        if passed.retained_receipts.len() > MAX_ROUND_RECEIPTS {
+            return Err(round_error(
+                "passed validation inventory exceeds protected bound",
+            ));
+        }
+        for (operation, digest) in &passed.retained_receipts {
+            let actual = exact_receipt(
+                receipts,
+                &ReviewReceiptReference {
+                    operation: *operation,
+                    receipt_digest: digest.clone(),
+                },
+            )?;
+            require_not_held(snapshot, actual)?;
+        }
+        let actual = exact_receipt(receipts, &passed.validation)?;
+        let run = closed_worker(actual, "completed")?;
+        if actual.runtime_id != round.runtime
+            || run.workspace != round.workspace
+            || run.account != round.account
+            || run.phase.phase != "child_local_validation"
+            || run.phase.work != round.review_phase.work
+            || run.phase.generation != round.review_phase.generation
+        {
+            return Err(round_error(
+                "passed validation belongs to another exact worker source",
+            ));
+        }
+    }
     // Original reviewed source remains authenticated historical provenance.
     // Only the exact latest repaired source can justify another implementation.
     if round.dispatch_source() != &round.source {
@@ -544,6 +575,7 @@ fn verify_candidate(
                 || round.ordinal != latest_marker.ordinal
                 || round.round_limit > latest_marker.round_limit
                 || round.source != latest_marker.source
+                || round.passed_validation != latest_marker.passed_validation
             {
                 return Err(round_error(
                     "paired repair changes its exact reviewed source/round",
@@ -577,6 +609,7 @@ fn verify_candidate(
             if round.round_id != latest_marker.round_id
                 || round.ordinal != latest_marker.ordinal
                 || round.source != latest_marker.source
+                || round.passed_validation != latest_marker.passed_validation
                 || round.round_limit > latest_marker.round_limit
             {
                 return Err(round_error(
@@ -648,6 +681,7 @@ fn verify_review_transition(
                 }
             };
             if next.round_id != prior.round_id
+                || next.passed_validation != prior.passed_validation
                 || next.ordinal != prior.ordinal
                 || next.source != prior.source
                 || next.round_limit > prior.round_limit

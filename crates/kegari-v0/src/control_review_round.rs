@@ -66,6 +66,41 @@ pub struct RepairValidationReference {
     pub(crate) outcome_proposal: uuid::Uuid,
     pub(crate) outcome_claim_digest: String,
     pub(crate) failure_inventory_digest: String,
+    /// Missing means the original direct SourceAdvanced shape. Omission keeps
+    /// its canonical serialized bytes and digest unchanged.
+    #[serde(default, skip_serializing_if = "RepairValidationLineage::is_direct")]
+    pub(crate) lineage: RepairValidationLineage,
+}
+
+/// A receipt-only prefix, never a retry/failed-check/source capability. The
+/// current producer also retains the actual CompletedGrantedValidation object.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RepairValidationLineage {
+    Direct {},
+    Retried {
+        origin: Box<ReviewReceiptReference>,
+        #[serde(with = "strict_phase")]
+        origin_phase: PhaseKey,
+        completed_retry_digest: String,
+        /// Actual provider target derived from the verified native WorkIdentity;
+        /// it is distinct from the opaque canonical PhaseKey work digest.
+        native_target: String,
+        /// Entire validation inventory at consumption, across grant namespaces.
+        inventory: std::collections::BTreeMap<uuid::Uuid, String>,
+        /// Whole actual publication receipts for every referenced grant.
+        grants: std::collections::BTreeMap<uuid::Uuid, String>,
+    },
+}
+impl Default for RepairValidationLineage {
+    fn default() -> Self {
+        Self::Direct {}
+    }
+}
+impl RepairValidationLineage {
+    pub(crate) fn is_direct(&self) -> bool {
+        matches!(self, Self::Direct {})
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,7 +154,53 @@ pub struct ReviewRoundReference {
     pub(crate) ordinal: u32,
     pub(crate) round_limit: u32,
     pub(crate) source: ReviewedSourceReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) passed_validation: Option<PassedValidationReference>,
     pub(crate) cause: ReviewRoundCause,
+}
+
+/// Exact passed-check history references, never a check or execution capability.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PassedValidationReference {
+    pub(crate) schema_version: u32,
+    pub(crate) source: ReviewedSourceReference,
+    pub(crate) validation: ReviewReceiptReference,
+    pub(crate) completed_validation_digest: String,
+    pub(crate) local_pass_digest: String,
+    pub(crate) retained_receipts: std::collections::BTreeMap<uuid::Uuid, String>,
+}
+impl PassedValidationReference {
+    pub(crate) fn validate_for_round(&self, round: &ReviewRoundReference) -> Result<()> {
+        self.source.validate(&round.review_phase)?;
+        self.validation.validate()?;
+        validate_digest(&self.completed_validation_digest)?;
+        validate_digest(&self.local_pass_digest)?;
+        if self.schema_version != 1
+            || self.source != round.source
+            || self.retained_receipts.is_empty()
+        {
+            return Err(invalid("passed validation changes exact reviewed source"));
+        }
+        for reference in [
+            &self.validation,
+            &self.source.implementation,
+            &self.source.seal,
+        ] {
+            if self.retained_receipts.get(&reference.operation) != Some(&reference.receipt_digest) {
+                return Err(invalid(
+                    "passed validation omits exact validation/source reference",
+                ));
+            }
+        }
+        for (id, digest) in &self.retained_receipts {
+            if id.is_nil() {
+                return Err(invalid("nil passed-validation receipt reference"));
+            }
+            validate_digest(digest)?;
+        }
+        Ok(())
+    }
 }
 
 fn invalid(message: &str) -> Error {
@@ -215,6 +296,18 @@ impl ReviewedSourceReference {
     }
 }
 impl RepairValidationReference {
+    pub(crate) fn source_admission(&self) -> &ReviewReceiptReference {
+        match &self.lineage {
+            RepairValidationLineage::Direct {} => &self.validation,
+            RepairValidationLineage::Retried { origin, .. } => origin,
+        }
+    }
+    pub(crate) fn source_phase(&self) -> &PhaseKey {
+        match &self.lineage {
+            RepairValidationLineage::Direct {} => &self.phase,
+            RepairValidationLineage::Retried { origin_phase, .. } => origin_phase,
+        }
+    }
     fn validate(
         &self,
         round: &ReviewRoundReference,
@@ -225,6 +318,47 @@ impl RepairValidationReference {
         validate_source_advanced_shape(&self.source_advanced)?;
         validate_digest(&self.outcome_claim_digest)?;
         validate_digest(&self.failure_inventory_digest)?;
+        match &self.lineage {
+            RepairValidationLineage::Direct {} => (),
+            RepairValidationLineage::Retried {
+                origin,
+                origin_phase,
+                completed_retry_digest,
+                native_target,
+                inventory,
+                grants,
+            } => {
+                origin.validate()?;
+                phase(origin_phase, "child_local_validation")?;
+                validate_digest(completed_retry_digest)?;
+                if origin.operation == self.validation.operation
+                    || origin_phase.work != self.phase.work
+                    || origin_phase.generation != self.phase.generation
+                    || self.phase.retry_grant.is_none()
+                    || !native_target.starts_with("linear:")
+                    || native_target.len() > 4096
+                    || inventory.is_empty()
+                    || grants.is_empty()
+                    || inventory.get(&origin.operation) != Some(&origin.receipt_digest)
+                    || inventory.get(&self.validation.operation)
+                        != Some(&self.validation.receipt_digest)
+                    || self
+                        .phase
+                        .retry_grant
+                        .is_none_or(|id| !grants.contains_key(&id))
+                {
+                    return Err(invalid(
+                        "retried validation loses original source or completed receipt",
+                    ));
+                }
+                for (operation, digest) in inventory.iter().chain(grants) {
+                    if operation.is_nil() {
+                        return Err(invalid("nil validation lineage receipt"));
+                    }
+                    validate_digest(digest)?;
+                }
+            }
+        }
         if self.outcome_proposal.is_nil()
             || self.phase.work != round.review_phase.work
             || self.phase.generation != round.review_phase.generation
@@ -304,8 +438,23 @@ impl ReviewRoundReference {
         )
     }
     pub(crate) fn validate(&self) -> Result<()> {
+        // Host-produced metadata must be readable by the same bounded parser;
+        // report the finite storage prerequisite before any admission is written.
+        if serde_json::to_vec(self)
+            .map_err(|_| invalid("review round serialization failed"))?
+            .len()
+            > MAX_ENCODED_BYTES
+        {
+            return Err(Error::new(
+                "review_round_history_limit",
+                "review round references exceed the protected encoded-record bound",
+            ));
+        }
         phase(&self.review_phase, "child_codex_review")?;
         self.source.validate(&self.review_phase)?;
+        if let Some(passed) = &self.passed_validation {
+            passed.validate_for_round(self)?;
+        }
         if self.schema_version != 1
             || self.runtime.is_nil()
             || self.workspace.is_nil()

@@ -1814,6 +1814,7 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
         unfinished: None,
         source_advanced: None,
         retried_unfinished: None,
+        validation_retry: None,
         review_retry: None,
         review_round: None,
         max_seconds: 60,

@@ -188,6 +188,7 @@ fn repair_cycle(
         failure_code,
         findings,
         None,
+        None,
     ))
 }
 async fn repair_cycle_inner(
@@ -196,10 +197,15 @@ async fn repair_cycle_inner(
     failure_code: Option<&str>,
     findings: bool,
     round_limit: Option<u32>,
+    validation_retry: Option<&str>,
 ) {
     let retry_again = failure_code.is_some();
     let (root, built, old_service, wire, owner) =
         super::super::tests::fixture_authorization_with_configuration(true, |config| {
+            if validation_retry.is_some() {
+                config.runtime.max_attempts_per_phase = 3;
+                config.runtime.retry_cap_ms = 1_000;
+            }
             if let Some(limit) = round_limit {
                 config.runtime.max_review_rounds = limit;
                 config.runtime.max_attempts_per_phase = 3;
@@ -370,6 +376,29 @@ async fn repair_cycle_inner(
     service
         .retire_delivery_phase(&validation_phase, json!({"assignment_prepared":true}))
         .unwrap();
+    if let Some(code) = validation_retry {
+        Box::pin(validation_retry_fixture::run(
+            validation_retry_fixture::ValidationFixture {
+                root: &root,
+                built: &built,
+                service: &service,
+                workspace: &workspace,
+                gate: &gate,
+                lease: &lease,
+                scope: scope(DeliveryPhase::LocalValidation),
+                assignment: &validation_assignment,
+                original_claim: claim.clone(),
+                binary: &binary,
+                tool: tool.clone(),
+                repository: &repository,
+                account: &account,
+                wire: &wire,
+            },
+            code,
+        ))
+        .await;
+        return;
+    }
     let validator = worker(WorkerInput {
         root: &root.join("validation"),
         source: &source,
@@ -799,6 +828,7 @@ async fn repair_cycle_inner(
             Some(proof.clone())
         },
         retried_unfinished: retried.clone(),
+        validation_retry: None,
         review_retry: None,
         review_round: None,
         source_advanced: None,
@@ -1140,9 +1170,36 @@ use review_retry_fixture::ReviewFixture;
 mod round_fixture;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exact_round_preparation_reaches_native_join_barrier_and_final_round_repair() {
-    Box::pin(repair_cycle_inner(false, false, None, false, Some(1))).await;
+    Box::pin(repair_cycle_inner(false, false, None, false, Some(1), None)).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recurring_findings_reuse_implementation_budget_after_actual_changed_source() {
-    Box::pin(repair_cycle_inner(false, false, None, false, Some(2))).await;
+    Box::pin(repair_cycle_inner(false, false, None, false, Some(2), None)).await;
+}
+
+#[path = "runtime_delivery_validation_retry_fixture.rs"]
+mod validation_retry_fixture;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exact_validation_retry_uses_native_grant_and_new_checks_without_join_fiction() {
+    Box::pin(repair_cycle_inner(
+        false,
+        false,
+        None,
+        false,
+        None,
+        Some("serverOverloaded"),
+    ))
+    .await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exact_validation_retry_refuses_automatic_auth_failure_within_granted_budget() {
+    Box::pin(repair_cycle_inner(
+        false,
+        false,
+        None,
+        false,
+        None,
+        Some("unauthorized"),
+    ))
+    .await;
 }

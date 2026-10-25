@@ -448,24 +448,7 @@ impl RuntimeCoordinator {
                 ));
             }
         }
-        let cause = match (
-            &request.unfinished,
-            &request.source_advanced,
-            &request.retried_unfinished,
-            &request.review_retry,
-        ) {
-            (Some(proof), None, None, None) => Some(WorkerReadmission::Unfinished(proof)),
-            (None, Some(proof), None, None) => Some(WorkerReadmission::SourceAdvanced(proof)),
-            (None, None, Some(proof), None) => Some(WorkerReadmission::Retried(proof)),
-            (None, None, None, Some(proof)) => Some(WorkerReadmission::ReviewRetry(proof)),
-            (None, None, None, None) => None,
-            _ => {
-                return Err(Error::new(
-                    "worker_binding",
-                    "conflicting preparation causes",
-                ));
-            }
-        };
+        let cause = request_readmission(request)?;
         self.plan_attempt_context(
             &request.phase,
             workspace,
@@ -500,6 +483,19 @@ impl RuntimeCoordinator {
         proof: &crate::delivery::ReviewRetryWork,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
         self.next_attempt_for_readmission(WorkerReadmission::ReviewRetry(proof))
+    }
+    pub(crate) fn next_attempt_for_validation_retry(
+        &self,
+        request: &crate::runtime_workers::LaunchRequest,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        request.validate_binding()?;
+        let proof = request.validation_retry.as_deref().ok_or_else(|| {
+            Error::new(
+                "worker_binding",
+                "validation retry scheduling requires its actual opaque cause",
+            )
+        })?;
+        self.next_attempt_for_readmission(WorkerReadmission::ValidationRetry(proof))
     }
     fn next_attempt_for_readmission(
         &self,
@@ -667,6 +663,21 @@ impl RuntimeCoordinator {
             ));
         }
         let receipts = self.control.operations()?;
+        if phase.phase == "child_local_validation" && readmission.is_none() {
+            let repeated = receipts
+                .iter()
+                .try_fold(false, |seen, receipt| -> Result<bool> {
+                    Ok(seen
+                        || RunReference::from_receipt(receipt)?
+                            .is_some_and(|run| run.phase == *phase))
+                })?;
+            if phase.retry_grant.is_some() || repeated {
+                return Err(Error::new(
+                    "validation_retry_required",
+                    "repeated validation requires its exact source advancement or failed-session retry capability",
+                ));
+            }
+        }
         let mut limits = config.runtime.clone();
         self.require_provider_session_clear(account, &phase.work)?;
         if let Some(error) = self
@@ -784,6 +795,10 @@ impl RuntimeCoordinator {
                 WorkerReadmission::ReviewRetry(proof) => {
                     proof.verify_current(&receipts, &current_grants)?
                 }
+                WorkerReadmission::ValidationRetry(proof) => {
+                    proof.verify_current(&receipts, &current_grants)?;
+                    proof.verify_joined(&|id| self.retained_completion(id))?;
+                }
                 WorkerReadmission::Unfinished(proof) => {
                     proof.verify_current(&receipts, &current_grants)?
                 }
@@ -850,6 +865,7 @@ impl RuntimeCoordinator {
                 })?;
             match proof {
                 WorkerReadmission::ReviewRetry(proof) => proof.verify_completion(&completed)?,
+                WorkerReadmission::ValidationRetry(proof) => proof.verify_completion(&completed)?,
                 _ => require_joined_readmission(&completed)?,
             }
             if let Some(round) = round {
@@ -876,6 +892,16 @@ impl RuntimeCoordinator {
                 }
                 WorkerReadmission::ReviewRetry(proof) => {
                     crate::runtime_schedule::plan_review_retry(
+                        &limits,
+                        phase,
+                        workspace,
+                        &receipts,
+                        proof,
+                        Utc::now(),
+                    )
+                }
+                WorkerReadmission::ValidationRetry(proof) => {
+                    crate::runtime_schedule::plan_validation_retry(
                         &limits,
                         phase,
                         workspace,
@@ -1589,6 +1615,21 @@ impl RuntimeCoordinator {
             None,
         )
     }
+    pub(crate) fn admit_validation_retry_worker(
+        &self,
+        lease: &Lease,
+        input: crate::control::RunAdmission,
+        contract: &WorkerContract,
+        proof: &crate::delivery::ValidationRetryWork,
+    ) -> Result<Permit> {
+        self.admit_worker_inner(
+            lease,
+            input,
+            contract,
+            Some(WorkerReadmission::ValidationRetry(proof)),
+            None,
+        )
+    }
     fn admit_worker_inner(
         &self,
         lease: &Lease,
@@ -1665,6 +1706,12 @@ impl RuntimeCoordinator {
             preparation,
         } = context;
         let WorkerPlanning { readmission, round } = planning;
+        if round.is_some() && matches!(readmission, Some(WorkerReadmission::ValidationRetry(_))) {
+            return Err(Error::new(
+                "worker_binding",
+                "validation retry cannot allocate or replace a review round",
+            ));
+        }
         if round.is_some() && (session_resume.is_some() || preparation.is_none()) {
             return Err(Error::new(
                 "worker_binding",
@@ -1925,6 +1972,7 @@ impl RuntimeCoordinator {
                 }
                 Some(WorkerReadmission::Retried(_))
                 | Some(WorkerReadmission::ReviewRetry(_))
+                | Some(WorkerReadmission::ValidationRetry(_))
                 | None => self.control.admit_run_observed(lease, input, final_gate)?,
             }
         };
@@ -3039,12 +3087,14 @@ fn request_readmission(
         &request.source_advanced,
         &request.retried_unfinished,
         &request.review_retry,
+        &request.validation_retry,
     ) {
-        (Some(p), None, None, None) => Ok(Some(WorkerReadmission::Unfinished(p))),
-        (None, Some(p), None, None) => Ok(Some(WorkerReadmission::SourceAdvanced(p))),
-        (None, None, Some(p), None) => Ok(Some(WorkerReadmission::Retried(p))),
-        (None, None, None, Some(p)) => Ok(Some(WorkerReadmission::ReviewRetry(p))),
-        (None, None, None, None) => Ok(None),
+        (Some(p), None, None, None, None) => Ok(Some(WorkerReadmission::Unfinished(p))),
+        (None, Some(p), None, None, None) => Ok(Some(WorkerReadmission::SourceAdvanced(p))),
+        (None, None, Some(p), None, None) => Ok(Some(WorkerReadmission::Retried(p))),
+        (None, None, None, Some(p), None) => Ok(Some(WorkerReadmission::ReviewRetry(p))),
+        (None, None, None, None, Some(p)) => Ok(Some(WorkerReadmission::ValidationRetry(p))),
+        (None, None, None, None, None) => Ok(None),
         _ => Err(Error::new(
             "worker_binding",
             "conflicting round readmission causes",
@@ -3063,6 +3113,10 @@ fn round_run_cause(
         Some(WorkerReadmission::SourceAdvanced(p)) => Ok(ReviewRoundRunCause::AfterRepair(
             source_advanced_reference(p),
         )),
+        Some(WorkerReadmission::ValidationRetry(_)) => Err(Error::new(
+            "worker_binding",
+            "validation retry preserves source lineage without allocating a review round",
+        )),
         Some(WorkerReadmission::Retried(_)) => Err(Error::new(
             "worker_binding",
             "new implementation grant needs its own round lineage",
@@ -3076,6 +3130,7 @@ enum WorkerReadmission<'a> {
     SourceAdvanced(&'a crate::delivery::VerifiedSourceAdvanced),
     Retried(&'a crate::delivery::RetriedUnfinishedWork),
     ReviewRetry(&'a crate::delivery::ReviewRetryWork),
+    ValidationRetry(&'a crate::delivery::ValidationRetryWork),
 }
 impl<'a> WorkerReadmission<'a> {
     fn authority(self) -> &'a crate::reconcile::FreshGate {
@@ -3084,6 +3139,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::SourceAdvanced(p) => p.authority(),
             Self::Retried(p) => p.authority(),
             Self::ReviewRetry(p) => p.authority(),
+            Self::ValidationRetry(p) => p.authority(),
         }
     }
     fn phase(self) -> &'a crate::scheduler::PhaseKey {
@@ -3092,6 +3148,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::SourceAdvanced(p) => p.phase(),
             Self::Retried(p) => p.phase(),
             Self::ReviewRetry(p) => p.phase(),
+            Self::ValidationRetry(p) => p.phase(),
         }
     }
     fn predecessor(self) -> Uuid {
@@ -3100,6 +3157,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::SourceAdvanced(p) => p.predecessor(),
             Self::Retried(p) => p.original().predecessor(),
             Self::ReviewRetry(p) => p.predecessor(),
+            Self::ValidationRetry(p) => p.predecessor(),
         }
     }
     fn cause_operation(self) -> Uuid {
@@ -3108,6 +3166,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::SourceAdvanced(p) => p.source_operation(),
             Self::Retried(p) => p.original().failure_operation(),
             Self::ReviewRetry(p) => p.predecessor(),
+            Self::ValidationRetry(p) => p.predecessor(),
         }
     }
     fn cause_receipt_digest(self) -> &'a str {
@@ -3116,6 +3175,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::SourceAdvanced(p) => p.source_receipt_digest(),
             Self::Retried(p) => p.original().failure_receipt_digest(),
             Self::ReviewRetry(p) => p.predecessor_receipt_digest(),
+            Self::ValidationRetry(p) => p.predecessor_receipt_digest(),
         }
     }
     fn completed_operation(self) -> Uuid {
@@ -3124,6 +3184,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::SourceAdvanced(p) => p.source_operation(),
             Self::Retried(p) => p.original().predecessor(),
             Self::ReviewRetry(p) => p.predecessor(),
+            Self::ValidationRetry(p) => p.predecessor(),
         }
     }
     fn source(self) -> &'a crate::delivery::DeliverySource {
@@ -3132,6 +3193,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::SourceAdvanced(p) => p.source(),
             Self::Retried(p) => p.source(),
             Self::ReviewRetry(p) => p.source(),
+            Self::ValidationRetry(p) => p.source(),
         }
     }
     fn verify_contract(self, contract: &WorkerContract) -> Result<()> {
@@ -3140,6 +3202,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::SourceAdvanced(p) => p.verify_contract(contract),
             Self::Retried(p) => p.verify_contract(contract),
             Self::ReviewRetry(p) => p.verify_contract(contract),
+            Self::ValidationRetry(p) => p.verify_contract(contract),
         }
     }
     fn verify_inventory(self, receipts: &[crate::control::Receipt]) -> Result<()> {
@@ -3148,6 +3211,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::SourceAdvanced(proof) => proof.verify_predecessor_inventory(receipts),
             Self::Retried(proof) => proof.original().verify_failure_inventory(receipts),
             Self::ReviewRetry(proof) => proof.verify_inventory(receipts),
+            Self::ValidationRetry(proof) => proof.verify_inventory(receipts),
         }
     }
 }

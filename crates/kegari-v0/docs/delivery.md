@@ -367,8 +367,46 @@ distinguishes implementation from executed checks. Component fixtures use real
 in-process RPC notifications, Control receipts and owned Git objects, with
 explicitly synthetic upstream provider/check observations where stated. They do
 not populate a native joined-run cache or establish native confinement/live-model
-qualification. Paired transient-session recovery and clean retried-validation
-handoff require their separate typed producers and consumers.
+qualification. Paired transient-session recovery remains separate work. The validation-retry
+producer and clean handoff are described below.
+
+### Exact-source validation retries
+
+An explicit native retry grant can give a failed child validation one new bounded
+phase budget. The retry retains the actual sealed source, assignment, original
+failed run and complete grant/receipt history. First admission uses the new grant;
+later automatic attempts require a supported transient terminal failure and the
+normal exponential or Retry-After delay. Authentication, policy/intervention,
+unknown effects and changed source remain blockers. Current configuration and
+granted/captured attempt and turn caps are checked again at preparation and final
+model admission. Validation consumes no review round.
+
+A completed validator must produce genuine results for every configured local
+check. Retrying cannot inherit an earlier pass or turn a missing check into a
+failed-check capability. Actual failed checks on a paired repaired source keep
+the exact original Findings/repair round through separate direct or retried
+validation ancestry. Real successful checks may supply the next review's sealed
+passed-validation proof, binding the exact current source, validation receipt,
+closed review preparation and immutable model request. Only that observed
+successor can transfer current validation evidence into retained historical facts.
+A later explicit review grant uses its own narrow failed-successor transition;
+ordinary stages continue to require current evidence.
+
+Validation histories share the existing65,536-record protected inventory resource
+bound, with distinct configured admission budgets and16KiB serialized round limit.
+Cycle, duplicate, ambiguous-grant and immutable-reference conflicts stay refusals.
+Long uniquely owned retry histories are destroyed iteratively; shared tails remain
+owned until their last holder releases them. This is resource safety, not a budget
+extension or permission to admit a particular number of sessions.
+
+The [validation report](../validation/LOCAL-VALIDATION-RETRY.md) separates focused
+component/data checks from full-suite and native/live evidence. The next-source
+path after a granted validation pass, later review Findings and repaired source
+still needs its typed source-advancement extension; it must retain the actual
+validation grant and remaining budget instead of selecting old ungranted history.
+Paired provider-session recovery and cold/corrected reconstruction remain separate
+work. Actual joined native/check qualification and human calibration are not
+established by in-process RPC or synthetic terminal metadata.
 
 ### Chained retained integrations
 

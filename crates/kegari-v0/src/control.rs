@@ -2550,8 +2550,9 @@ impl ControlHost {
 #[path = "control_review_round.rs"]
 mod review_round;
 pub(crate) use review_round::{
-    FindingsReference, RepairValidationReference, ReviewReceiptReference, ReviewRoundCause,
-    ReviewRoundReference, ReviewedSourceReference, TransientFailureCode,
+    FindingsReference, PassedValidationReference, RepairValidationLineage,
+    RepairValidationReference, ReviewReceiptReference, ReviewRoundCause, ReviewRoundReference,
+    ReviewedSourceReference, TransientFailureCode,
 };
 
 // Atomic round admission uses the same Control lock and durable receipt writer.

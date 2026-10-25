@@ -397,6 +397,7 @@ pub(super) async fn run(
         delivery: Some(assignment.clone()),
         unfinished: None,
         retried_unfinished: None,
+        validation_retry: None,
         review_retry: None,
         review_round: None,
         source_advanced: Some(advanced.clone()),

@@ -45,6 +45,7 @@ fn base(granted: bool) -> ReviewRoundReference {
             tree: "b".repeat(40),
         },
         cause: ReviewRoundCause::Initial {},
+        passed_validation: None,
     };
     value.round_id = value.expected_round_id().unwrap();
     value
@@ -595,6 +596,7 @@ fn repair_continuation(granted: bool) -> ReviewRoundReference {
     validation_phase.phase = "child_local_validation".into();
     validation_phase.retry_grant = None;
     let validation = RepairValidationReference {
+        lineage: crate::control::RepairValidationLineage::Direct {},
         validation: reference(40),
         phase: validation_phase,
         source_advanced: SourceAdvancedReference {
@@ -685,4 +687,88 @@ fn continued_repair_rejects_changed_round_grant_namespace_and_validation_source(
         }
         assert!(value.validate().is_err());
     }
+}
+
+#[test]
+fn direct_validation_legacy_encoding_stays_canonical_and_retried_origin_is_distinct() {
+    let direct = repair_continuation(false);
+    let bytes = serde_json::to_vec(&direct).unwrap();
+    let encoded: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(encoded.pointer("/cause/validation/lineage").is_none());
+    let restored: ReviewRoundReference = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(serde_json::to_vec(&restored).unwrap(), bytes);
+    let mut retried = direct;
+    let ReviewRoundCause::RepairContinuation { validation, .. } = &mut retried.cause else {
+        unreachable!()
+    };
+    let origin = validation.validation.clone();
+    let origin_phase = validation.phase.clone();
+    validation.validation = reference(80);
+    validation.phase.retry_grant = Some(Uuid::from_u128(81));
+    validation.lineage = RepairValidationLineage::Retried {
+        origin: Box::new(origin.clone()),
+        origin_phase,
+        completed_retry_digest: digest("opaque completed validation reference only"),
+        native_target: "linear:https://linear.invalid/graphql:native-workspace:native-issue".into(),
+        inventory: [
+            (origin.operation, origin.receipt_digest.clone()),
+            (
+                validation.validation.operation,
+                validation.validation.receipt_digest.clone(),
+            ),
+        ]
+        .into(),
+        grants: [(
+            Uuid::from_u128(81),
+            digest("actual grant publication reference"),
+        )]
+        .into(),
+    };
+    assert_eq!(validation.source_admission(), &origin);
+    assert_ne!(validation.source_admission(), &validation.validation);
+    retried.validate().unwrap();
+    decode(&retried, &preparation(&retried));
+    decode(&retried, &run(&retried));
+    for mutation in 0..4 {
+        let mut changed = retried.clone();
+        let ReviewRoundCause::RepairContinuation { validation, .. } = &mut changed.cause else {
+            unreachable!()
+        };
+        let RepairValidationLineage::Retried {
+            origin,
+            inventory,
+            grants,
+            origin_phase,
+            ..
+        } = &mut validation.lineage
+        else {
+            unreachable!()
+        };
+        match mutation {
+            0 => **origin = validation.validation.clone(),
+            1 => {
+                inventory.remove(&origin.operation);
+            }
+            2 => grants.clear(),
+            _ => origin_phase.generation = digest("other generation"),
+        }
+        assert!(changed.validate().is_err());
+    }
+}
+
+#[test]
+fn direct_validation_marker_rejects_unknown_authority_fields() {
+    let accepted: RepairValidationLineage =
+        serde_json::from_value(serde_json::json!({"kind":"direct"})).unwrap();
+    assert!(accepted.is_direct());
+    assert_eq!(
+        serde_json::to_value(accepted).unwrap(),
+        serde_json::json!({"kind":"direct"})
+    );
+    assert!(
+        serde_json::from_value::<RepairValidationLineage>(
+            serde_json::json!({"kind":"direct","authority":"invented"})
+        )
+        .is_err()
+    );
 }

@@ -256,6 +256,7 @@ fn plan_review_retry_inner(
         PlanCause {
             continuation: None,
             review_retry: Some(review),
+            validation_retry: None,
             round,
         },
         now,
@@ -280,6 +281,79 @@ fn plan_review_retry_inner(
         return Err(Error::new(
             "retry_wait",
             "failed review waits for bounded failure spacing",
+        )
+        .detail(json!({"not_before":next.not_before,"attempt":next.attempt})));
+    }
+    Ok(next)
+}
+/// Exact-source validation retries use a typed cause; this does not broaden
+/// generic failed-session policy or allocate review/fix rounds.
+pub(crate) fn plan_validation_retry(
+    runtime: &RuntimeConfig,
+    phase: &PhaseKey,
+    workspace: Uuid,
+    receipts: &[Receipt],
+    validation: &crate::delivery::ValidationRetryWork,
+    now: DateTime<Utc>,
+) -> Result<RunSchedule> {
+    validation.verify_inventory(receipts)?;
+    validation.verify_retry_cause()?;
+    let failed = receipts
+        .iter()
+        .find(|r| r.operation_id == validation.predecessor())
+        .ok_or_else(|| Error::new("reconciliation_required", "failed validation disappeared"))?;
+    if phase != validation.phase()
+        || workspace != validation.authority().workspace_id()
+        || runtime.id != failed.runtime_id
+    {
+        return Err(Error::new(
+            "worker_binding",
+            "validation schedule changes its verified scope",
+        ));
+    }
+    let mut limits = runtime.clone();
+    limits.max_attempts_per_phase = limits
+        .max_attempts_per_phase
+        .min(validation.grant().new_budget().max_attempts);
+    limits.max_turns = limits
+        .max_turns
+        .min(validation.grant().new_budget().max_turns);
+    limits.max_review_rounds = limits
+        .max_review_rounds
+        .min(validation.grant().new_budget().max_review_rounds);
+    let mut next = plan_inner(
+        &limits,
+        phase,
+        workspace,
+        receipts,
+        PlanCause {
+            continuation: None,
+            review_retry: None,
+            validation_retry: Some(validation),
+            round: None,
+        },
+        now,
+    )?;
+    if next.attempt != validation.next_attempt()? {
+        return Err(Error::new(
+            "stale_result",
+            "validation retry does not follow its exact predecessor",
+        ));
+    }
+    next.not_before = next.not_before.max(retry_at(
+        failed.updated_at,
+        next.attempt.saturating_sub(1).max(1),
+        runtime.retry_cap_ms,
+        failed
+            .observed_result
+            .as_ref()
+            .and_then(|v| v.pointer("/observation/error/details/retry_after_ms"))
+            .and_then(Value::as_u64),
+    )?);
+    if next.not_before > now {
+        return Err(Error::new(
+            "retry_wait",
+            "failed validation waits for bounded failure spacing",
         )
         .detail(json!({"not_before":next.not_before,"attempt":next.attempt})));
     }
@@ -456,6 +530,7 @@ pub(crate) fn plan_review_round(input: RoundScheduleInput<'_>) -> Result<RunSche
         PlanCause {
             continuation,
             review_retry: None,
+            validation_retry: None,
             round: Some(proof),
         },
         now,
@@ -466,6 +541,7 @@ pub(crate) fn plan_review_round(input: RoundScheduleInput<'_>) -> Result<RunSche
 struct PlanCause<'a> {
     continuation: Option<PlanTrigger<'a>>,
     review_retry: Option<&'a crate::delivery::ReviewRetryWork>,
+    validation_retry: Option<&'a crate::delivery::ValidationRetryWork>,
     round: Option<&'a crate::delivery::VerifiedReviewRoundPlan>,
 }
 
@@ -524,6 +600,7 @@ fn plan_inner(
     let PlanCause {
         continuation,
         review_retry,
+        validation_retry,
         round,
     } = cause;
     crate::evidence::validate_digest(&phase.generation)?;
@@ -796,6 +873,7 @@ fn plan_inner(
         error.code.as_str(),
         "process_exit" | "provider_transport" | "timeout" | "stream_timeout" | "stall_timeout"
     ) && !((review_retry.is_some()
+        || validation_retry.is_some()
         || round.is_some_and(|proof| {
             matches!(
                 proof.reference().cause,

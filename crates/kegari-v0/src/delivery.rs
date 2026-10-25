@@ -4660,6 +4660,13 @@ mod objects;
 mod continuation;
 pub use continuation::*;
 
+#[path = "delivery_validation_retry.rs"]
+mod validation_retry;
+pub(crate) use validation_retry::{
+    CompletedGrantedValidation, ConsumedValidationSuccessor, VerifiedPassedValidation,
+};
+pub use validation_retry::{ValidationRetryOrigin, ValidationRetryRequest, ValidationRetryWork};
+
 #[path = "delivery_review_retry.rs"]
 mod review_retry;
 #[cfg(test)]
@@ -4670,4 +4677,7 @@ pub use review_retry::{ReviewRetryRequest, ReviewRetryWork};
 #[path = "delivery_review_round.rs"]
 mod review_round;
 pub use review_round::VerifiedReviewRoundPlan;
-pub(crate) use review_round::{CompletedReviewLineage, CompletedReviewRound, ReviewRoundSource};
+pub(crate) use review_round::{
+    CompletedReviewLineage, CompletedReviewRound, PassedValidationSuccessor, ReviewRoundSource,
+    verify_validation_successor_admission,
+};

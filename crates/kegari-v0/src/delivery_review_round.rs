@@ -18,6 +18,13 @@ use crate::{
     worker_run::{RunCompletion, RunOutcome},
 };
 
+#[path = "delivery_review_validation.rs"]
+mod validation_lineage;
+use validation_lineage::ValidationEvidence;
+#[path = "delivery_review_passed.rs"]
+mod passed_lineage;
+pub(crate) use passed_lineage::{PassedValidationSuccessor, verify_validation_successor_admission};
+
 const MAX_RECEIPTS: usize = 65_536;
 
 /// Inputs already obtained through the real child/source pipeline. The source
@@ -29,6 +36,7 @@ pub(crate) struct ReviewRoundSource<'a> {
     pub source: &'a SealedChildSource,
     pub completion: Arc<RunCompletion>,
     pub assignment: &'a ChildReviewAssignment,
+    pub validated_retry: Option<Arc<VerifiedPassedValidation>>,
 }
 #[derive(Clone)]
 struct SourceEvidence {
@@ -55,7 +63,7 @@ enum RoundBasis {
     RepairContinuation {
         previous: Arc<VerifiedReviewRoundPlan>,
         unfinished: Arc<UnfinishedChildWork>,
-        validation_source: Arc<VerifiedSourceAdvanced>,
+        validation_source: ValidationEvidence,
         validation_outcome: Box<VerifiedAuthorizedOutcome>,
         validation_completion: Arc<RunCompletion>,
     },
@@ -78,6 +86,10 @@ pub struct VerifiedReviewRoundPlan {
     source_inventory_digest: String,
     retained: BTreeMap<Uuid, String>,
     grant: Option<VerifiedRetryGrant>,
+    // Retained native identities are checked without reusing an old current
+    // validation inventory after its exact paired successor has been admitted.
+    validation_grants: BTreeMap<Uuid, VerifiedRetryGrant>,
+    passed_validation: Option<Arc<VerifiedPassedValidation>>,
     digest: String,
 }
 impl VerifiedReviewRoundPlan {
@@ -123,6 +135,7 @@ impl VerifiedReviewRoundPlan {
         grants: &[VerifiedRetryGrant],
     ) -> Result<()> {
         self.reference.validate()?;
+        self.verify_passed_current(receipts, grants)?;
         if inventory(receipts, &self.reference)? != self.inventory_digest {
             return Err(blocked("review/source admission inventory changed"));
         }
@@ -188,11 +201,7 @@ impl VerifiedReviewRoundPlan {
                     actual_receipt(receipts, self.source.reference.implementation.operation)?;
                 previous.verify_completed_repair(receipts, grants, repair)?;
                 unfinished.verify_current(receipts, grants)?;
-                validation_source.verify_completed_inventory(
-                    receipts,
-                    grants,
-                    validation_completion.operation_id,
-                )?;
+                validation_source.verify_current(receipts, grants, validation_completion)?;
                 let validation = actual_receipt(receipts, validation_completion.operation_id)?;
                 require_recorded_session(validation, validation_completion)?;
                 let ReviewRoundCause::RepairContinuation {
@@ -217,7 +226,12 @@ impl VerifiedReviewRoundPlan {
                     || reference.outcome_claim_digest != validation_outcome.digest()
                     || reference.failure_inventory_digest
                         != unfinished.failure_phase_inventory_digest()
-                    || crate::control::SourceAdvancedReference::from_receipt(validation)?.as_ref()
+                    || validation_source.reference_lineage(receipts, grants)? != reference.lineage
+                    || crate::control::SourceAdvancedReference::from_receipt(actual_receipt(
+                        receipts,
+                        reference.source_admission().operation,
+                    )?)?
+                    .as_ref()
                         != Some(&reference.source_advanced)
                 {
                     return Err(blocked(
@@ -253,9 +267,23 @@ impl VerifiedReviewRoundPlan {
         grants: &[VerifiedRetryGrant],
     ) -> Result<()> {
         require_source_receipts(&self.source, receipts)?;
+        if let Some(passed) = &self.passed_validation {
+            passed.verify_retained(receipts, grants)?;
+        }
         for (id, digest) in &self.retained {
             if canonical_digest(1, actual_receipt(receipts, *id)?)? != *digest {
                 return Err(blocked("retained round ancestry changed or disappeared"));
+            }
+        }
+        for grant in self.validation_grants.values() {
+            crate::runtime_workflow::require_current_grant(grant, grants)?;
+            if grants
+                .iter()
+                .filter(|current| current.phase() == grant.phase())
+                .count()
+                != 1
+            {
+                return Err(blocked("retained validation grant namespace is ambiguous"));
             }
         }
         require_current_namespace(
@@ -473,6 +501,9 @@ impl VerifiedReviewRoundPlan {
                 return Err(history_limit());
             }
             require_joined(&plan.source.completion, retained)?;
+            if let Some(passed) = &plan.passed_validation {
+                passed.verify_joined(retained)?;
+            }
             match &plan.basis {
                 RoundBasis::Initial => (),
                 RoundBasis::ExplicitGrant(proof) => {
@@ -497,7 +528,7 @@ impl VerifiedReviewRoundPlan {
                     ..
                 } => {
                     require_joined(validation_completion, retained)?;
-                    require_joined(validation_source.previous_completion(), retained)?;
+                    validation_source.verify_joined(retained)?;
                     pending.push(previous);
                 }
                 RoundBasis::AfterRepair { paired, .. } => pending.push(paired),
@@ -522,6 +553,19 @@ pub(crate) struct CompletedReviewRound {
     digest: String,
 }
 impl CompletedReviewRound {
+    pub(crate) fn retained_receipt_references(&self) -> Result<BTreeMap<Uuid, String>> {
+        let mut refs = self.plan.retained.clone();
+        for (id, digest) in [
+            (self.receipt.operation_id, self.receipt_digest.clone()),
+            (
+                crate::control::preparation_operation(self.receipt.operation_id)?,
+                self.preparation_digest.clone(),
+            ),
+        ] {
+            retain_exact(&mut refs, id, digest)?;
+        }
+        Ok(refs)
+    }
     pub(crate) fn phase(&self) -> &PhaseKey {
         &self.plan.reference.review_phase
     }
@@ -602,6 +646,14 @@ impl CompletedReviewRound {
 }
 
 impl DeliveryCoordinator {
+    /// Referenced facts from the actual claim, owned source and current scoped
+    /// Git observation. This return value itself is not a source capability.
+    pub(crate) async fn reviewed_repair_source_reference(
+        &self,
+        input: &RepairSource<'_>,
+    ) -> Result<ReviewedSourceReference> {
+        Ok(self.repair_round_source(input).await?.reference.clone())
+    }
     pub(crate) async fn initial_review_round(
         &self,
         input: ReviewRoundSource<'_>,
@@ -615,13 +667,24 @@ impl DeliveryCoordinator {
             phase: "child_codex_review".into(),
             retry_grant: None,
         };
-        let reference = initial_reference(
+        let mut reference = initial_reference(
             input.admission,
             &source,
             phase,
             current_round_limit(config, &input.admission.gate)?,
         )?;
-        self.finish_round_plan(reference, source, assignment, RoundBasis::Initial, grants)
+        reference.passed_validation = input
+            .validated_retry
+            .as_ref()
+            .map(|p| p.reference().clone());
+        self.finish_round_plan(
+            reference,
+            source,
+            assignment,
+            input.validated_retry.clone(),
+            RoundBasis::Initial,
+            grants,
+        )
     }
     pub(crate) async fn granted_review_round(
         &self,
@@ -654,11 +717,17 @@ impl DeliveryCoordinator {
         }
         let limit = current_round_limit(config, &input.admission.gate)?
             .min(proof.grant().new_budget().max_review_rounds);
-        let reference = initial_reference(input.admission, &source, proof.phase().clone(), limit)?;
+        let mut reference =
+            initial_reference(input.admission, &source, proof.phase().clone(), limit)?;
+        reference.passed_validation = input
+            .validated_retry
+            .as_ref()
+            .map(|p| p.reference().clone());
         self.finish_round_plan(
             reference,
             source,
             assignment,
+            input.validated_retry.clone(),
             RoundBasis::ExplicitGrant(proof),
             grants,
         )
@@ -695,6 +764,7 @@ impl DeliveryCoordinator {
             reference,
             previous.source.clone(),
             previous.assignment.clone(),
+            previous.passed_validation.clone(),
             RoundBasis::Transient {
                 previous,
                 failed,
@@ -834,6 +904,7 @@ impl DeliveryCoordinator {
             reference,
             source,
             assignment,
+            findings.plan.passed_validation.clone(),
             RoundBasis::PairedRepair {
                 findings,
                 unfinished,
@@ -892,6 +963,7 @@ impl DeliveryCoordinator {
                 validation: receipt_reference(validation)?,
                 phase: validation_run.phase,
                 source_advanced: advanced,
+                lineage: crate::control::RepairValidationLineage::Direct {},
                 outcome_proposal: validation_outcome.outcome().proposal_id,
                 outcome_claim_digest: validation_outcome.digest().into(),
                 failure_inventory_digest: unfinished.failure_phase_inventory_digest().into(),
@@ -902,10 +974,11 @@ impl DeliveryCoordinator {
             reference,
             source,
             assignment,
+            previous.passed_validation.clone(),
             RoundBasis::RepairContinuation {
                 previous,
                 unfinished: unfinished.clone(),
-                validation_source,
+                validation_source: ValidationEvidence::Direct(validation_source),
                 validation_outcome,
                 validation_completion,
             },
@@ -1008,6 +1081,10 @@ impl DeliveryCoordinator {
             .round_limit
             .min(current_round_limit(config, &input.admission.gate)?);
         reference.source = source.reference.clone();
+        reference.passed_validation = input
+            .validated_retry
+            .as_ref()
+            .map(|p| p.reference().clone());
         reference.cause = ReviewRoundCause::AfterRepair {
             findings: findings.clone(),
             repair: receipt_reference(&repair)?,
@@ -1018,6 +1095,7 @@ impl DeliveryCoordinator {
             reference,
             source,
             assignment,
+            input.validated_retry.clone(),
             RoundBasis::AfterRepair {
                 paired,
                 repair,
@@ -1134,6 +1212,7 @@ impl DeliveryCoordinator {
         reference: ReviewRoundReference,
         source: Arc<SourceEvidence>,
         assignment: DeliveryWorkerAssignment,
+        passed_validation: Option<Arc<VerifiedPassedValidation>>,
         basis: RoundBasis,
         grants: &[VerifiedRetryGrant],
     ) -> Result<VerifiedReviewRoundPlan> {
@@ -1147,6 +1226,26 @@ impl DeliveryCoordinator {
         let receipts = self.host.operations()?;
         let inventory_digest = inventory(&receipts, &reference)?;
         let source_inventory_digest = implementation_inventory(&receipts, &reference)?;
+        let mut validation_grants = match &basis {
+            RoundBasis::Initial | RoundBasis::ExplicitGrant(_) => BTreeMap::new(),
+            RoundBasis::Transient { previous, .. }
+            | RoundBasis::RepairContinuation { previous, .. } => previous.validation_grants.clone(),
+            RoundBasis::PairedRepair { findings, .. } => findings.plan.validation_grants.clone(),
+            RoundBasis::AfterRepair { paired, .. } => paired.validation_grants.clone(),
+        };
+        if let RoundBasis::RepairContinuation {
+            validation_source, ..
+        } = &basis
+        {
+            for grant in validation_source.retained_grants(&receipts, grants)? {
+                if let Some(old) =
+                    validation_grants.insert(grant.record().operation_id, grant.clone())
+                    && old.digest() != grant.digest()
+                {
+                    return Err(blocked("validation native grant identity changed"));
+                }
+            }
+        }
         let (mut retained, grant) = match &basis {
             RoundBasis::Initial => (BTreeMap::new(), None),
             RoundBasis::ExplicitGrant(proof) => (BTreeMap::new(), Some(proof.grant().clone())),
@@ -1203,6 +1302,37 @@ impl DeliveryCoordinator {
                 (retained, paired.grant.clone())
             }
         };
+        if let Some(passed) = &passed_validation {
+            if reference.passed_validation.as_ref() != Some(passed.reference()) {
+                return Err(blocked(
+                    "passed capability differs from exact planned round reference",
+                ));
+            }
+            for (id, digest) in &passed.reference().retained_receipts {
+                if canonical_digest(1, actual_receipt(&receipts, *id)?)? != *digest {
+                    return Err(blocked(
+                        "passed validation ancestry changed before round capture",
+                    ));
+                }
+                retain_exact(&mut retained, *id, digest.clone())?;
+            }
+        }
+        if let Some(grant) = &grant {
+            let receipt = actual_receipt(&receipts, grant.record().operation_id)?;
+            retain_exact(
+                &mut retained,
+                receipt.operation_id,
+                canonical_digest(1, receipt)?,
+            )?;
+        }
+        for grant in validation_grants.values() {
+            let receipt = actual_receipt(&receipts, grant.record().operation_id)?;
+            retain_exact(
+                &mut retained,
+                receipt.operation_id,
+                canonical_digest(1, receipt)?,
+            )?;
+        }
         for entry in [
             &reference.source.implementation,
             &reference.source.seal,
@@ -1215,7 +1345,8 @@ impl DeliveryCoordinator {
             1,
             &json!({"purpose":"verified_review_round_plan",
             "reference":reference,"assignment":assignment.digest()?,"inventory":inventory_digest,
-            "source_inventory":source_inventory_digest,"retained":retained,"grant":grant.as_ref().map(VerifiedRetryGrant::digest)}),
+            "source_inventory":source_inventory_digest,"retained":retained,"grant":grant.as_ref().map(VerifiedRetryGrant::digest),
+            "validation_grants":validation_grants.iter().map(|(id,g)|(*id,g.digest())).collect::<BTreeMap<_,_>>()}),
         )?;
         let plan = VerifiedReviewRoundPlan {
             reference,
@@ -1226,6 +1357,8 @@ impl DeliveryCoordinator {
             source_inventory_digest,
             retained,
             grant,
+            validation_grants,
+            passed_validation,
             digest,
         };
         plan.verify_current(&receipts, grants)?;
@@ -1395,6 +1528,7 @@ fn initial_reference(
         ordinal: 1,
         round_limit: limit,
         source: source.reference.clone(),
+        passed_validation: None,
         cause: ReviewRoundCause::Initial {},
     };
     reference.round_id = reference.expected_round_id()?;

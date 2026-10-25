@@ -613,6 +613,7 @@ impl RuntimeCoordinator {
                         unfinished: None,
                         source_advanced: None,
                         retried_unfinished: None,
+                        validation_retry: None,
                         review_retry: None,
                         review_round: None,
                         max_seconds: worker_seconds,

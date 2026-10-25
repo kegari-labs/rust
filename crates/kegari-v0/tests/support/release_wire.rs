@@ -1038,7 +1038,9 @@ impl DeliveryFixture {
                 broker,
                 records: Arc::new(PrivateDir::create(&directory.join("records")).unwrap()),
                 key: key.clone(),
-                git: Arc::new(Git::new(pinned_git::prepare(&directory)).unwrap()),
+                git: Arc::new(
+                    Git::from_pinned_executable(pinned_git::prepare(&directory)).unwrap(),
+                ),
                 retained_git_sources: BTreeMap::new(),
                 current_gate: callback,
                 executions: Arc::new(crate::worker::ExecutionRegistry::default()),
@@ -1855,6 +1857,42 @@ async fn changed_candidate_from(
     PublishedChild,
 ) {
     use crate::evidence::*;
+    // The common fixture only pins/inspects tool bytes. Candidate setup below
+    // performs Git reads before the production assembly entry point, so verify
+    // the supported tool through its actual admitted, journaled owned path.
+    // This is fixture setup evidence, not native confinement qualification.
+    let host = f.host.clone();
+    let permit = f.admission.permit.clone();
+    let gate = f.admission.fresh_gate().clone();
+    let current = f.coordinator.current_gate.clone();
+    let start: crate::git::GitStartGate = Arc::new(move |spawn| {
+        host.validate_permit(&permit, || {
+            current(&gate)?;
+            spawn()
+        })
+    });
+    let probe = f
+        .coordinator
+        .git
+        .start_journaled_operation(
+            crate::git::GitLimits::default(),
+            start,
+            f.coordinator.processes.clone(),
+            f.admission.permit.clone(),
+            |git| Ok(git.version().to_owned()),
+        )
+        .unwrap();
+    let exit = probe.cancellation();
+    let observed = probe.wait().await;
+    assert!(
+        exit.exited().unwrap(),
+        "fixture Git version probe must fully join"
+    );
+    assert_eq!(observed.unwrap(), crate::git::SUPPORTED_GIT_VERSION);
+    assert_eq!(
+        f.coordinator.git.version(),
+        crate::git::SUPPORTED_GIT_VERSION
+    );
     let source = std::path::PathBuf::from(&f.repository_contract.configuration.source);
     let base = f.admission.scope.revision.base.clone();
     fixture_git(&source, &["checkout", "-qb", "child"]);
@@ -3417,7 +3455,7 @@ async fn terminal_target_history_binds_plan_permit_and_reconciled_original_effec
             },
             records: records.clone(),
             key: key.clone(),
-            git: Arc::new(Git::new(pinned_git::prepare(base)).unwrap()),
+            git: Arc::new(Git::from_pinned_executable(pinned_git::prepare(base)).unwrap()),
             retained_git_sources: BTreeMap::new(),
             current_gate: Arc::new(|_| {
                 Err(Error::new(

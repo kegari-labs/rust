@@ -227,6 +227,8 @@ pub struct LaunchRequest {
     /// A current native operator grant for the retained exact unfinished task.
     pub retried_unfinished: Option<Arc<crate::delivery::RetriedUnfinishedWork>>,
     pub review_retry: Option<Arc<crate::delivery::ReviewRetryWork>>,
+    /// Exact failed-validation source/session and current native retry grant.
+    pub validation_retry: Option<Arc<crate::delivery::ValidationRetryWork>>,
     /// Exact review/fix round, orthogonal to its existing readmission cause.
     pub review_round: Option<Arc<crate::delivery::VerifiedReviewRoundPlan>>,
     pub max_seconds: u64,
@@ -251,6 +253,7 @@ impl LaunchRequest {
                 self.source_advanced.is_some(),
                 self.retried_unfinished.is_some(),
                 self.review_retry.is_some(),
+                self.validation_retry.is_some(),
             ]
             .into_iter()
             .filter(|present| *present)
@@ -287,7 +290,10 @@ impl LaunchRequest {
                     "review round requires its actual delivery assignment",
                 )
             })?;
-            if round.subject_phase() != &self.phase || self.retried_unfinished.is_some() {
+            if round.subject_phase() != &self.phase
+                || self.retried_unfinished.is_some()
+                || self.validation_retry.is_some()
+            {
                 return Err(Error::new(
                     "worker_binding",
                     "review round changes its exact subject phase",
@@ -383,6 +389,27 @@ impl LaunchRequest {
                 return Err(Error::new(
                     "worker_binding",
                     "review retry differs from actual granted phase",
+                ));
+            }
+            proof.verify_assignment(assignment)?;
+            WorkerAuthority::Authorized(proof.authority().clone()).compare(&self.authority)?;
+        }
+        if let Some(proof) = &self.validation_retry {
+            let assignment = self.delivery.as_ref().ok_or_else(|| {
+                Error::new(
+                    "worker_binding",
+                    "validation retry requires its exact sealed assignment",
+                )
+            })?;
+            if self.review_round.is_some()
+                || proof.phase() != &self.phase
+                || self.phase.phase != "child_local_validation"
+                || self.phase.retry_grant != Some(proof.grant().record().operation_id)
+                || proof.predecessor() == self.operation_id
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "validation retry changes its exact granted phase or round lineage",
                 ));
             }
             proof.verify_assignment(assignment)?;
@@ -584,29 +611,36 @@ pub async fn prepare_admitted(
             &plan.request.source_advanced,
             &plan.request.retried_unfinished,
             &plan.request.review_retry,
+            &plan.request.validation_retry,
         ) {
-            (Some(proof), None, None, None) => {
+            (Some(proof), None, None, None, None) => {
                 runtime.admit_unfinished_worker(&plan.request.lease, admission, &contract, proof)?
             }
-            (None, Some(proof), None, None) => runtime.admit_source_advanced_worker(
+            (None, Some(proof), None, None, None) => runtime.admit_source_advanced_worker(
                 &plan.request.lease,
                 admission,
                 &contract,
                 proof,
             )?,
-            (None, None, Some(proof), None) => runtime.admit_retried_unfinished_worker(
+            (None, None, Some(proof), None, None) => runtime.admit_retried_unfinished_worker(
                 &plan.request.lease,
                 admission,
                 &contract,
                 proof,
             )?,
-            (None, None, None, Some(proof)) => runtime.admit_review_retry_worker(
+            (None, None, None, Some(proof), None) => runtime.admit_review_retry_worker(
                 &plan.request.lease,
                 admission,
                 &contract,
                 proof,
             )?,
-            (None, None, None, None) => {
+            (None, None, None, None, Some(proof)) => runtime.admit_validation_retry_worker(
+                &plan.request.lease,
+                admission,
+                &contract,
+                proof,
+            )?,
+            (None, None, None, None, None) => {
                 runtime.admit_worker(&plan.request.lease, admission, &contract)?
             }
             _ => {
@@ -837,12 +871,20 @@ impl Plan {
             &self.request.source_advanced,
             &self.request.retried_unfinished,
             &self.request.review_retry,
+            &self.request.validation_retry,
         ) {
-            (Some(proof), None, None, None) => runtime.next_attempt_for_unfinished(proof),
-            (None, Some(proof), None, None) => runtime.next_attempt_for_source_advanced(proof),
-            (None, None, Some(proof), None) => runtime.next_attempt_for_retried_unfinished(proof),
-            (None, None, None, Some(proof)) => runtime.next_attempt_for_review_retry(proof),
-            (None, None, None, None) => {
+            (Some(proof), None, None, None, None) => runtime.next_attempt_for_unfinished(proof),
+            (None, Some(proof), None, None, None) => {
+                runtime.next_attempt_for_source_advanced(proof)
+            }
+            (None, None, Some(proof), None, None) => {
+                runtime.next_attempt_for_retried_unfinished(proof)
+            }
+            (None, None, None, Some(proof), None) => runtime.next_attempt_for_review_retry(proof),
+            (None, None, None, None, Some(_)) => {
+                runtime.next_attempt_for_validation_retry(&self.request)
+            }
+            (None, None, None, None, None) => {
                 runtime.next_attempt(&self.request.phase, self.workspace.id, &self.account)
             }
             _ => Err(Error::new(

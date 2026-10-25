@@ -55,6 +55,8 @@ enum Stage {
     Seal,
     LaunchValidation,
     Validate,
+    RetryValidation,
+    LaunchValidationRetry,
     PublishBranch,
     PullRequest,
     Hosted,
@@ -83,6 +85,22 @@ struct ChildReference {
     stage: Stage,
     phase_operation: Option<Uuid>,
     validation: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    validation_assignment_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    validation_source_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    validation_retry_operation: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    validation_retry_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    validation_completed_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    validation_passed_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    validation_successor_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    validation_history: Vec<Uuid>,
     review: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     repair_operation: Option<Uuid>,
@@ -122,6 +140,12 @@ struct ChildPipeline {
     phase: Option<ActivePhase>,
     unfinished: Option<Arc<UnfinishedChildWork>>,
     source_advanced: Option<Arc<VerifiedSourceAdvanced>>,
+    validation_assignment: Option<DeliveryWorkerAssignment>,
+    validation_source: Option<Arc<VerifiedSourceAdvanced>>,
+    validation_retry: Option<Arc<ValidationRetryWork>>,
+    validation_completed: Option<Arc<CompletedGrantedValidation>>,
+    validation_passed: Option<Arc<VerifiedPassedValidation>>,
+    validation_successor: Option<Arc<ConsumedValidationSuccessor>>,
     review_worker_assignment: Option<DeliveryWorkerAssignment>,
     review_retry: Option<Arc<ReviewRetryWork>>,
     review_round: Option<Arc<VerifiedReviewRoundPlan>>,
@@ -295,6 +319,14 @@ impl RuntimeDelivery {
                         stage: Stage::Seal,
                         phase_operation: None,
                         validation: None,
+                        validation_assignment_digest: None,
+                        validation_source_digest: None,
+                        validation_retry_operation: None,
+                        validation_retry_digest: None,
+                        validation_completed_digest: None,
+                        validation_passed_digest: None,
+                        validation_successor_digest: None,
+                        validation_history: vec![],
                         review: None,
                         repair_operation: None,
                         unfinished_digest: None,
@@ -324,6 +356,12 @@ impl RuntimeDelivery {
                     phase: None,
                     unfinished: None,
                     source_advanced: None,
+                    validation_assignment: None,
+                    validation_source: None,
+                    validation_retry: None,
+                    validation_completed: None,
+                    validation_passed: None,
+                    validation_successor: None,
                     review_worker_assignment: None,
                     review_retry: None,
                     review_round: None,
@@ -398,9 +436,88 @@ impl RuntimeDelivery {
         let operation = child.reference.phase_operation.unwrap_or_else(Uuid::new_v4);
         child.reference.phase_operation = Some(operation);
         self.persist_child(child)?;
+        if let Some(passed) = &child.validation_passed
+            && child.reference.validation_passed_digest.as_deref() != Some(passed.digest())
+        {
+            return Err(Error::new(
+                "record_corrupt",
+                "passed validation reference changed",
+            ));
+        }
+        let extra = match &child.validation_successor {
+            Some(proof) => {
+                if child.reference.validation_successor_digest.as_deref() != Some(proof.digest())
+                    || child.reference.review != Some(proof.worker_operation())
+                {
+                    return Err(Error::new(
+                        "record_corrupt",
+                        "passed validation handoff reference changed",
+                    ));
+                }
+                if child.reference.stage == Stage::RetryReview {
+                    let receipt = self.runtime.control.operation(proof.worker_operation())?;
+                    let run = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+                        Error::new(
+                            "worker_binding",
+                            "validation successor review admission disappeared",
+                        )
+                    })?;
+                    let grants = self.current_review_grants(&child.reference.work)?;
+                    let matching: Vec<_> = grants
+                        .iter()
+                        .filter(|grant| grant.phase() == &run.phase)
+                        .collect();
+                    match matching.as_slice() {
+                        [] => Some(self.consumed_validation_check(proof.clone())),
+                        [grant] => {
+                            let failed = self
+                                .runtime
+                                .retained_completion(proof.worker_operation())?
+                                .ok_or_else(|| {
+                                    Error::new(
+                                        "reconciliation_required",
+                                        "validation successor lost its joined failed review",
+                                    )
+                                })?;
+                            Some(self.consumed_validation_retry_check(
+                                proof.clone(),
+                                (**grant).clone(),
+                                failed,
+                            ))
+                        }
+                        _ => {
+                            return Err(Error::new(
+                                "stale_result",
+                                "review successor has competing current grants",
+                            ));
+                        }
+                    }
+                } else {
+                    Some(self.consumed_validation_check(proof.clone()))
+                }
+            }
+            None => child
+                .validation_completed
+                .as_ref()
+                .map(|proof| self.completed_validation_check(proof.clone())),
+        };
+        if let Some(proof) = &child.validation_completed
+            && child.reference.validation_completed_digest.as_deref() != Some(proof.digest())
+        {
+            return Err(Error::new(
+                "record_corrupt",
+                "completed validation reference changed",
+            ));
+        }
         child.phase = Some(
-            self.admit_delivery_phase(workspace, gate, lease, PhaseRequest { operation, scope })
-                .await?,
+            self.admit_delivery_phase_checked(
+                workspace,
+                gate,
+                lease,
+                PhaseRequest { operation, scope },
+                extra,
+            )
+            .await?,
         );
         Ok(())
     }
@@ -410,6 +527,17 @@ impl RuntimeDelivery {
         gate: &FreshGate,
         lease: &Lease,
         request: PhaseRequest,
+    ) -> Result<ActivePhase> {
+        self.admit_delivery_phase_checked(workspace, gate, lease, request, None)
+            .await
+    }
+    async fn admit_delivery_phase_checked(
+        &self,
+        workspace: &WorkspaceDelivery,
+        gate: &FreshGate,
+        lease: &Lease,
+        request: PhaseRequest,
+        extra: Option<GateCheck>,
     ) -> Result<ActivePhase> {
         let PhaseRequest { operation, scope } = request;
         let broker = self.provider_broker(&workspace.configuration, gate.workspace_id())?;
@@ -429,7 +557,11 @@ impl RuntimeDelivery {
             scope.digest()?,
             || {
                 self.runtime.registration.verify_active_owner(lease)?;
-                current(gate)
+                current(gate)?;
+                if let Some(check) = &extra {
+                    check(gate)?;
+                }
+                Ok(())
             },
         )?;
         let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -448,7 +580,16 @@ impl RuntimeDelivery {
         let registration = self.runtime.registration.clone();
         let expected = gate.clone();
         let held = permit.clone();
-        let current = self.retained_gate();
+        let retained = self.retained_gate();
+        let current: GateCheck = Arc::new(move |gate| {
+            retained(gate)?;
+            if let Some(check) = &extra {
+                check(gate)?;
+            }
+            Ok(())
+        });
+        let effect_gate = current.clone();
+        let observer_gate = current.clone();
         let gate_fn = Arc::new(move |launch: &mut dyn FnMut() -> Result<()>| {
             host.validate_permit(&held, || {
                 registration.verify_active_owner(&held.lease)?;
@@ -494,7 +635,7 @@ impl RuntimeDelivery {
                     .iter()
                     .map(|c| (c.repository.clone(), PathBuf::from(&c.configuration.source)))
                     .collect(),
-                current_gate: self.retained_gate(),
+                current_gate: effect_gate,
                 executions: self.runtime.executions.clone(),
                 processes: self.processes.clone(),
             },
@@ -507,7 +648,7 @@ impl RuntimeDelivery {
             self.runtime.control.clone(),
             self.runtime.services.key.clone(),
             workspace.records.child("deployment")?,
-            self.retained_gate(),
+            observer_gate,
         )?);
         setup.armed = false;
         self.phase_holds
@@ -629,6 +770,282 @@ impl RuntimeDelivery {
             &self.runtime.services.key,
         )
     }
+    fn require_validation_retry_identity(
+        &self,
+        child: &ChildPipeline,
+        proof: &ValidationRetryWork,
+    ) -> Result<()> {
+        let assignment = required(
+            &child.validation_assignment,
+            "original validation assignment",
+        )?;
+        proof.verify_assignment(assignment)?;
+        if child.reference.validation_retry_digest.as_deref() != Some(proof.digest())
+            || child.reference.validation_assignment_digest.as_deref()
+                != Some(assignment.digest()?.as_str())
+            || child.reference.validation_source_digest.as_deref()
+                != proof.source_advanced().map(|p| p.digest())
+            || child.validation_source.as_ref().map(|p| p.digest())
+                != proof.source_advanced().map(|p| p.digest())
+        {
+            return Err(Error::new(
+                "record_corrupt",
+                "validation retry lost its exact retained source/assignment identity",
+            ));
+        }
+        Ok(())
+    }
+    fn validation_retry_grant(
+        &self,
+        child: &ChildPipeline,
+    ) -> Result<(
+        Option<crate::decisions::VerifiedRetryGrant>,
+        Vec<crate::decisions::VerifiedRetryGrant>,
+    )> {
+        let operation = child
+            .reference
+            .validation
+            .ok_or_else(|| Error::new("record_corrupt", "failed validation identity is missing"))?;
+        let receipt = self.runtime.control.operation(operation)?;
+        let run = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+            Error::new("worker_binding", "failed validation admission is missing")
+        })?;
+        let grants = self.current_review_grants(&child.reference.work)?;
+        let matching: Vec<_> = grants
+            .iter()
+            .filter(|g| g.phase() == &run.phase)
+            .cloned()
+            .collect();
+        let grant = match matching.as_slice() {
+            [] if child
+                .validation_retry
+                .as_ref()
+                .is_some_and(|p| p.phase() == &run.phase) =>
+            {
+                None
+            }
+            [] => {
+                return Err(Error::new(
+                    "retry_required",
+                    "known failed validation awaits an explicit operator grant",
+                ));
+            }
+            [grant] => Some(grant.clone()),
+            _ => {
+                return Err(Error::new(
+                    "stale_result",
+                    "validation budget has competing retry grants",
+                ));
+            }
+        };
+        Ok((grant, grants))
+    }
+    fn completed_validation_check(&self, proof: Arc<CompletedGrantedValidation>) -> GateCheck {
+        let runtime = self.runtime.clone();
+        Arc::new(move |gate| {
+            let current = runtime
+                .observations
+                .active_gate(gate, &runtime.dependency_outcomes()?)?;
+            proof
+                .authority()
+                .compare_current(&current, Utc::now(), Duration::seconds(30))?;
+            let receipts = runtime.control.operations()?;
+            let grants = crate::runtime_workflow::current_retry_grants(
+                &runtime.configuration.snapshot()?,
+                &runtime.observations.admission_snapshot()?,
+                proof.authority().work(),
+                &receipts,
+                &runtime.services.key,
+            )?;
+            proof.verify_current(&receipts, &grants)?;
+            proof.verify_joined(&|id| runtime.retained_completion(id))
+        })
+    }
+    fn consumed_validation_check(&self, proof: Arc<ConsumedValidationSuccessor>) -> GateCheck {
+        let runtime = self.runtime.clone();
+        Arc::new(move |gate| {
+            let current = runtime
+                .observations
+                .active_gate(gate, &runtime.dependency_outcomes()?)?;
+            proof
+                .authority()
+                .compare_current(&current, Utc::now(), Duration::seconds(30))?;
+            let receipts = runtime.control.operations()?;
+            let grants = crate::runtime_workflow::current_retry_grants(
+                &runtime.configuration.snapshot()?,
+                &runtime.observations.admission_snapshot()?,
+                proof.authority().work(),
+                &receipts,
+                &runtime.services.key,
+            )?;
+            proof.verify_current(&receipts, &grants)?;
+            proof.verify_joined(&|id| runtime.retained_completion(id))
+        })
+    }
+    fn consumed_validation_retry_check(
+        &self,
+        proof: Arc<ConsumedValidationSuccessor>,
+        grant: crate::decisions::VerifiedRetryGrant,
+        failed: Arc<RunCompletion>,
+    ) -> GateCheck {
+        let runtime = self.runtime.clone();
+        Arc::new(move |gate| {
+            let current = runtime
+                .observations
+                .active_gate(gate, &runtime.dependency_outcomes()?)?;
+            proof
+                .authority()
+                .compare_current(&current, Utc::now(), Duration::seconds(30))?;
+            let actual = runtime
+                .retained_completion(proof.worker_operation())?
+                .ok_or_else(|| {
+                    Error::new(
+                        "reconciliation_required",
+                        "validation successor lost joined failed review",
+                    )
+                })?;
+            if !Arc::ptr_eq(&actual, &failed) {
+                return Err(Error::new(
+                    "worker_binding",
+                    "validation successor failed review identity changed",
+                ));
+            }
+            let receipts = runtime.control.operations()?;
+            let grants = crate::runtime_workflow::current_retry_grants(
+                &runtime.configuration.snapshot()?,
+                &runtime.observations.admission_snapshot()?,
+                proof.authority().work(),
+                &receipts,
+                &runtime.services.key,
+            )?;
+            crate::runtime_workflow::require_current_grant(&grant, &grants)?;
+            proof.verify_retry_preparation(&receipts, &grants, &grant, &failed)?;
+            proof.verify_joined(&|id| runtime.retained_completion(id))
+        })
+    }
+    fn observe_validation_successor(
+        &self,
+        child: &mut ChildPipeline,
+        operation: Uuid,
+    ) -> Result<()> {
+        let Some(passed) = child.validation_passed.clone() else {
+            if child.validation_completed.is_some() {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "completed retry lacks its genuine passed capability",
+                ));
+            }
+            return Ok(());
+        };
+        if child.reference.validation_passed_digest.as_deref() != Some(passed.digest()) {
+            return Err(Error::new(
+                "record_corrupt",
+                "passed validation reference changed",
+            ));
+        }
+        // A completed preparation alone is not model admission. Preserve this
+        // exact pending launch identity until the actual model record exists.
+        match self.runtime.control.operation(operation) {
+            Ok(_) => {}
+            Err(error) if error.code == "record_missing" => {
+                return Err(Error::new(
+                    "operation_pending",
+                    "validation handoff awaits exact model admission",
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+        let round = required(
+            &child.review_round,
+            "retained review round for validation handoff",
+        )?
+        .clone();
+        if child.reference.review_round_digest.as_deref() != Some(round.digest()) {
+            return Err(Error::new(
+                "record_corrupt",
+                "validation successor round changed",
+            ));
+        }
+        let consumed = Arc::new(passed.consume_successor(round, operation, &self.runtime)?);
+        child.reference.validation_successor_digest = Some(consumed.digest().into());
+        child.validation_successor = Some(consumed);
+        self.persist_child(child)
+    }
+    async fn launch_validation_retry(
+        &self,
+        lease: &Lease,
+        child: &mut ChildPipeline,
+    ) -> Result<()> {
+        let proof = required(&child.validation_retry, "retained validation retry")?.clone();
+        self.require_validation_retry_identity(child, &proof)?;
+        let operation = child
+            .reference
+            .validation_retry_operation
+            .unwrap_or_else(Uuid::new_v4);
+        if child.reference.validation != Some(operation) {
+            ValidationRetryWork::require_history_capacity(
+                child.reference.validation_history.len(),
+            )?;
+        }
+        let admitted = self.worker_launch_admitted(operation)?;
+        let receipts = self.runtime.control.operations()?;
+        let grants = self.current_review_grants(&child.reference.work)?;
+        proof.verify_joined(&|id| self.runtime.retained_completion(id))?;
+        if admitted {
+            // A saved launch is observed, never replayed. Its exact actual run
+            // must be the one bounded next admission of this opaque cause.
+            proof.verify_admitted_inventory(&receipts, &grants, operation)?;
+        } else {
+            proof.verify_current(&receipts, &grants)?;
+            let mut request = crate::runtime_workers::LaunchRequest {
+                lease: lease.clone(),
+                operation_id: operation,
+                authority: self.current_delivery_worker_authority(proof.authority())?,
+                phase: proof.phase().clone(),
+                source: None,
+                delivery: Some(proof.assignment().clone()),
+                unfinished: None,
+                source_advanced: None,
+                retried_unfinished: None,
+                review_retry: None,
+                review_round: None,
+                validation_retry: Some(proof),
+                max_seconds: 3600,
+                max_turns: self.runtime.configuration.snapshot()?.runtime.max_turns,
+            };
+            // Native adapter integration is deliberately a typed required API;
+            // no ordinary-admission fallback may erase the retry/source lineage.
+            let schedule = self.runtime.next_attempt_for_validation_retry(&request)?;
+            if schedule.not_before > Utc::now() {
+                return Err(Error::new(
+                    "operation_pending",
+                    "validation retry spacing has not elapsed",
+                ));
+            }
+            request.max_turns = schedule.max_turns;
+            child.reference.validation_retry_operation = Some(operation);
+            self.persist_child(child)?;
+            crate::runtime_workers::launch(self.runtime.clone(), request).await?;
+        }
+        if child.reference.validation != Some(operation) {
+            ValidationRetryWork::require_history_capacity(
+                child.reference.validation_history.len(),
+            )?;
+            child
+                .reference
+                .validation_history
+                .push(child.reference.validation.ok_or_else(|| {
+                    Error::new(
+                        "record_corrupt",
+                        "validation retry has no original operation",
+                    )
+                })?);
+            child.reference.validation = Some(operation);
+        }
+        child.reference.validation_retry_operation = None;
+        child.reference.stage = Stage::Validate;
+        self.persist_child(child)
+    }
     async fn launch_review_retry(&self, lease: &Lease, child: &mut ChildPipeline) -> Result<()> {
         let round = child.review_round.clone().ok_or_else(|| {
             Error::new(
@@ -691,6 +1108,7 @@ impl RuntimeDelivery {
                 unfinished: None,
                 source_advanced: None,
                 retried_unfinished: None,
+                validation_retry: None,
                 review_retry: child.review_retry.clone(),
                 review_round: Some(round),
                 max_seconds: 3600,
@@ -717,6 +1135,7 @@ impl RuntimeDelivery {
                 })?);
             child.reference.review = Some(operation);
         }
+        self.observe_validation_successor(child, operation)?;
         child.reference.review_retry_operation = None;
         child.reference.stage = Stage::Review;
         self.persist_child(child)
@@ -773,6 +1192,7 @@ impl RuntimeDelivery {
             unfinished: None,
             retried_unfinished: None,
             review_retry: None,
+            validation_retry: None,
             source_advanced,
             review_round,
             max_seconds: 3600,
@@ -1082,6 +1502,7 @@ impl RuntimeDelivery {
             retried_unfinished,
             review_retry: None,
             source_advanced: None,
+            validation_retry: None,
             review_round: child.paired_round.clone(),
             max_seconds: 3600,
             max_turns: self.runtime.configuration.snapshot()?.runtime.max_turns,
@@ -1398,6 +1819,9 @@ impl RuntimeDelivery {
         if child.reference.stage == Stage::LaunchReviewRetry {
             return self.launch_review_retry(lease, child).await;
         }
+        if child.reference.stage == Stage::LaunchValidationRetry {
+            return self.launch_validation_retry(lease, child).await;
+        }
         let workspace = match &child.phase {
             Some(phase) => (*phase.workspace).clone(),
             None => self.workspace(projection, workspace_id)?,
@@ -1408,7 +1832,9 @@ impl RuntimeDelivery {
         );
         let phase = match child.reference.stage {
             Stage::Seal => DeliveryPhase::SourceSealing,
-            Stage::LaunchValidation | Stage::Validate => DeliveryPhase::LocalValidation,
+            Stage::LaunchValidation | Stage::Validate | Stage::RetryValidation => {
+                DeliveryPhase::LocalValidation
+            }
             Stage::PublishBranch | Stage::PullRequest => DeliveryPhase::PublishChild,
             Stage::Hosted => {
                 if changed {
@@ -1435,7 +1861,8 @@ impl RuntimeDelivery {
             | Stage::Blocked
             | Stage::RepairLaunch
             | Stage::RepairWaiting
-            | Stage::LaunchReviewRetry => {
+            | Stage::LaunchReviewRetry
+            | Stage::LaunchValidationRetry => {
                 return Ok(());
             }
         };
@@ -1451,11 +1878,15 @@ impl RuntimeDelivery {
                     "worker phase lacks its persisted launch identity",
                 )
             })?;
-            if child.reference.stage == Stage::Review
-                && let Some(completion) = self.runtime.retained_completion(operation)?
+            if let Some(completion) = self.runtime.retained_completion(operation)?
                 && matches!(completion.outcome, crate::worker_run::RunOutcome::Failed)
             {
-                self.finish_child_phase(child, Stage::RetryReview)?;
+                let next = if child.reference.stage == Stage::Validate {
+                    Stage::RetryValidation
+                } else {
+                    Stage::RetryReview
+                };
+                self.finish_child_phase(child, next)?;
                 return self.persist_child(child);
             }
             if self.completed_claim(operation)?.is_none() {
@@ -1470,6 +1901,9 @@ impl RuntimeDelivery {
         if let Some((operation, next)) = pending_launch
             && self.worker_launch_admitted(operation)?
         {
+            if next == Stage::Review {
+                self.observe_validation_successor(child, operation)?;
+            }
             child.reference.stage = next;
             return self.persist_child(child);
         }
@@ -1522,6 +1956,11 @@ impl RuntimeDelivery {
                     ));
                 }
             }
+        } else {
+            None
+        };
+        let validation_grant = if child.reference.stage == Stage::RetryValidation {
+            Some(self.validation_retry_grant(child)?)
         } else {
             None
         };
@@ -1609,6 +2048,11 @@ impl RuntimeDelivery {
                     .await?;
                 child.reference.source_advanced_digest =
                     advanced.as_ref().map(|p| p.digest().to_owned());
+                child.validation_source = advanced.clone();
+                child.reference.validation_source_digest =
+                    advanced.as_ref().map(|p| p.digest().to_owned());
+                child.reference.validation_assignment_digest = Some(assignment.digest()?);
+                child.validation_assignment = Some(assignment.clone());
                 child.source_advanced = advanced;
                 self.finish_child_phase(child, Stage::LaunchValidation)?;
                 let operation = child.reference.validation.unwrap_or_else(Uuid::new_v4);
@@ -1631,6 +2075,29 @@ impl RuntimeDelivery {
                     .ok_or_else(|| {
                         Error::new("operation_pending", "local validation remains owned")
                     })?;
+                let completed_retry = if let Some(proof) = &child.validation_retry {
+                    self.require_validation_retry_identity(child, proof)?;
+                    let grants = self.current_review_grants(&child.reference.work)?;
+                    let completed = Arc::new(
+                        coordinator
+                            .completed_granted_validation(
+                                &admission,
+                                &outcome,
+                                &completion,
+                                proof,
+                                &grants,
+                            )
+                            .await?,
+                    );
+                    let check = self.completed_validation_check(completed.clone());
+                    check(admission.fresh_gate())?;
+                    child.reference.validation_completed_digest = Some(completed.digest().into());
+                    child.validation_completed = Some(completed.clone());
+                    self.persist_child(child)?;
+                    Some((completed, check))
+                } else {
+                    None
+                };
                 let result = coordinator
                     .advance_child(
                         &admission,
@@ -1642,6 +2109,9 @@ impl RuntimeDelivery {
                         },
                     )
                     .await;
+                if let Some((_, check)) = &completed_retry {
+                    check(admission.fresh_gate())?;
+                }
                 let result = match result {
                     Ok(result) => result,
                     Err(error) if terminal_gate_failure(&error) => {
@@ -1657,20 +2127,38 @@ impl RuntimeDelivery {
                             completion: completion.clone(),
                         };
                         if let Some(previous) = self.paired_review_plan(child).await? {
-                            let validation_source = child.source_advanced.clone().ok_or_else(|| Error::new(
+                            let validation_source = child.validation_source.clone().ok_or_else(|| Error::new(
                                 "review_round_lineage", "continued pair lacks its actual validation source capability"))?;
                             let grants = self.current_review_grants(&child.reference.work)?;
                             let config = self.runtime.configuration.snapshot()?;
-                            let (proof, next_pair) = match coordinator
-                                .continue_paired_repair(
-                                    request,
-                                    previous,
-                                    validation_source,
-                                    &config,
-                                    &grants,
-                                )
-                                .await
-                            {
+                            let continued = match &completed_retry {
+                                Some((completed, _)) => {
+                                    coordinator
+                                        .continue_paired_repair_after_granted_validation(
+                                            request,
+                                            previous,
+                                            completed.clone(),
+                                            &config,
+                                            &grants,
+                                        )
+                                        .await
+                                }
+                                None => {
+                                    coordinator
+                                        .continue_paired_repair(
+                                            request,
+                                            previous,
+                                            validation_source,
+                                            &config,
+                                            &grants,
+                                        )
+                                        .await
+                                }
+                            };
+                            if let Some((_, check)) = &completed_retry {
+                                check(admission.fresh_gate())?;
+                            }
+                            let (proof, next_pair) = match continued {
                                 Ok(value) => value,
                                 // A missing required check is a known terminal
                                 // validation failure, not unfinished work proof.
@@ -1686,6 +2174,9 @@ impl RuntimeDelivery {
                             return self.retain_unfinished(child, (*proof).clone(), error);
                         }
                         let proof = coordinator.unfinished_validation(request).await;
+                        if let Some((_, check)) = &completed_retry {
+                            check(admission.fresh_gate())?;
+                        }
                         return match proof {
                             Ok(proof) => self.retain_unfinished(child, proof, error),
                             Err(unavailable) if unavailable.code == "no_work_trigger" => Err(error),
@@ -1700,6 +2191,26 @@ impl RuntimeDelivery {
                         "local validation returned another phase",
                     ));
                 };
+                if let Some((completed, _)) = &completed_retry {
+                    let passed = Arc::new(
+                        coordinator
+                            .passed_granted_validation(
+                                RepairSource {
+                                    admission: &admission,
+                                    original: child.claim.clone(),
+                                    source: required(&child.source, "sealed source")?,
+                                    completion: child.completion.clone(),
+                                },
+                                &workspace.workflow,
+                                completed.clone(),
+                                &local,
+                                &self.runtime,
+                            )
+                            .await?,
+                    );
+                    child.reference.validation_passed_digest = Some(passed.digest().into());
+                    child.validation_passed = Some(passed);
+                }
                 child.local = Some(local);
                 self.finish_child_phase(
                     child,
@@ -1846,6 +2357,7 @@ impl RuntimeDelivery {
                     source: required(&child.source, "sealed source")?,
                     completion: child.completion.clone(),
                     assignment: required(&child.assignment, "review assignment")?,
+                    validated_retry: child.validation_passed.clone(),
                 };
                 let plan = if let Some(advanced) = &child.source_advanced {
                     let paired = self.paired_review_plan(child).await?.ok_or_else(|| {
@@ -1884,8 +2396,77 @@ impl RuntimeDelivery {
                     child.review_round.clone(),
                 )
                 .await?;
+                self.observe_validation_successor(child, operation)?;
                 child.reference.stage = Stage::Review;
                 self.persist_child(child)?;
+            }
+            Stage::RetryValidation => {
+                let (grant, grants) = validation_grant.ok_or_else(|| {
+                    Error::new("stale_result", "validation grant selection is unavailable")
+                })?;
+                let operation = child.reference.validation.ok_or_else(|| {
+                    Error::new("record_corrupt", "failed validation operation is missing")
+                })?;
+                let failed = self
+                    .runtime
+                    .retained_completion(operation)?
+                    .ok_or_else(|| {
+                        Error::new(
+                            "reconciliation_required",
+                            "actual joined failed validation is unavailable",
+                        )
+                    })?;
+                let assignment = required(
+                    &child.validation_assignment,
+                    "original validation assignment",
+                )?;
+                if child.reference.validation_assignment_digest.as_deref()
+                    != Some(assignment.digest()?.as_str())
+                    || child.reference.validation_source_digest.as_deref()
+                        != child.validation_source.as_ref().map(|p| p.digest())
+                {
+                    return Err(Error::new(
+                        "record_corrupt",
+                        "retained validation assignment/source changed",
+                    ));
+                }
+                let proof = match grant {
+                    Some(grant) => {
+                        coordinator
+                            .retry_failed_validation(ValidationRetryRequest {
+                                admission: &admission,
+                                assignment,
+                                origin: match &child.validation_retry {
+                                    Some(prior) => ValidationRetryOrigin::Retried(prior.clone()),
+                                    None => ValidationRetryOrigin::Original {
+                                        source_advanced: child.validation_source.clone(),
+                                    },
+                                },
+                                failed,
+                                grant,
+                                current_grants: &grants,
+                            })
+                            .await?
+                    }
+                    None => {
+                        coordinator
+                            .continue_failed_validation(
+                                &admission,
+                                required(&child.validation_retry, "previous validation retry")?,
+                                failed,
+                                &grants,
+                            )
+                            .await?
+                    }
+                };
+                proof.verify_current(
+                    &self.runtime.control.operations()?,
+                    &self.current_review_grants(&child.reference.work)?,
+                )?;
+                proof.verify_joined(&|id| self.runtime.retained_completion(id))?;
+                child.reference.validation_retry_digest = Some(proof.digest().into());
+                child.validation_retry = Some(Arc::new(proof));
+                self.finish_child_phase(child, Stage::LaunchValidationRetry)?;
             }
             Stage::RetryReview => {
                 let (grant, grants) = review_grant
@@ -1923,6 +2504,7 @@ impl RuntimeDelivery {
                                     source: required(&child.source, "sealed source")?,
                                     completion: child.completion.clone(),
                                     assignment: required(&child.assignment, "review assignment")?,
+                                    validated_retry: child.validation_passed.clone(),
                                 },
                                 &workspace.configuration,
                                 proof.clone(),
@@ -2127,7 +2709,8 @@ impl RuntimeDelivery {
             | Stage::Blocked
             | Stage::RepairLaunch
             | Stage::RepairWaiting
-            | Stage::LaunchReviewRetry => {}
+            | Stage::LaunchReviewRetry
+            | Stage::LaunchValidationRetry => {}
         }
         Ok(())
     }
@@ -2385,6 +2968,14 @@ mod retention_tests {
                 stage: Stage::Seal,
                 phase_operation: None,
                 validation: None,
+                validation_assignment_digest: None,
+                validation_source_digest: None,
+                validation_retry_operation: None,
+                validation_retry_digest: None,
+                validation_completed_digest: None,
+                validation_passed_digest: None,
+                validation_successor_digest: None,
+                validation_history: vec![],
                 review: None,
                 repair_operation: None,
                 unfinished_digest: None,
@@ -2414,6 +3005,12 @@ mod retention_tests {
             phase: None,
             unfinished: None,
             source_advanced: None,
+            validation_assignment: None,
+            validation_source: None,
+            validation_retry: None,
+            validation_completed: None,
+            validation_passed: None,
+            validation_successor: None,
             review_worker_assignment: None,
             review_retry: None,
             review_round: None,
