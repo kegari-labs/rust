@@ -1,7 +1,7 @@
 //! Pinned stdio app-server protocol. Provider messages are data, never authority.
 use crate::digest::canonical_digest;
 use crate::error::{Error, Result};
-use crate::isolation::{ExecutionRole, ValidatedIsolation};
+use crate::isolation::ValidatedIsolation;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -16,6 +16,9 @@ use tokio::time::{Instant, timeout_at};
 
 pub const SUPPORTED_CODEX_VERSION: &str = "codex-cli 0.164.0-alpha.11.1";
 pub const PROTOCOL_PROFILE: &str = "kegari-codex-0.164.0-alpha.11.1-v1";
+/// The installed binary that actually returned the pinned version. Construction
+/// is read-only metadata probing; native session launch still needs a host gate.
+pub struct VerifiedCodexExecutable(crate::platform::BinaryIdentity);
 pub const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PENDING_EVENTS: usize = 4096;
 
@@ -159,6 +162,7 @@ impl PermissionConfiguration {
             || p.read_roots
                 .iter()
                 .chain(p.source_writes.iter())
+                .chain(p.resource_writes.iter())
                 .any(|g| g.path.starts_with(&home) || home.starts_with(&g.path))
         {
             return Err(Error::new(
@@ -181,7 +185,7 @@ impl PermissionConfiguration {
         for grant in &p.read_roots {
             fs.insert(grant.path.to_string_lossy().into_owned(), json!("read"));
         }
-        for grant in &p.source_writes {
+        for grant in p.source_writes.iter().chain(p.resource_writes.iter()) {
             fs.insert(grant.path.to_string_lossy().into_owned(), json!("write"));
         }
         // Scope grants cannot reopen privileged roots because IsolationPlan rejects overlap.
@@ -203,10 +207,6 @@ impl PermissionConfiguration {
             profile_id.clone(),
             json!({"filesystem":fs,"network":{"enabled":false}}),
         );
-        let no_exec = matches!(
-            p.role,
-            ExecutionRole::Coordination | ExecutionRole::IndependentReview
-        );
         Ok(Self {
             profile_id: profile_id.clone(),
             isolation_digest: isolation.digest().into(),
@@ -216,7 +216,7 @@ impl PermissionConfiguration {
                 "apps":{"_default":{"enabled":false,"default_tools_enabled":false}},
                 "features":{"apps":false,"plugins":false,"browser_use":false,"browser_use_external":false,
                     "computer_use":false,"in_app_browser":false,"image_generation":false,"multi_agent":false,
-                    "shell_tool":!no_exec,"code_mode":false,"memories":false,"hooks":false,
+                    "shell_tool":false,"code_mode":false,"memories":false,"hooks":false,
                     "skill_mcp_dependency_install":false,"request_permissions_tool":false},
                 "shell_environment_policy":{"inherit":"none","include_only":[],"set":{"HOME":p.scratch,"TMPDIR":p.scratch,"PATH":"/usr/bin:/bin:/usr/sbin:/sbin"}}
             }),
@@ -821,6 +821,11 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 pub trait ToolBroker: Send {
+    /// Adapter-owned current state before a bound tool request, including tools
+    /// interleaved before a synchronous start/steer response arrives.
+    fn observe_session(&mut self, _state: &SessionState) -> Result<()> {
+        Ok(())
+    }
     fn call<'a>(
         &'a mut self,
         call: &'a ToolCall,
@@ -843,6 +848,26 @@ impl ToolBroker for DenyTools {
 
 /// The transport accepts injected duplex pipes for deterministic protocol tests.
 /// Production construction is `spawn`, which pins the executable/profile.
+/// Production worker request boundary. Only the bounded pipe write is performed
+/// inside dispatch; provider responses and dynamic tools are handled afterward.
+/// Read-only metadata and owned cancellation do not enter this mutation hook.
+pub trait RequestGate: Send + Sync {
+    fn dispatch(
+        &self,
+        id: u64,
+        method: &str,
+        frame: &Value,
+        transmit: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()>;
+    fn observed(&self, id: u64, method: &str, result: &Result<Value>) -> Result<()>;
+    fn uncertain(&self, id: u64, method: &str) -> Result<()>;
+}
+fn changes_session(method: &str) -> bool {
+    matches!(
+        method,
+        "thread/start" | "thread/resume" | "turn/start" | "turn/steer" | "review/start"
+    )
+}
 pub struct RpcClient {
     reader: Pin<Box<dyn AsyncRead + Send>>,
     writer: Pin<Box<dyn AsyncWrite + Send>>,
@@ -851,7 +876,7 @@ pub struct RpcClient {
     events: VecDeque<SessionEvent>,
     next_id: u64,
     request_timeout: Duration,
-    child: Option<Child>,
+    child: Option<std::sync::Arc<OwnedProviderProcess>>,
     diagnostic_task: Option<tokio::task::JoinHandle<()>>,
     expected_home: Option<PathBuf>,
     initialized: bool,
@@ -861,6 +886,7 @@ pub struct RpcClient {
     models: Option<Vec<Value>>,
     verified_permissions: Option<String>,
     pending_reconciliation: Option<String>,
+    request_gate: Option<std::sync::Arc<dyn RequestGate>>,
     pub last_valid_output: Instant,
     pub last_semantic_event: Instant,
 }
@@ -891,9 +917,50 @@ impl RpcClient {
             models: None,
             verified_permissions: None,
             pending_reconciliation: None,
+            request_gate: None,
             last_valid_output: Instant::now(),
             last_semantic_event: Instant::now(),
         })
+    }
+    pub fn bind_request_gate(&mut self, gate: std::sync::Arc<dyn RequestGate>) -> Result<()> {
+        if self.request_gate.is_some() || !self.allowed_tools.is_empty() {
+            return Err(Error::new(
+                "ownership_conflict",
+                "provider mutation gate must be bound once before a worker thread",
+            ));
+        }
+        self.request_gate = Some(gate);
+        Ok(())
+    }
+    async fn dispatch_request(&mut self, id: u64, method: &str, params: Value) -> Result<()> {
+        let frame = json!({"id":id,"method":method,"params":params});
+        if let Some(gate) = self
+            .request_gate
+            .clone()
+            .filter(|_| changes_session(method))
+        {
+            let handle = tokio::runtime::Handle::current();
+            if handle.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+                return Err(Error::new(
+                    "prerequisite",
+                    "guarded provider dispatch requires the multithread host runtime",
+                ));
+            }
+            let bound = self.request_timeout.min(Duration::from_secs(5));
+            tokio::task::block_in_place(|| {
+                gate.dispatch(id, method, &frame, &mut || {
+                    handle.block_on(async {
+                        tokio::time::timeout(bound, self.send(&frame))
+                            .await
+                            .map_err(|_| {
+                                Error::new("timeout", "provider pipe dispatch exceeded its bound")
+                            })?
+                    })
+                })
+            })
+        } else {
+            self.send(&frame).await
+        }
     }
     pub async fn verify_version(executable: &Path, deadline: Duration) -> Result<()> {
         if !executable.is_absolute() {
@@ -904,15 +971,45 @@ impl RpcClient {
         let mut command = Command::new(executable);
         command
             .arg("--version")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
             .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
             .kill_on_drop(true);
-        let output = tokio::time::timeout(deadline, command.output())
-            .await
-            .map_err(|_| Error::new("timeout", "Codex version probe timed out"))?
-            .map_err(|e| Error::io("Codex version probe", e))?;
-        if !output.status.success()
-            || String::from_utf8_lossy(&output.stdout).trim() != SUPPORTED_CODEX_VERSION
-        {
+        let (mut child, group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command)?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::new("process_error", "version probe stdout is missing"))?;
+        let child = std::sync::Arc::new(OwnedProviderProcess::new(child, group));
+        let mut bytes = Vec::new();
+        let result = tokio::time::timeout(deadline, async {
+            stdout
+                .take(4097)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|error| Error::io("read Codex version", error))?;
+            if bytes.len() > 4096 {
+                return Err(Error::new(
+                    "protocol_error",
+                    "version response exceeds its finite bound",
+                ));
+            }
+            loop {
+                if let Some(status) = child.child.lock().await.observe_exit()? {
+                    child.record_exit();
+                    break Ok(status);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .map_err(|_| Error::new("timeout", "Codex version probe timed out"));
+        let terminated = terminate_owned_provider(&child).await;
+        terminated?;
+        let status = result??;
+        if !status.success() || String::from_utf8_lossy(&bytes).trim() != SUPPORTED_CODEX_VERSION {
             return Err(Error::new(
                 "unsupported_codex_version",
                 format!(
@@ -928,7 +1025,30 @@ impl RpcClient {
         permissions: &PermissionConfiguration,
         request_timeout: Duration,
     ) -> Result<Self> {
-        Self::verify_version(executable, request_timeout).await?;
+        let verified = Self::verify_executable(executable, request_timeout).await?;
+        Self::start_verified(&verified, codex_home, permissions, request_timeout)
+    }
+    pub async fn verify_executable(
+        executable: &Path,
+        deadline: Duration,
+    ) -> Result<VerifiedCodexExecutable> {
+        let identity = crate::platform::BinaryIdentity::inspect(executable, false)?;
+        Self::verify_version(&identity.path, deadline).await?;
+        identity.revalidate(false)?;
+        Ok(VerifiedCodexExecutable(identity))
+    }
+    /// Synchronous process creation, for use inside the host's serialized fresh
+    /// permit gate. Install the returned owned cancellation handle before release.
+    pub fn start_verified(
+        executable: &VerifiedCodexExecutable,
+        codex_home: &Path,
+        permissions: &PermissionConfiguration,
+        request_timeout: Duration,
+    ) -> Result<Self> {
+        executable.0.revalidate(false)?;
+        if request_timeout.is_zero() {
+            return Err(Error::invalid("request timeout must be positive"));
+        }
         let home = codex_home
             .canonicalize()
             .map_err(|e| Error::io("Codex auth home", e))?;
@@ -950,7 +1070,7 @@ impl RpcClient {
                 ));
             }
         }
-        let mut command = Command::new(executable);
+        let mut command = Command::new(&executable.0.path);
         command.args(["app-server", "--listen", "stdio://", "--strict-config"]);
         for (key, value) in permissions
             .settings
@@ -971,13 +1091,7 @@ impl RpcClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        #[cfg(unix)]
-        {
-            command.process_group(0);
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|e| Error::io("start Codex app-server", e))?;
+        let (mut child, group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command)?;
         let stdout = child
             .stdout
             .take()
@@ -997,7 +1111,7 @@ impl RpcClient {
             while matches!(stderr.read(&mut buffer).await,Ok(n) if n>0) {}
         });
         let mut rpc = Self::from_transport(stdout, stdin, request_timeout)?;
-        rpc.child = Some(child);
+        rpc.child = Some(std::sync::Arc::new(OwnedProviderProcess::new(child, group)));
         rpc.diagnostic_task = Some(diagnostic_task);
         rpc.expected_home = Some(home);
         Ok(rpc)
@@ -1106,6 +1220,7 @@ impl RpcClient {
                         && !s.input_required
                 });
                 let tool_result = if bound && self.allowed_tools.contains(&call.name) {
+                    broker.observe_session(state.as_deref().expect("checked bound session"))?;
                     broker.call(&call).await
                 } else {
                     Err(Error::new(
@@ -1172,6 +1287,9 @@ impl RpcClient {
                 return Ok(());
             }
         };
+        if let Some(current) = state.as_deref() {
+            broker.observe_session(current)?;
+        }
         self.send(&json!({"id":id,"result":result})).await?;
         self.emit(SessionEvent::new(
             event_kind,
@@ -1204,8 +1322,7 @@ impl RpcClient {
             .ok_or_else(|| Error::new("protocol_error", "request ID exhausted"))?;
         let deadline = Instant::now() + self.request_timeout;
         let result = timeout_at(deadline, async {
-            self.send(&json!({"id":id,"method":method,"params":params}))
-                .await?;
+            self.dispatch_request(id, method, params).await?;
             loop {
                 match self.read_message().await? {
                     RpcMessage::Response {
@@ -1241,6 +1358,9 @@ impl RpcClient {
                             )
                         };
                         self.emit(event)?;
+                        if let Some(current) = state.as_deref() {
+                            broker.observe_session(current)?;
+                        }
                     }
                     RpcMessage::Request { id, method, params } => {
                         self.service_request(id, &method, params, state.as_deref_mut(), broker)
@@ -1250,6 +1370,23 @@ impl RpcClient {
             }
         })
         .await;
+        let gate = self
+            .request_gate
+            .clone()
+            .filter(|_| changes_session(method));
+        if let Some(gate) = gate {
+            match &result {
+                Ok(observed)
+                    if observed.is_ok()
+                        || observed
+                            .as_ref()
+                            .is_err_and(|e| e.code == "provider_response") =>
+                {
+                    gate.observed(id, method, observed)?
+                }
+                _ => gate.uncertain(id, method)?,
+            }
+        }
         match result {
             Ok(result) => {
                 if result
@@ -1772,6 +1909,7 @@ impl RpcClient {
             Ok(Err(e)) => Err(e),
             Ok(Ok(RpcMessage::Notification { method, params })) => {
                 let event = state.notification(&method, &params)?;
+                broker.observe_session(state)?;
                 self.emit(event.clone())?;
                 Ok(event)
             }
@@ -1789,38 +1927,14 @@ impl RpcClient {
             )),
         }
     }
+    pub fn cancellation(&self) -> Option<OwnedProviderCancellation> {
+        self.child.as_ref().map(|child| OwnedProviderCancellation {
+            child: child.clone(),
+        })
+    }
     pub async fn terminate(&mut self) -> Result<()> {
-        if let Some(child) = &mut self.child
-            && child
-                .try_wait()
-                .map_err(|e| Error::io("check owned provider process", e))?
-                .is_none()
-        {
-            #[cfg(unix)]
-            if let Some(id) = child.id() {
-                unsafe {
-                    libc::kill(-(id as i32), libc::SIGTERM);
-                }
-            }
-            if tokio::time::timeout(Duration::from_secs(5), child.wait())
-                .await
-                .is_err()
-            {
-                #[cfg(unix)]
-                if let Some(id) = child.id() {
-                    unsafe {
-                        libc::kill(-(id as i32), libc::SIGKILL);
-                    }
-                }
-                child
-                    .kill()
-                    .await
-                    .map_err(|e| Error::io("kill owned provider", e))?;
-                child
-                    .wait()
-                    .await
-                    .map_err(|e| Error::io("reap owned provider", e))?;
-            }
+        if let Some(child) = &self.child {
+            terminate_owned_provider(child).await?;
         }
         if let Some(task) = self.diagnostic_task.take() {
             task.abort();
@@ -1828,8 +1942,109 @@ impl RpcClient {
         Ok(())
     }
 }
+/// Same-process capability for one unreaped spawned adapter, never a restored PID.
+#[derive(Clone)]
+pub struct OwnedProviderCancellation {
+    child: std::sync::Arc<OwnedProviderProcess>,
+}
+struct OwnedProviderProcess {
+    child: tokio::sync::Mutex<ProviderChild>,
+    exited: std::sync::atomic::AtomicBool,
+}
+impl OwnedProviderProcess {
+    fn new(child: Child, group: crate::process_group::OwnedGroup) -> Self {
+        Self {
+            child: tokio::sync::Mutex::new(ProviderChild { child, group }),
+            exited: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+    fn record_exit(&self) {
+        self.exited.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+impl OwnedProviderCancellation {
+    pub fn exited(&self) -> Result<bool> {
+        if self.child.exited.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(true);
+        }
+        let Ok(mut child) = self.child.child.try_lock() else {
+            return Ok(false);
+        };
+        let exited = child.observe_exit()?.is_some();
+        if exited {
+            self.child.record_exit();
+        }
+        Ok(exited)
+    }
+    pub fn request_cancel(&self) -> Result<()> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+            Error::new(
+                "prerequisite",
+                "owned adapter cancellation needs its running host executor",
+            )
+        })?;
+        let child = self.child.clone();
+        runtime.spawn(async move {
+            let _ = terminate_owned_provider(&child).await;
+        });
+        Ok(())
+    }
+    pub async fn join_termination(&self) -> Result<()> {
+        terminate_owned_provider(&self.child).await
+    }
+}
+struct ProviderChild {
+    child: Child,
+    group: crate::process_group::OwnedGroup,
+}
+impl ProviderChild {
+    fn observe_exit(&mut self) -> Result<Option<std::process::ExitStatus>> {
+        if !self.group.observe_exit_before_reap()? {
+            return Ok(None);
+        }
+        self.child
+            .try_wait()
+            .map_err(|error| Error::io("reap owned provider", error))
+    }
+}
+async fn terminate_owned_provider(process: &std::sync::Arc<OwnedProviderProcess>) -> Result<()> {
+    let mut child = process.child.lock().await;
+    if child.observe_exit()?.is_some() {
+        process.record_exit();
+        return Ok(());
+    }
+    child
+        .group
+        .terminate(crate::process_group::Termination::Terminate)?;
+    let grace = Instant::now() + Duration::from_secs(5);
+    let deadline = grace + Duration::from_secs(5);
+    let mut forced = false;
+    loop {
+        if child.observe_exit()?.is_some() {
+            process.record_exit();
+            return Ok(());
+        }
+        if !forced && Instant::now() >= grace {
+            child
+                .group
+                .terminate(crate::process_group::Termination::Kill)?;
+            forced = true;
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::new(
+                "operation_uncertain",
+                "owned provider exit remains unconfirmed after termination",
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 impl Drop for RpcClient {
     fn drop(&mut self) {
+        if let Some(owned) = self.cancellation() {
+            let _ = owned.request_cancel();
+        }
         if let Some(task) = self.diagnostic_task.take() {
             task.abort();
         }
@@ -1916,4 +2131,95 @@ fn toml_inline(value: &Value) -> Result<String> {
                 .join(",")
         )),
     }
+}
+
+/// Metadata-only connection evidence. This never creates a thread or turn and
+/// does not attest live worker sandbox qualification or successful model work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexConnectionMetadata {
+    pub supported_version: String,
+    pub protocol_profile: String,
+    pub account_id: String,
+    pub auth_home: PathBuf,
+    pub permission_digest: String,
+    pub argument_digest: Option<String>,
+    pub model_catalog: Vec<Value>,
+    pub rate_limits: Value,
+    pub observed_at: String,
+}
+impl RpcClient {
+    /// A caller must already own/authorize this transport and its private home.
+    /// In tests, injected finite responses exercise this same metadata protocol.
+    pub async fn connection_metadata(
+        &mut self,
+        expected_account: &str,
+        permissions: &PermissionConfiguration,
+        cwd: &Path,
+    ) -> Result<CodexConnectionMetadata> {
+        let initialized = self.initialize().await?;
+        self.verify_account(expected_account).await?;
+        let model_catalog = self.discover_models().await?;
+        let rate_limits = self.rate_limits().await?;
+        self.verify_execution_configuration(permissions, cwd)
+            .await?;
+        Ok(CodexConnectionMetadata {
+            supported_version: SUPPORTED_CODEX_VERSION.into(),
+            protocol_profile: PROTOCOL_PROFILE.into(),
+            account_id: expected_account.into(),
+            auth_home: PathBuf::from(required_str(&initialized, "codexHome")?),
+            permission_digest: canonical_digest(1, &permissions.settings)?,
+            argument_digest: None,
+            model_catalog,
+            rate_limits,
+            observed_at: chrono::Utc::now().to_rfc3339(),
+        })
+    }
+}
+/// Explicit native connection/configuration verification, for an operator's
+/// setup/reconnect transaction. No login, token refresh, thread, turn or model
+/// task is started. Do not invoke this merely to qualify an unattended build.
+pub async fn probe_connection(
+    executable: &Path,
+    auth_home: &Path,
+    permissions: &PermissionConfiguration,
+    cwd: &Path,
+    expected_account: &str,
+) -> Result<CodexConnectionMetadata> {
+    let mut client =
+        RpcClient::spawn(executable, auth_home, permissions, Duration::from_secs(5)).await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        client.connection_metadata(expected_account, permissions, cwd),
+    )
+    .await
+    .map_err(|_| {
+        Error::new(
+            "timeout",
+            "Codex metadata verification exceeded its finite deadline",
+        )
+    });
+    let terminated = client.terminate().await;
+    let mut evidence = result??;
+    terminated?;
+    let mut argv = vec![
+        executable.to_string_lossy().into_owned(),
+        "app-server".into(),
+        "--listen".into(),
+        "stdio://".into(),
+        "--strict-config".into(),
+    ];
+    for (key, value) in permissions
+        .settings
+        .as_object()
+        .ok_or_else(|| Error::invalid("permission configuration must be an object"))?
+    {
+        argv.push("-c".into());
+        argv.push(format!("{key}={}", toml_inline(value)?));
+    }
+    evidence.argument_digest = Some(canonical_digest(
+        1,
+        &json!({"argv":argv,"auth_home":evidence.auth_home,"cwd":cwd,"protocol":PROTOCOL_PROFILE}),
+    )?);
+    Ok(evidence)
 }

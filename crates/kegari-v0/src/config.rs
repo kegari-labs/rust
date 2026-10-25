@@ -393,6 +393,7 @@ pub struct Repository {
 pub struct CiSuite {
     pub workflow_id: u64,
     pub required_checks: Vec<String>,
+    pub proof: HostedProofRoute,
     /// A configured declarative predicate, evaluated by the host, never by a worker.
     pub inapplicable_when: Option<InapplicablePredicate>,
 }
@@ -409,6 +410,81 @@ pub struct ExactRevisionWorkflow {
     pub source_input: String,
     pub operation_input: String,
     pub observed_source_output: String,
+    pub proof: HostedProofRoute,
+}
+
+/// Reviewed caller and reusable workflow revisions that may mint hosted proof.
+/// Mutable runner labels and unpinned workflow names never establish trust.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostedProofRoute {
+    pub workflow_ref: String,
+    pub workflow_sha: String,
+    pub job_workflow_ref: String,
+    pub job_workflow_sha: String,
+    pub event_name: String,
+}
+impl HostedProofRoute {
+    pub fn validate(&self) -> Result<()> {
+        for sha in [&self.workflow_sha, &self.job_workflow_sha] {
+            if sha.len() != 40
+                || !sha
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(Error::invalid(
+                    "hosted proof workflow revisions require exact lowercase 40-character Git SHAs",
+                ));
+            }
+        }
+        for reference in [&self.workflow_ref, &self.job_workflow_ref] {
+            let Some((path, revision)) = reference.rsplit_once('@') else {
+                return Err(Error::invalid(
+                    "hosted proof workflow reference needs repository/path@revision",
+                ));
+            };
+            let components: Vec<_> = path.split('/').collect();
+            if components.len() != 5
+                || components[2] != ".github"
+                || components[3] != "workflows"
+                || components.iter().any(|s| {
+                    s.is_empty()
+                        || *s == "."
+                        || *s == ".."
+                        || s.contains(['\\', '\0', '@', ':'])
+                        || s.chars().any(char::is_whitespace)
+                })
+                || !(components[4].ends_with(".yml") || components[4].ends_with(".yaml"))
+                || revision.is_empty()
+                || revision.chars().any(char::is_whitespace)
+                || revision.contains(['@', '\\', '\0'])
+            {
+                return Err(Error::invalid(
+                    "hosted proof workflow reference must be an exact owner/repository/.github/workflows/file.yml@revision",
+                ));
+            }
+        }
+        if !self
+            .job_workflow_ref
+            .ends_with(&format!("@{}", self.job_workflow_sha))
+        {
+            return Err(Error::invalid(
+                "trusted reusable workflow must be referenced at its exact configured SHA",
+            ));
+        }
+        if ![
+            "workflow_dispatch",
+            "pull_request",
+            "push",
+            "workflow_call",
+            "merge_group",
+        ]
+        .contains(&self.event_name.as_str())
+        {
+            return Err(Error::invalid("hosted proof trigger event is unsupported"));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
@@ -771,7 +847,15 @@ impl Config {
             operator.validate()?;
         }
         for (user, operator) in &self.control.tailscale_users {
-            nonempty(user, "verified Tailscale user ID")?;
+            if user
+                .parse::<u64>()
+                .ok()
+                .is_none_or(|id| id == 0 || id.to_string() != *user)
+            {
+                return Err(Error::invalid(
+                    "Tailscale operator keys must be canonical positive numeric UserProfile.ID values, not display login names",
+                ));
+            }
             operator.validate()?;
         }
         if let Some(https) = &self.control.https {
@@ -848,6 +932,7 @@ impl Repository {
                     ));
                 }
                 unique_nonempty(&suite.required_checks, "required CI checks", false)?;
+                suite.proof.validate()?;
                 if let Some(InapplicablePredicate::PathsUnchanged(paths)) = &suite.inapplicable_when
                 {
                     unique_nonempty(paths, "inapplicable paths", false)?;
@@ -897,6 +982,14 @@ impl Repository {
 }
 impl ExactRevisionWorkflow {
     fn validate(&self) -> Result<()> {
+        self.proof.validate()?;
+        if self.proof.workflow_sha != self.workflow_revision
+            || self.proof.event_name != "workflow_dispatch"
+        {
+            return Err(Error::invalid(
+                "exact-source dispatch proof must pin the configured caller revision and workflow_dispatch event",
+            ));
+        }
         if self.workflow_id == 0
             || self.workflow_revision.len() != 40
             || !self

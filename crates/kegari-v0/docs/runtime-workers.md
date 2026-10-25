@@ -1,0 +1,53 @@
+# Runtime worker preparation
+
+`runtime_workers::launch` connects current sealed runtime authority to the actual
+worker adapter. It accepts a canonical phase, owned lease, operation ID, finite
+turn/duration bounds and, where applicable, a host-selected exact repository
+commit/tree. It derives the role from the authorized child's responsibility or
+independent-review gate. Parent coordination never receives source-write rights.
+
+The runtime checks durable retry eligibility before preparation. A separate
+preparation admission reserves the same canonical work identity. Owned Git clone
+creation has a durable Sent effect, cancellation registration and a fresh gate
+around every subprocess start. Waiting happens outside the control mutex.
+Creation hooks use the real LocalExecutor and retained HookLedger. Failed or
+unknown preparation preserves directories and records; an exit-observation
+failure fences before requesting cancellation. An empty in-memory registry alone
+is not recovery proof for work from a prior host process.
+
+Only after observed local preparation exit does the runtime retire that
+preparation claim, check retry eligibility again, assemble the exact installed
+instructions and admit the model attempt. The durable admission binds account,
+workspace, normalized tracker state, phase, profile, instruction digest and
+original finite bounds. The coordinator checks current global/account/workspace/
+state capacity atomically and retains the actual configuration/workflow snapshot
+for admitted work. Every later effect still checks current authority and OS
+ownership. Ordinary selection-filter changes may drain admitted work; authority
+or resource-access revocations cannot.
+
+Task context uses the production assembly's exact schema and selected parent
+scope. It contains observed issue/required-child/correction data and only that
+parent's verified evidence and history. Independent PR context contains its exact
+repository/head/base and does not invent a Linear parent. Read-only children
+without a repository use a separate empty owned substrate, retain their declared
+reasoning responsibility, and expose no Git, source-write, validation or hook
+execution. Repository-backed children use an owned clone; the operator checkout
+is never reset or written.
+
+Product source writes and disposable test-resource writes are distinct grants.
+Each resource grant must match the actual configured path and writable/disposable
+flags plus the child's authorized resource names. Resource writes cannot overlap
+any configured operator checkout, product source, scratch, credentials or control
+records; writable resource trees reject symlinks and hardlinks. The instruction
+manifest, Codex permission configuration and local execution policy bind these
+same grants. Built-in Codex shell execution is disabled for every role. Declared
+repository checks, restricted Git inspection and source writes use host tools.
+
+Deterministic coverage checks source/generation binding, configured resource
+flags, forbidden resource aliases, role/tool narrowing and actual assembled
+manifests. It does not qualify live Codex or native sandbox containment. The
+native command boundary still retains `process_tree_unverified` where group exit
+and pipe EOF cannot prove that detached descendants exited. Delivery-specific
+sealed review/validation phases, continuation readmission, durable native worker
+process recovery and non-Linear cleanup inventory are separate remaining
+integration work; retained preparation records do not authorize cleanup.

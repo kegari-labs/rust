@@ -1,6 +1,17 @@
 # Kegari v0 build progress
 
-Local implementation and integration remain in progress. The real shared command dispatcher now has **6 passing composition tests**, alongside **17 control/storage**, **10 API**, **5 platform fixture** (2 native blocked), **3 process-channel** and **2 connection-import** tests. Provider reconciliation, scoped workers and local execution also have passing focused suites recorded below. This is **not** a complete application or readiness claim: the executable factory, full workflow/supervisor integration, service operations, cleanup and qualification remain unfinished. The operator is **unattended**; live agent evaluations, remote mutations, installation, deployment and required human calibration have not been authorized or run. Independent local engineering continues.
+Local implementation and integration remain in progress. The complete offline
+crate suite passed **411 tests, with 2 explicitly blocked native tests ignored**.
+Strict all-target Clippy passed. A subsequent review correction for stale retry
+grants passed its affected library/decision/scheduling/worker rerun. See
+[the local integration report](validation/LOCAL-INTEGRATION.md). These are
+component results, not full application conformance.
+The runtime decision facade and protected provider-session recovery are being
+connected. The complete scheduler, phase progression and executable entry remain
+in flight. Native descendant containment remains an implementation blocker and
+fails closed. The operator remains **unattended**. Live agents, remote mutations,
+installation, deployment and required human calibration have not been authorized
+or run. Independent local engineering continues.
 
 ## Baseline and authority
 
@@ -22,7 +33,7 @@ Local implementation and integration remain in progress. The real shared command
 
 Current checkpoint: strict configuration/workflow, embedded instruction assets, canonical digests, private durable storage, serialized intent/admission/mutations, authorization/correction/scheduling primitives, immutable paged snapshots, pinned app-server/isolation adapter, and deterministic Git/evidence/release primitives are implemented and have focused tests. Real Git fixtures preserve the source checkout/index, exclude staged B from A's candidate, and preserve failed candidates. Provider schemas/config parsing are verified locally; actual sandbox enforcement is not.
 
-Root owns shared files, control/persistence, application integration, this record and commits. Five completed local checkpoints are recorded below. Current in-flight ownership: root owns the concrete dispatcher/runtime engine and host factory; the configuration agent owns cleanup/logging and transport drain; the Codex agent owns the supervisor, worker factory and local executable/service wiring; the delivery agent owns exact-revision delivery progression. `main.rs` remains unwired at this checkpoint. Component APIs are not a substitute for the complete workflow; configuration/supervisor/factory and full delivery integration remain required.
+Root owns shared files, control/persistence, application integration, this record and commits. Six completed local checkpoints are recorded below. Current in-flight ownership: root owns the dispatcher/runtime engine and shared control integration; the configuration agent owns active reload/permission fences and decision integration; the Codex agent owns the native host, worker construction and executable/service wiring; the delivery agent owns exact-revision child/parent/release progression. `main.rs` remains unwired at this checkpoint. Component APIs are not a substitute for the complete workflow; configuration/supervisor/factory and full delivery integration remain required.
 
 Latest focused component results: 30 configuration/harness, 13 configuration-transaction, 21 provider, 15 reconciliation, 11 transport, 15 worker, 14 local execution, 15 delivery-composition, 24 CLI, 8 local-CLI, 6 supervisor, 22 protocol and 20 deterministic evaluation tests. These were run by their owning agents and are subject to affected reruns as integration changes continue. Root directly reran the dispatcher/control/API/platform/channel/connection results in the summary. No aggregate full-suite or complete SC/V0-T scenario pass is claimed.
 
@@ -70,7 +81,104 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 - Root checkpoint validation: the frozen Git/evidence/release files pass 28 `git_delivery` tests, selected-file `rustfmt --check`, and `git diff --check`. This increment adds canonical signed-publication framing, pre-merge review identity, explicit replacement contribution inventories, authenticated production-integration recovery, no-release-required proofs and read-only manual-release eligibility. It is kept separate from the earlier nonadjacent core checkpoint because it is a new independently reviewable contract correction with intervening provider/harness commits; no history rewrite or consolidation is needed.
 - Dispatcher/recovery corrections now pass 6 application, 17 control/storage and 15 reconciliation tests: background configuration work survives HTTP timeout, active work cannot be prematurely reconciled, snapshot continuations preserve original metadata, and recovery retains required-child identities while re-reading signed provider authority. The initial observation cache remains explicitly pending, and failed refreshes cannot authorize admission.
 - The bounded artifact archive reader uses exact `zip` 9.1.0 with the Rust deflate backend, locked with its dependencies. Package metadata and primary crate documentation were checked; archives are bounded and parsed in memory, never extracted into an execution directory.
+- **Corrected provider responsiveness and cancellation finding:** provider preflight
+  and response waits no longer retain the control mutex. A unique durable
+  Prepared reservation precedes asynchronous reads; current gates run before
+  reads and before serialized Sent/owned-task dispatch. Actual network tasks
+  survive caller aborts, cannot be prematurely reconciled or service-stopped,
+  and preserve unknown receipts. The two new offline wire regressions pass as
+  part of 23 provider tests. One first run failed only because the new test
+  asserted `status_id` instead of the adapter's established `record_id`; the
+  assertion was corrected to the real receipt schema, retaining all behavior
+  checks. Decision callbacks were also changed to prepare complete observations
+  asynchronously and use cache-only final checks; observation publication now
+  serializes with dispatch.
+- **Canonical ownership and active reload corrections:** canonical issue/PR
+  claims now remain stable across generations and filter/profile edits. Durable
+  phase identity still binds exact work generations and budgets. Atomic run
+  admission counts actual active receipts under the control lock, including
+  global, account, workspace and normalized-state limits; the concurrent
+  capacity regression passes. Opaque admitted settings snapshots retain original
+  workflow/profile settings while re-reading current permissions and provider
+  facts. The 21 reconciliation and 17 configuration tests include ordinary reload,
+  invalid future workflow, actor/path/access revocation, known reductions in an
+  otherwise invalid proposal, persistence/restart, and unknown-effect holds.
+  Independent-review drain and final runtime integration checks remain in flight.
+- **Dispatcher permission regression:** retained cached transport roles cannot
+  survive disabling HTTPS or a known monotone role reduction. Both tests pass
+  through the real dispatcher; unchanged inspect authority remains usable.
+- **Owned-process finding and retained failure:** leader exit alone did not prove
+  process-group descendants exited. The new owned-group helper reserves the
+  unreaped leader while observing/terminating remaining members. Darwin quick
+  exit returned ESRCH from getpgid and EPERM for a terminal-only group, initially
+  breaking ten decision fixtures and the bounded Git process test. The helper
+  now captures creation provenance and performs complete read-only native group
+  inspection; its three actual local process fixtures and bounded Git unit pass.
+  Shared affected suites are being rerun. No security-policy change or sandbox
+  bypass was made; escaped sessions and denied/incomplete observations remain
+  explicit uncertainty.
+- **Material native process-containment finding (open):** the new finite
+  escape fixture demonstrates that a descendant can call setsid, close inherited
+  streams and continue writing after the original group exits. Existing Seatbelt
+  configuration has no verified escape denial. Native group/stream completion
+  therefore no longer grants the stronger all-processes-exited/check capability;
+  `process_tree_unverified` retains the Sent receipt, permit and owned reference.
+  This is an incomplete implementation guarantee, not merely an unrun test.
+  Built-in Codex shell is now disabled for every role; declared commands remain
+  scoped host tools. A real process-containment/ownership mechanism and supervised
+  native qualification remain required. No sandbox bypass or host change was made.
+- Runtime authority, actual worker-handle collection, retained admission settings,
+  signed pending outcomes and durable attempt planning are being composed in
+  `src/runtime.rs`, `src/runtime_schedule.rs` and `src/runtime_workers.rs`. The
+  worker helper uses separate preparation and model admissions. Explicit
+  disposable test-resource write grants and no-repository read-only child
+  contexts are being integrated. Worker completion remains a pending claim.
+  Full scheduling/phase progression/continuation/correction/recovery and the
+  executable entrypoint remain incomplete. Abrupt-host orphan recovery and exact
+  remote Git object acquisition into owned caches are newly identified gaps;
+  configured source checkouts are never assumed magically up to date.
 - Real-agent evaluations: not run. Real integrations: not run. Human calibration: not run. No provider mutations, Keychain changes or unknown remote outcomes exist for this build.
+- Runtime decision composition now delegates actual human commands through
+  `DecisionManager`, stores only sealed acceptance/correction/retry proofs, and
+  requires a concrete release/recovery backend. Retry selection rejects ambiguous
+  phases, incomplete admissions and unresolved effects. Restart recovery checks
+  exact current signed native comments against publication receipts and complete
+  prior admission digests. Its newest recovery regression is awaiting an affected
+  rerun; the initial three selection regressions passed.
+- Review found that correction/retry generations could bypass provider intervention
+  if only the latest exact-phase receipt were checked. New account/work guards
+  scan historical receipts, and the worker checkpoints authoritative session state
+  before continuing. Runtime inserts intervention/input holds under the same gate
+  as new admissions and recovers bound protected journals. Later successful exits,
+  profile edits and new retry budgets cannot clear them. Six scheduling tests and
+  nine then-current library tests passed; the latest recovery/cache additions need
+  their affected rerun. No supported provider-resolution adapter exists yet.
+- Additional review fixes: cached acceptance now compares the exact evidence token
+  within a generation; edited/deleted acceptance/retry/correction publications are
+  re-read before proof insertion; a shared pre-dispatch correction fence closes
+  stale normal and active gates until intake or actual `not_sent` reconciliation.
+  Agent-reported latest decision/reconciliation/cleanup run: 13/24/11 passes.
+- Process journaling now preserves Starting references, actual spawned process
+  identity and an inherited OS guard. Three deterministic journal fixtures pass.
+  Group exit still does not prove full descendant exit; durable identity records
+  never authorize signalling a PID reconstructed from disk. Worker injection and
+  crash recovery integration remain in progress.
+- Full Clippy and the latest root focused rerun initially stopped at shared schema
+  migration compile errors (`HostedProofExpectation.context_digest`, then the
+  parent evidence fixture's `ProductionBaseline.target_artifacts`). These are
+  retained integration failures, not test passes. Target-specific deployed artifact
+  provenance is being implemented; no single artifact is selected arbitrarily for
+  multiple deployment targets. SPEC SHA and `git diff --check` still pass.
+- The complete registered crate subsequently passed 411 offline tests with two
+  explicit native ignores, plus strict all-target Clippy and the coverage inventory.
+  Independent review then found a retry grant could survive a deleted publication
+  until status inspection refreshed the grant cache. Planning, selection and the
+  final serialized admission now revalidate the exact current native grant and
+  reject superseded budgets; cached recovery errors also block retry selection.
+  The affected 11 library/13 decision/6 schedule/28 worker tests passed again.
+  Unregistered development drafts were moved out of `src`, because the build
+  provenance hashes all source-directory files. The pending executable is at
+  `/private/tmp/kegari-v0-main.rs.pending`; no coordinator has been activated.
 
 ## Blockers and bounded follow-up dependencies
 
@@ -80,6 +188,7 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 | Disposable Linear/GitHub integration; §§4/8/9/12 | Not attempted: remote repository writes and deployment remain prohibited, no approved disposable targets. Prepare exact account/target/action/evidence/recovery plan; explicit scoped authorization must amend applicable prohibitions before remote test actions. |
 | Tailscale/media/background/locked-session/handover; §§7/8.5/10.3/11 | Required utilities not on PATH; no installation attempted. Implement adapters and deterministic fixtures; later identify installed supported paths or operator-provisioned tools/certificates and approve bounded host testing. |
 | Actual macOS execution boundary; §7.1, V0-T12, E07 | Installed Codex schema generation and credential-free strict named-permission parsing succeeded. A nested sandbox probe exited 71 (`sandbox_apply: Operation not permitted`) under the existing outer sandbox. No bypass/unsandboxed retry. Continue deterministic boundary tests; actual canaries need a permitted supervised execution environment before qualification. |
+| Native execution descendants; §§7.1/11, V0-T12/23/E07 | An ordinary finite owned fixture proves setsid descendants can outlive group/EOF completion. Native result promotion now fails closed with `process_tree_unverified`; implement verifiable containment/descendant ownership before native checks can pass, then qualify in an allowed supervised environment. This is an engineering gap, not permission to use group exit as full proof. |
 | Native process ownership; §§6.1/11, V0-T07–09/23 | Read-only macOS boot-identity query returns `Operation not permitted` in this sandbox. Production ownership discovery fails closed; two retained native tests are explicitly blocked. Injected deterministic process fixtures verify registration/intent/lease logic only. A permitted supervised environment is required for actual process birth/boot identity, termination and restart qualification. |
 | GitHub-hosted runner provenance; §§8.2/9.4 | Job labels do not prove runner type. Signed OIDC verifier now binds fixed issuer/JWKS, audience, exact job/run/attempt/workflow and time/replay guards. The trigger SHA is distinct from the source actually checked out: the reviewed pinned proof workflow must verify the tested checkout and derive the audience accordingly. Adapter fixtures pass; proof workflow preparation/collection and actual hosted route remain unqualified. |
 | Human qualitative review/calibration; §12.4.3 | Operator explicitly unavailable; not attempted. Prepare representative evidence across every qualitative rubric and all material failures, then request review only when supervision is explicit. |
@@ -96,4 +205,11 @@ These block only dependent validation, not local implementation. No missing prer
 - Local checkpoint `55712e1a6ba1de8e17d9cbf95ee166c7347a5d58` — `feat(kegari-v0): enforce isolated delivery and evidence gates` follows 18 passing focused tests, including the atomic lock-reconciliation regression. No commits were consolidated or rewritten. Later replacement/production accounting changes remain uncommitted pending review correction.
 - Local checkpoint `20a932b6727c93dd5af77964efa22db66583b1ca` — `feat(kegari-v0): add scoped provider adapters and hosted proof verification` records 18 passing offline wire/proof/receipt tests and strict Clippy. Provider HTTP implementations and fixed-issuer signed proof verification are committed; executable integration and real provider compatibility remain incomplete. Separate checkpoints preserve the independently reviewable adapter, harness and delivery contracts; no history rewrite or consolidation was performed.
 - Local checkpoint `92b5cd42b9acf88884006086cfb11f2d87b1f032` — `feat(kegari-v0): add version-bound agent evaluation fixtures and runner` records 28 variants/56 bounded trial slots, 20 passing deterministic runner/grader tests, full tool/mode provenance review corrections and build-bound instruction manifests. No actual-agent trials or human calibration ran. No history rewrite or consolidation occurred.
+- Local checkpoint `ac79bdb7002143fb4324a895de7b4a29cc2096c8` —
+  `feat(kegari-v0): track replacements and bind delivery provenance` follows 28
+  passing Git/evidence fixtures and selected formatting/diff checks. The initial
+  same-change commit `4a689e284c68662ae7754e3f0af2363418b79d0f` was immediately
+  amended only to wrap its body at 80 characters. Recovery reference
+  `refs/recovery/kegari-v0/4a689e2` was created first; its file tree and final HEAD
+  were verified identical. No other commits were consolidated or rewritten.
 - Provider/evaluation/API/platform increments remain intentionally in flight and excluded from the committed foundation claim. All test processes are bounded local Cargo tests; no lasting service has been installed/started. Git test fixtures are owned temporary repositories. No project branch/worktree, push, deployment or coordinator activation occurred.

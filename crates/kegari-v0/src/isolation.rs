@@ -38,6 +38,9 @@ pub struct IsolationPlan {
     pub scratch: PathBuf,
     pub read_roots: Vec<PathGrant>,
     pub source_writes: Vec<PathGrant>,
+    /// Explicit disposable test resources; never aliases product source.
+    #[serde(default)]
+    pub resource_writes: Vec<PathGrant>,
     pub forbidden_roots: Vec<PathBuf>,
     pub executables: Vec<PathBuf>,
 }
@@ -149,6 +152,14 @@ impl IsolationPlan {
         for forbidden in &mut plan.forbidden_roots {
             *forbidden = canonical_target(forbidden)?;
         }
+        if !matches!(plan.role, ExecutionRole::Child | ExecutionRole::Validation)
+            && !plan.resource_writes.is_empty()
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "this role cannot mutate test resources",
+            ));
+        }
         for allowed in [&plan.repository, &plan.scratch] {
             if plan.forbidden_roots.iter().any(|f| overlap(f, allowed)) {
                 return Err(Error::new(
@@ -161,6 +172,7 @@ impl IsolationPlan {
             .read_roots
             .iter_mut()
             .chain(plan.source_writes.iter_mut())
+            .chain(plan.resource_writes.iter_mut())
         {
             grant.path = canonical_target(&grant.path)?;
             if grant.directory && !grant.path.is_dir() {
@@ -187,7 +199,19 @@ impl IsolationPlan {
                     "source writes must belong to the assigned repository, excluding Git administration",
                 ));
             }
-            verify_writable_links(&grant.path)?;
+            verify_writable_links(&grant.path, false)?;
+        }
+        for grant in &plan.resource_writes {
+            if overlap(&grant.path, &plan.repository)
+                || overlap(&grant.path, &plan.scratch)
+                || !plan.read_roots.iter().any(|read| read == grant)
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "test-resource writes require an exact read grant outside repository and scratch",
+                ));
+            }
+            verify_writable_links(&grant.path, true)?;
         }
         for executable in &mut plan.executables {
             *executable = executable
@@ -217,7 +241,7 @@ impl IsolationPlan {
     }
 }
 
-fn verify_writable_links(path: &Path) -> Result<()> {
+fn verify_writable_links(path: &Path, resource: bool) -> Result<()> {
     let mut pending = vec![path.to_path_buf()];
     let mut visited = 0usize;
     while let Some(path) = pending.pop() {
@@ -236,6 +260,12 @@ fn verify_writable_links(path: &Path) -> Result<()> {
         // Symlink targets are separately enforced by the OS boundary; do not
         // follow them into unrelated trees during boundary preparation.
         if metadata.is_symlink() {
+            if resource {
+                return Err(Error::new(
+                    "scope_violation",
+                    "writable disposable resources cannot contain symbolic links",
+                ));
+            }
             continue;
         }
         #[cfg(unix)]
@@ -374,7 +404,12 @@ impl ValidatedIsolation {
                 quote_path(&grant.path)?
             ));
         }
-        for grant in &self.plan.source_writes {
+        for grant in self
+            .plan
+            .source_writes
+            .iter()
+            .chain(self.plan.resource_writes.iter())
+        {
             profile.push_str(&format!(
                 "(allow file-write* ({} {}))\n",
                 if grant.directory {
@@ -498,13 +533,13 @@ async fn bounded_output<R: tokio::io::AsyncRead + Unpin>(
 
 /// Run a check/hook only under the OS boundary. The caller persists its admitted
 /// operation before calling; outputs never establish revision provenance alone.
-pub async fn run_command(
+pub fn start_command(
     isolation: &ValidatedIsolation,
     argv: &[String],
     timeout: Duration,
     output_limit: usize,
     secret_values: &[String],
-) -> Result<CommandOutcome> {
+) -> Result<OwnedCommand> {
     isolation.revalidate()?;
     if matches!(
         isolation.plan.role,
@@ -550,9 +585,7 @@ pub async fn run_command(
         command.process_group(0);
     }
     let started = std::time::Instant::now();
-    let mut child = command
-        .spawn()
-        .map_err(|e| Error::io("spawn confined command", e))?;
+    let (mut child, group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command)?;
     let stdout = child
         .stdout
         .take()
@@ -561,75 +594,226 @@ pub async fn run_command(
         .stderr
         .take()
         .ok_or_else(|| Error::new("process_error", "missing stderr pipe"))?;
-    let mut out_task = tokio::spawn(bounded_output(stdout, output_limit));
-    let mut err_task = tokio::spawn(bounded_output(stderr, output_limit));
-    let result = tokio::time::timeout(timeout, child.wait()).await;
-    let timed_out = result.is_err();
-    let status = match result {
-        Ok(status) => status.map_err(|e| Error::io("wait confined command", e))?,
-        Err(_) => {
-            // The unreaped Child owns this PID, so it cannot already name a reused process.
-            #[cfg(unix)]
-            if let Some(id) = child.id() {
-                unsafe {
-                    libc::kill(-(id as i32), libc::SIGKILL);
-                }
-            }
-            child
-                .kill()
-                .await
-                .map_err(|e| Error::io("terminate confined command", e))?;
-            child
-                .wait()
-                .await
-                .map_err(|e| Error::io("reap confined command", e))?
-        }
-    };
-    // Descendants holding inherited pipes cannot prolong the result forever.
-    let collect = async {
-        let out = (&mut out_task)
-            .await
-            .map_err(|_| Error::new("process_error", "stdout collector interrupted"))?
-            .map_err(|e| Error::io("read command output", e))?;
-        let err = (&mut err_task)
-            .await
-            .map_err(|_| Error::new("process_error", "stderr collector interrupted"))?
-            .map_err(|e| Error::io("read command diagnostics", e))?;
-        Ok::<_, Error>((out, err))
-    };
-    let ((out, out_truncated), (err, err_truncated)) =
-        match tokio::time::timeout(Duration::from_secs(1), collect).await {
-            Ok(result) => result?,
-            Err(_) => {
-                out_task.abort();
-                err_task.abort();
-                return Err(Error::new(
-                    "operation_uncertain",
-                    "command descendants retain output pipes; preserve the run",
-                ));
-            }
-        };
-    let stderr = redact(String::from_utf8_lossy(&err).into_owned(), secret_values);
-    if stderr.contains("sandbox-exec: sandbox_apply")
-        || stderr.contains("sandbox-exec: sandbox_init")
-    {
-        return Err(Error::new(
-            "isolation_unavailable",
-            "host policy prevented applying the execution sandbox",
-        ));
-    }
-    Ok(CommandOutcome {
-        schema_version: 1,
+    let out_eof = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let err_eof = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let out_observed = out_eof.clone();
+    let err_observed = err_eof.clone();
+    Ok(OwnedCommand {
         argv: argv.to_vec(),
         cwd: isolation.plan.cwd.clone(),
         isolation_digest: isolation.digest.clone(),
-        exit_code: status.code(),
-        timed_out,
-        stdout: redact(String::from_utf8_lossy(&out).into_owned(), secret_values),
-        stderr,
-        output_truncated: out_truncated || err_truncated,
-        elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        started,
+        timeout,
+        secret_values: secret_values.to_vec(),
+        process: std::sync::Arc::new(std::sync::Mutex::new(CommandProcess {
+            child,
+            group,
+            terminal: None,
+            out_eof,
+            err_eof,
+        })),
+        out_task: tokio::spawn(async move {
+            let result = bounded_output(stdout, output_limit).await;
+            if result.is_ok() {
+                out_observed.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            result
+        }),
+        err_task: tokio::spawn(async move {
+            let result = bounded_output(stderr, output_limit).await;
+            if result.is_ok() {
+                err_observed.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            result
+        }),
     })
+}
+
+struct CommandProcess {
+    child: tokio::process::Child,
+    group: crate::process_group::OwnedGroup,
+    terminal: Option<std::process::ExitStatus>,
+    out_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    err_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl CommandProcess {
+    fn observe(&mut self) -> Result<Option<std::process::ExitStatus>> {
+        if self.terminal.is_none() && self.group.observe_exit_before_reap()? {
+            self.terminal = self
+                .child
+                .try_wait()
+                .map_err(|e| Error::io("reap owned command after group cleanup", e))?;
+        }
+        Ok(self.terminal)
+    }
+}
+/// Non-serializable capability anchored to an actual unreaped owned child.
+/// The control host must persist/fence operator cancellation before using it.
+#[derive(Clone)]
+pub struct OwnedCommandCancellation {
+    process: std::sync::Arc<std::sync::Mutex<CommandProcess>>,
+}
+impl OwnedCommandCancellation {
+    /// Observes only the directly owned process group and inherited streams.
+    /// This is diagnostic evidence, not permission to release run ownership.
+    pub fn group_exited(&self) -> Result<bool> {
+        let mut process = self
+            .process
+            .lock()
+            .map_err(|_| Error::new("process_error", "owned command lock failed"))?;
+        process.observe()?;
+        Ok(process.terminal.is_some()
+            && process.out_eof.load(std::sync::atomic::Ordering::SeqCst)
+            && process.err_eof.load(std::sync::atomic::Ordering::SeqCst))
+    }
+    pub fn exited(&self) -> Result<bool> {
+        if !self.group_exited()? {
+            return Ok(false);
+        }
+        Err(process_tree_unverified())
+    }
+    pub fn cancel(&self) -> Result<()> {
+        let mut process = self
+            .process
+            .lock()
+            .map_err(|_| Error::new("process_error", "owned command lock failed"))?;
+        if process.observe()?.is_some() {
+            return Ok(());
+        }
+        process
+            .group
+            .terminate(crate::process_group::Termination::Kill)
+    }
+}
+pub struct OwnedCommand {
+    argv: Vec<String>,
+    cwd: PathBuf,
+    isolation_digest: String,
+    started: std::time::Instant,
+    timeout: Duration,
+    secret_values: Vec<String>,
+    process: std::sync::Arc<std::sync::Mutex<CommandProcess>>,
+    out_task: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
+    err_task: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
+}
+impl OwnedCommand {
+    pub fn cancellation(&self) -> OwnedCommandCancellation {
+        OwnedCommandCancellation {
+            process: self.process.clone(),
+        }
+    }
+    pub async fn wait(self) -> Result<CommandOutcome> {
+        let cancellation = self.cancellation();
+        let mut timed_out = false;
+        let status = loop {
+            let status = {
+                let mut process = self
+                    .process
+                    .lock()
+                    .map_err(|_| Error::new("process_error", "owned command lock failed"))?;
+                process.observe()?
+            };
+            if let Some(status) = status {
+                break status;
+            }
+            if !timed_out && self.started.elapsed() >= self.timeout {
+                timed_out = true;
+                cancellation.cancel()?;
+            }
+            if timed_out
+                && self.started.elapsed() >= self.timeout.saturating_add(Duration::from_secs(5))
+            {
+                return Err(Error::new(
+                    "operation_uncertain",
+                    "terminated command has not been reaped; preserve ownership",
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let mut out_task = self.out_task;
+        let mut err_task = self.err_task;
+        // Descendants holding inherited pipes cannot prolong the result forever.
+        let collect = async {
+            let out = (&mut out_task)
+                .await
+                .map_err(|_| Error::new("process_error", "stdout collector interrupted"))?
+                .map_err(|e| Error::io("read command output", e))?;
+            let err = (&mut err_task)
+                .await
+                .map_err(|_| Error::new("process_error", "stderr collector interrupted"))?
+                .map_err(|e| Error::io("read command diagnostics", e))?;
+            Ok::<_, Error>((out, err))
+        };
+        let ((out, out_truncated), (err, err_truncated)) =
+            match tokio::time::timeout(Duration::from_secs(1), collect).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    out_task.abort();
+                    err_task.abort();
+                    return Err(Error::new(
+                        "operation_uncertain",
+                        "command descendants retain output pipes; preserve the run",
+                    ));
+                }
+            };
+        let stderr = redact(
+            String::from_utf8_lossy(&err).into_owned(),
+            &self.secret_values,
+        );
+        if stderr.contains("sandbox-exec: sandbox_apply")
+            || stderr.contains("sandbox-exec: sandbox_init")
+        {
+            return Err(Error::new(
+                "isolation_unavailable",
+                "host policy prevented applying the execution sandbox",
+            ));
+        }
+        let outcome = CommandOutcome {
+            schema_version: 1,
+            argv: self.argv,
+            cwd: self.cwd,
+            isolation_digest: self.isolation_digest,
+            exit_code: status.code(),
+            timed_out,
+            stdout: redact(
+                String::from_utf8_lossy(&out).into_owned(),
+                &self.secret_values,
+            ),
+            stderr,
+            output_truncated: out_truncated || err_truncated,
+            elapsed_ms: self.started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        };
+        // Seatbelt's current process-fork rule does not prove that descendants
+        // cannot create another session/group and close inherited streams. A
+        // clean leader/group exit therefore cannot establish check success or
+        // release the caller's Sent receipt/permit. Preserve actual diagnostics
+        // while withholding that stronger capability until containment exists.
+        Err(process_tree_unverified().detail(serde_json::json!({
+            "group_exit_code": outcome.exit_code,
+            "group_timed_out": outcome.timed_out,
+            "group_elapsed_ms": outcome.elapsed_ms,
+            "isolation_digest": outcome.isolation_digest,
+        })))
+    }
+}
+
+fn process_tree_unverified() -> Error {
+    Error::new(
+        "process_tree_unverified",
+        "owned group exited, but session-escaping descendants are not contained or tracked; preserve run ownership and uncertain effects",
+    )
+}
+
+pub async fn run_command(
+    isolation: &ValidatedIsolation,
+    argv: &[String],
+    timeout: Duration,
+    output_limit: usize,
+    secret_values: &[String],
+) -> Result<CommandOutcome> {
+    start_command(isolation, argv, timeout, output_limit, secret_values)?
+        .wait()
+        .await
 }
 
 /// Explicit allowlist rather than deleting a few known credential names from an
@@ -702,4 +886,57 @@ pub fn artifact_digest(path: &Path, max_bytes: u64) -> Result<String> {
         ));
     }
     Ok(bytes_digest(&bytes))
+}
+
+#[cfg(test)]
+mod owned_exit_tests {
+    use super::*;
+    #[tokio::test]
+    async fn clean_group_and_streams_do_not_prove_arbitrary_command_tree_exit() {
+        let mut command = Command::new("/usr/bin/true");
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let (mut child, group) =
+            crate::process_group::OwnedGroup::spawn_tokio(&mut command).unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let out_eof = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let err_eof = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let out_observed = out_eof.clone();
+        let err_observed = err_eof.clone();
+        let owned = OwnedCommand {
+            argv: vec!["/usr/bin/true".into()],
+            cwd: std::env::temp_dir(),
+            isolation_digest: "deterministic-owned-process-fixture".into(),
+            started: std::time::Instant::now(),
+            timeout: Duration::from_secs(2),
+            secret_values: vec![],
+            process: std::sync::Arc::new(std::sync::Mutex::new(CommandProcess {
+                child,
+                group,
+                terminal: None,
+                out_eof,
+                err_eof,
+            })),
+            out_task: tokio::spawn(async move {
+                let result = bounded_output(stdout, 1024).await;
+                out_observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                result
+            }),
+            err_task: tokio::spawn(async move {
+                let result = bounded_output(stderr, 1024).await;
+                err_observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                result
+            }),
+        };
+        let cancellation = owned.cancellation();
+        assert_eq!(
+            owned.wait().await.unwrap_err().code,
+            "process_tree_unverified"
+        );
+        assert!(cancellation.group_exited().unwrap());
+        assert_eq!(
+            cancellation.exited().unwrap_err().code,
+            "process_tree_unverified"
+        );
+    }
 }

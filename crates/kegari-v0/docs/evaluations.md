@@ -162,3 +162,12 @@ reconciler and host observations. Authorize actual-agent trials explicitly. The
 need separate authority and a concrete disposable-target/cleanup plan. Preserve
 interrupted local/provider state for reconciliation. Complete human calibration
 and independent review before claiming behavioral qualification.
+
+The live `TrialOperation` now takes the concrete production `ScopedWorker` plus
+its canonical admitted work key. Before dispatch it verifies the identical
+instruction, complete tool contract and isolation, and rejects a fixture command
+boundary. Declared correction events must pass the host's real authorized
+correction ingestion callback before steering. Readmission after a correction
+changes an immutable work/authority generation still needs application trial
+coordinator composition; the existing operation is denied rather than silently
+rebinding its permission or claiming that steering alone completed reconciliation.

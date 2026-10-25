@@ -106,7 +106,141 @@ fn labels() -> Result<HttpResponse> {
     response(json!({"data":{"issue":{"labels":connection(json!([]),false,Value::Null)}}}))
 }
 fn gh_identity() -> Result<HttpResponse> {
-    response(json!({"id":7,"login":"fixture"}))
+    response(json!({"id":7,"login":"fixture","type":"User"}))
+}
+
+#[tokio::test]
+async fn connection_identity_preflight_needs_no_workspace_and_never_mutates() {
+    use kegari_v0::config::ProviderKind;
+    let wire = Wire::fixture(vec![linear_identity()]);
+    let identity = verify_connection_identity(
+        HttpPolicy::new(
+            "https://linear.invalid/graphql",
+            id(1).to_string(),
+            Duration::from_secs(2),
+        )
+        .unwrap(),
+        Credential::new("test-key".into()).unwrap(),
+        ProviderKind::Linear,
+        Some(wire.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(identity.workspace_id, Some(id(2)));
+    assert_eq!(wire.len(), 1);
+    assert!(
+        wire.body(0)["query"]
+            .as_str()
+            .unwrap()
+            .starts_with("query ")
+    );
+    let mut github_response = gh_identity().unwrap();
+    github_response
+        .headers
+        .insert("x-oauth-scopes", HeaderValue::from_static("repo, read:org"));
+    let github = Wire::fixture(vec![Ok(github_response)]);
+    let user = verify_connection_identity(
+        HttpPolicy::new(
+            "https://github.invalid/api/v3",
+            "7".into(),
+            Duration::from_secs(2),
+        )
+        .unwrap(),
+        Credential::new("test-key".into()).unwrap(),
+        ProviderKind::Github,
+        Some(github.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        user.permission_scopes,
+        Some(vec!["repo".into(), "read:org".into()])
+    );
+    assert_eq!(
+        github.requests.lock().unwrap()[0].url.path(),
+        "/api/v3/user"
+    );
+    for kind in [ProviderKind::Linear, ProviderKind::Github] {
+        let wrong = Wire::fixture(vec![if kind == ProviderKind::Linear {
+            linear_identity()
+        } else {
+            gh_identity()
+        }]);
+        let expected = if kind == ProviderKind::Linear {
+            id(88).to_string()
+        } else {
+            "88".into()
+        };
+        assert_eq!(
+            verify_connection_identity(
+                HttpPolicy::new(
+                    "https://provider.invalid/",
+                    expected,
+                    Duration::from_secs(2)
+                )
+                .unwrap(),
+                Credential::new("test-key".into()).unwrap(),
+                kind,
+                Some(wrong)
+            )
+            .await
+            .unwrap_err()
+            .code,
+            "identity_mismatch"
+        );
+    }
+    let none = Wire::fixture(vec![]);
+    assert_eq!(
+        verify_connection_identity(
+            HttpPolicy::new(
+                "https://provider.invalid/",
+                "codex".into(),
+                Duration::from_secs(2)
+            )
+            .unwrap(),
+            Credential::new("test-key".into()).unwrap(),
+            ProviderKind::Codex,
+            Some(none.clone())
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "unsupported_provider"
+    );
+    assert_eq!(none.len(), 0);
+}
+
+#[tokio::test]
+async fn connection_preflight_rejects_non_user_identity_and_partial_rate_limited_identity() {
+    use kegari_v0::config::ProviderKind;
+    for kind in [Value::Null, json!("Bot"), json!("Organization")] {
+        let wire = Wire::fixture(vec![response(
+            json!({"id":7,"login":"fixture","type":kind}),
+        )]);
+        assert_eq!(
+            github(wire).identity().await.unwrap_err().code,
+            "identity_mismatch"
+        );
+    }
+    let wire = Wire::fixture(vec![response(
+        json!({"data":{"viewer":{"id":id(1),"name":"Fixture"},"organization":{"id":id(2)}},"errors":[{"message":"untrusted secret content","extensions":{"code":"RATELIMITED"}}]}),
+    )]);
+    let error = verify_connection_identity(
+        HttpPolicy::new(
+            "https://linear.invalid/graphql",
+            id(1).to_string(),
+            Duration::from_secs(2),
+        )
+        .unwrap(),
+        Credential::new("test-key".into()).unwrap(),
+        ProviderKind::Linear,
+        Some(wire),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "rate_limited");
+    assert!(error.retryable);
+    assert!(!format!("{error:?}").contains("untrusted secret"));
 }
 fn repo() -> RepositoryIdentity {
     RepositoryIdentity {
@@ -122,7 +256,7 @@ fn gh_repo() -> Result<HttpResponse> {
         json!({"id":42,"owner":{"id":7,"login":"fixture","type":"User"},"name":"repo","default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":true,"push":true}}),
     )
 }
-fn github(wire: Arc<Wire>) -> GithubClient {
+fn github(wire: Arc<dyn HttpTransport>) -> GithubClient {
     GithubClient::with_transport(
         HttpPolicy::new(
             "https://github.invalid/api/v3",
@@ -354,6 +488,7 @@ fn request(runtime: Uuid, request_id: Uuid) -> MutationRequest {
         runtime_id: runtime,
         request_id,
         actor: Actor {
+            principal: None,
             identity: "fixture-operator".into(),
             roles: BTreeSet::from(["provider".into()]),
         },
@@ -445,6 +580,58 @@ async fn broker_posts_exact_status_once_and_replay_binds_actual_command() {
     );
     assert_eq!(wire.len(), 4);
 }
+
+#[tokio::test]
+async fn commit_publication_binds_explicit_metadata_and_exact_validated_sha() {
+    for returned in [HEAD, BASE] {
+        let wire = Wire::fixture(vec![
+            gh_identity(),
+            gh_repo(),
+            response(json!({"sha":BASE,"truncated":false,"tree":[]})),
+            gh_identity(),
+            gh_repo(),
+            commit_response(),
+            response(json!({"sha":returned})),
+        ]);
+        let broker = ProviderBroker {
+            linear: None,
+            github: Some(github(wire.clone())),
+        };
+        let (_temp, host, runtime) = control_fixture();
+        let operation = Uuid::new_v4();
+        let identity = CommitIdentity {
+            name: "Fixture author".into(),
+            email: "fixture@example.invalid".into(),
+            date: "2026-01-01T00:00:00Z".into(),
+        };
+        let outcome = broker
+            .mutate(
+                host.clone(),
+                request(runtime, operation),
+                None,
+                Some("provider".into()),
+                ProviderMutation::GithubCommit {
+                    repository: repo(),
+                    message: "Validated commit".into(),
+                    tree: BASE.into(),
+                    parent: HEAD.into(),
+                    author: identity.clone(),
+                    committer: identity,
+                    expected_sha: HEAD.into(),
+                },
+                || Ok(()),
+            )
+            .await;
+        assert_eq!(wire.body(6)["author"]["date"], "2026-01-01T00:00:00Z");
+        assert_eq!(wire.body(6)["committer"]["name"], "Fixture author");
+        if returned == HEAD {
+            assert!(outcome.is_ok());
+        } else {
+            assert_eq!(outcome.unwrap_err().code, "operation_uncertain");
+            assert_eq!(host.operation(operation).unwrap().phase, ReceiptPhase::Sent);
+        }
+    }
+}
 #[tokio::test]
 async fn rejected_fresh_gate_never_reads_or_writes_and_unknown_write_holds_new_requests() {
     let wire = Wire::fixture(vec![]);
@@ -533,6 +720,7 @@ const FIXTURE_KEY: &str = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDFT
 const FIXTURE_MODULUS: &str = "xUxF-goSDfrXNDB5-nst3ru-21DLuxuthe-1I5aERHDFkEsjtsEr1H-pV6md4-0CzoDoyBFK0qWpSw3vbkw5x7CeKnvkHxYhg3RSFbbE6RRkQLSbtEjjVgFmXklZ0Hu_bLL_VFxkRwkMILy21BwrQ6enxWUxJzZ7gFpJ0rVITRyY0OaaIOVdWhU87yVg1cvP7WE6y2NFibQfI98MWgE0Z2Soei0L2oqjyr47jKaozrjwVi-0n8OhLbCFLG3SjdyQsMGlQcPElLcQPqaglKITjzu6yVLwAJPlhyOgDiK2L4Ds1_FgRaXPxcLnE_-wp7wzkt0EQUy0UZ9Yn3lONSvacw";
 fn expectation() -> HostedProofExpectation {
     HostedProofExpectation {
+        context_digest: None,
         runtime_id: id(100),
         operation_id: id(101),
         challenge: id(102),
@@ -880,4 +1068,210 @@ async fn artifact_download_uses_only_provider_grant_and_checks_archive_digest() 
     assert!(!requests[4].headers.contains_key("authorization"));
     assert_eq!(requests[4].url.host_str(), Some("artifact.blob.invalid"));
     assert!(!format!("{artifact:?}").contains("fixture-archive"));
+}
+
+struct StalledWire {
+    inner: Arc<Wire>,
+    call: usize,
+    entered: tokio::sync::Semaphore,
+    released: tokio::sync::Semaphore,
+}
+impl HttpTransport for StalledWire {
+    fn send(
+        &self,
+        request: HttpRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
+        Box::pin(async move {
+            let response = self.inner.send(request).await;
+            if self.inner.len() == self.call {
+                self.entered.add_permits(1);
+                self.released.acquire().await.unwrap().forget();
+            }
+            response
+        })
+    }
+}
+async fn responsive_snapshot(host: Arc<ControlHost>) -> kegari_v0::control::ControlSnapshot {
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || host.snapshot()),
+    )
+    .await
+    .expect("network wait held control lock")
+    .unwrap()
+    .unwrap()
+}
+#[tokio::test]
+async fn provider_preflight_keeps_control_responsive_and_rechecks_revocation_before_send() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let wire = Arc::new(StalledWire {
+        inner: Wire::fixture(vec![gh_identity(), gh_repo(), commit_response()]),
+        call: 1,
+        entered: tokio::sync::Semaphore::new(0),
+        released: tokio::sync::Semaphore::new(0),
+    });
+    let broker = ProviderBroker {
+        linear: None,
+        github: Some(github(wire.clone())),
+    };
+    let (_temp, host, runtime) = control_fixture();
+    let operation = Uuid::new_v4();
+    let allowed = Arc::new(AtomicBool::new(true));
+    let owned_host = host.clone();
+    let owned_allowed = allowed.clone();
+    let task = tokio::spawn(async move {
+        broker
+            .mutate(
+                owned_host,
+                request(runtime, operation),
+                None,
+                Some("provider".into()),
+                status(),
+                move || {
+                    if owned_allowed.load(Ordering::SeqCst) {
+                        Ok(())
+                    } else {
+                        Err(Error::new("access_denied", "fixture authority revoked"))
+                    }
+                },
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), wire.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    let snapshot = responsive_snapshot(host.clone()).await;
+    assert_eq!(snapshot.pending_external_effects, vec![operation]);
+    assert_eq!(
+        host.operation(operation).unwrap().phase,
+        ReceiptPhase::Prepared
+    );
+    host.serialize_observation(|_| {
+        allowed.store(false, Ordering::SeqCst);
+        Ok(())
+    })
+    .unwrap();
+    wire.released.add_permits(1);
+    assert_eq!(task.await.unwrap().unwrap_err().code, "access_denied");
+    assert_eq!(wire.inner.len(), 3);
+    assert!(
+        wire.inner
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.method == Method::Get)
+    );
+    let receipt = host.operation(operation).unwrap();
+    assert_eq!(receipt.phase, ReceiptPhase::Reconciled);
+    assert_eq!(receipt.observed_result.unwrap()["effect"], "not_sent");
+    assert!(host.snapshot().unwrap().pending_external_effects.is_empty());
+    assert!(
+        !host
+            .snapshot()
+            .unwrap()
+            .unresolved_operations
+            .contains_key(&operation)
+    );
+}
+#[tokio::test]
+async fn provider_response_survives_caller_abort_replay_and_refuses_premature_recovery() {
+    use kegari_v0::control::Reconciliation;
+    let wire = Arc::new(StalledWire {
+        inner: Wire::fixture(vec![
+            gh_identity(),
+            gh_repo(),
+            commit_response(),
+            response(json!({"id":90})),
+        ]),
+        call: 4,
+        entered: tokio::sync::Semaphore::new(0),
+        released: tokio::sync::Semaphore::new(0),
+    });
+    let broker = ProviderBroker {
+        linear: None,
+        github: Some(github(wire.clone())),
+    };
+    let (_temp, host, runtime) = control_fixture();
+    let operation = Uuid::new_v4();
+    let owned_host = host.clone();
+    let owned_broker = broker.clone();
+    let caller = tokio::spawn(async move {
+        owned_broker
+            .mutate(
+                owned_host,
+                request(runtime, operation),
+                None,
+                Some("provider".into()),
+                status(),
+                || Ok(()),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), wire.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    let snapshot = responsive_snapshot(host.clone()).await;
+    assert_eq!(snapshot.pending_external_effects, vec![operation]);
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    let replay = broker
+        .mutate(
+            host.clone(),
+            request(runtime, operation),
+            None,
+            Some("provider".into()),
+            status(),
+            || panic!("replay must not execute gate"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.phase, ReceiptPhase::Sent);
+    assert_eq!(wire.inner.len(), 4);
+    assert_eq!(
+        host.snapshot().unwrap().pending_external_effects,
+        vec![operation]
+    );
+    let mut recover = request(runtime, Uuid::new_v4()).actor;
+    recover.roles.insert("recover".into());
+    assert_eq!(
+        host.reconcile_operation(&recover, operation, |_| Ok(Reconciliation::Incomplete))
+            .unwrap_err()
+            .code,
+        "operation_active"
+    );
+    let mut stop = request(runtime, Uuid::new_v4());
+    stop.actor.roles.insert("lifecycle".into());
+    assert_eq!(
+        host.stop_service(stop, || panic!("active network task forbids shutdown"))
+            .unwrap_err()
+            .code,
+        "stop_in_progress"
+    );
+    wire.released.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if host.snapshot().unwrap().pending_external_effects.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let receipt = host.operation(operation).unwrap();
+    assert_eq!(receipt.phase, ReceiptPhase::Acknowledged);
+    assert_eq!(receipt.remote_ids["record_id"], "90");
+    assert_eq!(wire.inner.len(), 4);
+    assert!(
+        !host
+            .snapshot()
+            .unwrap()
+            .unresolved_operations
+            .contains_key(&operation)
+    );
 }

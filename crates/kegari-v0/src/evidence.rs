@@ -1106,6 +1106,10 @@ pub struct ProductionBaseline {
     pub production: Revision,
     pub deployed_revision: Option<String>,
     pub deployed_artifact: Option<String>,
+    /// Exact target artifact inventory. `deployed_artifact`, when present, is
+    /// only a common digest shared by every target, never a synthetic aggregate.
+    #[serde(default)]
+    pub target_artifacts: BTreeMap<String, String>,
     pub deployment_free: bool,
     /// A known partially delivered predecessor, never an unknown action. This
     /// reference permits declared recovery divergence, not a success claim.
@@ -1117,7 +1121,10 @@ impl ProductionBaseline {
         self.repository.validate()?;
         self.production.validate()?;
         if self.deployment_free {
-            if self.deployed_revision.is_some() || self.deployed_artifact.is_some() {
+            if self.deployed_revision.is_some()
+                || self.deployed_artifact.is_some()
+                || !self.target_artifacts.is_empty()
+            {
                 return Err(Error::invalid(
                     "deployment-free baseline must not invent deployment activity",
                 ));
@@ -1127,11 +1134,29 @@ impl ProductionBaseline {
                 Error::new("production_baseline", "deployed source revision is unknown")
             })?;
             validate_oid(deployed)?;
-            let artifact = self
-                .deployed_artifact
-                .as_deref()
-                .ok_or_else(|| Error::new("production_baseline", "deployed artifact is unknown"))?;
-            validate_digest(artifact)?;
+            if self.deployed_artifact.is_none() && self.target_artifacts.is_empty() {
+                return Err(Error::new(
+                    "production_baseline",
+                    "deployed target artifacts are unknown",
+                ));
+            }
+            if let Some(artifact) = &self.deployed_artifact {
+                validate_digest(artifact)?;
+            }
+            for (target, artifact) in &self.target_artifacts {
+                if target.trim().is_empty()
+                    || self
+                        .deployed_artifact
+                        .as_ref()
+                        .is_some_and(|common| common != artifact)
+                {
+                    return Err(Error::new(
+                        "production_baseline",
+                        "target identity or common artifact digest is inconsistent",
+                    ));
+                }
+                validate_digest(artifact)?;
+            }
             if deployed != self.production.commit && self.successor_recovery_operation.is_none() {
                 return Err(Error::new(
                     "production_baseline",
@@ -1140,6 +1165,13 @@ impl ProductionBaseline {
             }
         }
         Ok(())
+    }
+    pub fn artifact_for_target(&self, target: &str) -> Option<&str> {
+        if self.target_artifacts.is_empty() {
+            self.deployed_artifact.as_deref()
+        } else {
+            self.target_artifacts.get(target).map(String::as_str)
+        }
     }
 }
 
@@ -1760,9 +1792,13 @@ pub struct VerifiedProduction {
     work: WorkIdentity,
     checks: Vec<CheckRun>,
     review_digest: String,
+    existing_production: bool,
 }
 
 impl VerifiedProduction {
+    pub fn is_existing_production(&self) -> bool {
+        self.existing_production
+    }
     pub fn revision(&self) -> &RevisionBinding {
         &self.revision
     }
@@ -1772,7 +1808,7 @@ impl VerifiedProduction {
     pub fn digest(&self) -> Result<String> {
         canonical_digest(
             1,
-            &serde_json::json!({ "revision": self.revision, "work": self.work, "checks": self.checks, "review": self.review_digest }),
+            &serde_json::json!({ "revision": self.revision, "work": self.work, "checks": self.checks, "review": self.review_digest, "existing_production":self.existing_production }),
         )
     }
 }
@@ -1829,6 +1865,48 @@ pub fn verify_production(
         work: requirements.parent.manifest.work.clone(),
         checks,
         review_digest: review.digest.clone(),
+        existing_production: false,
+    })
+}
+
+/// Exact validation of an already-produced accepted contribution for a
+/// deployment-only successor. There is no new patch, PR or invented review.
+pub fn verify_existing_production(
+    parent: &VerifiedParent,
+    revision: &RevisionBinding,
+    requirements: &[CheckRequirement],
+    snapshot: &CheckSnapshot,
+    integrations: &[crate::git::VerifiedProductionIntegration],
+) -> Result<VerifiedProduction> {
+    revision.validate()?;
+    let candidate = parent.manifest.candidates.iter().find(|candidate|
+        candidate.repository==revision.repository && candidate.ordered_delta_digests.is_empty()
+            && candidate.result.as_ref()==Some(&candidate.production)
+            && candidate.production.commit==revision.head && revision.base==revision.head
+            && revision.tested_commit==revision.head && candidate.production.tree==revision.tested_tree
+    ).ok_or_else(||Error::new("production_validation", "existing-source validation needs the unchanged exact accepted production candidate"))?;
+    if candidate.production_integrations.is_empty()
+        || requirements.is_empty()
+        || requirements
+            .iter()
+            .any(|r| r.kind != CheckKind::ProductionCi)
+        || candidate
+            .production_integrations
+            .iter()
+            .any(|record| !integrations.iter().any(|proof| proof.record() == record))
+    {
+        return Err(Error::new(
+            "production_validation",
+            "existing source needs complete exact production checks and verified prior contribution provenance",
+        ));
+    }
+    let checks = verify_checks(requirements, &parent.manifest.work, revision, snapshot)?;
+    Ok(VerifiedProduction {
+        revision: revision.clone(),
+        work: parent.manifest.work.clone(),
+        checks,
+        review_digest: canonical_digest(1, &candidate.production_integrations)?,
+        existing_production: true,
     })
 }
 
@@ -2033,7 +2111,8 @@ fn validate_no_release_required(
                     && !b.deployment_free
                     && b.production == target.source
                     && b.deployed_revision.as_ref() == Some(&target.source.commit)
-                    && b.deployed_artifact.as_ref() == Some(&target.artifact_digest)
+                    && b.artifact_for_target(&target.target)
+                        == Some(target.artifact_digest.as_str())
             })
         {
             return Err(Error::new(
@@ -2044,7 +2123,20 @@ fn validate_no_release_required(
     }
     if seen != p.production_targets
         || p.baselines.iter().any(|b| {
-            !b.deployment_free && !record.targets.iter().any(|t| t.repository == b.repository)
+            let configured: BTreeSet<_> = requirements
+                .targets
+                .iter()
+                .filter(|(_, (_, repository))| repository == &b.repository)
+                .map(|(target, _)| target.clone())
+                .collect();
+            if b.deployment_free {
+                !configured.is_empty()
+            } else {
+                configured.is_empty()
+                    || (!b.target_artifacts.is_empty()
+                        && b.target_artifacts.keys().cloned().collect::<BTreeSet<_>>()
+                            != configured)
+            }
         })
     {
         return Err(Error::new(

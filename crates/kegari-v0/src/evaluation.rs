@@ -596,6 +596,7 @@ pub fn verify_grader_boundary(
             plan.read_roots
                 .iter()
                 .chain(&plan.source_writes)
+                .chain(&plan.resource_writes)
                 .map(|g| &g.path),
         ) {
             if public.starts_with(&private) || private.starts_with(public) {
@@ -656,6 +657,8 @@ fn verify_fixture_scope(
         || plan.cwd != fixture.repository
         || plan.scratch != fixture.scratch
         || plan.source_writes.iter().any(|grant| grant.directory)
+        || !plan.resource_writes.is_empty()
+        || !permissions.resource_write_paths.is_empty()
         || actual != expected_writes
         || described != actual
         || plan.read_roots
@@ -1133,6 +1136,9 @@ pub trait TrialHost: ToolBroker {
     fn reconcile_prior(&mut self, prior: Option<&Value>) -> Result<()>;
     /// Feed the actual provider snapshot into the runtime's allowance/capacity gate.
     fn rate_limits(&mut self, observed: &Value) -> Result<()>;
+    /// Ingest a declared fixture correction through the production authorized
+    /// correction path before provider steering. Never just edit model state.
+    fn correction_event(&mut self, watermark: u64, input: &str) -> Result<()>;
     /// Persist pending requests before transmission and session state after responses.
     /// Recovery must reconcile a pending method instead of blindly repeating it.
     fn checkpoint(&mut self, state: &SessionState, pending_method: Option<&str>) -> Result<()>;
@@ -1301,6 +1307,10 @@ struct AuditedHost<'a> {
     trace: Vec<TraceEntry>,
 }
 impl ToolBroker for AuditedHost<'_> {
+    fn observe_session(&mut self, state: &SessionState) -> Result<()> {
+        self.lease.check()?;
+        self.host.observe_session(state)
+    }
     fn call<'a>(
         &'a mut self,
         call: &'a ToolCall,
@@ -1400,13 +1410,15 @@ impl BoundToolContracts {
 }
 /// Passed by the host only after repository preparation and production instruction assembly.
 pub struct TrialOperation<'a> {
+    /// Exact canonical work key admitted by the production control host.
+    pub work_identity: &'a str,
     pub fixture: &'a PreparedFixture,
     pub assembled: &'a AssembledInstructions,
     pub isolation: &'a ValidatedIsolation,
     pub permissions: &'a PermissionConfiguration,
     pub tools: &'a BoundToolContracts,
     pub executable: &'a Path,
-    pub host: &'a mut dyn TrialHost,
+    pub host: &'a mut crate::worker::ScopedWorker,
     pub report_root: &'a Path,
 }
 /// Invoked explicitly, once per fresh trial. There is no retry-until-pass loop.
@@ -1442,6 +1454,12 @@ pub async fn run_live_trial(
             "operator-supplied evaluated model/account/profile binding is unresolved".into();
         return Ok(report);
     };
+    operation.host.validate_live_operation(
+        operation.assembled,
+        operation.isolation,
+        operation.tools,
+        operation.work_identity,
+    )?;
     verify_grader_boundary(
         operation.isolation,
         &[
@@ -1530,7 +1548,7 @@ pub async fn run_live_trial(
         SessionBinding {
             schema_version: 1,
             account_id: profile.account_id.clone(),
-            work_identity: request.trial.name()?,
+            work_identity: operation.work_identity.into(),
             operation_id: operation.assembled.manifest.operation_id.to_string(),
             generation: operation.assembled.manifest.work_generation.clone(),
             instruction_digest: operation.assembled.manifest_digest.clone(),
@@ -1594,6 +1612,8 @@ pub async fn run_live_trial(
         audited.host.checkpoint(&state, None)?;
         let mut queued = Vec::new();
         for correction in &corrections {
+            lease.check()?;
+            audited.host.correction_event(correction.watermark, &correction.input)?;
             audited.host.checkpoint(&state, Some("turn/steer"))?;
             let delivered = client.steer(&mut state, correction.watermark, &correction.input, &mut audited).await?;
             if !delivered { queued.push(correction.input.clone()); }

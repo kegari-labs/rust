@@ -6,6 +6,30 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+#[derive(Default)]
+struct ObservingBroker {
+    turn: Option<String>,
+    called: bool,
+}
+impl ToolBroker for ObservingBroker {
+    fn observe_session(&mut self, state: &SessionState) -> kegari_v0::error::Result<()> {
+        self.turn = state.turn_id.clone();
+        Ok(())
+    }
+    fn call<'a>(
+        &'a mut self,
+        call: &'a ToolCall,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = kegari_v0::error::Result<Value>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            assert_eq!(self.turn.as_deref(), Some(call.turn_id.as_str()));
+            self.called = true;
+            Ok(json!({"observed":true}))
+        })
+    }
+}
+
 fn binding() -> SessionBinding {
     SessionBinding {
         schema_version: 1,
@@ -50,6 +74,7 @@ fn fixture() -> (tempfile::TempDir, IsolationPlan) {
         cwd: root.join("repository"),
         scratch: root.join("scratch"),
         read_roots: vec![],
+        resource_writes: vec![],
         source_writes: vec![PathGrant {
             path: root.join("repository/src"),
             directory: true,
@@ -302,7 +327,7 @@ async fn handshake<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + U
     let request = read_json(r).await;
     assert_eq!(request["method"], "initialize");
     assert_eq!(request["params"]["capabilities"]["experimentalApi"], true);
-    write_json(w,json!({"id":request["id"],"result":{"userAgent":"fixture","platformFamily":"unix","platformOs":"macos","codexHome":"/fixture/auth"}})).await;
+    write_json(w,json!({"id":request["id"],"result":{"userAgent":"fixture","platformFamily":"unix","platformOs":"macos","codexHome":"/fixture/auth","codexHome":"/fixture/auth"}})).await;
     assert_eq!(read_json(r).await["method"], "initialized");
 }
 
@@ -686,6 +711,10 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
         assert_eq!(req["params"]["effort"], "high");
         // A fast turn can finish before its synchronous start response arrives.
         write_json(&mut sw,json!({"method":"turn/started","params":{"threadId":"owned-thread","turn":{"id":"turn-fast","status":"inProgress"}}})).await;
+        write_json(&mut sw,json!({"id":"interleaved","method":"item/tool/call","params":{"threadId":"owned-thread","turnId":"turn-fast","callId":"interleaved-call","tool":"observe","arguments":{}}})).await;
+        let tool_reply = read_json(&mut sr).await;
+        assert_eq!(tool_reply["id"], "interleaved");
+        assert_eq!(tool_reply["result"]["success"], true);
         write_json(&mut sw,json!({"method":"turn/completed","params":{"threadId":"owned-thread","turn":{"id":"turn-fast","status":"completed"}}})).await;
         write_json(
             &mut sw,
@@ -735,18 +764,20 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
         &isolation,
         &permissions,
         "runtime authority and delivered child guidance",
-        vec![],
+        vec![json!({"type":"function","name":"observe","description":"Fixture observation","inputSchema":{"type":"object"}})],
     )
     .await
     .unwrap();
+    let mut observer = ObservingBroker::default();
     rpc.start_turn(
         &mut state,
         &permissions,
         "implement scoped child",
-        &mut DenyTools,
+        &mut observer,
     )
     .await
     .unwrap();
+    assert!(observer.called);
     assert!(state.turn_id.is_none());
     assert!(state.completion_is_current());
     rpc.review(
@@ -787,4 +818,321 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
     assert_eq!(state.turns_started, 3);
     assert!(state.reconciliation_digest.is_some());
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn connection_metadata_uses_only_bounded_read_protocol_without_model_work() {
+    let (_temp, plan) = fixture();
+    let isolation = plan.validate().unwrap();
+    let permissions =
+        PermissionConfiguration::for_isolation(&isolation, &plan.execution_root.join("auth"))
+            .unwrap();
+    let effective = permissions.settings.clone();
+    let (client, server) = tokio::io::duplex(65536);
+    let (cr, cw) = tokio::io::split(client);
+    let (sr, mut sw) = tokio::io::split(server);
+    let mut sr = BufReader::new(sr);
+    let task = tokio::spawn(async move {
+        handshake(&mut sr, &mut sw).await;
+        let req = read_json(&mut sr).await;
+        assert_eq!(req["method"], "account/read");
+        assert_eq!(req["params"]["refreshToken"], false);
+        write_json(&mut sw,json!({"id":req["id"],"result":{"account":{"type":"chatgpt"},"workspaceRouting":{"chatgptAccountId":"account-one"}}})).await;
+        let req = read_json(&mut sr).await;
+        assert_eq!(req["method"], "model/list");
+        write_json(
+            &mut sw,
+            json!({"id":req["id"],"result":{"data":[{"model":"fixture-model"}],"nextCursor":null}}),
+        )
+        .await;
+        let req = read_json(&mut sr).await;
+        assert_eq!(req["method"], "account/rateLimits/read");
+        write_json(
+            &mut sw,
+            json!({"id":req["id"],"result":{"rateLimits":null}}),
+        )
+        .await;
+        let req = read_json(&mut sr).await;
+        assert_eq!(req["method"], "config/read");
+        write_json(
+            &mut sw,
+            json!({"id":req["id"],"result":{"config":effective,"layers":[],"origins":{}}}),
+        )
+        .await;
+    });
+    let mut rpc = RpcClient::from_transport(cr, cw, Duration::from_secs(2)).unwrap();
+    let observed = rpc
+        .connection_metadata("account-one", &permissions, &plan.cwd)
+        .await
+        .unwrap();
+    assert_eq!(observed.account_id, "account-one");
+    assert_eq!(observed.model_catalog[0]["model"], "fixture-model");
+    assert!(
+        observed.argument_digest.is_none(),
+        "injected transport cannot claim native argv provenance"
+    );
+    assert_eq!(
+        observed.permission_digest,
+        kegari_v0::digest::canonical_digest(1, &permissions.settings).unwrap()
+    );
+    task.await.unwrap();
+}
+
+#[derive(Default)]
+struct FixtureRequestGate {
+    observations: std::sync::Mutex<Vec<String>>,
+    deny: std::sync::atomic::AtomicBool,
+}
+impl RequestGate for FixtureRequestGate {
+    fn dispatch(
+        &self,
+        id: u64,
+        method: &str,
+        _: &Value,
+        transmit: &mut dyn FnMut() -> kegari_v0::error::Result<()>,
+    ) -> kegari_v0::error::Result<()> {
+        self.observations
+            .lock()
+            .unwrap()
+            .push(format!("dispatch:{id}:{method}"));
+        if self.deny.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(kegari_v0::error::Error::new(
+                "access_denied",
+                "fixture already fenced",
+            ));
+        }
+        transmit()
+    }
+    fn observed(
+        &self,
+        id: u64,
+        method: &str,
+        result: &kegari_v0::error::Result<Value>,
+    ) -> kegari_v0::error::Result<()> {
+        self.observations
+            .lock()
+            .unwrap()
+            .push(format!("observed:{id}:{method}:{}", result.is_ok()));
+        Ok(())
+    }
+    fn uncertain(&self, id: u64, method: &str) -> kegari_v0::error::Result<()> {
+        self.observations
+            .lock()
+            .unwrap()
+            .push(format!("uncertain:{id}:{method}"));
+        Ok(())
+    }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutation_gate_surrounds_only_pipe_dispatch_and_records_actual_response() {
+    let (client, server) = tokio::io::duplex(4096);
+    let (cr, cw) = tokio::io::split(client);
+    let (sr, mut sw) = tokio::io::split(server);
+    let server = tokio::spawn(async move {
+        let mut lines = BufReader::new(sr).lines();
+        let init: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        sw.write_all(format!("{}\n",json!({"id":init["id"],"result":{"userAgent":"fixture","platformFamily":"unix","platformOs":"macos","codexHome":"/fixture/auth"}})).as_bytes()).await.unwrap();
+        let _: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        let request: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(request["method"], "turn/start");
+        sw.write_all(
+            format!(
+                "{}\n",
+                json!({"id":request["id"],"result":{"turn":{"id":"fixture-turn"}}})
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    });
+    let mut client = RpcClient::from_transport(cr, cw, Duration::from_secs(1)).unwrap();
+    let gate = std::sync::Arc::new(FixtureRequestGate::default());
+    client.bind_request_gate(gate.clone()).unwrap();
+    client.initialize().await.unwrap();
+    client
+        .request("turn/start", json!({}), None, &mut DenyTools)
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert_eq!(
+        *gate.observations.lock().unwrap(),
+        ["dispatch:2:turn/start", "observed:2:turn/start:true"]
+    );
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fenced_request_gate_prevents_provider_bytes_and_keeps_uncertainty_distinct() {
+    let (client, server) = tokio::io::duplex(4096);
+    let (cr, cw) = tokio::io::split(client);
+    let (sr, mut sw) = tokio::io::split(server);
+    let server = tokio::spawn(async move {
+        let mut lines = BufReader::new(sr).lines();
+        let init: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        sw.write_all(format!("{}\n",json!({"id":init["id"],"result":{"userAgent":"fixture","platformFamily":"unix","platformOs":"macos","codexHome":"/fixture/auth"}})).as_bytes()).await.unwrap();
+        lines.next_line().await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(35), lines.next_line())
+                .await
+                .is_err()
+        );
+    });
+    let mut client = RpcClient::from_transport(cr, cw, Duration::from_secs(1)).unwrap();
+    let gate = std::sync::Arc::new(FixtureRequestGate::default());
+    gate.deny.store(true, std::sync::atomic::Ordering::SeqCst);
+    client.bind_request_gate(gate.clone()).unwrap();
+    client.initialize().await.unwrap();
+    assert_eq!(
+        client
+            .request("turn/start", json!({}), None, &mut DenyTools)
+            .await
+            .unwrap_err()
+            .code,
+        "access_denied"
+    );
+    server.await.unwrap();
+    assert_eq!(
+        *gate.observations.lock().unwrap(),
+        ["dispatch:2:turn/start", "uncertain:2:turn/start"]
+    );
+}
+
+#[tokio::test]
+async fn owned_fixture_provider_cancellation_waits_and_reaps_without_pid_adoption() {
+    use std::os::unix::fs::PermissionsExt;
+    let (temp, plan) = fixture();
+    let root = temp.path().canonicalize().unwrap();
+    let binary = root.join("fixture-adapter");
+    std::fs::write(&binary,format!("#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{SUPPORTED_CODEX_VERSION}'; else exec /bin/sleep 30; fi\n")).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(root.join("auth"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let permissions =
+        PermissionConfiguration::for_isolation(&plan.validate().unwrap(), &root.join("auth"))
+            .unwrap();
+    let verified = RpcClient::verify_executable(&binary, Duration::from_secs(2))
+        .await
+        .unwrap();
+    let mut client = RpcClient::start_verified(
+        &verified,
+        &root.join("auth"),
+        &permissions,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let owned = client.cancellation().unwrap();
+    assert!(!owned.exited().unwrap());
+    owned.request_cancel().unwrap();
+    tokio::time::timeout(Duration::from_secs(2), owned.join_termination())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(owned.exited().unwrap());
+    client.terminate().await.unwrap();
+    std::fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
+    assert!(
+        RpcClient::start_verified(
+            &verified,
+            &root.join("auth"),
+            &permissions,
+            Duration::from_secs(2)
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn metadata_probe_limits_output_and_reaps_timed_out_fixture_processes() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    for (name, body, expected) in [
+        (
+            "flood",
+            "while :; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; done",
+            "protocol_error",
+        ),
+        ("timeout", "exec /bin/sleep 30", "timeout"),
+    ] {
+        let binary = root.join(name);
+        let pid_file = root.join(format!("{name}.pid"));
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\n{body}\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let deadline = if name == "flood" {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_secs(1)
+        };
+        let error = RpcClient::verify_version(&binary, deadline)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected, "{error:?}");
+        let pid = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        let mut status = 0;
+        assert_eq!(
+            unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
+}
+
+#[test]
+fn test_resource_writes_are_separate_exact_grants_and_never_reopen_source_or_control() {
+    let (_temp, mut plan) = fixture();
+    let resource = plan.execution_root.join("disposable-resource");
+    std::fs::create_dir(&resource).unwrap();
+    std::fs::write(resource.join("data"), "fixture").unwrap();
+    let grant = PathGrant {
+        path: resource.clone(),
+        directory: true,
+    };
+    plan.resource_writes.push(grant.clone());
+    assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
+    plan.read_roots.push(grant.clone());
+    let boundary = plan.validate().unwrap();
+    let permissions =
+        PermissionConfiguration::for_isolation(&boundary, &plan.execution_root.join("auth"))
+            .unwrap();
+    assert_eq!(
+        permissions.settings["permissions"][&permissions.profile_id]["filesystem"]
+            [resource.to_str().unwrap()],
+        "write"
+    );
+    assert_eq!(permissions.settings["features"]["shell_tool"], false);
+    let profile = boundary.seatbelt_profile().unwrap();
+    assert!(profile.contains(&format!(
+        "(allow file-write* (subpath \"{}\"))",
+        resource.display()
+    )));
+    plan.role = ExecutionRole::Coordination;
+    plan.source_writes.clear();
+    assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
+    plan.role = ExecutionRole::Validation;
+    plan.validate().unwrap();
+    let original = plan.resource_writes.clone();
+    for path in [&plan.repository, &plan.scratch, &plan.forbidden_roots[0]] {
+        let mut unsafe_plan = plan.clone();
+        let grant = PathGrant {
+            path: path.clone(),
+            directory: true,
+        };
+        unsafe_plan.read_roots.push(grant.clone());
+        unsafe_plan.resource_writes = vec![grant];
+        assert_eq!(unsafe_plan.validate().unwrap_err().code, "scope_violation");
+    }
+    plan.resource_writes = original;
+    std::os::unix::fs::symlink(&plan.repository, resource.join("escape")).unwrap();
+    assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
 }

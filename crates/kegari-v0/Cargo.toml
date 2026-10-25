@@ -12,6 +12,8 @@ clap = { version = "=4.6.7", features = ["derive"] }
 fs2 = "=0.4.3"
 hex = "=0.4.3"
 hmac = "=0.12.1"
+hyper = { version = "=1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "=0.1.21", features = ["server", "tokio", "service"] }
 libc = "=0.2.189"
 reqwest = { version = "=0.12.24", default-features = false, features = ["rustls-tls", "json", "stream"] }
 ring = "=0.17.14"
@@ -21,11 +23,16 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 serde_yaml = "=0.9.34"
 sha2 = "=0.10.9"
+sha1 = "=0.10.6"
 tokio = { version = "=1.53.1", features = ["full"] }
 tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring", "tls12"] }
+tower = { version = "=0.5.3", features = ["util"] }
 toml = "=0.9.8"
 url = { version = "=2.5.8", features = ["serde"] }
 uuid = { version = "=1.18.1", features = ["v4", "serde"] }
+zip = { version = "=9.1.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+webpki-roots = "=1.0.11"
+x509-parser = { version = "=0.18.1", default-features = false }
 
 [dev-dependencies]
 tempfile = "=3.23.0"

@@ -23,6 +23,7 @@ fn directory() -> (TempDir, PrivateDir) {
 fn actor() -> Actor {
     Actor {
         identity: "os:501".into(),
+        principal: None,
         roles: BTreeSet::from(["lifecycle".into()]),
     }
 }
@@ -36,6 +37,263 @@ fn command(runtime: Uuid, id: Uuid) -> MutationRequest {
         expected: BTreeMap::new(),
         payload: json!(null),
     }
+}
+
+#[test]
+fn pending_protocol_allows_interleaved_tools_but_exit_retains_unknown_work_hold() {
+    let (_temp, host, lease) = started();
+    let permit = host
+        .admit(
+            &lease,
+            Uuid::new_v4(),
+            "work".into(),
+            canonical_digest(1, &"scope").unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    let mut request = command(lease.runtime_id, Uuid::new_v4());
+    request.kind = "codex/turn/start".into();
+    request.canonical_targets = vec![format!("codex-session:{}", permit.operation_id)];
+    let pending = request.request_id;
+    let (_ticket, ()) = host
+        .begin_protocol_effect(request.clone(), &permit, || Ok(()), |_| Ok(()))
+        .unwrap();
+    let mut next = request.clone();
+    next.request_id = Uuid::new_v4();
+    assert_eq!(
+        host.begin_protocol_effect(next, &permit, || Ok(()), |_| Ok(()))
+            .err()
+            .unwrap()
+            .code,
+        "reconciliation_required"
+    );
+    let mut tool = command(lease.runtime_id, Uuid::new_v4());
+    tool.kind = "local_check".into();
+    tool.canonical_targets = vec!["local-check".into()];
+    let (ticket, ()) = host
+        .begin_effect(tool, &permit, || Ok(()), |_| Ok(()))
+        .unwrap();
+    host.complete_effect(
+        ticket,
+        &permit,
+        || Ok(()),
+        json!({"observed":"actual_fixture_exit"}),
+    )
+    .unwrap();
+    let retired = host
+        .retire_local(
+            permit.operation_id,
+            json!({"owned_task":"joined","outcome":"interrupted"}),
+        )
+        .unwrap();
+    assert!(host.snapshot().unwrap().active_operations.is_empty());
+    assert_eq!(
+        retired.observed_result.as_ref().unwrap()["unresolved_effects"],
+        json!([pending])
+    );
+    assert!(host.snapshot().unwrap().unresolved_operations[&pending].contains(&"work".to_string()));
+    assert_eq!(
+        host.admit(
+            &lease,
+            Uuid::new_v4(),
+            "work".into(),
+            canonical_digest(1, &"scope").unwrap(),
+            || Ok(())
+        )
+        .unwrap_err()
+        .code,
+        "reconciliation_required"
+    );
+    let mut invalid = request;
+    invalid.request_id = Uuid::new_v4();
+    invalid.kind = "linear_comment".into();
+    assert_eq!(
+        host.begin_protocol_effect(invalid, &permit, || Ok(()), |_| Ok(()))
+            .err()
+            .unwrap()
+            .code,
+        "scope_violation"
+    );
+}
+
+#[test]
+fn local_exit_does_not_clear_unknown_remote_effect_or_block_graceful_drain() {
+    let (_temp, host, lease) = started();
+    let permit = host
+        .admit(
+            &lease,
+            Uuid::new_v4(),
+            "remote-work".into(),
+            canonical_digest(1, &"scope").unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    let mut effect = command(lease.runtime_id, Uuid::new_v4());
+    effect.kind = "linear_comment".into();
+    effect.canonical_targets = vec!["remote-target".into()];
+    let unknown = effect.request_id;
+    assert_eq!(
+        host.mutate(
+            effect,
+            Some(&permit),
+            None,
+            || Ok(()),
+            |_| Err(Error::new("timeout", "fixture lost acknowledgement"))
+        )
+        .unwrap_err()
+        .code,
+        "operation_uncertain"
+    );
+    let generation = host.snapshot().unwrap().intent.generation;
+    host.lifecycle(
+        command(lease.runtime_id, Uuid::new_v4()),
+        Lifecycle::Stop,
+        generation,
+    )
+    .unwrap();
+    assert!(
+        host.finish(permit.operation_id, json!({"succeeded":true}))
+            .is_err()
+    );
+    host.retire_local(permit.operation_id, json!({"broker_task":"joined"}))
+        .unwrap();
+    assert!(host.snapshot().unwrap().active_operations.is_empty());
+    assert!(
+        host.snapshot()
+            .unwrap()
+            .unresolved_operations
+            .contains_key(&unknown)
+    );
+    host.orchestration_exited(&lease).unwrap();
+    assert!(!host.snapshot().unwrap().draining);
+    assert_eq!(host.snapshot().unwrap().intent.desired, Intent::Stopped);
+}
+
+#[test]
+fn service_shutdown_fence_serializes_lifecycle_and_preserves_failed_checks() {
+    let (_temp, directory) = directory();
+    let runtime = Uuid::new_v4();
+    let host = ControlHost::setup(directory, runtime, Uuid::new_v4()).unwrap();
+    let rejected = Uuid::new_v4();
+    assert!(
+        host.stop_service(command(runtime, rejected), || Err(Error::new(
+            "ownership_conflict",
+            "fixture prior process remains"
+        )))
+        .is_err()
+    );
+    assert!(!host.snapshot().unwrap().service_stopping);
+    assert!(
+        host.stop_service(command(runtime, rejected), || panic!(
+            "rejected request must not replay"
+        ))
+        .is_err()
+    );
+    let accepted = Uuid::new_v4();
+    host.stop_service(command(runtime, accepted), || Ok(()))
+        .unwrap();
+    assert!(host.snapshot().unwrap().service_stopping);
+    assert_eq!(
+        host.lifecycle(command(runtime, Uuid::new_v4()), Lifecycle::Start, 0)
+            .unwrap_err()
+            .code,
+        "service_stopping"
+    );
+    host.stop_service(command(runtime, accepted), || {
+        panic!("accepted reservation must not replay")
+    })
+    .unwrap();
+    assert_eq!(host.snapshot().unwrap().intent.desired, Intent::Stopped);
+}
+
+#[test]
+fn configuration_gate_observes_serialized_intent_without_reentering_host() {
+    let (_temp, host, lease) = started();
+    let mut request = command(lease.runtime_id, Uuid::new_v4());
+    request.actor.roles.insert("configure".into());
+    let error = host
+        .mutate_observed(
+            request,
+            None,
+            Some("configure"),
+            |snapshot| {
+                if snapshot.intent.desired == Intent::Running {
+                    Err(Error::new(
+                        "requires_pause",
+                        "fixture account replacement requires pause",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+            |_| panic!("running replacement must not write"),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "requires_pause");
+}
+
+#[test]
+fn in_flight_local_effect_releases_gate_and_force_rejects_its_success() {
+    let (_temp, host, lease) = started();
+    let permit = host
+        .admit(
+            &lease,
+            Uuid::new_v4(),
+            "fixture-child".into(),
+            "fixture-scope".into(),
+            || Ok(()),
+        )
+        .unwrap();
+    let mut request = command(lease.runtime_id, Uuid::new_v4());
+    request.kind = "local_check".into();
+    request.canonical_targets = vec!["fixture-child".into()];
+    let effect_id = request.request_id;
+    let (effect, launched) = host
+        .begin_effect(
+            request.clone(),
+            &permit,
+            || Ok(()),
+            |_| Ok("owned fixture process"),
+        )
+        .unwrap();
+    assert_eq!(launched, "owned fixture process");
+    assert_eq!(host.operation(effect_id).unwrap().phase, ReceiptPhase::Sent);
+    let generation = host.snapshot().unwrap().intent.generation;
+    host.lifecycle(
+        command(lease.runtime_id, Uuid::new_v4()),
+        Lifecycle::ForceStop,
+        generation,
+    )
+    .unwrap();
+    assert!(
+        host.snapshot()
+            .unwrap()
+            .fenced_operations
+            .contains(&permit.operation_id)
+    );
+    assert!(
+        host.begin_effect::<()>(request, &permit, || Ok(()), |_| panic!("never relaunch"))
+            .is_err()
+    );
+    assert_eq!(
+        host.complete_effect(effect, &permit, || Ok(()), json!({"exit_code":0}))
+            .unwrap_err()
+            .code,
+        "access_denied"
+    );
+    let receipt = host.operation(effect_id).unwrap();
+    assert_eq!(receipt.phase, ReceiptPhase::Acknowledged);
+    assert_eq!(
+        receipt.observed_result.unwrap()["effect"],
+        "exited_evidence_rejected"
+    );
+    assert!(
+        !host
+            .snapshot()
+            .unwrap()
+            .unresolved_operations
+            .contains_key(&effect_id)
+    );
 }
 fn started() -> (TempDir, Arc<ControlHost>, Lease) {
     let (temp, dir) = directory();
@@ -498,4 +756,239 @@ fn canonical_identity_ignores_object_order_not_arrays() {
         canonical_digest(1, &json!([2, 1])).unwrap()
     );
     assert!(canonical_digest(1, &json!(1.5)).is_err());
+}
+
+#[test]
+fn active_background_command_cannot_be_reconciled_under_its_running_task() {
+    let (_temp, directory) = directory();
+    let runtime = Uuid::new_v4();
+    let host = ControlHost::setup(directory, runtime, Uuid::new_v4()).unwrap();
+    let mut request = command(runtime, Uuid::new_v4());
+    request.kind = "command/Setup".into();
+    request.actor.roles.insert("configure".into());
+    let id = request.request_id;
+    host.queue_command(request, "configure", || Ok(())).unwrap();
+    let mut recover = actor();
+    recover.roles.insert("recover".into());
+    assert_eq!(
+        host.reconcile_operation(&recover, id, |_| panic!(
+            "active command cannot be taken over"
+        ))
+        .unwrap_err()
+        .code,
+        "operation_active"
+    );
+    host.complete_command(id, Ok(json!({"effect":"verified"})))
+        .unwrap();
+    assert!(host.snapshot().unwrap().background_commands.is_empty());
+    assert_eq!(host.operation(id).unwrap().phase, ReceiptPhase::Reconciled);
+}
+
+#[test]
+fn failed_owner_is_fenced_without_claiming_exit_or_changing_operator_intent() {
+    let (_temp, host, lease) = started();
+    let permit = host
+        .admit(
+            &lease,
+            Uuid::new_v4(),
+            "fixture-child".into(),
+            "fixture-scope".into(),
+            || Ok(()),
+        )
+        .unwrap();
+    let first = host.suspend_owner(&lease, "channel_failed").unwrap();
+    let duplicate = host.suspend_owner(&lease, "channel_failed").unwrap();
+    assert_eq!(first.operation_id, duplicate.operation_id);
+    let state = host.snapshot().unwrap();
+    assert_eq!(state.intent.desired, Intent::Running);
+    assert!(state.orchestration_alive);
+    assert!(!state.admission_open);
+    assert!(!state.reconciled);
+    assert!(state.fenced_operations.contains(&permit.operation_id));
+    assert!(
+        state
+            .unresolved_operations
+            .contains_key(&first.operation_id)
+    );
+    assert_eq!(first.phase, ReceiptPhase::Sent);
+    assert_eq!(
+        first.observed_result.unwrap()["process_exit"],
+        "unconfirmed"
+    );
+    host.orchestration_exited(&lease).unwrap();
+    assert!(!host.snapshot().unwrap().orchestration_alive);
+    assert!(
+        host.snapshot()
+            .unwrap()
+            .unresolved_operations
+            .contains_key(&duplicate.operation_id)
+    );
+}
+
+#[test]
+fn atomic_run_budget_survives_restart_and_profile_edits_without_reset() {
+    let (temp, host, lease) = started();
+    let reference = RunReference {
+        normalized_state: Some("todo".into()),
+        workspace: Uuid::new_v4(),
+        account: "actual-fixture-account".into(),
+        phase: kegari_v0::scheduler::PhaseKey {
+            work: "canonical-child".into(),
+            generation: canonical_digest(1, &"definition-correction").unwrap(),
+            phase: "implementation".into(),
+            retry_grant: None,
+        },
+        profile_digest: canonical_digest(1, &"profile-a").unwrap(),
+        instruction_digest: canonical_digest(1, &"instructions").unwrap(),
+        max_attempts: 2,
+        max_turns: 20,
+        max_review_rounds: 3,
+        attempt: 1,
+    };
+    let admission = |reference: RunReference| RunAdmission {
+        request_id: Uuid::new_v4(),
+        work_key: "exact-work-generation".into(),
+        scope_digest: canonical_digest(1, &"assembled-contract").unwrap(),
+        reference,
+    };
+    let first = host
+        .admit_run(&lease, admission(reference.clone()), || Ok(()))
+        .unwrap();
+    let recorded = RunReference::from_receipt(&host.operation(first.operation_id).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(recorded.attempt, 1);
+    host.retire_local(
+        first.operation_id,
+        json!({"known_failure":"fixture-process-exited"}),
+    )
+    .unwrap();
+    assert_eq!(
+        host.admit_run(&lease, admission(reference.clone()), || Ok(()))
+            .unwrap_err()
+            .code,
+        "attempts_exhausted"
+    );
+    let runtime = lease.runtime_id;
+    drop(host);
+    let host = ControlHost::recover(
+        PrivateDir::open(&temp.path().canonicalize().unwrap().join("state")).unwrap(),
+        runtime,
+    )
+    .unwrap();
+    let renewed = Lease {
+        runtime_id: runtime,
+        owner_generation: 2,
+        owner_id: Uuid::new_v4(),
+    };
+    host.attach_reconciled(renewed.clone()).unwrap();
+    let mut second = reference.clone();
+    second.attempt = 2;
+    second.profile_digest = canonical_digest(1, &"profile-b").unwrap();
+    second.max_attempts = 9;
+    let next = host
+        .admit_run(&renewed, admission(second.clone()), || Ok(()))
+        .unwrap();
+    host.retire_local(
+        next.operation_id,
+        json!({"known_failure":"fixture-process-exited"}),
+    )
+    .unwrap();
+    second.attempt = 3;
+    assert_eq!(
+        host.admit_run(&renewed, admission(second), || Ok(()))
+            .unwrap_err()
+            .code,
+        "attempts_exhausted"
+    );
+    let mut correction = reference;
+    correction.phase.generation = canonical_digest(1, &"new-material-correction").unwrap();
+    assert!(
+        host.admit_run(&renewed, admission(correction), || Ok(()))
+            .is_ok()
+    );
+}
+
+#[test]
+fn concurrent_session_capacity_is_counted_and_reserved_in_one_host_transaction() {
+    let (_temp, host, lease) = started();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let attempts = (0..2)
+        .map(|index| {
+            let host = host.clone();
+            let lease = lease.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let work = format!("canonical-child-{index}");
+                let reference = RunReference {
+                    workspace: Uuid::from_u128(2),
+                    account: "same-actual-account".into(),
+                    normalized_state: Some("todo".into()),
+                    phase: kegari_v0::scheduler::PhaseKey {
+                        work: work.clone(),
+                        generation: canonical_digest(1, &"current-generation").unwrap(),
+                        phase: "implementation".into(),
+                        retry_grant: None,
+                    },
+                    profile_digest: canonical_digest(1, &"profile").unwrap(),
+                    instruction_digest: canonical_digest(1, &"instructions").unwrap(),
+                    max_attempts: 3,
+                    max_turns: 20,
+                    max_review_rounds: 3,
+                    attempt: 1,
+                };
+                barrier.wait();
+                host.admit_run_observed(
+                    &lease,
+                    RunAdmission {
+                        request_id: Uuid::new_v4(),
+                        work_key: work,
+                        scope_digest: canonical_digest(1, &"contract").unwrap(),
+                        reference,
+                    },
+                    |snapshot| {
+                        let used = snapshot
+                            .active_operations
+                            .iter()
+                            .map(|permit| {
+                                RunReference::from_receipt(&host.operation(permit.operation_id)?)
+                            })
+                            .collect::<kegari_v0::error::Result<Vec<_>>>()?
+                            .into_iter()
+                            .flatten()
+                            .filter(|run| run.account == "same-actual-account")
+                            .count();
+                        if used >= 1 {
+                            Err(Error::new("capacity_wait", "actual account cap is full"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let results = attempts
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .find_map(|result| result.as_ref().err())
+            .unwrap()
+            .code,
+        "capacity_wait"
+    );
+    assert_eq!(host.snapshot().unwrap().active_operations.len(), 1);
+    assert_eq!(
+        host.operations()
+            .unwrap()
+            .iter()
+            .filter(|receipt| RunReference::from_receipt(receipt).unwrap().is_some())
+            .count(),
+        1
+    );
 }

@@ -1,0 +1,1903 @@
+//! Production composition with deterministic provider/process observations only.
+//! Does not qualify OS confinement or launch any model/provider action.
+use chrono::{Duration, Utc};
+use kegari_v0::{
+    authority::*,
+    codex::*,
+    config::{Profile, ReleaseMode, Speed},
+    control::*,
+    digest::*,
+    error::{Error, Result},
+    evaluation::TrialHost,
+    evidence::{Generation, WorkIdentity},
+    execution::*,
+    git::{Git, RepositoryId},
+    instructions::*,
+    isolation::*,
+    providers::ProviderBroker,
+    reconcile::*,
+    storage::PrivateDir,
+    worker::*,
+    workflow::Workflow,
+};
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    process::Command,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration as StdDuration,
+};
+use tempfile::TempDir;
+use uuid::Uuid;
+
+fn id(n: u128) -> Uuid {
+    Uuid::from_u128(n)
+}
+fn profile() -> Profile {
+    Profile {
+        tool: "codex".into(),
+        model: "fixture-model".into(),
+        reasoning: "high".into(),
+        speed: Speed::Standard,
+    }
+}
+fn git_path() -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|p| p.join("git"))
+        .find(|p| p.is_file())
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+}
+fn git_run(path: &Path, args: &[&str]) {
+    let r = Command::new(git_path())
+        .current_dir(path)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
+        .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
+        .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgSign=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+}
+struct Host {
+    authority: Mutex<WorkerAuthority>,
+    revoked: AtomicBool,
+    owner: AtomicBool,
+    rates: AtomicBool,
+}
+impl WorkerHost for Host {
+    fn observed_session(&self, _: Uuid, _: &SessionState) -> Result<()> {
+        Ok(())
+    }
+    fn current_authority(&self, _: &WorkerAuthority) -> Result<WorkerAuthority> {
+        if self.revoked.load(Ordering::SeqCst) {
+            return Err(Error::new("access_denied", "fixture revoked authorization"));
+        }
+        Ok(self.authority.lock().unwrap().clone())
+    }
+    fn verify_owner(&self, _: &Lease) -> Result<()> {
+        if !self.owner.load(Ordering::SeqCst) {
+            return Err(Error::new("ownership_conflict", "fixture owner exited"));
+        }
+        Ok(())
+    }
+    fn rate_limits(&self, _: Uuid, _: &Value) -> Result<()> {
+        self.rates.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    fn reconcile_prior(&self, _: Uuid, prior: Option<&Value>) -> Result<()> {
+        if prior.is_some_and(|p| p["status"] == "unknown") {
+            Err(Error::new(
+                "reconciliation_required",
+                "unknown provider effect",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+    fn observed_state(&self, _: Uuid) -> Result<Value> {
+        Ok(json!({"delivery":"pending"}))
+    }
+    fn correction_event(&self, _: Uuid, watermark: u64, _: &str) -> Result<String> {
+        Ok(format!("fixture-correction:{watermark}"))
+    }
+}
+#[derive(Default)]
+struct Sink(Mutex<Vec<Value>>);
+impl OutcomeSink for Sink {
+    fn record(&self, outcome: &WorkerOutcome) -> Result<String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(serde_json::to_value(outcome).unwrap());
+        Ok(format!("pending:{}", outcome.proposal_id))
+    }
+}
+struct Boundary {
+    fail: AtomicBool,
+    block: AtomicBool,
+    unknown: AtomicBool,
+    last_cancel: Mutex<Option<Arc<CancelFlag>>>,
+}
+struct CancelFlag {
+    cancelled: AtomicBool,
+    exited: AtomicBool,
+}
+impl CommandCancellation for CancelFlag {
+    fn cancel(&self) -> Result<()> {
+        self.cancelled.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    fn exited(&self) -> Result<bool> {
+        Ok(self.exited.load(Ordering::SeqCst))
+    }
+}
+struct FixtureCommand {
+    receipt: CommandOutcome,
+    block: bool,
+    cancel: Arc<CancelFlag>,
+    unknown: bool,
+}
+impl StartedCommand for FixtureCommand {
+    fn cancellation(&self) -> Arc<dyn CommandCancellation> {
+        self.cancel.clone()
+    }
+    fn wait(self: Box<Self>) -> Pin<Box<dyn Future<Output = Result<CommandOutcome>> + Send>> {
+        Box::pin(async move {
+            if self.unknown {
+                return Err(Error::new(
+                    "operation_uncertain",
+                    "fixture wait lost its exit observation",
+                ));
+            }
+            let mut receipt = self.receipt;
+            if self.block {
+                while !self.cancel.cancelled.load(Ordering::SeqCst) {
+                    tokio::time::sleep(StdDuration::from_millis(5)).await;
+                }
+                receipt.exit_code = Some(130);
+            }
+            self.cancel.exited.store(true, Ordering::SeqCst);
+            Ok(receipt)
+        })
+    }
+}
+impl CommandBoundary for Boundary {
+    fn evidence_class(&self) -> ExecutionEvidenceClass {
+        ExecutionEvidenceClass::DeterministicFixture
+    }
+    fn start(
+        &self,
+        b: &ValidatedIsolation,
+        argv: &[String],
+        _: StdDuration,
+        _: usize,
+    ) -> Result<Box<dyn StartedCommand>> {
+        std::fs::write(
+            b.plan().scratch.join("check.json"),
+            format!("{{\"fixture\":\"{}\"}}", Uuid::new_v4()),
+        )
+        .unwrap();
+        let cancel = Arc::new(CancelFlag {
+            cancelled: AtomicBool::new(false),
+            exited: AtomicBool::new(false),
+        });
+        *self.last_cancel.lock().unwrap() = Some(cancel.clone());
+        Ok(Box::new(FixtureCommand {
+            receipt: CommandOutcome {
+                schema_version: 1,
+                elapsed_ms: 1,
+                argv: argv.to_vec(),
+                cwd: b.plan().cwd.clone(),
+                exit_code: Some(if self.fail.load(Ordering::SeqCst) {
+                    1
+                } else {
+                    0
+                }),
+                timed_out: false,
+                stdout: "deterministic fixture".into(),
+                stderr: String::new(),
+                output_truncated: false,
+                isolation_digest: b.digest().into(),
+            },
+            block: self.block.load(Ordering::SeqCst),
+            cancel,
+            unknown: self.unknown.load(Ordering::SeqCst),
+        }))
+    }
+}
+struct Fixture {
+    _temp: TempDir,
+    worker: ScopedWorker,
+    contract: Arc<WorkerContract>,
+    host: Arc<Host>,
+    sink: Arc<Sink>,
+    control: Arc<ControlHost>,
+    state: SessionState,
+    boundary: Arc<Boundary>,
+    input: ContractInput,
+    executions: Arc<ExecutionRegistry>,
+    parent: ParentProjection,
+    permit: Permit,
+    execution: Option<Arc<WorkerExecution>>,
+}
+impl Fixture {
+    fn new(role: AgentRole) -> Self {
+        Self::with_hooks(role, "")
+    }
+    fn with_hooks(role: AgentRole, hooks: &str) -> Self {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let source = base.join("operator");
+        let run = base.join("execution");
+        let repo = run.join("repository");
+        let scratch = run.join("scratch");
+        let private = base.join("control");
+        let auth = base.join("auth");
+        for p in [&source, &run, &scratch] {
+            std::fs::create_dir(p).unwrap();
+        }
+        PrivateDir::create(&auth).unwrap();
+        git_run(&source, &["init", "-b", "main"]);
+        std::fs::write(source.join("a.txt"), "original\n").unwrap();
+        let workflow_text = format!(
+            "---\nschema_version: 1\n{hooks}checks:\n  local:\n    suite:\n      argv: [\"/usr/bin/true\"]\n      result_artifact: \"{}/check.json\"\n---\nOutcome: {{{{ issue | json }}}}\n",
+            scratch.display()
+        );
+        std::fs::write(source.join("WORKFLOW.md"), workflow_text).unwrap();
+        git_run(&source, &["add", "."]);
+        git_run(
+            &source,
+            &[
+                "commit",
+                "--signoff",
+                "-m",
+                "test: create disposable fixture",
+            ],
+        );
+        git_run(
+            &run,
+            &[
+                "clone",
+                "--local",
+                "--no-hardlinks",
+                source.to_str().unwrap(),
+                repo.to_str().unwrap(),
+            ],
+        );
+        let workflow = Workflow::load(&repo.join("WORKFLOW.md")).unwrap();
+        let git = Arc::new(Git::new(git_path()).unwrap());
+        let revision = git.revision(&repo, "HEAD").unwrap();
+        let child = role.permits_source_writes();
+        let work = WorkIdentity {
+            linear_endpoint: "https://linear.invalid/graphql".into(),
+            linear_workspace: id(2),
+            parent: id(10),
+            child: child.then_some(id(11)),
+            generation: Generation {
+                authorization: bytes_digest(b"a"),
+                definition: bytes_digest(b"d"),
+                correction: bytes_digest(b"c"),
+                scope: bytes_digest(b"s"),
+            },
+        };
+        let scope = ChildScope {
+            schema_version: 1,
+            kind: "child".into(),
+            responsibility: match role {
+                AgentRole::Testing => Responsibility::Testing,
+                AgentRole::Documentation => Responsibility::Documentation,
+                _ => Responsibility::Implementation,
+            },
+            write_repository: Some("42".into()),
+            write_paths: vec!["a.txt".into()],
+            read_repositories: vec![],
+            test_resources: vec![],
+        };
+        let parent = ParentProjection {
+            workspace_id: id(3),
+            workspace_name: "fixture".into(),
+            parent_reference: "fixture/10".into(),
+            key: IssueKey::new("https://linear.invalid/graphql", id(2), id(10)).unwrap(),
+            issue: None,
+            included: true,
+            observed_at: Utc::now(),
+            required_children: BTreeSet::from([id(11)]),
+            children: BTreeMap::from([(
+                id(11),
+                ChildProjection {
+                    parent_reference: "fixture/10".into(),
+                    key: IssueKey::new("https://linear.invalid/graphql", id(2), id(11)).unwrap(),
+                    issue: None,
+                    scope: Some(scope),
+                    profile: Some(profile()),
+                    work: Some(work.clone()),
+                    blockers: vec![],
+                    prerequisites: BTreeSet::new(),
+                },
+            )]),
+            observations: BTreeMap::new(),
+            metadata: None,
+            authorization_candidate: None,
+            authorization_published: true,
+            corrections: Corrections::default(),
+            observation_revision: 1,
+            disappeared_children: BTreeMap::new(),
+            work: Some(work.clone()),
+            blockers: vec![],
+            prerequisites: BTreeSet::new(),
+            source_digest: bytes_digest(b"sources"),
+            config_revision: bytes_digest(b"config"),
+            drain_config_revision: bytes_digest(b"config-drain"),
+            workflow_digest: workflow.digest.clone(),
+            coordination_profile: profile(),
+            release_mode: ReleaseMode::Manual,
+        };
+        let mut authority = WorkerAuthority::Authorized(
+            parent
+                .fresh_gate(
+                    work.child,
+                    if child {
+                        GatePurpose::NewOperation
+                    } else {
+                        GatePurpose::Coordination
+                    },
+                    &DependencyOutcomes::default(),
+                    Utc::now(),
+                    Duration::seconds(30),
+                )
+                .unwrap(),
+        );
+        let mut review = None;
+        if role == AgentRole::IndependentReview {
+            use kegari_v0::providers::{PullRequest, Repository, RepositoryIdentity};
+            let repository = RepositoryIdentity {
+                id: 42,
+                owner: "fixture".into(),
+                name: "repo".into(),
+                owner_id: 7,
+                organization_id: None,
+            };
+            let pr = PullRequest {
+                repository_id: 42,
+                id: 40,
+                number: 1,
+                author_id: 7,
+                state: "open".into(),
+                draft: false,
+                head_sha: revision.commit.clone(),
+                base_sha: revision.commit.clone(),
+                head_ref: "feature".into(),
+                base_ref: "main".into(),
+                head_repository_id: Some(42),
+                merged: Some(false),
+                merge_commit_sha: None,
+                url: "https://github.invalid/fixture/repo/pull/1".into(),
+            };
+            let projection = RuntimeProjection {
+                runtime_id: id(1),
+                config_revision: bytes_digest(b"config"),
+                observed_at: Utc::now(),
+                workspaces: BTreeMap::from([(
+                    id(3),
+                    WorkspaceProjection {
+                        workspace_id: id(3),
+                        workspace_name: "fixture".into(),
+                        complete: true,
+                        observed_at: Utc::now(),
+                        parents: BTreeMap::new(),
+                        repositories: BTreeMap::from([(
+                            42,
+                            Repository {
+                                identity: repository.clone(),
+                                default_branch: "main".into(),
+                                private: true,
+                                archived: false,
+                                disabled: false,
+                                squash_allowed: Some(true),
+                                permissions: json!({"pull":true}),
+                            },
+                        )]),
+                        independent_jobs: vec![IndependentJob {
+                            workspace_id: id(3),
+                            repository_id: 42,
+                            pull_request: pr,
+                            review_identity: bytes_digest(b"independent-review"),
+                            phase: "review".into(),
+                        }],
+                        error: None,
+                        config_revision: bytes_digest(b"config"),
+                        workflow_digest: workflow.digest.clone(),
+                        independent_review_profile: Some(profile()),
+                    },
+                )]),
+            };
+            authority = WorkerAuthority::Independent(
+                projection
+                    .independent_gate(id(3), 42, 1, Utc::now(), Duration::seconds(30))
+                    .unwrap(),
+            );
+            review = Some(ReviewTarget {
+                repository,
+                pull_request: 1,
+                head: revision.commit.clone(),
+                base: revision.commit.clone(),
+            });
+        }
+        let execution_role = if child {
+            ExecutionRole::Child
+        } else if role == AgentRole::IndependentReview {
+            ExecutionRole::IndependentReview
+        } else if role == AgentRole::Review {
+            ExecutionRole::Review
+        } else {
+            ExecutionRole::Coordination
+        };
+        let isolation = IsolationPlan {
+            schema_version: 1,
+            role: execution_role,
+            execution_root: run.clone(),
+            repository: repo.clone(),
+            cwd: repo.clone(),
+            scratch: scratch.clone(),
+            read_roots: vec![PathGrant {
+                path: repo.clone(),
+                directory: true,
+            }],
+            resource_writes: vec![],
+            source_writes: if child {
+                vec![PathGrant {
+                    path: repo.join("a.txt"),
+                    directory: false,
+                }]
+            } else {
+                vec![]
+            },
+            forbidden_roots: vec![source.clone(), private.clone(), auth.clone()],
+            executables: if child {
+                vec![
+                    PathBuf::from("/usr/bin/true"),
+                    PathBuf::from("/bin/sh"),
+                    git_path(),
+                ]
+            } else {
+                vec![]
+            },
+        }
+        .validate()
+        .unwrap();
+        let context = json!({"issue":{"body":"fixture"},"parent":{},"children":[{"id":id(11)}],"workspace":{"id":id(3)},"scope":{},"dependencies":[],"corrections":[],"evidence":{},"attempt":1,"phase":"work","profile":profile(),"operation":{"id":id(4)}});
+        let work_key = authority.work_key().unwrap();
+        let generation = match &authority {
+            WorkerAuthority::Authorized(_) => work.digest().unwrap(),
+            WorkerAuthority::Independent(g) => g.review_identity().into(),
+        };
+        let assembled = assemble(AssemblyInput {
+            workflow: &workflow,
+            role,
+            phase: "work",
+            context: &context,
+            workspace_id: id(3),
+            operation_id: id(4),
+            work_generation: &generation,
+            correction_revision: &work.generation.correction,
+            profile: &profile(),
+            cwd: &repo,
+            codex_home: &auth,
+            codex_version: kegari_v0::instructions::SUPPORTED_CODEX_VERSION,
+            repository: Some(RepositoryContext {
+                root: repo.clone(),
+                revision: revision.commit.clone(),
+                scope_paths: vec!["a.txt".into()],
+            }),
+            required_context: &[],
+            project_doc_max_bytes: 32768,
+            permissions: PermissionManifest {
+                read_roots: vec![repo.clone()],
+                resource_write_paths: vec![],
+                source_write_paths: if child {
+                    vec![repo.join("a.txt")]
+                } else {
+                    vec![]
+                },
+                scratch_roots: vec![scratch],
+                repository_code_execution: role.permits_repository_execution(),
+                enforcement_profile: isolation.digest().into(),
+                network: WorkerNetwork::BrokerOnly,
+            },
+            tools: tool_definitions(role, child)
+                .into_iter()
+                .map(|(e, _)| e)
+                .collect(),
+            provider_discovery: ProviderDiscovery::Unavailable {
+                reason: "fixture no live Codex".into(),
+            },
+            known_secrets: &[],
+        })
+        .unwrap();
+        let repository = RepositoryId {
+            hostname: "github.invalid".into(),
+            id: "42".into(),
+        };
+        let input = ContractInput {
+            assembled,
+            authority: authority.clone(),
+            isolation: isolation.clone(),
+            workflow,
+            context,
+            review,
+            account_id: "fixture-account".into(),
+            repository: Some(repository.clone()),
+            read_resources: BTreeMap::new(),
+        };
+        let contract = Arc::new(WorkerContract::new(input.clone()).unwrap());
+        let dir = PrivateDir::create(&private).unwrap();
+        let control = Arc::new(
+            ControlHost::setup(dir.child("runtime").unwrap(), id(1), Uuid::new_v4()).unwrap(),
+        );
+        control
+            .lifecycle(
+                MutationRequest {
+                    request_id: Uuid::new_v4(),
+                    runtime_id: id(1),
+                    actor: Actor {
+                        principal: None,
+                        identity: "fixture-operator".into(),
+                        roles: BTreeSet::from(["lifecycle".into()]),
+                    },
+                    kind: "start".into(),
+                    canonical_targets: vec![id(1).to_string()],
+                    expected: BTreeMap::new(),
+                    payload: Value::Null,
+                },
+                Lifecycle::Start,
+                0,
+            )
+            .unwrap();
+        let lease = Lease {
+            runtime_id: id(1),
+            owner_generation: 1,
+            owner_id: id(5),
+        };
+        control.attach_reconciled(lease.clone()).unwrap();
+        let permit = control
+            .admit(
+                &lease,
+                id(4),
+                work_key.clone(),
+                contract.scope_digest().into(),
+                || Ok(()),
+            )
+            .unwrap();
+        let host = Arc::new(Host {
+            authority: Mutex::new(authority),
+            revoked: AtomicBool::new(false),
+            owner: AtomicBool::new(true),
+            rates: AtomicBool::new(false),
+        });
+        let sink = Arc::new(Sink::default());
+        let boundary = Arc::new(Boundary {
+            fail: AtomicBool::new(false),
+            block: AtomicBool::new(false),
+            unknown: AtomicBool::new(false),
+            last_cancel: Mutex::new(None),
+        });
+        let execution = if child {
+            Some(Arc::new(WorkerExecution {
+                git: git.clone(),
+                git_executable: git_path(),
+                boundary: boundary.clone(),
+                ownership: Arc::new(
+                    OwnedDirectory::register(
+                        DirectoryIdentity {
+                            schema_version: 1,
+                            runtime_id: id(1),
+                            directory_id: id(6),
+                            repository: repository.clone(),
+                            work: work.clone(),
+                            repository_path: repo,
+                            operator_checkout: source,
+                        },
+                        &isolation,
+                    )
+                    .unwrap(),
+                ),
+                binding: ExecutionBinding {
+                    runtime_id: id(1),
+                    operation_id: id(4),
+                    work,
+                    repository,
+                    revision,
+                    candidate_vector_digest: None,
+                    isolation_digest: isolation.digest().into(),
+                },
+                limits: ExecutionLimits {
+                    output_bytes: 32768,
+                    ..Default::default()
+                },
+                check_outputs: BTreeMap::new(),
+            }))
+        } else {
+            None
+        };
+        let executions = Arc::new(ExecutionRegistry::default());
+        let mut worker = ScopedWorker::new(
+            contract.clone(),
+            permit.clone(),
+            WorkerServices {
+                control: control.clone(),
+                providers: ProviderBroker::default(),
+                host: host.clone(),
+                sink: sink.clone(),
+                execution: execution.clone(),
+                journal: dir.child("worker").unwrap(),
+                executions: executions.clone(),
+            },
+        )
+        .unwrap();
+        let mut state = SessionState::new(
+            SessionBinding {
+                schema_version: 1,
+                account_id: "fixture-account".into(),
+                work_identity: work_key,
+                operation_id: id(4).to_string(),
+                generation,
+                instruction_digest: contract.instructions().manifest_digest.clone(),
+                isolation_digest: isolation.digest().into(),
+                profile: CodexProfile {
+                    model: "fixture-model".into(),
+                    reasoning: "high".into(),
+                    speed: "standard".into(),
+                },
+                cwd: isolation.plan().cwd.clone(),
+            },
+            3,
+        )
+        .unwrap();
+        state.thread_id = Some("thread".into());
+        state.turn_id = Some("turn".into());
+        state.turns_started = 1;
+        worker.checkpoint(&state, None).unwrap();
+        Self {
+            _temp: temp,
+            worker,
+            contract,
+            host,
+            sink,
+            control,
+            state,
+            boundary,
+            input,
+            executions,
+            parent,
+            permit,
+            execution,
+        }
+    }
+    fn call(&self, name: &str, args: Value) -> ToolCall {
+        ToolCall {
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+            call_id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            arguments: args,
+        }
+    }
+}
+#[test]
+fn roles_expose_no_implementation_or_execution_to_parent_or_review() {
+    for role in [
+        AgentRole::Coordination,
+        AgentRole::Review,
+        AgentRole::IndependentReview,
+    ] {
+        let tools = tool_definitions(role, true);
+        assert!(
+            !tools
+                .iter()
+                .any(|(e, _)| e.capability == ToolCapability::SourceWrite
+                    || e.capability == ToolCapability::ValidationResult)
+        );
+        assert!(!role.permits(ToolCapability::SourceWrite));
+    }
+    assert!(AgentRole::Testing.permits(ToolCapability::SourceWrite));
+}
+#[tokio::test]
+async fn actual_context_is_bounded_and_tool_schema_is_closed() {
+    let mut f = Fixture::new(AgentRole::Coordination);
+    let call = f.call("context_read", json!({"key":"issue"}));
+    assert_eq!(f.worker.call(&call).await.unwrap()["body"], "fixture");
+    let call = f.call("context_read", json!({"key":"issue","shell":"whoami"}));
+    assert_eq!(
+        f.worker.call(&call).await.unwrap_err().code,
+        "invalid_input"
+    );
+    let call = f.call("source_write", json!({}));
+    assert_eq!(
+        f.worker.call(&call).await.unwrap_err().code,
+        "unsupported_tool"
+    );
+}
+#[tokio::test]
+async fn source_reader_rejects_control_traversal_links_and_git() {
+    let mut f = Fixture::new(AgentRole::Coordination);
+    let call = f.call("source_read", json!({"path":"a.txt"}));
+    assert_eq!(f.worker.call(&call).await.unwrap()["content"], "original\n");
+    for path in ["../control/intent.json", ".git/config", "/etc/passwd"] {
+        let call = f.call("source_read", json!({"path":path}));
+        assert!(f.worker.call(&call).await.is_err());
+    }
+    let repo = f
+        .contract
+        .instructions()
+        .manifest
+        .repository_root
+        .as_ref()
+        .unwrap();
+    std::os::unix::fs::symlink("/etc/passwd", repo.join("linked")).unwrap();
+    let call = f.call("source_read", json!({"path":"linked"}));
+    assert!(f.worker.call(&call).await.is_err());
+}
+#[tokio::test]
+async fn revoked_owner_fenced_permit_and_stale_turn_prevent_effects() {
+    let mut f = Fixture::new(AgentRole::Implementation);
+    let call=f.call("source_write",json!({"path":"a.txt","expected_digest":bytes_digest(b"original\n"),"content":"changed","executable":false}));
+    f.host.revoked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        f.worker.call(&call).await.unwrap_err().code,
+        "access_denied"
+    );
+    f.host.revoked.store(false, Ordering::SeqCst);
+    f.host.owner.store(false, Ordering::SeqCst);
+    assert_eq!(
+        f.worker.call(&call).await.unwrap_err().code,
+        "ownership_conflict"
+    );
+    f.host.owner.store(true, Ordering::SeqCst);
+    let mut stale = call.clone();
+    stale.turn_id = "old".into();
+    assert_eq!(
+        f.worker.call(&stale).await.unwrap_err().code,
+        "stale_result"
+    );
+    f.control.fence(id(4)).unwrap();
+    assert_eq!(
+        f.worker.call(&call).await.unwrap_err().code,
+        "access_denied"
+    );
+}
+#[tokio::test]
+async fn actual_source_write_is_scoped_journaled_and_idempotent() {
+    let mut f = Fixture::new(AgentRole::Implementation);
+    let mut call=f.call("source_write",json!({"path":"a.txt","expected_digest":bytes_digest(b"original\n"),"content":"changed\n","executable":true}));
+    let first = f.worker.call(&call).await.unwrap();
+    assert_eq!(first["completed"], true);
+    assert_eq!(f.worker.call(&call).await.unwrap(), first);
+    let repo = f
+        .contract
+        .instructions()
+        .manifest
+        .repository_root
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "changed\n"
+    );
+    call.arguments["content"] = json!("another");
+    assert_eq!(
+        f.worker.call(&call).await.unwrap_err().code,
+        "request_conflict"
+    );
+}
+#[tokio::test]
+async fn out_of_scope_source_and_operator_tool_names_are_rejected() {
+    let mut f = Fixture::new(AgentRole::Implementation);
+    for name in ["approve", "release", "provider_mutate", "shell"] {
+        let call = f.call(name, json!({"roles":["release"]}));
+        assert_eq!(
+            f.worker.call(&call).await.unwrap_err().code,
+            "unsupported_tool"
+        );
+    }
+    let call = f.call(
+        "source_write",
+        json!({"path":"WORKFLOW.md","expected_digest":null,"content":"attack","executable":false}),
+    );
+    assert!(f.worker.call(&call).await.is_err());
+}
+#[tokio::test]
+async fn proposals_are_not_completion_and_require_current_completed_turn() {
+    let mut f = Fixture::new(AgentRole::Coordination);
+    let call = f.call(
+        "outcome_submit",
+        json!({"claim":{"all_passed":true},"artifact_refs":[]}),
+    );
+    let result = f.worker.call(&call).await.unwrap();
+    assert_eq!(result["state"], "pending_host_verification");
+    assert!(f.sink.0.lock().unwrap().is_empty());
+    assert_eq!(f.worker.observe().unwrap().state["delivery"], "pending");
+    f.state.notification("turn/completed",&json!({"threadId":"thread","turn":{"id":"turn","status":"completed","items":[],"error":null}})).unwrap();
+    f.worker.checkpoint(&f.state, None).unwrap();
+    assert_eq!(f.sink.0.lock().unwrap().len(), 1);
+    f.worker.checkpoint(&f.state, None).unwrap();
+    assert_eq!(f.sink.0.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn unknown_recovery_and_pending_requests_do_not_become_clean() {
+    let mut f = Fixture::new(AgentRole::Coordination);
+    assert_eq!(
+        f.worker
+            .reconcile_prior(Some(&json!({"status":"unknown"})))
+            .unwrap_err()
+            .code,
+        "reconciliation_required"
+    );
+    f.worker
+        .checkpoint(&f.state, Some("interrupted_unknown"))
+        .unwrap();
+    let call = f.call("context_read", json!({"key":"issue"}));
+    assert_eq!(f.worker.call(&call).await.unwrap_err().code, "stale_result");
+    let mut state = f.state.clone();
+    state.binding.account_id = "other-account".into();
+    assert_eq!(
+        f.worker.checkpoint(&state, None).unwrap_err().code,
+        "worker_binding"
+    );
+}
+#[tokio::test]
+async fn correction_proposal_cannot_expand_children_or_claim_consumption() {
+    let mut f = Fixture::new(AgentRole::Coordination);
+    let call=f.call("correction_propose",json!({"source_comment":id(100),"source_revision":"edited-1","children":[id(12)],"message":"fix it"}));
+    assert_eq!(
+        f.worker.call(&call).await.unwrap_err().code,
+        "scope_violation"
+    );
+    let call=f.call("correction_propose",json!({"source_comment":id(100),"source_revision":"edited-1","children":[id(11)],"message":"fix it"}));
+    assert_eq!(
+        f.worker.call(&call).await.unwrap()["state"],
+        "pending_host_verification"
+    );
+    assert_eq!(f.state.correction_consumed, 0);
+}
+#[tokio::test]
+async fn configured_check_uses_executor_and_never_mints_fixture_production_proof() {
+    let mut f = Fixture::new(AgentRole::Implementation);
+    let call = f.call("validation_run", json!({"name":"suite","kind":"local"}));
+    let result = f.worker.call(&call).await.unwrap();
+    assert_eq!(result["successful"], true);
+    let checks = f.worker.take_verified_checks();
+    assert_eq!(checks.len(), 1);
+    assert_eq!(
+        checks[0].production_evidence().unwrap_err().code,
+        "unqualified_fixture"
+    );
+    assert_eq!(
+        f.worker.observe().unwrap().checks["suite"].status,
+        kegari_v0::evaluation::CheckStatus::Passed
+    );
+    let call = f.call("validation_run", json!({"name":"suite","kind":"local"}));
+    assert!(
+        f.worker.call(&call).await.unwrap()["successful"]
+            .as_bool()
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn failed_check_is_retained_as_failed_and_corrected_rerun_keeps_old_bytes() {
+    let mut f = Fixture::new(AgentRole::Implementation);
+    f.boundary.fail.store(true, Ordering::SeqCst);
+    let call = f.call("validation_run", json!({"name":"suite","kind":"local"}));
+    assert_eq!(f.worker.call(&call).await.unwrap()["successful"], false);
+    assert!(f.worker.take_verified_checks().is_empty());
+    assert_eq!(
+        f.worker.observe().unwrap().checks["suite"].status,
+        kegari_v0::evaluation::CheckStatus::Failed
+    );
+    assert!(
+        f.control
+            .snapshot()
+            .unwrap()
+            .unresolved_operations
+            .is_empty()
+    );
+    f.boundary.fail.store(false, Ordering::SeqCst);
+    let call = f.call("validation_run", json!({"name":"suite","kind":"local"}));
+    assert_eq!(f.worker.call(&call).await.unwrap()["successful"], true);
+    assert_eq!(f.worker.take_verified_checks().len(), 1);
+}
+#[tokio::test]
+async fn independent_review_has_no_linear_authority_or_execution_and_pins_pr() {
+    let mut f = Fixture::new(AgentRole::IndependentReview);
+    assert!(f.contract.authority().work().is_none());
+    for name in [
+        "source_write",
+        "validation_run",
+        "correction_propose",
+        "git_inspect",
+    ] {
+        let call = f.call(name, json!({}));
+        assert_eq!(
+            f.worker.call(&call).await.unwrap_err().code,
+            "unsupported_tool"
+        );
+    }
+    let mut input = f.input.clone();
+    input.review.as_mut().unwrap().head = "1".repeat(40);
+    assert!(WorkerContract::new(input).is_err());
+    let call = f.call(
+        "outcome_submit",
+        json!({"claim":{"clean":true},"artifact_refs":[]}),
+    );
+    f.worker.call(&call).await.unwrap();
+    f.state.notification("turn/completed",&json!({"threadId":"thread","turn":{"id":"turn","status":"completed","items":[],"error":null}})).unwrap();
+    f.worker.checkpoint(&f.state, None).unwrap();
+    let records = f.sink.0.lock().unwrap();
+    assert!(records[0]["work"].is_null());
+    assert_eq!(records[0]["independent_review"]["pull_request"], 1);
+}
+#[test]
+fn changed_tools_profiles_or_authorized_write_paths_cannot_rebind_contract() {
+    let f = Fixture::new(AgentRole::Implementation);
+    let mut input = f.input.clone();
+    input.assembled.manifest.tools[0].name = "shell".into();
+    input.assembled.manifest_digest = canonical_digest(1, &input.assembled.manifest).unwrap();
+    assert!(WorkerContract::new(input).is_err());
+    let mut input = f.input.clone();
+    input.assembled.manifest.profile.model = "other".into();
+    input.assembled.manifest_digest = canonical_digest(1, &input.assembled.manifest).unwrap();
+    assert!(WorkerContract::new(input).is_err());
+    let mut input = f.input.clone();
+    let mut plan = input.isolation.plan().clone();
+    plan.source_writes = vec![PathGrant {
+        path: plan.repository.clone(),
+        directory: true,
+    }];
+    input.isolation = plan.validate().unwrap();
+    input.assembled.manifest.permissions.source_write_paths =
+        vec![input.isolation.plan().repository.clone()];
+    input.assembled.manifest.permissions.enforcement_profile = input.isolation.digest().into();
+    input.assembled.manifest_digest = canonical_digest(1, &input.assembled.manifest).unwrap();
+    assert_eq!(
+        WorkerContract::new(input).unwrap_err().code,
+        "scope_violation"
+    );
+    assert_eq!(
+        f.worker
+            .validate_live_operation(
+                f.contract.instructions(),
+                &f.input.isolation,
+                f.contract.tools(),
+                &f.contract.work_key().unwrap()
+            )
+            .unwrap_err()
+            .code,
+        "unqualified_fixture"
+    );
+}
+
+#[tokio::test]
+async fn force_is_durable_and_status_remains_responsive_during_long_check() {
+    let mut f = Fixture::new(AgentRole::Implementation);
+    f.boundary.block.store(true, Ordering::SeqCst);
+    let call = f.call("validation_run", json!({"name":"suite","kind":"local"}));
+    let control = f.control.clone();
+    let executions = f.executions.clone();
+    let task = tokio::spawn(async move {
+        let result = f.worker.call(&call).await;
+        (f, result)
+    });
+    tokio::time::timeout(StdDuration::from_secs(2), async {
+        while executions.active_operations().unwrap().is_empty() {
+            tokio::time::sleep(StdDuration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let status_control = control.clone();
+    let status = tokio::time::timeout(
+        StdDuration::from_millis(250),
+        tokio::task::spawn_blocking(move || status_control.snapshot()),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        executions.cancel_fenced(&control, id(4)).unwrap_err().code,
+        "access_denied"
+    );
+    control
+        .lifecycle(
+            MutationRequest {
+                request_id: Uuid::new_v4(),
+                runtime_id: id(1),
+                actor: Actor {
+                    principal: None,
+                    identity: "fixture-operator".into(),
+                    roles: BTreeSet::from(["lifecycle".into()]),
+                },
+                kind: "force_stop".into(),
+                canonical_targets: vec![id(1).to_string()],
+                expected: BTreeMap::new(),
+                payload: Value::Null,
+            },
+            Lifecycle::ForceStop,
+            status.intent.generation,
+        )
+        .unwrap();
+    assert_eq!(control.snapshot().unwrap().intent.desired, Intent::Stopped);
+    assert_eq!(executions.cancel_fenced(&control, id(4)).unwrap(), 1);
+    let (mut f, result) = tokio::time::timeout(StdDuration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(result.is_err());
+    assert!(f.worker.take_verified_checks().is_empty());
+    assert!(executions.active_operations().unwrap().is_empty());
+    assert!(
+        f.control
+            .snapshot()
+            .unwrap()
+            .unresolved_operations
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn adapter_observation_binds_interleaved_tool_before_start_response() {
+    let mut f = Fixture::new(AgentRole::Coordination);
+    f.state.turn_id = None;
+    f.worker.checkpoint(&f.state, Some("turn/start")).unwrap();
+    let mut call = f.call("context_read", json!({"key":"issue"}));
+    call.turn_id = "interleaved-turn".into();
+    assert_eq!(f.worker.call(&call).await.unwrap_err().code, "stale_result");
+    f.state.turn_id = Some("interleaved-turn".into());
+    f.worker.observe_session(&f.state).unwrap();
+    assert_eq!(f.worker.call(&call).await.unwrap()["body"], "fixture");
+    f.worker
+        .checkpoint(&f.state, Some("interrupted_unknown"))
+        .unwrap();
+    assert_eq!(f.worker.call(&call).await.unwrap_err().code, "stale_result");
+}
+
+fn run_preparation(f: &Fixture) -> kegari_v0::worker_run::Preparation {
+    let proof = json!({"workflow_ref":"fixture/repo/.github/workflows/caller.yml@refs/heads/trusted","workflow_sha":"0123456789012345678901234567890123456789","job_workflow_ref":"fixture/trusted/.github/workflows/proof.yml@0123456789012345678901234567890123456789","job_workflow_sha":"0123456789012345678901234567890123456789","event_name":"workflow_dispatch"});
+    let auth = f._temp.path().canonicalize().unwrap().join("auth");
+    let config: kegari_v0::config::Config = serde_json::from_value(json!({
+        "schema_version":1,"runtime":{"id":id(1),"host_id":"fixture-host","max_agents":2},
+        "connections":{
+            "linear":{"kind":"linear","account_id":"linear-fixture","endpoint":"https://linear.invalid/graphql","credential_ref":"keychain:fixture-linear"},
+            "github":{"kind":"github","account_id":"github-fixture","endpoint":"https://github.invalid/api","credential_ref":"keychain:fixture-github"},
+            "codex":{"kind":"codex","account_id":"fixture-account","auth_home":auth,"max_agents":2,"argv":["/usr/bin/true","app-server","--listen","stdio://"]}
+        },
+        "workspaces":{"fixture":{
+            "id":id(3),"linear_workspace_id":id(2),"linear_connection":"linear","github_connection":"github","codex_connection":"codex","workflow":f.input.workflow.path,
+            "linear":{"teams":"all","projects":"all","users":"all","authorization_label_id":id(20),"states":{"team":{"prepared":id(30),"running":id(31),"blocked":id(32),"child_done":id(33),"parent_accepted":id(34),"cancelled":id(35)}}},
+            "github":{"repositories":["42"]},"actors":{"authorizers":[id(5)],"correctors":[id(5)],"acceptors":[id(5)]},
+            "profiles":{"coordination":profile()},"routing_labels":{"tool":{id(40).to_string():"codex"},"model":{id(41).to_string():"fixture-model"},"reasoning":{id(42).to_string():"high"},"speed":{id(43).to_string():"standard"}},
+            "max_agents":2,"release":{"mode":"manual","spacing_seconds":0},
+            "repositories":{"42":{"source":f._temp.path().join("operator"),"local_checks":["suite"],"integrated_checks":["e2e"],"ci":[{"workflow_id":1,"required_checks":["suite"],"proof":proof}],"production_ci":[{"workflow_id":2,"required_checks":["suite"],"proof":proof}],"no_change_validation":{"workflow_id":1,"workflow_revision":"0123456789012345678901234567890123456789","source_input":"source_sha","operation_input":"operation_id","observed_source_output":"tested_sha","proof":proof},"deployment":"none"}}
+        }},"control":{"local_users":{"501":{"id":"fixture-operator","linear_user_id":id(5),"roles":["inspect","configure","lifecycle","correct","accept","release","recover"]}}}
+    })).unwrap();
+    config.validate().unwrap();
+    let mut parent = f.parent.clone();
+    parent.config_revision = config.revision().unwrap();
+    let child = f.input.assembled.manifest.role.permits_source_writes();
+    let gate = parent
+        .fresh_gate(
+            child.then_some(id(11)),
+            if child {
+                GatePurpose::NewOperation
+            } else {
+                GatePurpose::Coordination
+            },
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    kegari_v0::worker_run::Preparation {
+        config: Arc::new(config),
+        workflow: f.input.workflow.clone(),
+        authority: WorkerAuthority::Authorized(gate),
+        operation_id: id(4),
+        role: f.input.assembled.manifest.role,
+        phase: "work".into(),
+        context: f.input.context.clone(),
+        isolation: f.input.isolation.plan().clone(),
+        repository: Some(RepositoryContext {
+            root: f.input.isolation.plan().repository.clone(),
+            revision: f
+                .input
+                .assembled
+                .manifest
+                .repository_revision
+                .clone()
+                .unwrap(),
+            scope_paths: vec!["a.txt".into()],
+        }),
+        repository_id: f.input.repository.clone(),
+        read_resources: BTreeMap::new(),
+        review: None,
+        required_context: vec![],
+        project_doc_max_bytes: 32768,
+        provider_discovery: ProviderDiscovery::Unavailable {
+            reason: "deterministic fixture; no actual Codex discovery".into(),
+        },
+        known_secrets: vec![],
+    }
+}
+
+#[test]
+fn worker_run_preparation_assembles_exact_current_profile_and_tools_without_launch() {
+    let f = Fixture::new(AgentRole::Implementation);
+    let prepared = kegari_v0::worker_run::prepare(run_preparation(&f)).unwrap();
+    assert_eq!(prepared.contract().account_id(), "fixture-account");
+    assert_eq!(
+        prepared.contract().instructions().manifest.profile,
+        profile()
+    );
+    prepared
+        .contract()
+        .tools()
+        .verify(
+            prepared.contract().instructions(),
+            prepared.contract().tools().definitions(),
+        )
+        .unwrap();
+    assert_eq!(
+        prepared.permissions().isolation_digest,
+        prepared.isolation().digest()
+    );
+    assert_eq!(
+        prepared.contract().instructions().manifest.runtime_build,
+        kegari_v0::BUILD_ID
+    );
+}
+
+#[test]
+fn worker_run_preparation_rejects_changed_configuration_workflow_and_scope() {
+    let f = Fixture::new(AgentRole::Implementation);
+    let mut input = run_preparation(&f);
+    Arc::make_mut(&mut input.config).runtime.max_turns += 1;
+    assert_eq!(
+        kegari_v0::worker_run::prepare(input).err().unwrap().code,
+        "stale_config"
+    );
+    let mut input = run_preparation(&f);
+    input.isolation.source_writes.push(PathGrant {
+        path: f._temp.path().canonicalize().unwrap().join("operator"),
+        directory: true,
+    });
+    assert!(kegari_v0::worker_run::prepare(input).is_err());
+    let input = run_preparation(&f);
+    std::fs::write(
+        &input.workflow.path,
+        "---\nschema_version: 1\n---\nChanged\n",
+    )
+    .unwrap();
+    assert_eq!(
+        kegari_v0::worker_run::prepare(input).err().unwrap().code,
+        "stale_config"
+    );
+}
+
+#[tokio::test]
+async fn nonexecuting_hooks_reject_execution_role_and_revoked_owner() {
+    use kegari_v0::worker_run::{NonExecutingRunHooks, RunHooks};
+    let child = Fixture::new(AgentRole::Implementation);
+    assert_eq!(
+        NonExecutingRunHooks::new(
+            child.contract.clone(),
+            child.control.clone(),
+            child.host.clone()
+        )
+        .err()
+        .unwrap()
+        .code,
+        "scope_violation"
+    );
+    let coordination = Fixture::new(AgentRole::Coordination);
+    let hooks = NonExecutingRunHooks::new(
+        coordination.contract.clone(),
+        coordination.control.clone(),
+        coordination.host.clone(),
+    )
+    .unwrap();
+    hooks.before(&coordination.permit).await.unwrap();
+    coordination.host.owner.store(false, Ordering::SeqCst);
+    assert_eq!(
+        hooks.launched(&coordination.permit).await.unwrap_err().code,
+        "ownership_conflict"
+    );
+}
+
+async fn initialized_hook_records(f: &Fixture) -> PrivateDir {
+    let dir = PrivateDir::open(&f._temp.path().canonicalize().unwrap().join("control"))
+        .unwrap()
+        .child("hooks")
+        .unwrap();
+    let execution = f.execution.as_ref().unwrap();
+    let executor = LocalExecutor {
+        isolation: &f.input.isolation,
+        git: &execution.git,
+        boundary: execution.boundary.as_ref(),
+        limits: execution.limits.clone(),
+        ownership: &execution.ownership,
+    };
+    let mut ledger = HookLedger::new(&execution.binding).unwrap();
+    executor
+        .run_hook(
+            &mut ledger,
+            HookInvocation {
+                binding: &execution.binding,
+                workflow: &f.input.workflow,
+                phase: HookPhase::AfterCreate,
+                session: None,
+                eligible_cleanup_plan: None,
+            },
+            |ledger| dir.write("hooks.json", ledger),
+        )
+        .await
+        .unwrap();
+    assert!(ledger.initialized);
+    dir
+}
+fn executor_hooks(f: &Fixture, records: PrivateDir) -> kegari_v0::worker_run::ExecutorRunHooks {
+    kegari_v0::worker_run::ExecutorRunHooks::new(kegari_v0::worker_run::ExecutorHookServices {
+        contract: f.contract.clone(),
+        control: f.control.clone(),
+        host: f.host.clone(),
+        execution: f.execution.as_ref().unwrap().clone(),
+        registry: f.executions.clone(),
+        records,
+        session_id: id(99),
+    })
+    .unwrap()
+}
+#[tokio::test]
+async fn worker_hooks_require_actual_creation_and_record_actual_session_lifecycle() {
+    use kegari_v0::worker_run::RunHooks;
+    let f = Fixture::with_hooks(
+        AgentRole::Implementation,
+        "hooks:\n  before_run: 'true'\n  after_run: 'true'\n",
+    );
+    let records = initialized_hook_records(&f).await;
+    let path = records.path().to_owned();
+    let hooks = executor_hooks(&f, records);
+    assert_eq!(
+        hooks.launched(&f.permit).await.unwrap_err().code,
+        "hook_gate"
+    );
+    hooks.before(&f.permit).await.unwrap();
+    hooks.launched(&f.permit).await.unwrap();
+    hooks.after(&f.permit, &f.state).await.unwrap();
+    let ledger: HookLedger = PrivateDir::open(&path).unwrap().read("hooks.json").unwrap();
+    assert_eq!(ledger.sessions[&id(99)], SessionLifecycle::Ended);
+    assert_eq!(
+        ledger.records[&format!("BeforeRun:{}", id(99))].state,
+        HookState::Succeeded
+    );
+    assert_eq!(
+        ledger.records[&format!("AfterRun:{}", id(99))].state,
+        HookState::Succeeded
+    );
+    assert_eq!(
+        hooks.before(&f.permit).await.unwrap_err().code,
+        "reconciliation_required"
+    );
+    assert!(f.executions.active_operations().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn failed_worker_before_hook_never_records_launched_session() {
+    use kegari_v0::worker_run::RunHooks;
+    let f = Fixture::with_hooks(AgentRole::Implementation, "hooks:\n  before_run: 'false'\n");
+    let records = initialized_hook_records(&f).await;
+    let path = records.path().to_owned();
+    let hooks = executor_hooks(&f, records);
+    f.boundary.fail.store(true, Ordering::SeqCst);
+    assert_eq!(
+        hooks.before(&f.permit).await.unwrap_err().code,
+        "hook_failed"
+    );
+    assert_eq!(
+        hooks.launched(&f.permit).await.unwrap_err().code,
+        "hook_gate"
+    );
+    hooks.after(&f.permit, &f.state).await.unwrap();
+    let ledger: HookLedger = PrivateDir::open(&path).unwrap().read("hooks.json").unwrap();
+    assert!(ledger.sessions.is_empty());
+    assert!(!ledger.records.keys().any(|key| key.starts_with("AfterRun")));
+}
+
+#[tokio::test]
+async fn unconfirmed_hook_exit_keeps_owned_handle_and_sent_receipt() {
+    use kegari_v0::worker_run::RunHooks;
+    let f = Fixture::with_hooks(AgentRole::Implementation, "hooks:\n  before_run: 'true'\n");
+    let records = initialized_hook_records(&f).await;
+    let path = records.path().to_owned();
+    let hooks = executor_hooks(&f, records);
+    f.boundary.unknown.store(true, Ordering::SeqCst);
+    assert_eq!(
+        hooks.before(&f.permit).await.unwrap_err().code,
+        "operation_uncertain"
+    );
+    assert!(f.executions.active_operations().unwrap().contains(&id(4)));
+    assert_eq!(f.executions.observe_exited(id(4)).unwrap(), 0);
+    let operations = f.control.operations().unwrap();
+    let receipt = operations
+        .iter()
+        .find(|receipt| receipt.kind == "worker_hook")
+        .unwrap();
+    assert_eq!(receipt.phase, ReceiptPhase::Sent);
+    let ledger: HookLedger = PrivateDir::open(&path).unwrap().read("hooks.json").unwrap();
+    assert_eq!(
+        ledger.records[&format!("BeforeRun:{}", id(99))].state,
+        HookState::StartedUnknown
+    );
+    f.boundary
+        .last_cancel
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .exited
+        .store(true, Ordering::SeqCst);
+    assert_eq!(f.executions.observe_exited(id(4)).unwrap(), 1);
+    assert!(f.executions.active_operations().unwrap().is_empty());
+    assert_eq!(
+        f.control
+            .operations()
+            .unwrap()
+            .iter()
+            .find(|item| item.operation_id == receipt.operation_id)
+            .unwrap()
+            .phase,
+        ReceiptPhase::Sent
+    );
+    assert_eq!(
+        hooks.before(&f.permit).await.unwrap_err().code,
+        "reconciliation_required"
+    );
+}
+
+fn native_fixture_run(
+    f: &Fixture,
+) -> (
+    kegari_v0::worker_run::PreparedRun,
+    Permit,
+    kegari_v0::worker_run::RunServices,
+    PathBuf,
+) {
+    use kegari_v0::worker_run::{NonExecutingRunHooks, RunServices};
+    use std::os::unix::fs::PermissionsExt;
+    let base = f._temp.path().canonicalize().unwrap();
+    let executable = base.join("deterministic-app-server");
+    let marker = base.join("fixture-provider-started");
+    // A disposable protocol/process fixture, never the installed Codex binary.
+    // It returns only version metadata and then waits without starting any turn.
+    std::fs::write(&executable,format!("#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{}'; exit 0; fi\nprintf 'started' > '{}'\nexec /bin/sleep 30\n",kegari_v0::codex::SUPPORTED_CODEX_VERSION,marker.display())).unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut input = run_preparation(f);
+    Arc::make_mut(&mut input.config)
+        .connections
+        .get_mut("codex")
+        .unwrap()
+        .argv[0] = executable.to_string_lossy().into_owned();
+    let mut parent = f.parent.clone();
+    parent.config_revision = input.config.revision().unwrap();
+    input.authority = WorkerAuthority::Authorized(
+        parent
+            .fresh_gate(
+                None,
+                GatePurpose::Coordination,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(30),
+            )
+            .unwrap(),
+    );
+    input.operation_id = id(100);
+    input.context["operation"]["id"] = json!(id(100));
+    let prepared = kegari_v0::worker_run::prepare(input).unwrap();
+    *f.host.authority.lock().unwrap() = prepared.contract().authority().clone();
+    f.control
+        .retire_local(id(4), json!({"fixture":"no process launched"}))
+        .unwrap();
+    let permit = f
+        .control
+        .admit_run(
+            &f.permit.lease,
+            RunAdmission {
+                request_id: id(100),
+                work_key: prepared.contract().authority().work_key().unwrap(),
+                scope_digest: prepared.contract().scope_digest().into(),
+                reference: RunReference {
+                    normalized_state: Some("in progress".into()),
+                    workspace: id(3),
+                    account: "fixture-account".into(),
+                    phase: kegari_v0::scheduler::PhaseKey {
+                        work: prepared.contract().work_key().unwrap(),
+                        generation: canonical_digest(
+                            1,
+                            &prepared.contract().authority().work().unwrap().generation,
+                        )
+                        .unwrap(),
+                        phase: "work".into(),
+                        retry_grant: None,
+                    },
+                    profile_digest: canonical_digest(1, &profile()).unwrap(),
+                    instruction_digest: prepared.contract().instructions().manifest_digest.clone(),
+                    max_attempts: 2,
+                    max_turns: 1,
+                    max_review_rounds: 2,
+                    attempt: 1,
+                },
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    let services = RunServices {
+        hooks: Arc::new(
+            NonExecutingRunHooks::new(
+                prepared.contract().clone(),
+                f.control.clone(),
+                f.host.clone(),
+            )
+            .unwrap(),
+        ),
+        worker: WorkerServices {
+            control: f.control.clone(),
+            providers: ProviderBroker::default(),
+            host: f.host.clone(),
+            sink: f.sink.clone(),
+            execution: None,
+            journal: PrivateDir::open(&base.join("control"))
+                .unwrap()
+                .child("native-fixture-run")
+                .unwrap(),
+            executions: f.executions.clone(),
+        },
+    };
+    (prepared, permit, services, marker)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fenced_worker_cannot_start_even_the_disposable_provider_process() {
+    let f = Fixture::new(AgentRole::Coordination);
+    let (prepared, permit, services, marker) = native_fixture_run(&f);
+    f.control.fence(permit.operation_id).unwrap();
+    let error = kegari_v0::worker_run::run(
+        prepared,
+        permit,
+        services,
+        kegari_v0::worker_run::RunOptions {
+            initial_input: "deterministic fixture".into(),
+            max_seconds: 5,
+            max_turns: 1,
+            resume: None,
+        },
+    )
+    .err()
+    .unwrap();
+    assert_eq!(error.code, "access_denied");
+    assert!(!marker.exists());
+    assert!(f.executions.active_operations().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worker_cannot_increase_original_admission_turn_budget() {
+    let f = Fixture::new(AgentRole::Coordination);
+    let (prepared, permit, services, marker) = native_fixture_run(&f);
+    let error = kegari_v0::worker_run::run(
+        prepared,
+        permit,
+        services,
+        kegari_v0::worker_run::RunOptions {
+            initial_input: "fixture".into(),
+            max_seconds: 5,
+            max_turns: 2,
+            resume: None,
+        },
+    )
+    .err()
+    .unwrap();
+    assert_eq!(error.code, "admission_budget");
+    assert!(!marker.exists());
+    assert!(f.executions.active_operations().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forced_worker_joins_actual_fixture_provider_before_confirming_local_exit() {
+    let f = Fixture::new(AgentRole::Coordination);
+    let (prepared, permit, services, marker) = native_fixture_run(&f);
+    let mut run = kegari_v0::worker_run::run(
+        prepared,
+        permit,
+        services,
+        kegari_v0::worker_run::RunOptions {
+            initial_input: "deterministic fixture".into(),
+            max_seconds: 10,
+            max_turns: 1,
+            resume: None,
+        },
+    )
+    .unwrap();
+    tokio::time::timeout(StdDuration::from_secs(3), async {
+        while !marker.exists() {
+            tokio::time::sleep(StdDuration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let snapshot = f.control.snapshot().unwrap();
+    f.control
+        .lifecycle(
+            MutationRequest {
+                request_id: Uuid::new_v4(),
+                runtime_id: id(1),
+                actor: Actor {
+                    principal: None,
+                    identity: "fixture-operator".into(),
+                    roles: BTreeSet::from(["lifecycle".into()]),
+                },
+                kind: "force-stop".into(),
+                canonical_targets: vec![id(1).to_string()],
+                expected: BTreeMap::new(),
+                payload: Value::Null,
+            },
+            Lifecycle::ForceStop,
+            snapshot.intent.generation,
+        )
+        .unwrap();
+    run.cancel_fenced(&f.control).unwrap();
+    let completion = tokio::time::timeout(StdDuration::from_secs(8), run.join())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(completion.local_exit_confirmed);
+    assert!(completion.error.is_some());
+    assert!(completion.state.thread_id.is_none());
+    assert_eq!(completion.state.turns_started, 0);
+    assert!(completion.checks.is_empty());
+    assert!(f.executions.active_operations().unwrap().is_empty());
+    assert_eq!(
+        completion.observation()["completion"],
+        "worker_claim_requires_host_delivery_verification"
+    );
+}
+
+#[test]
+fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_before_effects() {
+    use kegari_v0::runtime_workers::{LaunchRequest, SourceSelection};
+    use kegari_v0::scheduler::PhaseKey;
+    for role in [
+        AgentRole::Implementation,
+        AgentRole::Coordination,
+        AgentRole::IndependentReview,
+    ] {
+        let f = Fixture::new(role);
+        let authority = f.contract.authority().clone();
+        let generation = match &authority {
+            WorkerAuthority::Authorized(gate) => {
+                kegari_v0::digest::canonical_digest(1, &gate.work().generation).unwrap()
+            }
+            WorkerAuthority::Independent(gate) => gate.review_identity().into(),
+        };
+        let source = if role == AgentRole::Coordination {
+            None
+        } else {
+            Some(SourceSelection {
+                repository: "42".into(),
+                revision: f
+                    .execution
+                    .as_ref()
+                    .map(|execution| execution.binding.revision.clone())
+                    .unwrap_or_else(|| {
+                        let head = f.input.review.as_ref().unwrap().head.clone();
+                        kegari_v0::git::Revision {
+                            commit: head,
+                            tree: "a".repeat(40),
+                        }
+                    }),
+            })
+        };
+        let mut request = LaunchRequest {
+            lease: f.permit.lease.clone(),
+            operation_id: id(810),
+            authority,
+            phase: PhaseKey {
+                work: f.contract.work_key().unwrap(),
+                generation,
+                phase: "work".into(),
+                retry_grant: None,
+            },
+            source,
+            max_seconds: 60,
+            max_turns: 2,
+        };
+        request.validate_binding().unwrap();
+        request.phase.work = bytes_digest(b"different canonical issue");
+        assert_eq!(
+            request.validate_binding().unwrap_err().code,
+            "worker_binding"
+        );
+        request.phase.work = f.contract.work_key().unwrap();
+        request.phase.generation = bytes_digest(b"stale generation");
+        assert_eq!(
+            request.validate_binding().unwrap_err().code,
+            "worker_binding"
+        );
+        request.phase.generation = match &request.authority {
+            WorkerAuthority::Authorized(gate) => {
+                kegari_v0::digest::canonical_digest(1, &gate.work().generation).unwrap()
+            }
+            WorkerAuthority::Independent(gate) => gate.review_identity().into(),
+        };
+        request.source = Some(SourceSelection {
+            repository: "999".into(),
+            revision: kegari_v0::git::Revision {
+                commit: "b".repeat(40),
+                tree: "c".repeat(40),
+            },
+        });
+        assert_eq!(
+            request.validate_binding().unwrap_err().code,
+            "scope_violation"
+        );
+    }
+}
+
+#[test]
+fn authorized_resource_write_contract_rejects_unconfigured_flags_and_scope_expansion() {
+    use kegari_v0::worker::ReadResource;
+    let f = Fixture::new(AgentRole::Testing);
+    let mut preparation = run_preparation(&f);
+    let resource = f._temp.path().canonicalize().unwrap().join("test-data");
+    std::fs::create_dir(&resource).unwrap();
+    let grant = PathGrant {
+        path: resource.clone(),
+        directory: true,
+    };
+    preparation.isolation.read_roots.push(grant.clone());
+    preparation.isolation.resource_writes.push(grant);
+    preparation.read_resources.insert(
+        resource.clone(),
+        ReadResource::TestResource {
+            name: "database".into(),
+            writable: true,
+            disposable: true,
+        },
+    );
+    // A caller-supplied path cannot invent a configured authorized resource.
+    assert_eq!(
+        kegari_v0::worker_run::prepare(preparation)
+            .err()
+            .unwrap()
+            .code,
+        "scope_violation"
+    );
+    let mut preparation = run_preparation(&f);
+    Arc::make_mut(&mut preparation.config)
+        .workspaces
+        .values_mut()
+        .next()
+        .unwrap()
+        .test_resources
+        .insert(
+            "database".into(),
+            kegari_v0::config::TestResource {
+                path: resource.to_str().unwrap().into(),
+                writable: true,
+                disposable: true,
+            },
+        );
+    let mut parent = f.parent.clone();
+    parent.config_revision = preparation.config.revision().unwrap();
+    parent
+        .children
+        .get_mut(&id(11))
+        .unwrap()
+        .scope
+        .as_mut()
+        .unwrap()
+        .test_resources = vec!["database".into()];
+    let gate = parent
+        .fresh_gate(
+            Some(id(11)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    preparation.authority = WorkerAuthority::Authorized(gate);
+    preparation.isolation.read_roots.push(PathGrant {
+        path: resource.clone(),
+        directory: true,
+    });
+    preparation.isolation.resource_writes.push(PathGrant {
+        path: resource.clone(),
+        directory: true,
+    });
+    preparation.read_resources.insert(
+        resource.clone(),
+        ReadResource::TestResource {
+            name: "database".into(),
+            writable: false,
+            disposable: true,
+        },
+    );
+    assert_eq!(
+        kegari_v0::worker_run::prepare(preparation.clone())
+            .err()
+            .unwrap()
+            .code,
+        "scope_violation"
+    );
+    preparation.read_resources.insert(
+        resource.clone(),
+        ReadResource::TestResource {
+            name: "database".into(),
+            writable: true,
+            disposable: true,
+        },
+    );
+    let prepared = kegari_v0::worker_run::prepare(preparation).unwrap();
+    assert_eq!(
+        prepared
+            .contract()
+            .instructions()
+            .manifest
+            .permissions
+            .resource_write_paths,
+        vec![resource]
+    );
+}
+
+#[test]
+fn repository_free_child_keeps_reasoning_role_without_execution_or_fabricated_git() {
+    let f = Fixture::new(AgentRole::Documentation);
+    let mut input = run_preparation(&f);
+    let mut parent = f.parent.clone();
+    parent.config_revision = input.config.revision().unwrap();
+    let scope = parent
+        .children
+        .get_mut(&id(11))
+        .unwrap()
+        .scope
+        .as_mut()
+        .unwrap();
+    scope.write_repository = None;
+    scope.write_paths.clear();
+    let gate = parent
+        .fresh_gate(
+            Some(id(11)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    input.authority = WorkerAuthority::Authorized(gate);
+    input.repository = None;
+    input.repository_id = None;
+    input.isolation.source_writes.clear();
+    input.isolation.executables.clear();
+    let prepared = kegari_v0::worker_run::prepare(input).unwrap();
+    let manifest = &prepared.contract().instructions().manifest;
+    assert_eq!(manifest.role, AgentRole::Documentation);
+    assert!(!manifest.permissions.repository_code_execution);
+    assert!(manifest.repository_revision.is_none());
+    assert!(!manifest.tools.iter().any(|tool| matches!(
+        tool.name.as_str(),
+        "validation_run" | "git_inspect" | "source_write"
+    )));
+    kegari_v0::worker_run::NonExecutingRunHooks::new(
+        prepared.contract().clone(),
+        f.control.clone(),
+        f.host.clone(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn recovered_session_retains_earlier_intervention_and_rejects_wrong_account_or_missing_events() {
+    use kegari_v0::codex::{ProviderIntervention, SessionBinding};
+    let f = Fixture::new(AgentRole::Coordination);
+    let (prepared, permit, mut services, _) = native_fixture_run(&f);
+    let contract = prepared.contract().clone();
+    let records = PrivateDir::open(&f._temp.path().canonicalize().unwrap().join("control"))
+        .unwrap()
+        .child("session-recovery-fixture")
+        .unwrap();
+    records.write("contract.json",&json!({"scope":contract.scope_digest(),"instructions":contract.instructions().manifest,"tool_contract":contract.tools().digest(),"isolation":prepared.isolation().plan()})).unwrap();
+    services.worker.journal = records.child("journal").unwrap();
+    let journal_path = services.worker.journal.path().to_path_buf();
+    let mut broker = ScopedWorker::new(contract.clone(), permit.clone(), services.worker).unwrap();
+    let manifest = &contract.instructions().manifest;
+    let mut state = SessionState::new(
+        SessionBinding {
+            schema_version: 1,
+            account_id: contract.account_id().into(),
+            work_identity: contract.work_key().unwrap(),
+            operation_id: permit.operation_id.to_string(),
+            generation: manifest.work_generation.clone(),
+            instruction_digest: contract.instructions().manifest_digest.clone(),
+            isolation_digest: prepared.isolation().digest().into(),
+            profile: kegari_v0::codex::CodexProfile {
+                model: manifest.profile.model.clone(),
+                reasoning: manifest.profile.reasoning.clone(),
+                speed: "standard".into(),
+            },
+            cwd: manifest.cwd.clone(),
+        },
+        1,
+    )
+    .unwrap();
+    state.thread_id = Some("actual-fixture-thread".into());
+    state.input_required = true;
+    state.intervention = Some(ProviderIntervention {
+        schema_version: 1,
+        account_id: contract.account_id().into(),
+        thread_id: "actual-fixture-thread".into(),
+        turn_id: "fixture-turn".into(),
+        source_method: "thread/status/changed".into(),
+        reason_code: "usage_limit".into(),
+        required_resolution: "verified provider resolution".into(),
+        observed_at: Utc::now().to_rfc3339(),
+        source_digest: bytes_digest(b"fixture intervention"),
+    });
+    broker.checkpoint(&state, Some("turn/start")).unwrap();
+    state.intervention = None;
+    state.input_required = false;
+    broker.checkpoint(&state, None).unwrap();
+    let receipt = f.control.operation(permit.operation_id).unwrap();
+    let recovered = kegari_v0::worker::recover_session(&records, &receipt)
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.session_records, 2);
+    assert!(recovered.state.input_required);
+    assert_eq!(
+        recovered.state.intervention.unwrap().reason_code,
+        "usage_limit"
+    );
+    let journal = PrivateDir::open(&journal_path).unwrap();
+    let mut event: Value = journal.read("event-00000001.json").unwrap();
+    event["record"]["state"]["binding"]["account_id"] = json!("different-account");
+    journal.write("event-00000001.json", &event).unwrap();
+    assert_eq!(
+        kegari_v0::worker::recover_session(&records, &receipt)
+            .unwrap_err()
+            .code,
+        "record_corrupt"
+    );
+    std::fs::remove_file(journal_path.join("event-00000000.json")).unwrap();
+    assert_eq!(
+        kegari_v0::worker::recover_session(&records, &receipt)
+            .unwrap_err()
+            .code,
+        "record_corrupt"
+    );
+}

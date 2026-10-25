@@ -22,7 +22,8 @@ fn profile() -> Profile {
     }
 }
 fn configured() -> Config {
-    let exact = json!({"workflow_id":1,"workflow_revision":"0123456789012345678901234567890123456789","source_input":"source_sha","operation_input":"operation_id","observed_source_output":"tested_sha"});
+    let proof = json!({"workflow_ref":"fixture/repo/.github/workflows/caller.yml@refs/heads/trusted","workflow_sha":"0123456789012345678901234567890123456789","job_workflow_ref":"fixture/trusted/.github/workflows/proof.yml@0123456789012345678901234567890123456789","job_workflow_sha":"0123456789012345678901234567890123456789","event_name":"workflow_dispatch"});
+    let exact = json!({"workflow_id":1,"workflow_revision":"0123456789012345678901234567890123456789","source_input":"source_sha","operation_input":"operation_id","observed_source_output":"tested_sha","proof":proof});
     serde_json::from_value(json!({
         "schema_version":1,
         "runtime":{"id":id(1),"host_id":"verified-test-host","max_agents":4},
@@ -39,7 +40,7 @@ fn configured() -> Config {
             "profiles":{"coordination":profile()},
             "routing_labels":{"tool":{id(20).to_string():"codex"},"model":{id(21).to_string():"fixture-model"},"reasoning":{id(22).to_string():"high"},"speed":{id(23).to_string():"standard"}},
             "max_agents":2,"release":{"mode":"manual","spacing_seconds":0},
-            "repositories":{"101":{"source":"/private/tmp/source","local_checks":["local"],"integrated_checks":["e2e"],"ci":[{"workflow_id":1,"required_checks":["suite"]}],"production_ci":[{"workflow_id":2,"required_checks":["suite"]}],"no_change_validation":exact,"deployment":"none"}}
+            "repositories":{"101":{"source":"/private/tmp/source","local_checks":["local"],"integrated_checks":["e2e"],"ci":[{"workflow_id":1,"required_checks":["suite"],"proof":proof}],"production_ci":[{"workflow_id":2,"required_checks":["suite"],"proof":proof}],"no_change_validation":exact,"deployment":"none"}}
         }},
         "control":{"local_users":{"501":{"id":"operator","linear_user_id":id(5),"roles":["inspect","configure","lifecycle","correct","accept","release","recover"]}}}
     })).unwrap()
@@ -56,6 +57,54 @@ fn typed_config_defaults_and_reproducible_revision() {
     assert_eq!(parsed.runtime.min_free_bytes, 1_073_741_824);
     assert!(!parsed.workspaces["example"].independent_review.enabled);
     assert_eq!(config.revision().unwrap(), parsed.revision().unwrap());
+}
+
+#[test]
+fn hosted_proof_routes_require_pinned_caller_and_reusable_workflow_identity() {
+    let good = configured();
+    let route = good.workspaces["example"].repositories["101"].ci[0]
+        .proof
+        .clone();
+    route.validate().unwrap();
+    for field in [
+        "workflow_sha",
+        "job_workflow_sha",
+        "workflow_ref",
+        "job_workflow_ref",
+        "event_name",
+    ] {
+        let mut value = serde_json::to_value(&route).unwrap();
+        value[field] = json!(match field {
+            "workflow_ref" => "owner/repo/../../etc@main",
+            "job_workflow_ref" => "owner/repo/.github/workflows/test.yml@main",
+            "event_name" => "unreviewed_event",
+            _ => "main",
+        });
+        assert!(
+            serde_json::from_value::<HostedProofRoute>(value)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+    }
+    let mut missing = serde_json::to_value(&good).unwrap();
+    missing["workspaces"]["example"]["repositories"]["101"]["ci"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("proof");
+    assert!(serde_json::from_value::<Config>(missing).is_err());
+    let mut mismatched = good;
+    mismatched
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .repositories
+        .get_mut("101")
+        .unwrap()
+        .no_change_validation
+        .proof
+        .workflow_sha = "1111111111111111111111111111111111111111".into();
+    assert!(mismatched.validate().is_err());
 }
 #[test]
 fn unknown_duplicate_and_wrong_typed_config_never_load() {
@@ -455,6 +504,7 @@ impl AssemblyFixture {
             project_doc_max_bytes: 32768,
             permissions: PermissionManifest {
                 read_roots: vec![self.repository.clone()],
+                resource_write_paths: vec![],
                 source_write_paths: vec![self.repository.join("src")],
                 scratch_roots: vec![self.scratch.clone()],
                 repository_code_execution: true,
@@ -794,4 +844,17 @@ fn host_path_resolution_is_transactional_and_workflow_check_references_are_verif
     assert!(config.load_workflows().is_err());
     std::fs::write(&workflow,"---\nchecks:\n  local:\n    local: {argv: ['true'], result_artifact: local.json}\n  integrated:\n    e2e: {argv: ['true'], result_artifact: e2e.json}\n---\nTask").unwrap();
     assert_eq!(config.load_workflows().unwrap().len(), 1);
+}
+
+#[test]
+fn tailscale_operator_mapping_uses_stable_numeric_identity_not_login_text() {
+    let mut config = configured();
+    let operator = config.control.local_users.values().next().unwrap().clone();
+    for key in ["human@example.invalid", "00042", "0", "-1", "42 "] {
+        config.control.tailscale_users =
+            std::collections::BTreeMap::from([(key.into(), operator.clone())]);
+        assert!(config.validate().is_err(), "accepted {key}");
+    }
+    config.control.tailscale_users = std::collections::BTreeMap::from([("42".into(), operator)]);
+    config.validate().unwrap();
 }

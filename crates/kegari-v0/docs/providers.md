@@ -193,3 +193,45 @@ current generation gate types; qualify actual account permissions, Git object de
 branch protections, dispatch correlation, native same-account review, MP4 accessibility
 and playback. Linear structural child creation/metadata edits are not yet commands in
 this adapter increment. No live provider mutation or agent trial was run for these tests.
+# Required hosted-proof configuration
+
+Every `CiSuite` and `ExactRevisionWorkflow` now requires a strict `proof` object:
+`workflow_ref`, `workflow_sha`, `job_workflow_ref`, `job_workflow_sha`, and
+`event_name`. Both SHA fields are exact lowercase commit IDs. The reusable
+workflow reference must end in its configured `@SHA`; mutable reusable refs are
+rejected. Exact-source workflows additionally require `workflow_dispatch` and a
+caller SHA equal to their configured `workflow_revision`. Existing undeployed
+draft configuration must add reviewed explicit routes; there is no inferred pin
+or migration that modifies target workflows.
+
+A static caller SHA describes a prepared trusted workflow revision. An ordinary
+PR-triggered caller's `workflow_sha` can change with the PR head, so an operator
+cannot assume a fixed pin matches every PR. The prepared validation contract must
+establish the configured caller/reusable identity and independently prove the
+actual source checkout through the source-bound audience and result manifest.
+Installing or reviewing that trusted workflow is a target preparation decision,
+not an automatic repository policy change.
+
+Connection import can call `verify_connection_identity` before any workspace
+exists. It checks configured account equality through Linear viewer/organization
+or GitHub `/user`, using the same bounded HTTPS and GraphQL error handling.
+GitHub's returned `type` must be `User`; missing, bot and organization types fail
+closed. Codex authentication uses the app-server handshake instead. This helper
+never discovers a default account from work text and performs no mutation.
+
+Git commit publication requires explicit author and committer name, email and
+RFC3339 date plus the expected validated local commit SHA. GitHub receives those
+fields and an acknowledgement with a different SHA is uncertain rather than an
+adopted replacement commit. Exact object preservation still needs the delivery
+pipeline to verify locally retained/fetched Git objects.
+
+
+Remote dispatch has a durable `Prepared` reservation before asynchronous provider
+preflight. The current actor/work gate runs before preflight and again under the
+control lock immediately before `Sent` and owned transport-task launch. Network
+reads and response waits do not hold that lock. The owned task survives caller
+cancellation; a replay returns the same receipt. An active transport cannot be
+manually reconciled or allow service shutdown. Failure after dispatch leaves the
+receipt and target hold unresolved; it never authorizes a resend. Completed
+observations publish under the same lock so a newly observed correction cannot
+race between the final check and launch.

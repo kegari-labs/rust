@@ -13,6 +13,7 @@ use std::{
         unix::{ffi::OsStrExt, fs::MetadataExt},
     },
     path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 use uuid::Uuid;
 
@@ -192,22 +193,7 @@ impl PrivateDir {
     }
 
     pub fn read<T: DeserializeOwned + Serialize>(&self, leaf: &str) -> Result<T> {
-        let file = self.open_file(leaf, libc::O_RDONLY)?;
-        if file
-            .metadata()
-            .map_err(|e| Error::io("read record size", e))?
-            .len()
-            > MAX_RECORD
-        {
-            return Err(Error::new(
-                "record_corrupt",
-                "control record exceeds bounded receipt size",
-            ));
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_RECORD + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| Error::io("read control record", e))?;
+        let bytes = self.read_bytes(leaf, MAX_RECORD)?;
         let record: Record<T> = serde_json::from_slice(&bytes).map_err(|_| {
             Error::new(
                 "record_corrupt",
@@ -229,6 +215,37 @@ impl PrivateDir {
         Ok(record.payload)
     }
 
+    /// Non-secret configuration/client preferences use their native TOML format.
+    /// Control records continue to use the versioned, digested JSON methods.
+    pub fn read_bytes(&self, leaf: &str, maximum: u64) -> Result<Vec<u8>> {
+        if maximum == 0 || maximum > 8 * 1024 * 1024 {
+            return Err(Error::invalid("invalid private file size bound"));
+        }
+        let file = self.open_file(leaf, libc::O_RDONLY)?;
+        if file
+            .metadata()
+            .map_err(|e| Error::io("read record size", e))?
+            .len()
+            > maximum
+        {
+            return Err(Error::new(
+                "record_corrupt",
+                "private file exceeds its size bound",
+            ));
+        }
+        let mut bytes = Vec::new();
+        file.take(maximum + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| Error::io("read control record", e))?;
+        if bytes.len() as u64 > maximum {
+            return Err(Error::new(
+                "record_corrupt",
+                "private file grew beyond its size bound",
+            ));
+        }
+        Ok(bytes)
+    }
+
     pub fn write<T: Serialize>(&self, leaf: &str, value: &T) -> Result<()> {
         self.write_observed(leaf, value, |_| Ok(()))
     }
@@ -239,16 +256,8 @@ impl PrivateDir {
         &self,
         leaf: &str,
         value: &T,
-        mut boundary: impl FnMut(WriteBoundary) -> Result<()>,
+        boundary: impl FnMut(WriteBoundary) -> Result<()>,
     ) -> Result<()> {
-        self.revalidate()?;
-        let destination = name(leaf)?;
-        // Refuse replacing even an owner-created symlink or hard-linked control record.
-        match self.open_file(leaf, libc::O_RDONLY) {
-            Ok(_) => (),
-            Err(e) if e.code == "record_missing" => (),
-            Err(e) => return Err(e),
-        }
         let record = Record {
             schema_version: 1,
             digest: canonical_digest(1, value)?,
@@ -261,10 +270,34 @@ impl PrivateDir {
                 "receipt exceeds 256 KiB; store artifact references instead",
             ));
         }
+        self.write_bytes_observed(leaf, &bytes, boundary)
+    }
+
+    pub fn write_bytes(&self, leaf: &str, bytes: &[u8]) -> Result<()> {
+        self.write_bytes_observed(leaf, bytes, |_| Ok(()))
+    }
+
+    pub fn write_bytes_observed(
+        &self,
+        leaf: &str,
+        bytes: &[u8],
+        mut boundary: impl FnMut(WriteBoundary) -> Result<()>,
+    ) -> Result<()> {
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(Error::invalid("private file exceeds 8 MiB"));
+        }
+        self.revalidate()?;
+        let destination = name(leaf)?;
+        // Refuse replacing even an owner-created symlink or hard-linked control record.
+        match self.open_file(leaf, libc::O_RDONLY) {
+            Ok(_) => (),
+            Err(e) if e.code == "record_missing" => (),
+            Err(e) => return Err(e),
+        }
         let temporary = format!(".{}.{}.tmp", leaf, Uuid::new_v4());
         let mut file = self.open_file(&temporary, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
         boundary(WriteBoundary::Created)?;
-        file.write_all(&bytes)
+        file.write_all(bytes)
             .map_err(|e| Error::io("write control record", e))?;
         boundary(WriteBoundary::Written)?;
         file.sync_all()
@@ -325,11 +358,23 @@ impl PrivateDir {
         self.dir
             .sync_all()
             .map_err(|e| Error::io("flush lock directory", e))?;
-        Ok(ExclusiveLock { _file: file })
+        Ok(ExclusiveLock {
+            _file: Arc::new(file),
+        })
     }
 }
 
 /// The live descriptor is the lock, not its filename/PID metadata.
+#[derive(Clone)]
 pub struct ExclusiveLock {
-    _file: File,
+    _file: Arc<File>,
+}
+impl ExclusiveLock {
+    /// Duplicate the actual locked open-file description for an owned child.
+    /// The child spawn hook, never an ambient setting, clears close-on-exec.
+    pub(crate) fn inherited_file(&self) -> Result<File> {
+        self._file
+            .try_clone()
+            .map_err(|error| Error::io("duplicate owned process guard", error))
+    }
 }

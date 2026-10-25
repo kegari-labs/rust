@@ -75,6 +75,15 @@ session state alone cannot enforce a host-wide ban on replacement work. It must
 also recheck authority immediately before broker effects; transport success is
 never a workflow gate.
 
+The concrete worker factory in [`worker-run.md`](worker-run.md) binds a
+`RequestGate` to every changing protocol request. Only its bounded pipe write
+runs under the fresh serialized host gate; responses and tool callbacks run
+outside that mutex. Native process creation and owned-handle registration use
+the same fresh permit boundary. Bounded version probes and provider cancellation
+explicitly reap the actual owned child. A cached confirmed exit remains visible
+even when a concurrent cancellation request holds the child mutex. Deterministic
+fixtures exercise these races without starting an installed Codex model.
+
 ## Intervention and outcome handling
 
 The generated schema supplies `model/verification` (currently including
@@ -151,3 +160,24 @@ minimal environments and candidate-relative artifact/executable resolution.
 They use controlled duplex transports and files; they do **not** count as actual
 agent behavior trials, real provider validation or complete V0-T10/12/14/34
 qualification.
+
+## Metadata-only connection verification
+
+`codex::probe_connection` implements explicit setup/reconnect verification using
+an authorized private Codex home and the caller's narrow probe permission plan.
+It runs the pinned version probe, initializes stdio app-server, reads the exact
+ChatGPT account without token refresh, enumerates its model catalog, reads
+allowance metadata and verifies effective permissions. It creates no thread or
+turn and performs no login. The result binds account, canonical auth home,
+permission digest and the actual native argument digest; injected transports
+leave argument provenance absent. The probe has bounded request/overall duration
+and terminates its owned process on success or failure. This implementation has
+only been exercised with finite deterministic protocol responses in this build;
+no native account/authentication probe was invoked.
+
+Native built-in shell execution is disabled for every role. Repository command
+execution uses the host's declared validation/Git tools and its independently
+checked execution boundary. Disposable test-resource write grants are separate
+from product-source grants and are included in the exact permission digest.
+Group exit and closed stdio do not establish all-descendant containment if a
+process can detach; this remains an explicit native qualification prerequisite.

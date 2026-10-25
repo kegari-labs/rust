@@ -466,7 +466,7 @@ pub struct CandidateRequest<'a> {
     pub identity: CommitIdentity,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CommitIdentity {
     pub name: String,
     pub email: String,
@@ -476,8 +476,10 @@ impl CommitIdentity {
     fn validate(&self) -> Result<()> {
         if self.name.trim().is_empty()
             || self.email.trim().is_empty()
-            || self.name.contains(['\r', '\n', '<', '>'])
-            || self.email.contains(['\r', '\n', '<', '>'])
+            || self.name.len() > 1024
+            || self.email.len() > 1024
+            || self.name.contains(['\0', '\r', '\n', '<', '>'])
+            || self.email.contains(['\0', '\r', '\n', '<', '>'])
         {
             return Err(Error::invalid(
                 "a valid configured human commit identity is required",
@@ -487,21 +489,827 @@ impl CommitIdentity {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceCommitMetadata {
+    pub identity: CommitIdentity,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub message: String,
+}
+impl SourceCommitMetadata {
+    fn validate(&self) -> Result<()> {
+        self.identity.validate()?;
+        if self.timestamp.timestamp_subsec_nanos() != 0
+            || self.message.trim().is_empty()
+            || self.message.len() > 65536
+            || self.message.contains('\0')
+            || !self.message.ends_with(&format!(
+                "Signed-off-by: {} <{}>\n",
+                self.identity.name, self.identity.email
+            ))
+        {
+            return Err(Error::invalid(
+                "source commit needs bounded explicit message, exact-second time and configured human signoff",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceTreeEntry {
+    pub path: String,
+    pub mode: String,
+    pub object: Option<String>,
+}
+#[derive(Clone)]
+pub struct CommittedSource {
+    base: Revision,
+    revision: Revision,
+    metadata: SourceCommitMetadata,
+    entries: Vec<SourceTreeEntry>,
+    blobs: BTreeMap<String, Vec<u8>>,
+}
+impl CommittedSource {
+    pub fn base(&self) -> &Revision {
+        &self.base
+    }
+    pub fn revision(&self) -> &Revision {
+        &self.revision
+    }
+    pub fn metadata(&self) -> &SourceCommitMetadata {
+        &self.metadata
+    }
+    pub fn entries(&self) -> &[SourceTreeEntry] {
+        &self.entries
+    }
+    pub fn blobs(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.blobs
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct RawSourceFile {
+    mode: String,
+    oid: String,
+    bytes: Vec<u8>,
+}
+fn raw_blob_oid(bytes: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut digest = Sha1::new();
+    digest.update(format!("blob {}\0", bytes.len()));
+    digest.update(bytes);
+    hex::encode(digest.finalize())
+}
+
+fn raw_source_file(path: &Path, metadata: &fs::Metadata) -> Result<(String, Vec<u8>)> {
+    use std::io::Read;
+    if metadata.is_symlink() {
+        let target = fs::read_link(path).map_err(|e| Error::io("read source symlink", e))?;
+        return Ok((
+            "120000".into(),
+            target.as_os_str().as_encoded_bytes().to_vec(),
+        ));
+    }
+    if !metadata.is_file() || metadata.len() > 64 * 1024 * 1024 {
+        return Err(Error::new(
+            "source_limit",
+            "source path is not a bounded ordinary file or symlink",
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        if metadata.nlink() != 1 {
+            return Err(Error::new(
+                "scope_violation",
+                "source file must not alias another file",
+            ));
+        }
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let file = options
+        .open(path)
+        .map_err(|e| Error::io("open raw source file", e))?;
+    let opened = file
+        .metadata()
+        .map_err(|e| Error::io("inspect opened source", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if opened.ino() != metadata.ino() || opened.dev() != metadata.dev() || opened.nlink() != 1 {
+            return Err(Error::new(
+                "stale_revision",
+                "source file identity changed while opening",
+            ));
+        }
+    }
+    let mut bytes = Vec::new();
+    file.take(64 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| Error::io("read raw source", e))?;
+    if bytes.len() > 64 * 1024 * 1024 {
+        return Err(Error::new("source_limit", "source file grew beyond bound"));
+    }
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        if opened.permissions().mode() & 0o111 != 0 {
+            "100755"
+        } else {
+            "100644"
+        }
+    };
+    #[cfg(not(unix))]
+    let mode = "100644";
+    Ok((mode.into(), bytes))
+}
+
+#[derive(Clone)]
 pub struct Git {
     executable: PathBuf,
     version: String,
+    operation: Option<std::sync::Arc<GitOperationState>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecutionCloneRecord {
+    schema_version: u32,
+    git_version: String,
+    source: PathBuf,
+    identity: CloneOwner,
+    revision: Revision,
+    prepared: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum CloneOwner {
+    Child(crate::execution::DirectoryIdentity),
+    IndependentReview(IndependentCloneIdentity),
+}
+impl CloneOwner {
+    fn directory_id(&self) -> Uuid {
+        match self {
+            Self::Child(i) => i.directory_id,
+            Self::IndependentReview(i) => i.directory_id,
+        }
+    }
+    fn repository_path(&self) -> &Path {
+        match self {
+            Self::Child(i) => &i.repository_path,
+            Self::IndependentReview(i) => &i.repository_path,
+        }
+    }
+    fn operator_checkout(&self) -> &Path {
+        match self {
+            Self::Child(i) => &i.operator_checkout,
+            Self::IndependentReview(i) => &i.operator_checkout,
+        }
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IndependentCloneIdentity {
+    pub schema_version: u32,
+    pub runtime_id: Uuid,
+    pub workspace_id: Uuid,
+    pub directory_id: Uuid,
+    pub repository: RepositoryId,
+    pub pull_request: u64,
+    pub head: Revision,
+    pub base: Revision,
+    pub review_identity: String,
+    pub repository_path: PathBuf,
+    pub operator_checkout: PathBuf,
+}
+impl std::fmt::Debug for Git {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Git")
+            .field("executable", &self.executable)
+            .field("version", &self.version)
+            .field("guarded", &self.operation.is_some())
+            .finish()
+    }
 }
 
 impl Git {
+    /// Commit stopped child implementation bytes in its owned clone. The host
+    /// must fence further writer activity first, execute this inside its owned
+    /// Git effect, and obtain a fresh admission for the returned revision.
+    pub fn commit_execution_changes(
+        &self,
+        ownership: &crate::execution::OwnedDirectory,
+        binding: &crate::execution::ExecutionBinding,
+        boundary: &crate::isolation::ValidatedIsolation,
+        scope: &WriteScope,
+        metadata: SourceCommitMetadata,
+    ) -> Result<Option<CommittedSource>> {
+        ownership.verify(binding, boundary)?;
+        binding.validate(boundary)?;
+        scope.validate()?;
+        metadata.validate()?;
+        if boundary.plan().role != crate::isolation::ExecutionRole::Child
+            || binding.work.child.is_none()
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "only a scoped implementation child may create source commits",
+            ));
+        }
+        let path = &boundary.plan().repository;
+        self.verify_execution_clone(path, &binding.revision)?;
+        let base_tree = self.source_tree(path, &binding.revision.commit)?;
+        let staged = self.output(
+            path,
+            [
+                "diff-index",
+                "--cached",
+                "--quiet",
+                "--no-ext-diff",
+                &binding.revision.commit,
+                "--",
+            ]
+            .map(OsStr::new)
+            .as_slice(),
+            None,
+        )?;
+        if !staged.status.success() {
+            return Err(Error::new(
+                "dirty_index",
+                "ambient staging must be preserved and explicitly reconciled before source commit",
+            ));
+        }
+        let before = self.raw_source_snapshot(path, &base_tree)?;
+        let mut entries = Vec::new();
+        let mut blobs = BTreeMap::new();
+        for file in base_tree
+            .keys()
+            .chain(before.keys())
+            .collect::<BTreeSet<_>>()
+        {
+            let original = base_tree.get(file);
+            let actual = before.get(file);
+            if original.map(|(mode, oid)| (mode, oid)) == actual.map(|file| (&file.mode, &file.oid))
+            {
+                continue;
+            }
+            let absolute = path.join(file);
+            if !scope.permits(file)
+                || !boundary.plan().source_writes.iter().any(|grant| {
+                    grant.path == absolute || grant.directory && absolute.starts_with(&grant.path)
+                })
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "working source contains a change outside its exact child write boundary",
+                ));
+            }
+            if let Some(actual) = actual {
+                blobs.insert(actual.oid.clone(), actual.bytes.clone());
+            }
+            entries.push(SourceTreeEntry {
+                path: file.clone(),
+                mode: actual.map_or_else(
+                    || original.expect("deleted tracked path").0.clone(),
+                    |file| file.mode.clone(),
+                ),
+                object: actual.map(|file| file.oid.clone()),
+            });
+        }
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        let index = path
+            .join(".git")
+            .join(format!("kegari-index-{}", binding.operation_id));
+        if index.symlink_metadata().is_ok()
+            || index.with_extension("lock").symlink_metadata().is_ok()
+        {
+            return Err(Error::new(
+                "reconciliation_required",
+                "source commit has a retained temporary index; never overwrite an interrupted attempt",
+            ));
+        }
+        self.index_command(path, &index, &["read-tree", &binding.revision.commit], None)?;
+        for (expected, bytes) in &blobs {
+            let actual = String::from_utf8(self.run(
+                path,
+                &["hash-object", "-w", "--stdin", "--no-filters"],
+                Some(bytes),
+            )?)
+            .map_err(|_| Error::new("git_response", "blob ID is not UTF-8"))?;
+            if actual.trim_end() != expected {
+                return Err(Error::new(
+                    "provenance_mismatch",
+                    "raw blob identity differs from Git object",
+                ));
+            }
+        }
+        let mut update = Vec::new();
+        for entry in &entries {
+            update.extend_from_slice(
+                format!(
+                    "{} {}\t{}\0",
+                    if entry.object.is_some() {
+                        entry.mode.as_str()
+                    } else {
+                        "0"
+                    },
+                    entry
+                        .object
+                        .as_deref()
+                        .unwrap_or("0000000000000000000000000000000000000000"),
+                    entry.path
+                )
+                .as_bytes(),
+            );
+        }
+        self.index_command(
+            path,
+            &index,
+            &["update-index", "-z", "--index-info"],
+            Some(&update),
+        )?;
+        let tree = String::from_utf8(self.index_command(path, &index, &["write-tree"], None)?)
+            .map_err(|_| Error::new("git_response", "source tree ID is not UTF-8"))?
+            .trim_end()
+            .to_string();
+        validate_oid(&tree)?;
+        if self.raw_source_snapshot(path, &base_tree)? != before
+            || self.revision(path, "HEAD")? != binding.revision
+        {
+            return Err(Error::new(
+                "stale_revision",
+                "source changed while preparing exact commit objects",
+            ));
+        }
+        let mut command = self.command(path);
+        let date = metadata
+            .timestamp
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        command
+            .env("GIT_AUTHOR_NAME", &metadata.identity.name)
+            .env("GIT_AUTHOR_EMAIL", &metadata.identity.email)
+            .env("GIT_COMMITTER_NAME", &metadata.identity.name)
+            .env("GIT_COMMITTER_EMAIL", &metadata.identity.email)
+            .env("GIT_AUTHOR_DATE", &date)
+            .env("GIT_COMMITTER_DATE", &date)
+            .args([
+                "-c",
+                "commit.gpgSign=false",
+                "commit-tree",
+                &tree,
+                "-p",
+                &binding.revision.commit,
+                "-F",
+                "-",
+            ]);
+        let output = self.finish_command(command, Some(metadata.message.as_bytes()))?;
+        if !output.status.success() {
+            return Err(Error::new(
+                "git_operation_failed",
+                "source commit object creation failed; preserve temporary index",
+            ));
+        }
+        let commit = String::from_utf8(output.stdout)
+            .map_err(|_| Error::new("git_response", "source commit ID is not UTF-8"))?
+            .trim_end()
+            .to_string();
+        let revision = self.exact_revision(path, &commit)?;
+        self.single_parent(path, &commit, &binding.revision.commit)?;
+        if revision.tree != tree {
+            return Err(Error::new(
+                "provenance_mismatch",
+                "created source commit has a different tree",
+            ));
+        }
+        self.run(
+            path,
+            &["update-ref", "HEAD", &commit, &binding.revision.commit],
+            None,
+        )?;
+        self.run(path, &["read-tree", &tree], None)?;
+        if self.raw_source_snapshot(path, &base_tree)? != before {
+            return Err(Error::new(
+                "stale_revision",
+                "source changed while finalizing its commit",
+            ));
+        }
+        self.assert_clean(path)?;
+        Ok(Some(CommittedSource {
+            base: binding.revision.clone(),
+            revision,
+            metadata,
+            entries,
+            blobs,
+        }))
+    }
+
+    fn index_command(
+        &self,
+        path: &Path,
+        index: &Path,
+        args: &[&str],
+        input: Option<&[u8]>,
+    ) -> Result<Vec<u8>> {
+        let mut command = self.command(path);
+        command.env("GIT_INDEX_FILE", index).args(args);
+        let output = self.finish_command(command, input)?;
+        if !output.status.success() {
+            return Err(Error::new(
+                "git_operation_failed",
+                "temporary source index operation failed; preserve its artifacts",
+            ));
+        }
+        Ok(output.stdout)
+    }
+
+    fn source_tree(
+        &self,
+        path: &Path,
+        revision: &str,
+    ) -> Result<BTreeMap<String, (String, String)>> {
+        let output = self.run(path, &["ls-tree", "-r", "-z", revision], None)?;
+        let mut result = BTreeMap::new();
+        for entry in output
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+        {
+            let entry = std::str::from_utf8(entry).map_err(|_| {
+                Error::new("unsupported_repository", "source tree paths must be UTF-8")
+            })?;
+            let (meta, name) = entry
+                .split_once('\t')
+                .ok_or_else(|| Error::new("git_response", "tree entry lacks path"))?;
+            let fields: Vec<_> = meta.split(' ').collect();
+            validate_repo_path(name)?;
+            if fields.len() != 3
+                || fields[1] != "blob"
+                || !matches!(fields[0], "100644" | "100755" | "120000")
+                || result.len() >= 100_000
+            {
+                return Err(Error::new(
+                    "unsupported_repository",
+                    "source tree requires bounded ordinary files/symlinks without Gitlinks",
+                ));
+            }
+            validate_oid(fields[2])?;
+            result.insert(name.into(), (fields[0].into(), fields[2].into()));
+        }
+        Ok(result)
+    }
+
+    fn raw_source_snapshot(
+        &self,
+        path: &Path,
+        tracked: &BTreeMap<String, (String, String)>,
+    ) -> Result<BTreeMap<String, RawSourceFile>> {
+        let others = self.run(path, &["ls-files", "--others", "-z"], None)?;
+        let mut names: BTreeSet<String> = tracked.keys().cloned().collect();
+        for name in others
+            .split(|byte| *byte == 0)
+            .filter(|name| !name.is_empty())
+        {
+            let name = std::str::from_utf8(name).map_err(|_| {
+                Error::new("unsupported_repository", "source file path must be UTF-8")
+            })?;
+            validate_repo_path(name)?;
+            names.insert(name.into());
+        }
+        if names.len() > 100_000 {
+            return Err(Error::new("source_limit", "source inventory exceeds bound"));
+        }
+        let mut result = BTreeMap::new();
+        let mut total = 0usize;
+        for name in names {
+            let file = path.join(&name);
+            let mut parent = file.parent();
+            while let Some(directory) = parent.filter(|directory| *directory != path) {
+                if fs::symlink_metadata(directory).is_ok_and(|meta| !meta.is_dir()) {
+                    return Err(Error::new(
+                        "scope_violation",
+                        "source file ancestry crosses a link or non-directory",
+                    ));
+                }
+                parent = directory.parent();
+            }
+            let metadata = match fs::symlink_metadata(&file) {
+                Ok(meta) => meta,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::io("inspect source file", error)),
+            };
+            let (mode, bytes) = raw_source_file(&file, &metadata)?;
+            total = total
+                .checked_add(bytes.len())
+                .ok_or_else(|| Error::new("source_limit", "source size overflow"))?;
+            if total > 256 * 1024 * 1024 {
+                return Err(Error::new(
+                    "source_limit",
+                    "source byte inventory exceeds bound",
+                ));
+            }
+            result.insert(
+                name,
+                RawSourceFile {
+                    mode,
+                    oid: raw_blob_oid(&bytes),
+                    bytes,
+                },
+            );
+        }
+        Ok(result)
+    }
+
+    /// Create only a separate owned execution clone at an observed exact
+    /// revision. Run through `start_operation` in production so every Git
+    /// subprocess passes the current authority gate. A matching existing clone
+    /// is returned without changing its files or index, including dirty work.
+    pub fn prepare_execution_clone(
+        &self,
+        source: &Path,
+        execution_root: &Path,
+        identity: &crate::execution::DirectoryIdentity,
+        revision: &Revision,
+    ) -> Result<PathBuf> {
+        identity.work.validate()?;
+        identity.repository.validate()?;
+        revision.validate()?;
+        if identity.schema_version != 1
+            || identity.runtime_id.is_nil()
+            || identity.directory_id.is_nil()
+        {
+            return Err(Error::new(
+                "execution_ownership",
+                "execution identity is incomplete",
+            ));
+        }
+        self.prepare_owned_clone(
+            source,
+            execution_root,
+            CloneOwner::Child(identity.clone()),
+            revision,
+            true,
+        )
+    }
+
+    /// Read-only independent review clone has its own provider identity and does
+    /// not invent a Linear parent, implementation scope, hooks or write rights.
+    pub fn prepare_independent_review_clone(
+        &self,
+        source: &Path,
+        execution_root: &Path,
+        identity: &IndependentCloneIdentity,
+    ) -> Result<PathBuf> {
+        validate_independent_clone_identity(identity)?;
+        if self.exact_revision(source, &identity.base.commit)? != identity.base {
+            return Err(Error::new(
+                "stale_revision",
+                "review source lacks its observed base revision",
+            ));
+        }
+        self.prepare_owned_clone(
+            source,
+            execution_root,
+            CloneOwner::IndependentReview(identity.clone()),
+            &identity.head,
+            true,
+        )
+    }
+
+    /// Inspect an existing prepared review clone without creating, repairing or
+    /// changing its files/index. A missing or partial ownership receipt blocks.
+    pub fn observe_independent_review_clone(
+        &self,
+        execution_root: &Path,
+        identity: &IndependentCloneIdentity,
+    ) -> Result<()> {
+        validate_independent_clone_identity(identity)?;
+        self.prepare_owned_clone(
+            &identity.operator_checkout,
+            execution_root,
+            CloneOwner::IndependentReview(identity.clone()),
+            &identity.head,
+            false,
+        )?;
+        if self.exact_revision(&identity.repository_path, &identity.base.commit)? != identity.base {
+            return Err(Error::new(
+                "stale_revision",
+                "retained review clone lost its exact base object",
+            ));
+        }
+        Ok(())
+    }
+
+    fn prepare_owned_clone(
+        &self,
+        source: &Path,
+        execution_root: &Path,
+        identity: CloneOwner,
+        revision: &Revision,
+        create: bool,
+    ) -> Result<PathBuf> {
+        let source = fs::canonicalize(source).map_err(|e| Error::io("resolve clone source", e))?;
+        let root = owner_directory(execution_root)?;
+        let path = identity.repository_path();
+        if identity.operator_checkout() != source
+            || path.parent() != Some(root.as_path())
+            || path.file_name().is_none()
+            || source.starts_with(&root)
+            || root.starts_with(&source)
+        {
+            return Err(Error::new(
+                "execution_ownership",
+                "execution clone requires a disjoint owned root and exact source identity",
+            ));
+        }
+        let mut expected = ExecutionCloneRecord {
+            schema_version: 1,
+            git_version: self.version.clone(),
+            source: source.clone(),
+            identity: identity.clone(),
+            revision: revision.clone(),
+            prepared: false,
+        };
+        let marker = root.join(format!("prepared-clone-{}.json", identity.directory_id()));
+        if marker.symlink_metadata().is_ok() {
+            let metadata = marker
+                .symlink_metadata()
+                .map_err(|e| Error::io("inspect clone receipt", e))?;
+            if !metadata.is_file() || metadata.len() > 64 * 1024 {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "clone receipt is linked or invalid",
+                ));
+            }
+            let mut options = OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+                if metadata.nlink() != 1 {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "clone receipt must not be hardlinked",
+                    ));
+                }
+                options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+            }
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            options
+                .open(&marker)
+                .map_err(|e| Error::io("open clone receipt", e))?
+                .take(64 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| Error::io("read clone receipt", e))?;
+            let record: ExecutionCloneRecord = serde_json::from_slice(&bytes)
+                .map_err(|_| Error::new("ownership_conflict", "clone receipt is malformed"))?;
+            expected.prepared = true;
+            if record != expected || !record.prepared {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "partial or differently owned clone must be preserved",
+                ));
+            }
+            self.verify_execution_clone(path, revision)?;
+            return Ok(path.to_owned());
+        }
+        if !create {
+            return Err(Error::new(
+                "ownership_conflict",
+                "existing review clone has no preparation receipt; observation cannot create it",
+            ));
+        }
+        if path.symlink_metadata().is_ok() {
+            return Err(Error::new(
+                "ownership_conflict",
+                "execution clone destination already exists without its receipt",
+            ));
+        }
+        if self.exact_revision(&source, &revision.commit)? != *revision {
+            return Err(Error::new(
+                "stale_revision",
+                "clone source does not contain observed exact revision",
+            ));
+        }
+        for kind in ["--absolute-git-dir", "--git-common-dir"] {
+            let directory = self.text(&source, &["rev-parse", "--path-format=absolute", kind])?;
+            if Path::new(&directory)
+                .join("objects/info/alternates")
+                .exists()
+            {
+                return Err(Error::new(
+                    "unsupported_repository",
+                    "execution clone source uses external object alternates",
+                ));
+            }
+        }
+        write_clone_record(&marker, &expected, true)?;
+        let args: Vec<OsString> = [
+            "clone",
+            "--local",
+            "--no-hardlinks",
+            "--no-checkout",
+            "--template=/dev/null",
+            "--",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .chain([source.as_os_str().to_owned(), path.as_os_str().to_owned()])
+        .collect();
+        let output = self.output(
+            &root,
+            &args.iter().map(OsString::as_os_str).collect::<Vec<_>>(),
+            None,
+        )?;
+        if !output.status.success() {
+            return Err(Error::new(
+                "git_operation_failed",
+                "execution clone failed; retain partial clone and its receipt",
+            ));
+        }
+        set_owner_directory(path)?;
+        self.run(
+            path,
+            &["checkout", "--detach", &revision.commit, "--"],
+            None,
+        )?;
+        self.verify_execution_clone(path, revision)?;
+        self.assert_clean(path)?;
+        if let Some(operation) = &self.operation {
+            operation.current()?;
+        }
+        expected.prepared = true;
+        write_clone_record(&marker, &expected, false)?;
+        Ok(path.to_owned())
+    }
+
+    fn verify_execution_clone(&self, path: &Path, revision: &Revision) -> Result<()> {
+        let path = owner_directory(path)?;
+        let git = path.join(".git");
+        let config = self.run(&path, &["config", "--local", "--null", "--list"], None)?;
+        for entry in config
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+        {
+            let key = entry
+                .split(|byte| *byte == b'\n')
+                .next()
+                .unwrap_or_default();
+            let key = String::from_utf8_lossy(key).to_ascii_lowercase();
+            if key.starts_with("filter.")
+                || key.starts_with("include.")
+                || key.starts_with("includeif.")
+                || key == "core.worktree"
+                || key == "core.sparsecheckout"
+            {
+                return Err(Error::new(
+                    "unsupported_repository",
+                    "owned execution Git configuration must not run filters, load external configuration, redirect worktrees or hide source paths",
+                ));
+            }
+        }
+        for option in ["--absolute-git-dir", "--git-common-dir"] {
+            if Path::new(&self.text(&path, &["rev-parse", "--path-format=absolute", option])?)
+                != git
+            {
+                return Err(Error::new(
+                    "execution_ownership",
+                    "execution Git administration is not independently owned",
+                ));
+            }
+        }
+        if git.join("objects/info/alternates").exists()
+            || self.revision(&path, "HEAD")? != *revision
+        {
+            return Err(Error::new(
+                "stale_revision",
+                "retained execution clone lost its exact revision or independent objects",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn new(executable: impl AsRef<Path>) -> Result<Self> {
         let executable =
             fs::canonicalize(executable).map_err(|e| Error::io("resolve Git executable", e))?;
-        let output = Command::new(&executable)
-            .env_clear()
-            .arg("--version")
-            .output()
-            .map_err(|e| Error::io("inspect Git version", e))?;
+        let mut command = Command::new(&executable);
+        command.env_clear().arg("--version");
+        let output = GitOperationState::new(
+            GitLimits {
+                command_timeout: std::time::Duration::from_secs(3),
+                operation_timeout: std::time::Duration::from_secs(5),
+                output_bytes: 1024,
+                ..GitLimits::default()
+            },
+            None,
+        )?
+        .run(command, None)?;
         let version = String::from_utf8(output.stdout)
             .map_err(|_| Error::new("unsupported_git_version", "Git version is not UTF-8"))?
             .trim()
@@ -515,6 +1323,7 @@ impl Git {
         Ok(Self {
             executable,
             version,
+            operation: None,
         })
     }
 
@@ -564,30 +1373,13 @@ impl Git {
 
     fn output(&self, cwd: &Path, args: &[&OsStr], input: Option<&[u8]>) -> Result<Output> {
         let mut command = self.command(cwd);
-        command
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if let Some(input) = input {
-            let mut child = command
-                .stdin(Stdio::piped())
-                .spawn()
-                .map_err(|e| Error::io("start Git", e))?;
-            let write_result = child.stdin.take().expect("piped stdin").write_all(input);
-            let output = child
-                .wait_with_output()
-                .map_err(|e| Error::io("wait for Git", e))?;
-            if let Err(e) = write_result
-                && output.status.success()
-            {
-                return Err(Error::io("write Git input", e));
-            }
-            Ok(output)
-        } else {
-            command
-                .stdin(Stdio::null())
-                .output()
-                .map_err(|e| Error::io("run Git", e))
+        command.args(args);
+        self.finish_command(command, input)
+    }
+    fn finish_command(&self, command: Command, input: Option<&[u8]>) -> Result<Output> {
+        match &self.operation {
+            Some(operation) => operation.run(command, input),
+            None => GitOperationState::new(GitLimits::default(), None)?.run(command, input),
         }
     }
 
@@ -1560,15 +2352,13 @@ impl Git {
             canonical_digest(1, &manifest.ordered_delta_digests)?
         );
         let mut command = self.command(&path);
-        let output = command
+        command
             .env("GIT_AUTHOR_NAME", &request.identity.name)
             .env("GIT_AUTHOR_EMAIL", &request.identity.email)
             .env("GIT_COMMITTER_NAME", &request.identity.name)
             .env("GIT_COMMITTER_EMAIL", &request.identity.email)
-            .args(["commit", "--signoff", "--no-gpg-sign", "-m", &message])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| Error::io("commit isolated candidate", e))?;
+            .args(["commit", "--signoff", "--no-gpg-sign", "-m", &message]);
+        let output = self.finish_command(command, None)?;
         if !output.status.success() {
             return Err(Error::new(
                 "git_operation_failed",
@@ -1688,6 +2478,40 @@ fn owner_directory(path: &Path) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+fn write_clone_record(path: &Path, record: &ExecutionCloneRecord, exclusive: bool) -> Result<()> {
+    let bytes =
+        serde_json::to_vec(record).map_err(|_| Error::invalid("encode execution clone receipt"))?;
+    let target = if exclusive {
+        path.to_owned()
+    } else {
+        path.with_extension(format!("{}.tmp", Uuid::new_v4()))
+    };
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let mut file = options
+        .open(&target)
+        .map_err(|e| Error::io("create execution clone receipt", e))?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| Error::io("persist execution clone receipt", e))?;
+    if !exclusive {
+        fs::rename(&target, path).map_err(|e| Error::io("finalize execution clone receipt", e))?;
+    }
+    File::open(
+        path.parent()
+            .ok_or_else(|| Error::invalid("clone receipt parent absent"))?,
+    )
+    .and_then(|parent| parent.sync_all())
+    .map_err(|e| Error::io("sync execution clone receipt", e))
+}
+
 fn set_owner_directory(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -1722,5 +2546,509 @@ fn write_candidate_manifest(path: &Path, manifest: &CandidateManifest) -> Result
     File::open(&git_dir)
         .and_then(|f| f.sync_all())
         .map_err(|e| Error::io("flush candidate directory", e))?;
+    Ok(())
+}
+
+/// Invokes the actual synchronous spawn while the host holds its short current
+/// admission gate. The outer operation already has a durable Sent receipt.
+pub type GitStartGate =
+    std::sync::Arc<dyn Fn(&mut dyn FnMut() -> Result<()>) -> Result<()> + Send + Sync>;
+#[derive(Clone, Debug)]
+pub struct GitLimits {
+    pub command_timeout: std::time::Duration,
+    pub operation_timeout: std::time::Duration,
+    pub output_bytes: usize,
+    pub input_bytes: usize,
+}
+impl Default for GitLimits {
+    fn default() -> Self {
+        Self {
+            command_timeout: std::time::Duration::from_secs(30),
+            operation_timeout: std::time::Duration::from_secs(300),
+            output_bytes: 64 * 1024 * 1024,
+            input_bytes: 256 * 1024 * 1024,
+        }
+    }
+}
+impl GitLimits {
+    fn validate(&self) -> Result<()> {
+        if self.command_timeout.is_zero()
+            || self.command_timeout > std::time::Duration::from_secs(300)
+            || self.operation_timeout.is_zero()
+            || self.operation_timeout > std::time::Duration::from_secs(3600)
+            || self.output_bytes == 0
+            || self.output_bytes > 256 * 1024 * 1024
+            || self.input_bytes == 0
+            || self.input_bytes > 256 * 1024 * 1024
+        {
+            return Err(Error::invalid(
+                "Git operation limits must be finite and bounded",
+            ));
+        }
+        Ok(())
+    }
+}
+struct ActiveGitChild {
+    child: std::process::Child,
+    group: Option<crate::process_group::OwnedGroup>,
+    terminal: Option<std::process::ExitStatus>,
+}
+impl ActiveGitChild {
+    fn observe(&mut self) -> Result<Option<std::process::ExitStatus>> {
+        if self.terminal.is_none()
+            && self
+                .group
+                .as_mut()
+                .map_or(Ok(true), |group| group.observe_exit_before_reap())?
+        {
+            self.terminal = self
+                .child
+                .try_wait()
+                .map_err(|error| Error::io("reap owned Git after group cleanup", error))?;
+        }
+        Ok(self.terminal)
+    }
+}
+struct GitOperationState {
+    cancelled: std::sync::atomic::AtomicBool,
+    closed: std::sync::atomic::AtomicBool,
+    uncertain_descendants: std::sync::atomic::AtomicBool,
+    active: std::sync::Mutex<Option<ActiveGitChild>>,
+    deadline: std::time::Instant,
+    limits: GitLimits,
+    gate: Option<GitStartGate>,
+}
+impl GitOperationState {
+    fn new(limits: GitLimits, gate: Option<GitStartGate>) -> Result<Self> {
+        limits.validate()?;
+        Ok(Self {
+            cancelled: false.into(),
+            closed: false.into(),
+            uncertain_descendants: false.into(),
+            active: std::sync::Mutex::new(None),
+            deadline: std::time::Instant::now() + limits.operation_timeout,
+            limits,
+            gate,
+        })
+    }
+    fn current(&self) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        if self.cancelled.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
+            return Err(Error::new("cancelled", "Git operation is fenced or ended"));
+        }
+        if std::time::Instant::now() >= self.deadline {
+            return Err(Error::new(
+                "timeout",
+                "Git operation exceeded its finite deadline",
+            ));
+        }
+        Ok(())
+    }
+    fn cancel(&self) -> Result<()> {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| Error::new("ownership_conflict", "Git child ownership lock failed"))?;
+        if let Some(process) = active.as_mut()
+            && process.observe()?.is_none()
+        {
+            if let Some(group) = process.group.as_mut() {
+                group.terminate(crate::process_group::Termination::Kill)?;
+            } else if let Err(error) = process.child.kill()
+                && error.raw_os_error() != Some(libc::ESRCH)
+            {
+                return Err(Error::io(
+                    "terminate owned Git child without group proof",
+                    error,
+                ));
+            }
+        }
+
+        Ok(())
+    }
+    #[cfg(unix)]
+    fn run(&self, mut command: Command, input: Option<&[u8]>) -> Result<Output> {
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+        use std::os::unix::process::CommandExt;
+        self.current()?;
+        let input = input.unwrap_or(&[]);
+        if input.len() > self.limits.input_bytes {
+            return Err(Error::new(
+                "bounded_input",
+                "Git input exceeds configured bound",
+            ));
+        }
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let mut pipes = None;
+        let mut start = || -> Result<()> {
+            self.current()?;
+            let mut active = self
+                .active
+                .lock()
+                .map_err(|_| Error::new("ownership_conflict", "Git child ownership lock failed"))?;
+            if active.is_some() {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "one owned Git sequence cannot run parallel subprocesses",
+                ));
+            }
+            self.current()?;
+            let (mut child, group) = crate::process_group::OwnedGroup::spawn_std(&mut command)?;
+            pipes = Some((
+                child.stdin.take().expect("piped stdin"),
+                child.stdout.take().expect("piped stdout"),
+                child.stderr.take().expect("piped stderr"),
+            ));
+            *active = Some(ActiveGitChild {
+                child,
+                group: Some(group),
+                terminal: None,
+            });
+            Ok(())
+        };
+        let gated = if let Some(gate) = &self.gate {
+            gate(&mut start)
+        } else {
+            start()
+        };
+        // Even a faulty gate which fails after spawning must retain and reap
+        // the owned child; returning early would detach an external effect.
+        if pipes.is_none() {
+            gated?;
+            return Err(Error::new(
+                "ownership_conflict",
+                "Git start gate did not launch owned process",
+            ));
+        }
+        let (stdin, mut stdout, mut stderr) = pipes.ok_or_else(|| {
+            Error::new(
+                "ownership_conflict",
+                "Git start gate did not launch owned process",
+            )
+        })?;
+        let nonblocking = |fd| -> Result<()> {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+            {
+                return Err(Error::io(
+                    "configure bounded Git pipe",
+                    std::io::Error::last_os_error(),
+                ));
+            }
+            Ok(())
+        };
+        let configured = nonblocking(stdin.as_raw_fd())
+            .and_then(|_| nonblocking(stdout.as_raw_fd()))
+            .and_then(|_| nonblocking(stderr.as_raw_fd()));
+        let mut failure = gated.err().or_else(|| configured.err());
+        let mut stdin = Some(stdin);
+        let mut written = 0usize;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut out_eof = false;
+        let mut err_eof = false;
+        let started = std::time::Instant::now();
+        let mut terminal_at = None;
+        let mut cancelled_at = None;
+        let drain = |stream: &mut dyn Read, bytes: &mut Vec<u8>| -> Result<bool> {
+            let mut buffer = [0u8; 8192];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => return Ok(true),
+                    Ok(n) => {
+                        if bytes
+                            .len()
+                            .checked_add(n)
+                            .is_none_or(|size| size > self.limits.output_bytes)
+                        {
+                            return Err(Error::new(
+                                "output_limit",
+                                "Git output exceeded its configured byte bound",
+                            ));
+                        }
+                        bytes.extend_from_slice(&buffer[..n]);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(false),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(Error::io("read owned Git output", e)),
+                }
+            }
+        };
+        loop {
+            if failure.is_none() {
+                failure = self.current().err();
+            }
+            if started.elapsed() >= self.limits.command_timeout && failure.is_none() {
+                failure = Some(Error::new("timeout", "Git command exceeded finite timeout"));
+            }
+            if failure.is_none() {
+                if written == input.len() {
+                    stdin.take();
+                } else if let Some(pipe) = stdin.as_mut() {
+                    match pipe.write(&input[written..input.len().min(written + 65536)]) {
+                        Ok(n) => written += n,
+                        Err(e)
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                            stdin.take();
+                        }
+                        Err(e) => failure = Some(Error::io("write owned Git input", e)),
+                    }
+                }
+                match drain(&mut stdout, &mut out) {
+                    Ok(done) => out_eof = done,
+                    Err(e) => failure = Some(e),
+                }
+                match drain(&mut stderr, &mut err) {
+                    Ok(done) => err_eof = done,
+                    Err(e) => {
+                        if failure.is_none() {
+                            failure = Some(e)
+                        }
+                    }
+                }
+            }
+            if failure.is_some() && cancelled_at.is_none() {
+                self.cancel()?;
+                cancelled_at = Some(std::time::Instant::now());
+                stdin.take();
+            }
+            let terminal = {
+                let mut active = self.active.lock().map_err(|_| {
+                    Error::new("ownership_conflict", "Git child ownership lock failed")
+                })?;
+                let process = active.as_mut().ok_or_else(|| {
+                    Error::new("ownership_conflict", "owned Git child disappeared")
+                })?;
+                process.observe()?
+            };
+            if let Some(status) = terminal {
+                let since = terminal_at.get_or_insert_with(std::time::Instant::now);
+                if failure.is_some()
+                    || out_eof && err_eof
+                    || since.elapsed() >= std::time::Duration::from_secs(1)
+                {
+                    self.active
+                        .lock()
+                        .map_err(|_| {
+                            Error::new("ownership_conflict", "Git child ownership lock failed")
+                        })?
+                        .take();
+                    if let Some(error) = failure {
+                        return Err(error);
+                    }
+                    if !out_eof || !err_eof {
+                        self.uncertain_descendants
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                        return Err(Error::new(
+                            "operation_uncertain",
+                            "Git output pipes remained open after owned child exit",
+                        ));
+                    }
+                    if status.success() && written != input.len() {
+                        return Err(Error::new(
+                            "git_operation_failed",
+                            "Git did not consume the complete intended input",
+                        ));
+                    }
+                    return Ok(Output {
+                        status,
+                        stdout: out,
+                        stderr: err,
+                    });
+                }
+            }
+            if cancelled_at.is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(5)) {
+                return Err(Error::new(
+                    "operation_uncertain",
+                    "cancelled Git child has not been observed exited",
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    #[cfg(not(unix))]
+    fn run(&self, _: Command, _: Option<&[u8]>) -> Result<Output> {
+        Err(Error::new(
+            "prerequisite",
+            "bounded Git execution requires the supported Unix host",
+        ))
+    }
+}
+#[derive(Clone)]
+pub struct GitCancellation {
+    state: std::sync::Arc<GitOperationState>,
+}
+impl GitCancellation {
+    pub fn cancel(&self) -> Result<()> {
+        self.state.cancel()
+    }
+    pub fn exited(&self) -> Result<bool> {
+        if self
+            .state
+            .uncertain_descendants
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(false);
+        }
+        let mut active = self
+            .state
+            .active
+            .lock()
+            .map_err(|_| Error::new("ownership_conflict", "Git child ownership lock failed"))?;
+        if let Some(process) = active.as_mut()
+            && process.observe()?.is_none()
+        {
+            return Ok(false);
+        }
+
+        Ok(self.state.closed.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
+pub struct RunningGitOperation<T: Send + 'static> {
+    state: std::sync::Arc<GitOperationState>,
+    thread: Option<std::thread::JoinHandle<Result<T>>>,
+}
+impl<T: Send + 'static> RunningGitOperation<T> {
+    pub fn cancellation(&self) -> GitCancellation {
+        GitCancellation {
+            state: self.state.clone(),
+        }
+    }
+    pub async fn wait(mut self) -> Result<T> {
+        let thread = self
+            .thread
+            .take()
+            .ok_or_else(|| Error::new("ownership_conflict", "Git operation already awaited"))?;
+        tokio::task::spawn_blocking(move || {
+            thread.join().map_err(|_| {
+                Error::new(
+                    "operation_uncertain",
+                    "owned Git operation panicked; retain its artifacts",
+                )
+            })?
+        })
+        .await
+        .map_err(|_| Error::new("operation_uncertain", "owned Git waiter interrupted"))?
+    }
+}
+impl<T: Send + 'static> Drop for RunningGitOperation<T> {
+    fn drop(&mut self) {
+        let _ = self.state.cancel();
+    }
+}
+impl Git {
+    /// Launch under ControlHost::begin_effect and register cancellation before
+    /// releasing its gate; await outside and complete the effect afterward.
+    pub fn start_operation<T: Send + 'static>(
+        &self,
+        limits: GitLimits,
+        start_gate: GitStartGate,
+        work: impl FnOnce(Git) -> Result<T> + Send + 'static,
+    ) -> Result<RunningGitOperation<T>> {
+        let state = std::sync::Arc::new(GitOperationState::new(limits, Some(start_gate))?);
+        let mut owned = self.clone();
+        owned.operation = Some(state.clone());
+        let finished = state.clone();
+        let thread = std::thread::Builder::new()
+            .name("kegari-owned-git".into())
+            .spawn(move || {
+                struct Closed(std::sync::Arc<GitOperationState>);
+                impl Drop for Closed {
+                    fn drop(&mut self) {
+                        self.0
+                            .closed
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                let _closed = Closed(finished);
+                work(owned)
+            })
+            .map_err(|e| Error::io("start owned Git operation", e))?;
+        Ok(RunningGitOperation {
+            state,
+            thread: Some(thread),
+        })
+    }
+}
+
+#[cfg(all(test, unix))]
+mod bounded_process_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    // Ordinary owned OS process fixtures test lifecycle, not sandbox enforcement.
+    #[test]
+    fn timeout_and_post_spawn_gate_failure_reap_owned_processes() {
+        let state = GitOperationState::new(
+            GitLimits {
+                command_timeout: Duration::from_millis(30),
+                ..GitLimits::default()
+            },
+            None,
+        )
+        .unwrap();
+        let mut sleeper = Command::new("/bin/sleep");
+        sleeper.arg("10");
+        let started = Instant::now();
+        assert_eq!(state.run(sleeper, None).unwrap_err().code, "timeout");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(state.active.lock().unwrap().is_none());
+
+        let state = GitOperationState::new(
+            GitLimits::default(),
+            Some(Arc::new(|launch| {
+                launch()?;
+                Err(Error::new(
+                    "fixture_after_spawn",
+                    "failed final gate record",
+                ))
+            })),
+        )
+        .unwrap();
+        let mut sleeper = Command::new("/bin/sleep");
+        sleeper.arg("10");
+        assert_eq!(
+            state.run(sleeper, None).unwrap_err().code,
+            "fixture_after_spawn"
+        );
+        assert!(state.active.lock().unwrap().is_none());
+    }
+}
+
+fn validate_independent_clone_identity(identity: &IndependentCloneIdentity) -> Result<()> {
+    identity.repository.validate()?;
+    identity.head.validate()?;
+    identity.base.validate()?;
+    let repository = identity
+        .repository
+        .id
+        .parse::<u64>()
+        .map_err(|_| Error::invalid("review repository needs canonical numeric GitHub ID"))?;
+    let expected = canonical_digest(
+        1,
+        &serde_json::json!({"repository":repository,"pr":identity.pull_request,"head":identity.head.commit,"base":identity.base.commit}),
+    )?;
+    if identity.schema_version != 1
+        || identity.runtime_id.is_nil()
+        || identity.workspace_id.is_nil()
+        || identity.directory_id.is_nil()
+        || identity.pull_request == 0
+        || identity.review_identity != expected
+    {
+        return Err(Error::new(
+            "execution_ownership",
+            "independent review clone identity is incomplete or mismatched",
+        ));
+    }
     Ok(())
 }

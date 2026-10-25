@@ -1,7 +1,7 @@
 //! Production HTTPS adapters. Provider input is untrusted; collection reads are
 //! atomic and mutation transmission is reachable only through the control broker.
 use crate::config::{GithubSelection, LinearSelection, Selector};
-use crate::control::{ControlHost, MutationRequest, Permit, Receipt};
+use crate::control::{ControlHost, ControlSnapshot, MutationRequest, Permit, Receipt};
 use crate::digest::{bytes_digest, canonical_digest};
 use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
@@ -476,6 +476,82 @@ pub struct AccountIdentity {
     pub permission_scopes: Option<Vec<String>>,
     pub observed_at: DateTime<Utc>,
 }
+
+/// Read-only credential preflight before a workspace exists. Endpoints and
+/// expected account identity come exclusively from the explicit connection.
+pub async fn verify_connection_identity(
+    policy: HttpPolicy,
+    credential: Credential,
+    kind: crate::config::ProviderKind,
+    transport: Option<Arc<dyn HttpTransport>>,
+) -> Result<AccountIdentity> {
+    use crate::config::ProviderKind;
+    if kind == ProviderKind::Codex {
+        return Err(Error::new(
+            "unsupported_provider",
+            "Codex authentication must be verified through the pinned app-server handshake",
+        ));
+    }
+    let expected = policy.account_id.clone();
+    let http = HttpCore::new(policy, credential, kind == ProviderKind::Github, transport)?;
+    match kind {
+        ProviderKind::Linear => {
+            let configured = Uuid::parse_str(&expected)
+                .map_err(|_| Error::invalid("Linear expected account must be a canonical UUID"))?;
+            if configured.is_nil() || configured.to_string() != expected {
+                return Err(Error::invalid(
+                    "Linear expected account must be a canonical nonnil UUID",
+                ));
+            }
+            let (value, headers) = http.json(Method::Post, http.policy.endpoint.clone(), Some(json!({"query":"query KegariIdentity { viewer { id name } organization { id } }","variables":{}}))).await?;
+            let data = graph_data(value, &headers)?;
+            let account = uuid_at(&data, "/viewer/id")?;
+            let workspace = uuid_at(&data, "/organization/id")?;
+            if account != configured {
+                return Err(Error::new(
+                    "identity_mismatch",
+                    "Linear credential differs from expected connection account",
+                ));
+            }
+            Ok(AccountIdentity {
+                account_id: account.to_string(),
+                workspace_id: Some(workspace),
+                display_name: text_at(&data, "/viewer/name")?.into(),
+                permission_scopes: None,
+                observed_at: Utc::now(),
+            })
+        }
+        ProviderKind::Github => {
+            let (value, headers) = http.json(Method::Get, http.url(&["user"])?, None).await?;
+            require_github_user(&value)?;
+            let account = positive_id(&value, "/id")?.to_string();
+            if account != expected {
+                return Err(Error::new(
+                    "identity_mismatch",
+                    "GitHub credential differs from expected connection user",
+                ));
+            }
+            let permission_scopes = headers
+                .get("x-oauth-scopes")
+                .and_then(|s| s.to_str().ok())
+                .map(|s| {
+                    s.split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                });
+            Ok(AccountIdentity {
+                account_id: account,
+                workspace_id: None,
+                display_name: text_at(&value, "/login")?.into(),
+                permission_scopes,
+                observed_at: Utc::now(),
+            })
+        }
+        ProviderKind::Codex => unreachable!("checked before transport creation"),
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Label {
     pub id: Uuid,
@@ -552,6 +628,36 @@ pub struct LinearClient {
     selection: LinearSelection,
     uploads: Arc<Mutex<BTreeMap<Uuid, UploadGrant>>>,
 }
+fn graph_data(value: Value, headers: &HeaderMap) -> Result<Value> {
+    if let Some(errors) = value.get("errors") {
+        if !errors.is_array() {
+            return Err(Error::new(
+                "provider_response",
+                "malformed GraphQL error collection",
+            ));
+        }
+        if !errors.as_array().unwrap().is_empty() {
+            let rate_limited = errors.as_array().unwrap().iter().any(|e| {
+                e.pointer("/extensions/code")
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| matches!(c, "RATELIMITED" | "RATE_LIMITED"))
+            });
+            let mut error = Error::new(if rate_limited{"rate_limited"}else{"provider_response"},"GraphQL returned errors; all partial data discarded").detail(json!({"error_count":errors.as_array().unwrap().len(),"rate_limit":RateLimit::from_headers(headers,false)}));
+            error.retryable = rate_limited;
+            return Err(error);
+        }
+    }
+    value
+        .get("data")
+        .filter(|v| v.is_object())
+        .cloned()
+        .ok_or_else(|| {
+            Error::new(
+                "provider_response",
+                "GraphQL response lacks a complete data object",
+            )
+        })
+}
 const ISSUE_FIELDS: &str = "id identifier title description priority createdAt updatedAt url team { id } project { id } creator { id } assignee { id } parent { id } state { id name type } labelIds";
 const COMMENT_FIELDS: &str = "id body createdAt updatedAt editedAt url user { id } onBehalfOf { id } botActor { __typename } issue { id }";
 const HISTORY_FIELDS: &str = "id actor { id } actorId actors { id } botActor { __typename } addedLabelIds removedLabelIds createdAt updatedAt fromParentId toParentId updatedDescription";
@@ -595,34 +701,7 @@ impl LinearClient {
                 Some(json!({"query":query,"variables":variables})),
             )
             .await?;
-        if let Some(errors) = value.get("errors") {
-            if !errors.is_array() {
-                return Err(Error::new(
-                    "provider_response",
-                    "malformed GraphQL error collection",
-                ));
-            }
-            if !errors.as_array().unwrap().is_empty() {
-                let rate_limited = errors.as_array().unwrap().iter().any(|e| {
-                    e.pointer("/extensions/code")
-                        .and_then(Value::as_str)
-                        .is_some_and(|c| matches!(c, "RATELIMITED" | "RATE_LIMITED"))
-                });
-                let mut error = Error::new(if rate_limited{"rate_limited"}else{"provider_response"},"GraphQL returned errors; all partial data discarded").detail(json!({"error_count":errors.as_array().unwrap().len(),"rate_limit":RateLimit::from_headers(&headers,false)}));
-                error.retryable = rate_limited;
-                return Err(error);
-            }
-        }
-        value
-            .get("data")
-            .filter(|v| v.is_object())
-            .cloned()
-            .ok_or_else(|| {
-                Error::new(
-                    "provider_response",
-                    "GraphQL response lacks a complete data object",
-                )
-            })
+        graph_data(value, &headers)
     }
     pub async fn identity(&self) -> Result<AccountIdentity> {
         let data = self
@@ -1356,6 +1435,7 @@ impl GithubClient {
             .json(Method::Get, self.http.url(&["user"])?, None)
             .await?;
         let id = positive_id(&v, "/id")?;
+        require_github_user(&v)?;
         if id.to_string() != self.http.policy.account_id {
             return Err(Error::new(
                 "identity_mismatch",
@@ -2204,6 +2284,9 @@ pub enum ProviderMutation {
         message: String,
         tree: String,
         parent: String,
+        author: CommitIdentity,
+        committer: CommitIdentity,
+        expected_sha: String,
     },
 }
 impl std::fmt::Debug for ProviderMutation {
@@ -2218,6 +2301,30 @@ pub enum StatusState {
     Success,
     Failure,
     Error,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitIdentity {
+    pub name: String,
+    pub email: String,
+    pub date: String,
+}
+impl CommitIdentity {
+    fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty()
+            || self.email.trim().is_empty()
+            || self.name.len() > 1024
+            || self.email.len() > 1024
+            || self.name.contains(['\r', '\n', '\0', '<', '>'])
+            || self.email.contains(['\r', '\n', '\0', '<', '>'])
+            || DateTime::parse_from_rfc3339(&self.date).is_err()
+        {
+            return Err(Error::invalid(
+                "Git commit author/committer requires bounded explicit name, email and RFC3339 date",
+            ));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2259,10 +2366,29 @@ pub struct ProviderBroker {
     pub github: Option<GithubClient>,
 }
 impl ProviderBroker {
-    /// Only this broker transmits mutations. Host admission, receipt preparation,
-    /// last-moment checks, sending and durable result stay in one serialized host
-    /// call. A failed/unknown response is never retried here.
+    /// Only this broker transmits mutations. A durable reservation precedes
+    /// asynchronous preflight; final authorization and owned dispatch serialize
+    /// with control changes. Network waits never retain the control mutex.
     pub async fn mutate<F>(
+        &self,
+        host: Arc<ControlHost>,
+        request: MutationRequest,
+        permit: Option<Permit>,
+        operator_role: Option<String>,
+        command: ProviderMutation,
+        fresh_gate: F,
+    ) -> Result<Receipt>
+    where
+        F: Fn() -> Result<()> + Send + 'static,
+    {
+        self.mutate_observed(host, request, permit, operator_role, command, move |_| {
+            fresh_gate()
+        })
+        .await
+    }
+    /// Supplies the already locked host snapshot to final authorization. Callers
+    /// must not reenter ControlHost while evaluating this gate.
+    pub async fn mutate_observed<F>(
         &self,
         host: Arc<ControlHost>,
         mut request: MutationRequest,
@@ -2272,21 +2398,38 @@ impl ProviderBroker {
         fresh_gate: F,
     ) -> Result<Receipt>
     where
-        F: FnOnce() -> Result<()> + Send + 'static,
+        F: Fn(&ControlSnapshot) -> Result<()> + Send + 'static,
     {
         let (kind, targets, payload) = self.binding(&command)?;
+        if let ProviderMutation::LinearComment { body, .. } = &command {
+            request
+                .expected
+                .insert("provider_body_digest".into(), bytes_digest(body.as_bytes()));
+            request.expected.insert(
+                "provider_writer".into(),
+                self.linear()?.http.policy.account_id.clone(),
+            );
+            request.expected.insert(
+                "provider_principal".into(),
+                canonical_digest(1, &request.actor.principal)?,
+            );
+        }
         request.kind = kind;
         request.canonical_targets = targets;
         request.payload = payload;
         let broker = self.clone();
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            host.mutate(
-                request,
-                permit.as_ref(),
-                operator_role.as_deref(),
-                || {
-                    fresh_gate()?;
+        // This owned task survives HTTP/worker caller cancellation. A second
+        // invocation observes the same Prepared/Sent receipt without resending.
+        tokio::spawn(async move {
+            let reservation = host.reserve_remote(request, permit, operator_role, &fresh_gate)?;
+            let reservation = match reservation {
+                crate::control::RemoteReservation::Existing(receipt) => return Ok(receipt),
+                crate::control::RemoteReservation::Prepared(reservation) => reservation,
+            };
+            let operation = reservation.operation_id();
+            let owned_host = host.clone();
+            let task = tokio::spawn(async move {
+                let preflight = async {
                     if let ProviderMutation::GithubCancel {
                         repository,
                         run_id,
@@ -2296,7 +2439,7 @@ impl ProviderBroker {
                         ..
                     } = &command
                     {
-                        let dispatch = host.operation(*dispatch_operation)?;
+                        let dispatch = owned_host.operation(*dispatch_operation)?;
                         let observation = dispatch.observed_result.as_ref().ok_or_else(|| {
                             Error::new(
                                 "reconciliation_required",
@@ -2319,19 +2462,58 @@ impl ProviderBroker {
                             ));
                         }
                     }
-                    handle.block_on(broker.preflight(&command))
-                },
-                |receipt| handle.block_on(broker.transmit(&command, receipt.operation_id)),
-            )
+                    broker.preflight(&command).await
+                }
+                .await;
+                let launch_host = owned_host.clone();
+                let handle = tokio::runtime::Handle::current();
+                let (effect, transport) = tokio::task::spawn_blocking(move || {
+                    launch_host.launch_remote(reservation, preflight, fresh_gate, move |receipt| {
+                        let operation = receipt.operation_id;
+                        handle.spawn(async move { broker.transmit(&command, operation).await })
+                    })
+                })
+                .await
+                .map_err(|_| {
+                    Error::new(
+                        "provider_broker",
+                        "provider dispatch task failed; consult receipt",
+                    )
+                })??;
+                let observed = transport
+                    .await
+                    .map_err(|_| Error::new("provider_broker", "owned transport task failed"))
+                    .and_then(|result| result);
+                tokio::task::spawn_blocking(move || owned_host.complete_remote(effect, observed))
+                    .await
+                    .map_err(|_| {
+                        Error::new(
+                            "provider_broker",
+                            "provider completion task failed; consult receipt",
+                        )
+                    })?
+            });
+            let result = task
+                .await
+                .map_err(|_| {
+                    Error::new(
+                        "provider_broker",
+                        "owned provider task failed; consult receipt",
+                    )
+                })
+                .and_then(|result| result);
+            host.remote_task_exited(operation)?;
+            result
         })
         .await
         .map_err(|_| {
             Error::new(
                 "provider_broker",
-                "serialized provider broker task failed; consult receipt",
+                "provider owner task failed; consult receipt",
             )
         })?
     }
+
     fn linear(&self) -> Result<&LinearClient> {
         self.linear
             .as_ref()
@@ -2407,7 +2589,13 @@ impl ProviderBroker {
         use ProviderMutation::*;
         match command {
             LinearComment { issue, body } => {
-                bounded_text(body)?;
+                // A maximum-size explicit operator correction carries a small
+                // authenticated provenance suffix in addition to its 1MiB text.
+                if body.trim().is_empty() || body.len() > 2 * 1024 * 1024 || body.contains('\0') {
+                    return Err(Error::invalid(
+                        "Linear comment exceeds its bounded UTF-8 envelope",
+                    ));
+                }
                 self.linear()?.issue(*issue).await?;
             }
             LinearState {
@@ -2711,8 +2899,14 @@ impl ProviderBroker {
                 message,
                 tree,
                 parent,
+                author,
+                committer,
+                expected_sha,
             } => {
                 bounded_text(message)?;
+                author.validate()?;
+                committer.validate()?;
+                sha(expected_sha)?;
                 self.github()?.tree(repository, sha(tree)?).await?;
                 self.github()?.commit(repository, sha(parent)?).await?;
             }
@@ -2954,6 +3148,14 @@ impl ProviderBroker {
                     }
                     GithubBlob { .. } | GithubTree { .. } | GithubCommit { .. } => {
                         let object = sha(text_at(&v, "/sha")?)?;
+                        if let GithubCommit { expected_sha, .. } = command
+                            && object != expected_sha
+                        {
+                            return Err(Error::new(
+                                "identity_mismatch",
+                                "GitHub-created commit SHA differs from exact validated local commit",
+                            ));
+                        }
                         ids.insert("object_sha".into(), object.into());
                         json!({"sha":object,"requires_observation":true})
                     }
@@ -2963,6 +3165,15 @@ impl ProviderBroker {
         };
         Ok((ids, observed))
     }
+}
+fn require_github_user(value: &Value) -> Result<()> {
+    if value.get("type").and_then(Value::as_str) != Some("User") {
+        return Err(Error::new(
+            "identity_mismatch",
+            "GitHub connection must authenticate the configured user, not a bot, organization or integration identity",
+        ));
+    }
+    Ok(())
 }
 fn bounded_text(s: &str) -> Result<()> {
     if s.trim().is_empty() || s.len() > 1_048_576 || s.contains('\0') {
@@ -3140,10 +3351,13 @@ fn github_write(
             message,
             tree,
             parent,
+            author,
+            committer,
+            ..
         } => (
             Method::Post,
             client.repo_url(repository, &["git", "commits"])?,
-            json!({"message":message,"tree":tree,"parents":[parent]}),
+            json!({"message":message,"tree":tree,"parents":[parent],"author":author,"committer":committer}),
         ),
         _ => return Err(Error::invalid("command does not belong to GitHub")),
     })
@@ -3157,6 +3371,9 @@ pub const GITHUB_OIDC_JWKS: &str = "https://token.actions.githubusercontent.com/
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostedProofExpectation {
+    /// Additional exact evidence purpose, independently derived by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_digest: Option<String>,
     pub runtime_id: Uuid,
     pub operation_id: Uuid,
     pub challenge: Uuid,
@@ -3215,12 +3432,14 @@ impl HostedProofExpectation {
                 "hosted proof requires pinned reusable workflow and supported event",
             ));
         }
+        let mut audience = json!({"runtime_id":self.runtime_id,"operation_id":self.operation_id,"challenge":self.challenge,"repository_id":self.repository_id,"source_sha":self.tested_source_sha});
+        if let Some(context) = &self.context_digest {
+            crate::evidence::validate_digest(context)?;
+            audience["context_digest"] = json!(context);
+        }
         Ok(format!(
             "urn:kegari:v0:hosted-proof:{}",
-            canonical_digest(
-                1,
-                &json!({"runtime_id":self.runtime_id,"operation_id":self.operation_id,"challenge":self.challenge,"repository_id":self.repository_id,"source_sha":self.tested_source_sha})
-            )?
+            canonical_digest(1, &audience)?
         ))
     }
 }
@@ -3687,5 +3906,175 @@ impl GithubClient {
                     && self.selection.permits_pr_author(&pr.author_id.to_string())
             })
             .collect())
+    }
+}
+
+/// Stable environment identity observed through the selected repository. Names
+/// are provider locators only; a recreated same-name environment has another ID.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GithubEnvironment {
+    pub repository_id: u64,
+    pub id: u64,
+    pub name: String,
+    pub protection_rules: Vec<Value>,
+    pub deployment_branch_policy: Value,
+    pub observed_at: DateTime<Utc>,
+}
+impl GithubClient {
+    pub async fn environments(
+        &self,
+        repository: &RepositoryIdentity,
+    ) -> Result<Vec<GithubEnvironment>> {
+        self.repository(repository).await?;
+        self.pages(
+            self.repo_url(repository, &["environments"])?,
+            &[],
+            Some("environments"),
+            Some(repository),
+        )
+        .await?
+        .into_iter()
+        .map(|v| self.normalize_environment(repository, v))
+        .collect()
+    }
+    fn normalize_environment(
+        &self,
+        repository: &RepositoryIdentity,
+        value: Value,
+    ) -> Result<GithubEnvironment> {
+        let name = text_at(&value, "/name")?;
+        if name.is_empty()
+            || name.len() > 4096
+            || name.chars().any(char::is_control)
+            || Url::parse(text_at(&value, "/url")?).ok().as_ref()
+                != Some(&self.repo_url(repository, &["environments", name])?)
+        {
+            return Err(Error::new(
+                "identity_mismatch",
+                "environment locator escaped selected repository",
+            ));
+        }
+        Ok(GithubEnvironment {
+            repository_id: repository.id,
+            id: positive_id(&value, "/id")?,
+            name: name.into(),
+            protection_rules: value
+                .get("protection_rules")
+                .and_then(Value::as_array)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::new(
+                        "provider_response",
+                        "environment protection inventory missing",
+                    )
+                })?,
+            deployment_branch_policy: value.get("deployment_branch_policy").cloned().ok_or_else(
+                || {
+                    Error::new(
+                        "provider_response",
+                        "environment deployment policy observation missing",
+                    )
+                },
+            )?,
+            observed_at: Utc::now(),
+        })
+    }
+    pub async fn environment_by_id(
+        &self,
+        repository: &RepositoryIdentity,
+        environment_id: u64,
+    ) -> Result<GithubEnvironment> {
+        nonzero(environment_id)?;
+        let environments = self.environments(repository).await?;
+        let selected = environments
+            .iter()
+            .find(|e| e.id == environment_id)
+            .ok_or_else(|| {
+                Error::new(
+                    "incompletely_prepared",
+                    "configured canonical deployment environment is absent",
+                )
+            })?;
+        let (value, _) = self
+            .http
+            .json(
+                Method::Get,
+                self.repo_url(repository, &["environments", &selected.name])?,
+                None,
+            )
+            .await?;
+        let current = self.normalize_environment(repository, value)?;
+        if current.id != selected.id || current.name != selected.name {
+            return Err(Error::new(
+                "identity_mismatch",
+                "deployment environment changed between inventory and read",
+            ));
+        }
+        Ok(current)
+    }
+}
+impl GithubClient {
+    /// Complete target inventory without a SHA filter: a newer divergent source
+    /// or pending deployment must remain visible to production reconciliation.
+    pub async fn environment_deployments(
+        &self,
+        repository: &RepositoryIdentity,
+        environment: &GithubEnvironment,
+    ) -> Result<Vec<GithubRecord>> {
+        if environment.repository_id != repository.id
+            || environment.id == 0
+            || environment.name.is_empty()
+        {
+            return Err(Error::new(
+                "identity_mismatch",
+                "deployment environment belongs to another repository",
+            ));
+        }
+        let records = self
+            .records(
+                repository,
+                &["deployments"],
+                &[("environment", environment.name.as_str())],
+                None,
+            )
+            .await?;
+        if records.iter().any(|record| {
+            record.data.get("environment").and_then(Value::as_str)
+                != Some(environment.name.as_str())
+        }) {
+            return Err(Error::new(
+                "provider_response",
+                "deployment inventory escaped its exact environment filter",
+            ));
+        }
+        Ok(records)
+    }
+    pub async fn deployment(
+        &self,
+        repository: &RepositoryIdentity,
+        deployment: u64,
+    ) -> Result<GithubRecord> {
+        self.repository(repository).await?;
+        let (data, _) = self
+            .http
+            .json(
+                Method::Get,
+                self.repo_url(repository, &["deployments", &nonzero(deployment)?])?,
+                None,
+            )
+            .await?;
+        if positive_id(&data, "/id")? != deployment {
+            return Err(Error::new(
+                "identity_mismatch",
+                "deployment identity changed",
+            ));
+        }
+        Ok(GithubRecord {
+            repository_id: repository.id,
+            id: deployment,
+            observed_at: Utc::now(),
+            data,
+        })
     }
 }

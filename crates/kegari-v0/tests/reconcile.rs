@@ -1,0 +1,1922 @@
+//! Reconciliation through production provider parsers; all HTTP is injected.
+use chrono::{Duration, Utc};
+use kegari_v0::{
+    authority::CommentClass,
+    config::Config,
+    control::{ControlSnapshot, Intent, IntentRecord},
+    digest::canonical_digest,
+    error::Result,
+    evidence::{AttestationKey, Publication},
+    providers::*,
+    reconcile::*,
+    workflow::Workflow,
+};
+use reqwest::header::HeaderMap;
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    time::Duration as StdDuration,
+};
+use uuid::Uuid;
+fn id(n: u128) -> Uuid {
+    Uuid::from_u128(n)
+}
+fn config() -> Config {
+    let profile =
+        json!({"tool":"codex","model":"fixture-model","reasoning":"high","speed":"standard"});
+    let proof = json!({"workflow_ref":"fixture/repo/.github/workflows/caller.yml@refs/heads/trusted","workflow_sha":"1111111111111111111111111111111111111111","job_workflow_ref":"fixture/trusted/.github/workflows/proof.yml@1111111111111111111111111111111111111111","job_workflow_sha":"1111111111111111111111111111111111111111","event_name":"workflow_dispatch"});
+    let exact = json!({"workflow_id":3,"workflow_revision":"1111111111111111111111111111111111111111","source_input":"source_sha","operation_input":"operation_id","observed_source_output":"source_sha","proof":proof});
+    serde_json::from_value(json!({"schema_version":1,"runtime":{"id":id(1),"host_id":"fixture","max_agents":4},"connections":{
+        "linear":{"kind":"linear","account_id":id(5),"endpoint":"https://linear.invalid/graphql","credential_ref":"keychain:linear"},
+        "github":{"kind":"github","account_id":"7","endpoint":"https://github.invalid/","credential_ref":"keychain:github"},
+        "codex":{"kind":"codex","account_id":"codex-fixture","auth_home":"/private/tmp/fixture-auth","max_agents":2}
+    },"workspaces":{"example":{"id":id(2),"linear_workspace_id":id(3),"linear_connection":"linear","github_connection":"github","codex_connection":"codex","workflow":"/private/tmp/WORKFLOW.md",
+        "linear":{"teams":"all","projects":"all","users":"all","authorization_label_id":id(4),"states":{id(10).to_string():{"prepared":id(11),"running":id(12),"blocked":id(13),"child_done":id(14),"parent_accepted":id(15),"cancelled":id(16)}}},
+        "github":{"organizations":[],"repositories":["42"],"pr_authors":["7"]},"actors":{"authorizers":[id(5)],"correctors":[id(5)],"acceptors":[id(5)]},"profiles":{"coordination":profile,"independent_review":profile},
+        "routing_labels":{"tool":{id(20).to_string():"codex"},"model":{id(21).to_string():"fixture-model"},"reasoning":{id(22).to_string():"high"},"speed":{id(23).to_string():"standard"}},"max_agents":2,"release":{"mode":"manual","spacing_seconds":0},
+        "repositories":{"42":{"source":"/private/tmp/source","local_checks":["local"],"integrated_checks":["e2e"],"ci":[{"workflow_id":1,"required_checks":["suite"],"proof":proof}],"production_ci":[{"workflow_id":2,"required_checks":["suite"],"proof":proof}],"no_change_validation":exact,"deployment":"none"}}
+    }},"control":{"local_users":{"501":{"id":"operator","linear_user_id":id(5),"roles":["inspect","configure","lifecycle","correct","accept","release","recover"]}}}})).unwrap()
+}
+fn issue(n: u128, parent: Option<u128>) -> Value {
+    let metadata = if parent.is_none() {
+        json!({"schema_version":1,"kind":"parent","required_children":[id(101)],"e2e_child":id(101),"visual":false,"production_targets":[]})
+    } else {
+        json!({"schema_version":1,"kind":"child","responsibility":"testing","write_repository":"42","write_paths":["tests/"],"read_repositories":[],"test_resources":[]})
+    };
+    json!({"id":id(n),"identifier":format!("TEST-{n}"),"title":format!("Fixture {n}"),"description":format!("Outcome: validate exact behavior. Acceptance criteria: all specified checks pass.\n```kegari\n{metadata}\n```"),"priority":2,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","url":format!("https://linear.invalid/issue/{n}"),"team":{"id":id(10)},"project":null,"creator":{"id":id(5)},"assignee":null,"parent":parent.map(|n| json!({"id":id(n)})),"state":{"id":id(11),"name":"Prepared","type":"unstarted"},"labelIds":if parent.is_none(){vec![id(4)]}else{vec![id(20),id(21),id(22),id(23)]}})
+}
+fn connection(nodes: Vec<Value>) -> Value {
+    json!({"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}})
+}
+struct Fixture {
+    issues: BTreeMap<Uuid, Value>,
+    comments: BTreeMap<Uuid, Vec<Value>>,
+    relations: Vec<Value>,
+    history: BTreeMap<Uuid, Vec<Value>>,
+    selected: bool,
+    fail_comments: bool,
+    changing: bool,
+    discovery_count: u32,
+    requests: Vec<(String, Value)>,
+    prs: Vec<Value>,
+    repository_available: bool,
+    comment_response_lost: bool,
+    duplicate_publication: bool,
+}
+impl Fixture {
+    fn new() -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self {
+            issues: BTreeMap::from([
+                (id(100), issue(100, None)),
+                (id(101), issue(101, Some(100))),
+            ]),
+            comments: BTreeMap::new(),
+            relations: Vec::new(),
+            history: BTreeMap::from([(
+                id(100),
+                vec![
+                    json!({"id":id(900),"actor":{"id":id(5)},"actorId":id(5),"actors":[{"id":id(5)}],"botActor":null,"addedLabelIds":[id(4)],"removedLabelIds":[],"createdAt":"2026-01-03T00:00:00Z","updatedAt":"2026-01-03T00:00:00Z"}),
+                ],
+            )]),
+            selected: true,
+            fail_comments: false,
+            changing: false,
+            discovery_count: 0,
+            requests: Vec::new(),
+            prs: Vec::new(),
+            repository_available: true,
+            comment_response_lost: false,
+            duplicate_publication: false,
+        }))
+    }
+}
+struct Wire(Arc<Mutex<Fixture>>);
+impl HttpTransport for Wire {
+    fn send(
+        &self,
+        request: HttpRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
+        Box::pin(async move {
+            let mut f = self.0.lock().unwrap();
+            let body: Value = if request.body.is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_slice(&request.body).unwrap()
+            };
+            f.requests.push((request.url.to_string(), body.clone()));
+            let value = if request.url.host_str() == Some("github.invalid") {
+                match request.url.path() {
+                    "/user" => json!({"id":7,"login":"fixture","type":"User"}),
+                    "/repos/fixture/repo" => {
+                        json!({"id":42,"owner":{"id":7,"login":"fixture","type":"User"},"name":"repo","default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":true,"push":true}})
+                    }
+                    "/user/repos" => {
+                        if f.repository_available {
+                            json!([{"id":42,"owner":{"id":7,"login":"fixture","type":"User"},"name":"repo","default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":true,"push":true}}])
+                        } else {
+                            json!([])
+                        }
+                    }
+                    "/repos/fixture/repo/pulls" => json!(f.prs),
+                    path => panic!("unexpected GitHub path {path}"),
+                }
+            } else {
+                let query = body["query"].as_str().unwrap();
+                let input_id = body["variables"]["id"]
+                    .as_str()
+                    .and_then(|s| Uuid::parse_str(s).ok());
+                let data = if query.contains("KegariIdentity") {
+                    json!({"viewer":{"id":id(5),"name":"fixture"},"organization":{"id":id(3)}})
+                } else if query.contains("mutation KegariComment") {
+                    let issue: Uuid =
+                        serde_json::from_value(body["variables"]["input"]["issueId"].clone())
+                            .unwrap();
+                    let published_body = body["variables"]["input"]["body"].clone();
+                    let comment = id(1500 + f.requests.len() as u128);
+                    let value = json!({"id":comment,"body":published_body,"createdAt":Utc::now(),"updatedAt":Utc::now(),"editedAt":null,"url":format!("https://linear.invalid/comment/{comment}"),"user":{"id":id(5)},"onBehalfOf":null,"botActor":null,"issue":{"id":issue}});
+                    f.comments.entry(issue).or_default().push(value.clone());
+                    if f.duplicate_publication {
+                        let mut duplicate = value;
+                        duplicate["id"] = json!(id(9500));
+                        f.comments.entry(issue).or_default().push(duplicate);
+                    }
+                    if f.comment_response_lost {
+                        return Err(kegari_v0::error::Error::new(
+                            "timeout",
+                            "fixture loses the acknowledgement after storing the comment",
+                        ));
+                    }
+                    json!({"commentCreate":{"success":true,"comment":{"id":comment,"issue":{"id":issue},"user":{"id":id(5)}}}})
+                } else if query.contains("KegariIssue(") {
+                    json!({"issue":f.issues[&input_id.unwrap()]})
+                } else if query.contains("KegariParents") {
+                    f.discovery_count += 1;
+                    if f.changing {
+                        f.issues.get_mut(&id(100)).unwrap()["title"] =
+                            json!(format!("Changed during collection {}", f.discovery_count));
+                    }
+                    json!({"issues":connection(if f.selected {f.issues.values().filter(|i|i["parent"].is_null()).cloned().collect()}else{vec![]})})
+                } else if query.contains("KegariRefresh") {
+                    let ids: Vec<Uuid> =
+                        serde_json::from_value(body["variables"]["filter"]["id"]["in"].clone())
+                            .unwrap();
+                    json!({"issues":connection(ids.iter().filter_map(|i|f.issues.get(i).cloned()).collect())})
+                } else if query.contains("KegariChildren") {
+                    json!({"issue":{"children":connection(f.issues.values().filter(|i|i["parent"]["id"]==json!(input_id)).cloned().collect())}})
+                } else if query.contains("KegariLabels") {
+                    let labels: Vec<Value> = f.issues[&input_id.unwrap()]["labelIds"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|i| json!({"id":i,"name":format!("Label {i}")}))
+                        .collect();
+                    json!({"issue":{"labels":connection(labels)}})
+                } else if query.contains("KegariComments") {
+                    if f.fail_comments {
+                        return Ok(HttpResponse {status:200,headers:HeaderMap::new(),body:serde_json::to_vec(&json!({"data":{"issue":{"comments":connection(vec![])}},"errors":[{"message":"partial"}]})).unwrap()});
+                    }
+                    json!({"issue":{"comments":connection(f.comments.get(&input_id.unwrap()).cloned().unwrap_or_default())}})
+                } else if query.contains("KegariHistory") {
+                    json!({"issue":{"history":connection(f.history.get(&input_id.unwrap()).cloned().unwrap_or_default())}})
+                } else if query.contains("KegariDependencies") {
+                    let field = if query.contains("inverseRelations") {
+                        "inverseRelations"
+                    } else {
+                        "relations"
+                    };
+                    let direction = if field == "relations" {
+                        "issue"
+                    } else {
+                        "relatedIssue"
+                    };
+                    json!({"issue":{field:connection(f.relations.iter().filter(|r|r[direction]["id"]==json!(input_id)).cloned().collect())}})
+                } else {
+                    panic!("unexpected Linear query {query}")
+                };
+                json!({"data":data})
+            };
+            Ok(HttpResponse {
+                status: 200,
+                headers: HeaderMap::new(),
+                body: serde_json::to_vec(&value).unwrap(),
+            })
+        })
+    }
+}
+async fn refresh(
+    config: &Config,
+    fixture: &Arc<Mutex<Fixture>>,
+    refs: &ReconcileRefs,
+) -> RuntimeProjection {
+    let mut clients = BTreeMap::new();
+    let mut workflows = BTreeMap::new();
+    for workspace in config.workspaces.values() {
+        let wire: Arc<dyn HttpTransport> = Arc::new(Wire(fixture.clone()));
+        let linear = LinearClient::with_transport(
+            HttpPolicy::new(
+                "https://linear.invalid/graphql",
+                id(5).to_string(),
+                StdDuration::from_secs(2),
+            )
+            .unwrap(),
+            id(3),
+            workspace.linear.clone(),
+            Credential::new("fixture".into()).unwrap(),
+            Some(wire.clone()),
+        )
+        .unwrap();
+        let github = GithubClient::with_transport(
+            HttpPolicy::new(
+                "https://github.invalid/",
+                "7".into(),
+                StdDuration::from_secs(2),
+            )
+            .unwrap(),
+            workspace.github.clone(),
+            Credential::new("fixture".into()).unwrap(),
+            Some(wire),
+        )
+        .unwrap();
+        clients.insert(workspace.id, WorkspaceClients { linear, github });
+        workflows.insert(
+            workspace.id,
+            Workflow::parse("Use prepared context", "/private/tmp/WORKFLOW.md").unwrap(),
+        );
+    }
+    Reconciler::default()
+        .refresh(config, &clients, &workflows, refs)
+        .await
+        .unwrap()
+}
+fn publish(projection: &RuntimeProjection, refs: &mut ReconcileRefs) {
+    projection.retain_references(refs);
+    let parent = projection.parent(id(2), id(100)).unwrap();
+    let key = AttestationKey::new("fixture".into(), vec![7; 32]).unwrap();
+    let signed = key
+        .sign(
+            "parent_authorization",
+            parent.authorization_candidate.as_ref().unwrap(),
+        )
+        .unwrap();
+    let publication = Publication {
+        provider: "linear".into(),
+        record_id: id(950).to_string(),
+        writer_account_id: id(5).to_string(),
+        payload_digest: canonical_digest(1, &signed).unwrap(),
+        observed_at: Utc::now(),
+        url: "https://linear.invalid/comment/950".into(),
+    };
+    refs.get_mut(&id(2))
+        .unwrap()
+        .get_mut(&id(100))
+        .unwrap()
+        .authorization = Some(
+        VerifiedAuthorization::verify(&key, &signed, &publication, &id(5).to_string()).unwrap(),
+    );
+}
+fn control(intent: Intent) -> ControlSnapshot {
+    ControlSnapshot {
+        intent: IntentRecord {
+            runtime_id: id(1),
+            desired: intent,
+            generation: 1,
+            last_command_id: id(990),
+            changed_at: Utc::now(),
+        },
+        admission_open: true,
+        reconciled: true,
+        orchestration_alive: true,
+        service_stopping: false,
+        background_commands: vec![],
+        pending_external_effects: vec![],
+        draining: false,
+        active_operations: vec![],
+        fenced_operations: vec![],
+        persistence_error: None,
+        unresolved_operations: BTreeMap::new(),
+    }
+}
+fn overview(projection: &RuntimeProjection, intent: Intent) -> Overview {
+    projection
+        .overview(OverviewInputs {
+            workspace: None,
+            delivery: &BTreeMap::new(),
+            outcomes: &DependencyOutcomes::default(),
+            activities: &[],
+            history: &[],
+            control: &control(intent),
+            now: Utc::now(),
+            max_age: Duration::seconds(60),
+        })
+        .unwrap()
+}
+
+#[tokio::test]
+async fn complete_wire_reads_require_published_authorization_and_exact_gate() {
+    let fixture = Fixture::new();
+    let cfg = config();
+    let mut refs = ReconcileRefs::new();
+    let first = refresh(&cfg, &fixture, &refs).await;
+    assert!(first.workspaces[&id(2)].complete);
+    assert_eq!(
+        first.parent(id(2), id(100)).unwrap().required_children,
+        BTreeSet::from([id(101)])
+    );
+    assert_eq!(
+        first
+            .parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(60)
+            )
+            .unwrap_err()
+            .code,
+        "authorization_unpublished"
+    );
+    publish(&first, &mut refs);
+    let current = refresh(&cfg, &fixture, &refs).await;
+    let parent = current.parent(id(2), id(100)).unwrap();
+    let gate = parent
+        .fresh_gate(
+            Some(id(101)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(60),
+        )
+        .unwrap();
+    gate.compare_current(&gate, Utc::now(), Duration::seconds(60))
+        .unwrap();
+    assert!(
+        gate.compare_current(
+            &gate,
+            Utc::now() + Duration::minutes(6),
+            Duration::seconds(60)
+        )
+        .is_err()
+    );
+    assert!(gate.work().child == Some(id(101)));
+    assert!(
+        overview(&current, Intent::Running)
+            .ready_for_review
+            .is_empty()
+    );
+    assert_eq!(overview(&current, Intent::Running).running.len(), 1);
+    assert!(fixture.lock().unwrap().requests.iter().all(|(_, v)| {
+        v.get("query")
+            .is_none_or(|q| !q.as_str().unwrap().contains("mutation"))
+    }));
+}
+
+#[tokio::test]
+async fn declared_deleted_and_previously_authorized_children_never_vanish() {
+    let fixture = Fixture::new();
+    let cfg = config();
+    let mut refs = ReconcileRefs::new();
+    publish(&refresh(&cfg, &fixture, &refs).await, &mut refs);
+    fixture.lock().unwrap().issues.remove(&id(101));
+    let missing = refresh(&cfg, &fixture, &refs).await;
+    let parent = missing.parent(id(2), id(100)).unwrap();
+    assert_eq!(parent.required_children.len(), 1);
+    assert!(parent.children[&id(101)].issue.is_none());
+    let view = overview(&missing, Intent::Running);
+    assert_eq!(view.blocked[0].required_children, 1);
+    assert_eq!(view.blocked[0].complete_children, 0);
+    assert!(view.blocked[0].children[0].missing);
+    assert!(
+        parent
+            .fresh_gate(
+                None,
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(60)
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn comments_are_repolled_without_issue_timestamp_change_and_classification_is_gated() {
+    let fixture = Fixture::new();
+    let cfg = config();
+    let mut refs = ReconcileRefs::new();
+    publish(&refresh(&cfg, &fixture, &refs).await, &mut refs);
+    let before = fixture.lock().unwrap().issues[&id(100)]["updatedAt"].clone();
+    fixture.lock().unwrap().comments.insert(id(100),vec![json!({"id":id(960),"body":"Please change the expected behavior","user":{"id":id(5)},"onBehalfOf":null,"botActor":null,"createdAt":"2026-01-04T00:00:00Z","updatedAt":"2026-01-04T00:00:00Z","editedAt":null,"issue":{"id":id(100)},"url":"https://linear.invalid/comment/960"})]);
+    let pending = refresh(&cfg, &fixture, &refs).await;
+    assert_eq!(
+        fixture.lock().unwrap().issues[&id(100)]["updatedAt"],
+        before
+    );
+    let p = pending.parent(id(2), id(100)).unwrap();
+    assert_eq!(p.corrections.pending_ids(), vec![id(960)]);
+    assert!(
+        p.fresh_gate(
+            None,
+            GatePurpose::Coordination,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(60)
+        )
+        .is_ok()
+    );
+    assert!(
+        p.fresh_gate(
+            None,
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(60)
+        )
+        .is_err()
+    );
+    pending.retain_references(&mut refs);
+    let digest = &p.observations[&id(100)].comments[0].body_digest;
+    refs.get_mut(&id(2))
+        .unwrap()
+        .get_mut(&id(100))
+        .unwrap()
+        .corrections
+        .classify(id(960), digest, CommentClass::Informational)
+        .unwrap();
+    let restored = refresh(&cfg, &fixture, &refs).await;
+    assert!(restored.parent(id(2), id(100)).unwrap().blockers.is_empty());
+}
+
+#[tokio::test]
+async fn partial_and_unstable_reads_fail_atomically_and_keep_owned_refs() {
+    let fixture = Fixture::new();
+    let cfg = config();
+    let mut refs = ReconcileRefs::new();
+    publish(&refresh(&cfg, &fixture, &refs).await, &mut refs);
+    fixture.lock().unwrap().fail_comments = true;
+    let failed = refresh(&cfg, &fixture, &refs).await;
+    assert!(!failed.workspaces[&id(2)].complete);
+    assert_eq!(
+        failed
+            .parent(id(2), id(100))
+            .unwrap()
+            .required_children
+            .len(),
+        1
+    );
+    fixture.lock().unwrap().fail_comments = false;
+    fixture.lock().unwrap().changing = true;
+    let changed = refresh(&cfg, &fixture, &refs).await;
+    assert!(!changed.workspaces[&id(2)].complete);
+    assert_eq!(
+        changed.workspaces[&id(2)].error.as_ref().unwrap().code,
+        "unstable_observation"
+    );
+}
+
+#[tokio::test]
+async fn exclusion_can_drain_but_revocation_and_removed_repository_cannot() {
+    let fixture = Fixture::new();
+    let cfg = config();
+    let mut refs = ReconcileRefs::new();
+    publish(&refresh(&cfg, &fixture, &refs).await, &mut refs);
+    fixture.lock().unwrap().selected = false;
+    let excluded = refresh(&cfg, &fixture, &refs).await;
+    let p = excluded.parent(id(2), id(100)).unwrap();
+    assert!(
+        p.fresh_gate(
+            Some(id(101)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(60)
+        )
+        .is_err()
+    );
+    assert!(
+        p.fresh_gate(
+            Some(id(101)),
+            GatePurpose::DrainExisting,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(60)
+        )
+        .is_ok()
+    );
+    fixture.lock().unwrap().repository_available = false;
+    let removed = refresh(&cfg, &fixture, &refs).await;
+    assert!(
+        removed
+            .parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::DrainExisting,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(60)
+            )
+            .is_err()
+    );
+    fixture.lock().unwrap().issues.get_mut(&id(100)).unwrap()["labelIds"] = json!([]);
+    let revoked = refresh(&cfg, &fixture, &refs).await;
+    assert!(
+        revoked
+            .parent(id(2), id(100))
+            .unwrap()
+            .blockers
+            .iter()
+            .any(|b| b.code == "unauthorized")
+    );
+}
+
+#[tokio::test]
+async fn admitted_gate_can_drain_filter_only_config_change_but_not_actor_policy_change() {
+    let fixture = Fixture::new();
+    let mut cfg = config();
+    let mut refs = ReconcileRefs::new();
+    publish(&refresh(&cfg, &fixture, &refs).await, &mut refs);
+    let before = refresh(&cfg, &fixture, &refs).await;
+    let original = before
+        .parent(id(2), id(100))
+        .unwrap()
+        .fresh_gate(
+            Some(id(101)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(60),
+        )
+        .unwrap();
+    cfg.workspaces.get_mut("example").unwrap().linear.users =
+        kegari_v0::config::Selector::Ids(vec![id(999).to_string()]);
+    fixture.lock().unwrap().selected = false;
+    let excluded = refresh(&cfg, &fixture, &refs).await;
+    let draining = excluded
+        .parent(id(2), id(100))
+        .unwrap()
+        .fresh_gate(
+            Some(id(101)),
+            GatePurpose::DrainExisting,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(60),
+        )
+        .unwrap();
+    assert_ne!(original.config_revision(), draining.config_revision());
+    original
+        .compare_current(&draining, Utc::now(), Duration::seconds(60))
+        .unwrap();
+    cfg.workspaces
+        .get_mut("example")
+        .unwrap()
+        .actors
+        .authorizers = BTreeSet::from([id(999)]);
+    let revoked = refresh(&cfg, &fixture, &refs).await;
+    assert!(
+        revoked
+            .parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::DrainExisting,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(60)
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn overlapping_workspaces_conflict_and_parent_reference_ambiguity_is_explicit() {
+    let fixture = Fixture::new();
+    let mut cfg = config();
+    let mut other = cfg.workspaces["example"].clone();
+    other.id = id(200);
+    cfg.workspaces.insert("second".into(), other);
+    let projected = refresh(&cfg, &fixture, &ReconcileRefs::new()).await;
+    assert!(projected.workspaces.values().all(|w| {
+        w.parents[&id(100)]
+            .blockers
+            .iter()
+            .any(|b| b.code == "ownership_conflict")
+    }));
+    assert_eq!(
+        projected.resolve_parent("TEST-100").unwrap_err().code,
+        "ambiguous_reference"
+    );
+    assert_eq!(
+        projected.resolve_parent("example/TEST-100").unwrap().0,
+        id(2)
+    );
+    assert_eq!(
+        projected
+            .resolve_parent(&format!("{}/{}", id(200), id(100)))
+            .unwrap()
+            .0,
+        id(200)
+    );
+}
+
+#[tokio::test]
+async fn missing_prerequisites_and_cycles_block_even_when_tracker_is_done() {
+    let fixture = Fixture::new();
+    fixture.lock().unwrap().relations.push(
+        json!({"id":id(970),"type":"blocks","issue":{"id":id(102)},"relatedIssue":{"id":id(101)}}),
+    );
+    let projected = refresh(&config(), &fixture, &ReconcileRefs::new()).await;
+    assert!(
+        projected
+            .parent(id(2), id(100))
+            .unwrap()
+            .blockers
+            .iter()
+            .any(|b| b.code == "missing_dependency")
+    );
+    let mut other = issue(102, Some(100));
+    other["state"] = json!({"id":id(14),"name":"Done","type":"completed"});
+    fixture.lock().unwrap().issues.insert(id(102), other);
+    fixture.lock().unwrap().relations.push(
+        json!({"id":id(971),"type":"blocks","issue":{"id":id(101)},"relatedIssue":{"id":id(102)}}),
+    );
+    let cycle = refresh(&config(), &fixture, &ReconcileRefs::new()).await;
+    assert!(
+        cycle
+            .parent(id(2), id(100))
+            .unwrap()
+            .blockers
+            .iter()
+            .any(|b| b.code == "dependency_cycle")
+    );
+    assert!(
+        !cycle
+            .parent(id(2), id(100))
+            .unwrap()
+            .dependency_blockers(Some(id(101)), &DependencyOutcomes::default())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn long_dependency_chains_use_bounded_stack_and_find_cycles() {
+    let mut graph: BTreeMap<_, _> = (1..20_000)
+        .map(|n| (id(n), BTreeSet::from([id(n + 1)])))
+        .collect();
+    assert!(dependency_cycle(&graph).is_none());
+    graph.insert(id(20_000), BTreeSet::from([id(1)]));
+    assert_eq!(dependency_cycle(&graph).unwrap().len(), 20_001);
+}
+
+#[tokio::test]
+async fn independent_review_gate_is_separate_exact_and_disabled_by_default() {
+    let fixture = Fixture::new();
+    fixture.lock().unwrap().prs.push(json!({"id":1001,"number":1,"user":{"id":7},"base":{"sha":"2222222222222222222222222222222222222222","ref":"main","repo":{"id":42}},"head":{"sha":"1111111111111111111111111111111111111111","ref":"feature","repo":{"id":42}},"state":"open","draft":false,"html_url":"https://github.invalid/fixture/repo/pull/1"}));
+    let mut cfg = config();
+    let disabled = refresh(&cfg, &fixture, &ReconcileRefs::new()).await;
+    assert!(
+        disabled
+            .independent_gate(id(2), 42, 1, Utc::now(), Duration::seconds(60))
+            .is_err()
+    );
+    cfg.workspaces
+        .get_mut("example")
+        .unwrap()
+        .independent_review
+        .enabled = true;
+    let selected = refresh(&cfg, &fixture, &ReconcileRefs::new()).await;
+    let gate = selected
+        .independent_gate(id(2), 42, 1, Utc::now(), Duration::seconds(60))
+        .unwrap();
+    gate.compare_current(&gate, Utc::now(), Duration::seconds(60))
+        .unwrap();
+    cfg.workspaces
+        .get_mut("example")
+        .unwrap()
+        .profiles
+        .independent_review
+        .as_mut()
+        .unwrap()
+        .model = "different-fixture-model".into();
+    let changed_profile = refresh(&cfg, &fixture, &ReconcileRefs::new()).await;
+    let changed_gate = changed_profile
+        .independent_gate(id(2), 42, 1, Utc::now(), Duration::seconds(60))
+        .unwrap();
+    assert_eq!(
+        gate.review_identity(),
+        changed_gate.review_identity(),
+        "a profile edit must not create a new PR work identity or reset attempts"
+    );
+    assert!(
+        gate.compare_current(&changed_gate, Utc::now(), Duration::seconds(60))
+            .is_err(),
+        "dispatch still binds the selected exact profile"
+    );
+    fixture.lock().unwrap().prs[0]["head"]["sha"] =
+        json!("3333333333333333333333333333333333333333");
+    let changed = refresh(&cfg, &fixture, &ReconcileRefs::new()).await;
+    assert!(
+        gate.compare_current(
+            &changed
+                .independent_gate(id(2), 42, 1, Utc::now(), Duration::seconds(60))
+                .unwrap(),
+            Utc::now(),
+            Duration::seconds(60)
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn overview_always_has_all_sections_and_preserves_every_required_child() {
+    let fixture = Fixture::new();
+    let projected = refresh(&config(), &fixture, &ReconcileRefs::new()).await;
+    let view = overview(&projected, Intent::Paused);
+    let encoded = serde_json::to_value(&view).unwrap();
+    for section in [
+        "ready_for_release",
+        "ready_for_review",
+        "blocked",
+        "running",
+    ] {
+        assert!(encoded[section].is_array());
+    }
+    assert_eq!(view.blocked[0].children.len(), 1);
+    assert!(!view.blocked[0].accepted);
+    assert_eq!(
+        view.blocked[0].parent_reference,
+        format!("{}/{}", id(2), id(100))
+    );
+    assert!(view.next_action.reason.contains("unknown"));
+}
+
+#[tokio::test]
+async fn old_label_cannot_authorize_newly_created_or_materially_edited_children() {
+    let fixture = Fixture::new();
+    fixture.lock().unwrap().issues.get_mut(&id(101)).unwrap()["createdAt"] =
+        json!("2026-01-04T00:00:00Z");
+    let projected = refresh(&config(), &fixture, &ReconcileRefs::new()).await;
+    assert!(
+        projected
+            .parent(id(2), id(100))
+            .unwrap()
+            .blockers
+            .iter()
+            .any(|b| b.code == "renewed_authorization_required")
+    );
+    fixture.lock().unwrap().issues.get_mut(&id(101)).unwrap()["createdAt"] =
+        json!("2026-01-01T00:00:00Z");
+    fixture.lock().unwrap().history.insert(id(101),vec![json!({"id":id(980),"actor":{"id":id(5)},"actorId":id(5),"actors":[{"id":id(5)}],"updatedDescription":true,"createdAt":"2026-01-04T00:00:00Z","updatedAt":"2026-01-04T00:00:00Z"})]);
+    let edited = refresh(&config(), &fixture, &ReconcileRefs::new()).await;
+    assert!(
+        edited
+            .parent(id(2), id(100))
+            .unwrap()
+            .blockers
+            .iter()
+            .any(|b| b.code == "renewed_authorization_required")
+    );
+}
+
+#[tokio::test]
+async fn signed_in_scope_definition_correction_needs_no_new_label_cycle_and_cannot_expand_scope() {
+    let fixture = Fixture::new();
+    let cfg = config();
+    let mut refs = ReconcileRefs::new();
+    publish(&refresh(&cfg, &fixture, &refs).await, &mut refs);
+    fixture.lock().unwrap().comments.insert(id(100),vec![json!({"id":id(960),"body":"Correction: adjust the expected behavior within existing test scope","user":{"id":id(5)},"onBehalfOf":null,"botActor":null,"createdAt":"2026-01-04T00:00:00Z","updatedAt":"2026-01-04T00:00:00Z","editedAt":null,"issue":{"id":id(100)},"url":"https://linear.invalid/comment/960"})]);
+    {
+        let mut f = fixture.lock().unwrap();
+        let child = f.issues.get_mut(&id(101)).unwrap();
+        child["description"] = json!(format!(
+            "Revised expected behavior. {}",
+            child["description"].as_str().unwrap()
+        ));
+        child["updatedAt"] = json!("2026-01-04T00:00:00Z");
+    }
+    let observed = refresh(&cfg, &fixture, &refs).await;
+    observed.retain_references(&mut refs);
+    let source = observed.parent(id(2), id(100)).unwrap().observations[&id(100)].comments[0]
+        .body_digest
+        .clone();
+    refs.get_mut(&id(2))
+        .unwrap()
+        .get_mut(&id(100))
+        .unwrap()
+        .corrections
+        .classify(id(960), &source, CommentClass::Corrective)
+        .unwrap();
+    let pending = refresh(&cfg, &fixture, &refs).await;
+    let parent = pending.parent(id(2), id(100)).unwrap();
+    assert!(
+        parent
+            .blockers
+            .iter()
+            .any(|b| b.code == "renewed_authorization_required")
+    );
+    let prior = &refs[&id(2)][&id(100)];
+    let auth = prior.authorization.as_ref().unwrap();
+    let record = DefinitionCorrection {
+        schema_version: 1,
+        parent: parent.key.clone(),
+        authorization_digest: auth.digest().into(),
+        before: auth.snapshot().scope.clone(),
+        after: parent
+            .authorization_candidate
+            .as_ref()
+            .unwrap()
+            .scope
+            .clone(),
+        correction_generation: parent.corrections.generation().unwrap(),
+        correction_watermark: parent.corrections.watermark,
+        source_comments: BTreeMap::from([(id(960), source)]),
+    };
+    let key = AttestationKey::new("fixture".into(), vec![7; 32]).unwrap();
+    let signed = key.sign("in_scope_definition_correction", &record).unwrap();
+    let mut publication = Publication {
+        provider: "linear".into(),
+        record_id: id(951).to_string(),
+        writer_account_id: id(5).to_string(),
+        payload_digest: canonical_digest(1, &signed).unwrap(),
+        observed_at: Utc::now(),
+        url: "https://linear.invalid/comment/951".into(),
+    };
+    refs.get_mut(&id(2))
+        .unwrap()
+        .get_mut(&id(100))
+        .unwrap()
+        .definition_correction = Some(
+        VerifiedDefinitionCorrection::verify(&key, &signed, &publication, &id(5).to_string())
+            .unwrap(),
+    );
+    let corrected = refresh(&cfg, &fixture, &refs).await;
+    assert!(
+        !corrected
+            .parent(id(2), id(100))
+            .unwrap()
+            .blockers
+            .iter()
+            .any(|b| b.code == "renewed_authorization_required")
+    );
+    publish(&corrected, &mut refs);
+    let ready = refresh(&cfg, &fixture, &refs).await;
+    assert!(
+        ready
+            .parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(60)
+            )
+            .is_ok()
+    );
+    let mut widened = record;
+    widened
+        .after
+        .child_scopes
+        .insert(id(101), canonical_digest(1, &"expanded paths").unwrap());
+    let forged = key
+        .sign("in_scope_definition_correction", &widened)
+        .unwrap();
+    publication.payload_digest = canonical_digest(1, &forged).unwrap();
+    assert_eq!(
+        VerifiedDefinitionCorrection::verify(&key, &forged, &publication, &id(5).to_string())
+            .unwrap_err()
+            .code,
+        "scope_violation"
+    );
+}
+
+#[tokio::test]
+async fn identity_only_recovery_keeps_required_counts_without_granting_authority() {
+    let fixture = Fixture::new();
+    let cfg = config();
+    let mut refs = ReconcileRefs::new();
+    refresh(&cfg, &fixture, &refs)
+        .await
+        .retain_references(&mut refs);
+    assert!(refs[&id(2)][&id(100)].authorization.is_none());
+    assert_eq!(
+        refs[&id(2)][&id(100)].required_child_ids,
+        BTreeSet::from([id(101)])
+    );
+    fixture.lock().unwrap().fail_comments = true;
+    let projection = refresh(&cfg, &fixture, &refs).await;
+    let parent = projection.parent(id(2), id(100)).unwrap();
+    assert_eq!(parent.required_children, BTreeSet::from([id(101)]));
+    assert!(parent.children.contains_key(&id(101)));
+    assert!(
+        parent
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(60)
+            )
+            .is_err()
+    );
+    assert!(!projection.workspaces[&id(2)].complete);
+}
+
+struct CacheConfiguration(Config);
+impl kegari_v0::app::ConfigurationControl for CacheConfiguration {
+    fn authority_fences(&self) -> Result<kegari_v0::configuration::AuthorityFences> {
+        Ok(Default::default())
+    }
+    fn snapshot(&self) -> Result<Config> {
+        Ok(self.0.clone())
+    }
+    fn execute(
+        &self,
+        _: kegari_v0::control::Actor,
+        _: kegari_v0::api::CommandRequest,
+        _: Option<kegari_v0::secrets::Secret>,
+        _: kegari_v0::control::Receipt,
+    ) -> kegari_v0::app::HostFuture<'_, kegari_v0::control::Receipt> {
+        Box::pin(async { panic!("observation must not mutate configuration") })
+    }
+    fn check(&self, _: Option<Uuid>) -> kegari_v0::app::HostFuture<'_, Value> {
+        Box::pin(async { panic!("observation must not launch configuration checks") })
+    }
+}
+struct CacheSecrets;
+impl kegari_v0::secrets::SecretStore for CacheSecrets {
+    fn read(&self, _: &str) -> Result<kegari_v0::secrets::Secret> {
+        kegari_v0::secrets::Secret::new(b"fixture".to_vec())
+    }
+    fn save(&self, _: &str, _: &kegari_v0::secrets::Secret) -> Result<()> {
+        panic!("read-only observation must not save credentials")
+    }
+}
+struct CacheInputs(Arc<Mutex<Fixture>>);
+impl kegari_v0::configuration::ConfigurationInputs for CacheInputs {
+    fn environment(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn transport(&self, _: &str) -> Option<Arc<dyn HttpTransport>> {
+        Some(Arc::new(Wire(self.0.clone())))
+    }
+    fn codex<'a>(
+        &'a self,
+        _: &'a kegari_v0::config::Connection,
+        _: &'a std::path::Path,
+    ) -> Pin<Box<dyn Future<Output = Result<kegari_v0::codex::CodexConnectionMetadata>> + Send + 'a>>
+    {
+        Box::pin(async { panic!("provider observation must not start Codex") })
+    }
+}
+#[tokio::test]
+async fn cached_authority_is_reconstructed_after_restart_and_removed_publication_revokes_it() {
+    use kegari_v0::{observations::ObservationCache, storage::PrivateDir};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().canonicalize().unwrap();
+    let workflow = path.join("WORKFLOW.md");
+    std::fs::write(&workflow,"---\nchecks:\n  local:\n    local:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/local.json'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/e2e.json'\n---\nUse prepared context\n").unwrap();
+    let mut cfg = config();
+    cfg.workspaces.get_mut("example").unwrap().workflow = workflow.to_str().unwrap().into();
+    let config = Arc::new(CacheConfiguration(cfg));
+    let wire = Fixture::new();
+    let inputs = Arc::new(CacheInputs(wire.clone()));
+    let key = Arc::new(AttestationKey::new("fixture".into(), vec![7; 32]).unwrap());
+    let control = Arc::new(
+        kegari_v0::control::ControlHost::setup(
+            PrivateDir::create(&path.join("control")).unwrap(),
+            id(1),
+            Uuid::new_v4(),
+        )
+        .unwrap(),
+    );
+    let refs = path.join("references");
+    let cache = ObservationCache::with_inputs(
+        config.clone(),
+        Arc::new(CacheSecrets),
+        key.clone(),
+        PrivateDir::create(&refs).unwrap(),
+        inputs.clone(),
+        control.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(cache.admission_snapshot().is_err());
+    let first = cache.refresh().await.unwrap();
+    let parent = first.parent(id(2), id(100)).unwrap();
+    assert!(!parent.authorization_published);
+    let signed = key
+        .sign(
+            "parent_authorization",
+            parent.authorization_candidate.as_ref().unwrap(),
+        )
+        .unwrap();
+    let body =
+        kegari_v0::evidence::encode_signed_publication("parent_authorization", &signed).unwrap();
+    wire.lock().unwrap().comments.insert(id(100),vec![json!({"id":id(950),"body":body,"createdAt":"2026-01-04T00:00:00Z","updatedAt":"2026-01-04T00:00:00Z","editedAt":null,"url":"https://linear.invalid/comment/950","user":{"id":id(5)},"onBehalfOf":null,"botActor":null,"issue":{"id":id(100)}})]);
+    assert!(
+        cache
+            .refresh()
+            .await
+            .unwrap()
+            .parent(id(2), id(100))
+            .unwrap()
+            .authorization_published
+    );
+    let before = cache
+        .snapshot()
+        .unwrap()
+        .parent(id(2), id(100))
+        .unwrap()
+        .fresh_gate(
+            Some(id(101)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    let linear = LinearClient::with_transport(
+        HttpPolicy::new(
+            "https://linear.invalid/graphql",
+            id(5).to_string(),
+            StdDuration::from_secs(2),
+        )
+        .unwrap(),
+        id(3),
+        config.0.workspaces["example"].linear.clone(),
+        Credential::new("fixture".into()).unwrap(),
+        Some(Arc::new(Wire(wire.clone()))),
+    )
+    .unwrap();
+    let ordinary = ProviderBroker {
+        linear: Some(linear),
+        github: None,
+    }
+    .mutate(
+        control.clone(),
+        kegari_v0::control::MutationRequest {
+            request_id: Uuid::new_v4(),
+            runtime_id: id(1),
+            actor: kegari_v0::control::Actor {
+                identity: "fixture-host".into(),
+                roles: ["recover".into()].into(),
+                principal: None,
+            },
+            kind: "host_progress".into(),
+            canonical_targets: vec!["fixture".into()],
+            expected: BTreeMap::new(),
+            payload: json!({}),
+        },
+        None,
+        Some("recover".into()),
+        ProviderMutation::LinearComment {
+            issue: id(101),
+            body: "Correction processing status: host feedback is not a new human instruction"
+                .into(),
+        },
+        || Ok(()),
+    )
+    .await
+    .unwrap();
+    assert!(ordinary.remote_ids.contains_key("comment_id"));
+    let after = cache
+        .refresh()
+        .await
+        .unwrap()
+        .parent(id(2), id(100))
+        .unwrap()
+        .fresh_gate(
+            Some(id(101)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    assert_ne!(
+        before.sources_digest(),
+        after.sources_digest(),
+        "full observation provenance retains the host publication"
+    );
+    before
+        .compare_current(&after, Utc::now(), Duration::seconds(30))
+        .unwrap();
+    drop(cache);
+    wire.lock().unwrap().fail_comments = true;
+    let recovered = ObservationCache::with_inputs(
+        config,
+        Arc::new(CacheSecrets),
+        key,
+        PrivateDir::open(&refs).unwrap(),
+        inputs,
+        control,
+    )
+    .await
+    .unwrap();
+    let unavailable = recovered.refresh().await.unwrap();
+    assert_eq!(
+        unavailable
+            .parent(id(2), id(100))
+            .unwrap()
+            .required_children,
+        BTreeSet::from([id(101)])
+    );
+    assert!(!unavailable.workspaces[&id(2)].complete);
+    wire.lock().unwrap().fail_comments = false;
+    assert!(
+        recovered
+            .refresh()
+            .await
+            .unwrap()
+            .parent(id(2), id(100))
+            .unwrap()
+            .authorization_published
+    );
+    let unchanged = recovered.refresh().await.unwrap();
+    let current_gate = unchanged
+        .parent(id(2), id(100))
+        .unwrap()
+        .fresh_gate(
+            Some(id(101)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    after
+        .compare_current(&current_gate, Utc::now(), Duration::seconds(30))
+        .unwrap();
+    wire.lock().unwrap().comments.get_mut(&id(101)).unwrap()[0]["body"] =
+        json!("Correction: change the prepared behavior after this host comment was published");
+    let edited = recovered.refresh().await.unwrap();
+    assert!(
+        edited
+            .parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(30)
+            )
+            .is_err(),
+        "edited host feedback must reenter correction classification"
+    );
+    wire.lock().unwrap().comments.clear();
+    let revoked = recovered.refresh().await.unwrap();
+    assert!(
+        !revoked
+            .parent(id(2), id(100))
+            .unwrap()
+            .authorization_published
+    );
+    assert!(
+        revoked
+            .parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(60)
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn authorization_preparation_requires_current_human_scope_and_is_not_a_worker_gate() {
+    let wire = Fixture::new();
+    let cfg = config();
+    let observed = refresh(&cfg, &wire, &ReconcileRefs::new()).await;
+    let parent = observed.parent(id(2), id(100)).unwrap();
+    let prepared = parent
+        .authorization_gate(Utc::now(), Duration::seconds(30))
+        .unwrap();
+    assert_eq!(
+        prepared.snapshot().required_children,
+        BTreeSet::from([id(101)])
+    );
+    assert!(
+        parent
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(30)
+            )
+            .is_err()
+    );
+    wire.lock().unwrap().issues.get_mut(&id(100)).unwrap()["labelIds"] = json!([]);
+    let revoked = refresh(&cfg, &wire, &ReconcileRefs::new()).await;
+    assert!(
+        revoked
+            .parent(id(2), id(100))
+            .unwrap()
+            .authorization_gate(Utc::now(), Duration::seconds(30))
+            .is_err()
+    );
+    assert!(
+        parent
+            .authorization_gate(Utc::now() + Duration::minutes(1), Duration::seconds(30))
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn authorization_publication_reconciles_real_wire_records_without_retransmitting_unknowns() {
+    use kegari_v0::{
+        control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
+        observations::ObservationCache,
+        preparation::AuthorizationPublisher,
+        storage::PrivateDir,
+    };
+    for scenario in ["acknowledged", "lost_ack", "duplicates", "revoked"] {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().canonicalize().unwrap();
+        let workflow = path.join("WORKFLOW.md");
+        std::fs::write(&workflow,"---\nchecks:\n  local:\n    local:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/local.json'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/e2e.json'\n---\nUse prepared context\n").unwrap();
+        let mut cfg = config();
+        cfg.workspaces.get_mut("example").unwrap().workflow = workflow.to_str().unwrap().into();
+        let config = Arc::new(CacheConfiguration(cfg));
+        let wire = Fixture::new();
+        let inputs = Arc::new(CacheInputs(wire.clone()));
+        let key = Arc::new(AttestationKey::new("fixture".into(), vec![7; 32]).unwrap());
+        let secrets = Arc::new(CacheSecrets);
+        let control = Arc::new(
+            ControlHost::setup(
+                PrivateDir::create(&path.join("control")).unwrap(),
+                id(1),
+                Uuid::new_v4(),
+            )
+            .unwrap(),
+        );
+        let observations = Arc::new(
+            ObservationCache::with_inputs(
+                config.clone(),
+                secrets.clone(),
+                key.clone(),
+                PrivateDir::create(&path.join("references")).unwrap(),
+                inputs.clone(),
+                control.clone(),
+            )
+            .await
+            .unwrap(),
+        );
+        let parent = observations
+            .refresh()
+            .await
+            .unwrap()
+            .parent(id(2), id(100))
+            .unwrap()
+            .clone();
+        let gate = parent
+            .authorization_gate(Utc::now(), Duration::seconds(30))
+            .unwrap();
+        let command = MutationRequest {
+            request_id: Uuid::new_v4(),
+            runtime_id: id(1),
+            actor: Actor {
+                identity: "fixture-operator".into(),
+                roles: ["lifecycle".into()].into(),
+                principal: None,
+            },
+            kind: "lifecycle".into(),
+            canonical_targets: vec![id(1).to_string()],
+            expected: BTreeMap::new(),
+            payload: json!({}),
+        };
+        control.lifecycle(command, Lifecycle::Start, 0).unwrap();
+        let lease = Lease {
+            runtime_id: id(1),
+            owner_generation: 1,
+            owner_id: Uuid::new_v4(),
+        };
+        control.attach_reconciled(lease.clone()).unwrap();
+        let publisher = Arc::new(AuthorizationPublisher::with_inputs(
+            config,
+            control.clone(),
+            observations.clone(),
+            secrets,
+            key,
+            inputs,
+        ));
+        {
+            let mut f = wire.lock().unwrap();
+            f.comment_response_lost = scenario == "lost_ack";
+            f.duplicate_publication = scenario == "duplicates";
+            if scenario == "revoked" {
+                f.issues.get_mut(&id(100)).unwrap()["labelIds"] = json!([]);
+            }
+        }
+        if scenario == "revoked" {
+            observations.refresh().await.unwrap();
+        }
+        let first = publisher.publish(&lease, gate.clone()).await;
+        match scenario {
+            "acknowledged" => {
+                first.unwrap();
+                assert!(
+                    observations
+                        .snapshot()
+                        .unwrap()
+                        .parent(id(2), id(100))
+                        .unwrap()
+                        .authorization_published
+                );
+                publisher.publish(&lease, gate).await.unwrap();
+            }
+            "lost_ack" => {
+                assert_eq!(first.unwrap_err().code, "operation_uncertain");
+                assert!(!control.snapshot().unwrap().unresolved_operations.is_empty());
+                publisher.publish(&lease, gate).await.unwrap();
+                assert!(control.snapshot().unwrap().unresolved_operations.is_empty());
+            }
+            "duplicates" => {
+                assert_eq!(first.unwrap_err().code, "ownership_conflict");
+                assert_eq!(
+                    publisher.publish(&lease, gate).await.unwrap_err().code,
+                    "ownership_conflict"
+                );
+            }
+            "revoked" => {
+                assert!(first.is_err());
+            }
+            _ => unreachable!(),
+        }
+        assert!(control.snapshot().unwrap().active_operations.is_empty());
+        let count = wire
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|(_, value)| {
+                value["query"]
+                    .as_str()
+                    .is_some_and(|q| q.contains("mutation KegariComment"))
+            })
+            .count();
+        assert_eq!(
+            count,
+            usize::from(scenario != "revoked"),
+            "{scenario}: no duplicate provider write"
+        );
+    }
+}
+
+struct MutableConfiguration {
+    config: Mutex<Config>,
+    fences: Mutex<kegari_v0::configuration::AuthorityFences>,
+}
+impl kegari_v0::app::ConfigurationControl for MutableConfiguration {
+    fn snapshot(&self) -> Result<Config> {
+        Ok(self.config.lock().unwrap().clone())
+    }
+    fn authority_fences(&self) -> Result<kegari_v0::configuration::AuthorityFences> {
+        Ok(self.fences.lock().unwrap().clone())
+    }
+    fn execute(
+        &self,
+        _: kegari_v0::control::Actor,
+        _: kegari_v0::api::CommandRequest,
+        _: Option<kegari_v0::secrets::Secret>,
+        _: kegari_v0::control::Receipt,
+    ) -> kegari_v0::app::HostFuture<'_, kegari_v0::control::Receipt> {
+        Box::pin(async { panic!("read-only fixture") })
+    }
+    fn check(&self, _: Option<Uuid>) -> kegari_v0::app::HostFuture<'_, Value> {
+        Box::pin(async { panic!("read-only fixture") })
+    }
+}
+struct ActiveFixture {
+    _directory: tempfile::TempDir,
+    workflow: std::path::PathBuf,
+    config: Arc<MutableConfiguration>,
+    wire: Arc<Mutex<Fixture>>,
+    cache: kegari_v0::observations::ObservationCache,
+    gate: kegari_v0::reconcile::FreshGate,
+    handle: Option<kegari_v0::observations::ActiveSnapshot>,
+    control: Arc<kegari_v0::control::ControlHost>,
+}
+impl ActiveFixture {
+    async fn new() -> Self {
+        use kegari_v0::{observations::ObservationCache, storage::PrivateDir};
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let workflow = root.join("WORKFLOW.md");
+        std::fs::write(&workflow,"---\nchecks:\n  local:\n    local:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/local.json'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/e2e.json'\n---\nOriginal admitted instructions\n").unwrap();
+        let mut cfg = config();
+        cfg.workspaces.get_mut("example").unwrap().workflow = workflow.to_str().unwrap().into();
+        let configuration = Arc::new(MutableConfiguration {
+            config: Mutex::new(cfg),
+            fences: Mutex::new(Default::default()),
+        });
+        let wire = Fixture::new();
+        let key = Arc::new(AttestationKey::new("fixture".into(), vec![7; 32]).unwrap());
+        let control = Arc::new(
+            kegari_v0::control::ControlHost::setup(
+                PrivateDir::create(&root.join("control")).unwrap(),
+                id(1),
+                Uuid::new_v4(),
+            )
+            .unwrap(),
+        );
+        let cache = ObservationCache::with_inputs(
+            configuration.clone(),
+            Arc::new(CacheSecrets),
+            key.clone(),
+            PrivateDir::create(&root.join("references")).unwrap(),
+            Arc::new(CacheInputs(wire.clone())),
+            control.clone(),
+        )
+        .await
+        .unwrap();
+        let first = cache.refresh().await.unwrap();
+        let signed = key
+            .sign(
+                "parent_authorization",
+                first
+                    .parent(id(2), id(100))
+                    .unwrap()
+                    .authorization_candidate
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap();
+        let body = kegari_v0::evidence::encode_signed_publication("parent_authorization", &signed)
+            .unwrap();
+        wire.lock().unwrap().comments.insert(id(100),vec![json!({"id":id(950),"body":body,"createdAt":"2026-01-04T00:00:00Z","updatedAt":"2026-01-04T00:00:00Z","editedAt":null,"url":"https://linear.invalid/comment/950","user":{"id":id(5)},"onBehalfOf":null,"botActor":null,"issue":{"id":id(100)}})]);
+        let observed = cache.refresh().await.unwrap();
+        let gate = observed
+            .parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(30),
+            )
+            .unwrap();
+        let handle = Some(
+            cache
+                .capture_active(id(2), gate.config_revision(), gate.workflow_digest())
+                .unwrap(),
+        );
+        Self {
+            _directory: directory,
+            workflow,
+            config: configuration,
+            wire,
+            cache,
+            gate,
+            handle,
+            control,
+        }
+    }
+    fn active(&self) -> Result<kegari_v0::reconcile::FreshGate> {
+        self.cache
+            .active_gate(&self.gate, &DependencyOutcomes::default())
+    }
+}
+#[tokio::test]
+async fn active_snapshot_survives_profile_capacity_and_invalid_workflow_reload_only_while_authority_holds()
+ {
+    let mut f = ActiveFixture::new().await;
+    {
+        let mut config = f.config.config.lock().unwrap();
+        config.runtime.max_agents = 1;
+        let ws = config.workspaces.get_mut("example").unwrap();
+        ws.profiles.coordination.model = "next-model".into();
+        ws.routing_labels.model.insert(id(21), "next-model".into());
+    }
+    std::fs::write(
+        &f.workflow,
+        "---\nunknown_override: true\n---\nInvalid proposed instructions\n",
+    )
+    .unwrap();
+    let next = f.cache.refresh().await.unwrap();
+    assert!(!next.workspaces[&id(2)].complete);
+    let active = f.active().unwrap();
+    assert_eq!(active.profile().model, "fixture-model");
+    assert_eq!(active.config_revision(), f.gate.config_revision());
+    assert_eq!(active.workflow_digest(), f.gate.workflow_digest());
+    assert!(
+        f.cache
+            .capture_active(id(2), &next.config_revision, f.gate.workflow_digest())
+            .is_err()
+    );
+    f.config.fences.lock().unwrap().workspaces.insert(id(2));
+    assert_eq!(f.active().unwrap_err().code, "permission_fenced");
+    f.config.fences.lock().unwrap().workspaces.clear();
+    f.handle.take();
+    assert_eq!(f.active().unwrap_err().code, "ownership_conflict");
+}
+#[tokio::test]
+async fn active_snapshot_keeps_new_workflow_separate_and_rechecks_current_authorizer() {
+    let f = ActiveFixture::new().await;
+    let original = std::fs::read_to_string(&f.workflow).unwrap();
+    std::fs::write(
+        &f.workflow,
+        original.replace(
+            "Original admitted instructions",
+            "Next admitted instructions",
+        ),
+    )
+    .unwrap();
+    let next = f.cache.refresh().await.unwrap();
+    assert!(next.workspaces[&id(2)].complete);
+    let next_gate = next
+        .parent(id(2), id(100))
+        .unwrap()
+        .fresh_gate(
+            Some(id(101)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    assert_ne!(next_gate.workflow_digest(), f.gate.workflow_digest());
+    assert_eq!(
+        f.active().unwrap().workflow_digest(),
+        f.gate.workflow_digest()
+    );
+    f.config
+        .config
+        .lock()
+        .unwrap()
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .actors
+        .authorizers = [id(999)].into();
+    f.cache.refresh().await.unwrap();
+    assert!(f.active().is_err());
+}
+#[tokio::test]
+async fn active_snapshot_drains_filter_exclusion_but_provider_loss_or_correction_blocks() {
+    let f = ActiveFixture::new().await;
+    f.config
+        .config
+        .lock()
+        .unwrap()
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .linear
+        .teams = kegari_v0::config::Selector::Ids(vec![id(999).to_string()]);
+    f.wire.lock().unwrap().selected = false;
+    let next = f.cache.refresh().await.unwrap();
+    assert!(
+        next.parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(30)
+            )
+            .is_err()
+    );
+    f.active().unwrap();
+    f.wire.lock().unwrap().fail_comments = true;
+    f.cache.refresh().await.unwrap();
+    assert!(f.active().is_err());
+    f.wire.lock().unwrap().fail_comments = false;
+    f.wire.lock().unwrap().comments.entry(id(101)).or_default().push(json!({"id":id(960),"body":"Change the test outcome before continuing.","createdAt":"2026-01-05T00:00:00Z","updatedAt":"2026-01-05T00:00:00Z","editedAt":null,"url":"https://linear.invalid/comment/960","user":{"id":id(5)},"onBehalfOf":null,"botActor":null,"issue":{"id":id(101)}}));
+    f.cache.refresh().await.unwrap();
+    assert!(f.active().is_err());
+}
+#[tokio::test]
+async fn active_snapshot_rejects_repository_path_and_current_provider_access_loss() {
+    let f = ActiveFixture::new().await;
+    f.config
+        .config
+        .lock()
+        .unwrap()
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .repositories
+        .get_mut("42")
+        .unwrap()
+        .source = "/private/tmp/other-source".into();
+    f.cache.refresh().await.unwrap();
+    assert_eq!(f.active().unwrap_err().code, "scope_violation");
+    f.config
+        .config
+        .lock()
+        .unwrap()
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .repositories
+        .get_mut("42")
+        .unwrap()
+        .source = "/private/tmp/source".into();
+    f.wire.lock().unwrap().repository_available = false;
+    f.cache.refresh().await.unwrap();
+    assert!(f.active().is_err());
+}
+
+#[tokio::test]
+async fn active_independent_review_drains_intake_filter_changes_but_never_a_changed_head() {
+    let f = ActiveFixture::new().await;
+    f.config
+        .config
+        .lock()
+        .unwrap()
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .independent_review
+        .enabled = true;
+    f.wire.lock().unwrap().prs.push(json!({"id":1001,"number":1,"user":{"id":7},"base":{"sha":"2222222222222222222222222222222222222222","ref":"main","repo":{"id":42}},"head":{"sha":"1111111111111111111111111111111111111111","ref":"feature","repo":{"id":42}},"state":"open","draft":false,"html_url":"https://github.invalid/fixture/repo/pull/1"}));
+    let observed = f.cache.refresh().await.unwrap();
+    let gate = observed
+        .independent_gate(id(2), 42, 1, Utc::now(), Duration::seconds(30))
+        .unwrap();
+    let _retained = f
+        .cache
+        .capture_active(id(2), gate.config_revision(), gate.workflow_digest())
+        .unwrap();
+    {
+        let mut config = f.config.config.lock().unwrap();
+        let ws = config.workspaces.get_mut("example").unwrap();
+        ws.independent_review.enabled = false;
+        ws.github.pr_authors = vec!["999".into()];
+        ws.profiles.independent_review.as_mut().unwrap().model = "next-review-model".into();
+    }
+    std::fs::write(
+        &f.workflow,
+        "---\nunknown: true\n---\nRejected new workflow\n",
+    )
+    .unwrap();
+    let next = f.cache.refresh().await.unwrap();
+    assert!(
+        next.independent_gate(id(2), 42, 1, Utc::now(), Duration::seconds(30))
+            .is_err()
+    );
+    let active = f.cache.active_independent_gate(&gate).unwrap();
+    assert_eq!(active.profile().model, "fixture-model");
+    assert_eq!(active.digest().unwrap(), gate.digest().unwrap());
+    f.wire.lock().unwrap().prs[0]["head"]["sha"] =
+        json!("3333333333333333333333333333333333333333");
+    f.cache.refresh().await.unwrap();
+    assert!(f.cache.active_independent_gate(&gate).is_err());
+}
+
+struct PreservedProbe;
+impl kegari_v0::platform::ProcessProbe for PreservedProbe {
+    fn current(&self) -> Result<kegari_v0::platform::ProcessIdentity> {
+        Err(kegari_v0::error::Error::new(
+            "fixture",
+            "no live process in this preservation fixture",
+        ))
+    }
+    fn observe(
+        &self,
+        _: &kegari_v0::platform::ProcessIdentity,
+    ) -> Result<kegari_v0::platform::ProcessObservation> {
+        Ok(kegari_v0::platform::ProcessObservation::Gone)
+    }
+    fn matching_executable(
+        &self,
+        _: &std::path::Path,
+    ) -> Result<Vec<kegari_v0::platform::ProcessIdentity>> {
+        Ok(vec![])
+    }
+}
+#[tokio::test]
+async fn coordination_preservation_binds_actual_opaque_authority_and_directory_identity() {
+    use kegari_v0::{
+        control::{Actor, Lease, Lifecycle, MutationRequest},
+        housekeeping::{Housekeeping, ReadOnlyIdentity, ReadOnlyPreparation},
+        isolation::{ExecutionRole, IsolationPlan},
+        storage::PrivateDir,
+        worker::WorkerAuthority,
+    };
+    let f = ActiveFixture::new().await;
+    let projection = f.cache.snapshot().unwrap();
+    let parent = projection.parent(id(2), id(100)).unwrap();
+    let gate = parent
+        .fresh_gate(
+            None,
+            GatePurpose::Coordination,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    let authority = WorkerAuthority::Authorized(gate);
+    f.control
+        .lifecycle(
+            MutationRequest {
+                request_id: Uuid::new_v4(),
+                runtime_id: id(1),
+                actor: Actor {
+                    identity: "fixture".into(),
+                    principal: None,
+                    roles: ["lifecycle".into()].into(),
+                },
+                kind: "start".into(),
+                canonical_targets: vec![id(1).to_string()],
+                expected: BTreeMap::new(),
+                payload: json!({}),
+            },
+            Lifecycle::Start,
+            0,
+        )
+        .unwrap();
+    let lease = Lease {
+        runtime_id: id(1),
+        owner_id: Uuid::new_v4(),
+        owner_generation: 1,
+    };
+    f.control.attach_reconciled(lease.clone()).unwrap();
+    let permit = f
+        .control
+        .admit(
+            &lease,
+            Uuid::new_v4(),
+            authority.work_key().unwrap(),
+            kegari_v0::digest::canonical_digest(1, &"fixture-preparation").unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    let home = f._directory.path().canonicalize().unwrap();
+    let root = PrivateDir::create(&home.join("reasoning")).unwrap();
+    let repository = root.child("repository").unwrap();
+    let scratch = root.child("scratch").unwrap();
+    let isolation = IsolationPlan {
+        schema_version: 1,
+        role: ExecutionRole::Coordination,
+        execution_root: root.path().into(),
+        repository: repository.path().into(),
+        cwd: repository.path().into(),
+        scratch: scratch.path().into(),
+        read_roots: vec![],
+        resource_writes: vec![],
+        source_writes: vec![],
+        forbidden_roots: vec![home.join("control")],
+        executables: vec![],
+    }
+    .validate()
+    .unwrap();
+    let git = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|p| p.join("git"))
+        .find(|p| p.is_file())
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    let house = Housekeeping::new(
+        PrivateDir::open(&home.join("control")).unwrap(),
+        f.control.clone(),
+        Arc::new(PreservedProbe),
+        git,
+    )
+    .unwrap();
+    let workflow = Workflow::load(&f.workflow).unwrap();
+    let operation = Uuid::new_v4();
+    let preserved = house
+        .register_readonly_preparation(ReadOnlyPreparation {
+            preparation: &permit,
+            operation,
+            authority: &authority,
+            identity: ReadOnlyIdentity::Coordination {
+                workspace: id(2),
+                parent: parent.key.clone(),
+            },
+            isolation: &isolation,
+            workflow: &workflow,
+        })
+        .unwrap();
+    let status = house.inspect_preserved_preparation(operation).unwrap();
+    assert_eq!(status["registration_digest"], preserved.digest());
+    assert_eq!(status["cleanup_eligible"], false);
+    std::fs::write(
+        scratch.path().join("retained-output"),
+        "keep these run bytes",
+    )
+    .unwrap();
+    house.inspect_preserved_preparation(operation).unwrap();
+    let changed = ReadOnlyIdentity::Coordination {
+        workspace: id(2),
+        parent: kegari_v0::authority::IssueKey::new(
+            "https://linear.invalid/graphql",
+            id(3),
+            id(999),
+        )
+        .unwrap(),
+    };
+    assert!(
+        house
+            .register_readonly_preparation(ReadOnlyPreparation {
+                preparation: &permit,
+                operation,
+                authority: &authority,
+                identity: changed,
+                isolation: &isolation,
+                workflow: &workflow
+            })
+            .is_err()
+    );
+    std::fs::rename(repository.path(), root.path().join("retained-original")).unwrap();
+    root.child("repository").unwrap();
+    assert_eq!(
+        house
+            .inspect_preserved_preparation(operation)
+            .unwrap_err()
+            .code,
+        "ownership_conflict"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("retained-output")).unwrap(),
+        "keep these run bytes"
+    );
+}
+
+#[tokio::test]
+async fn shared_corrective_publication_fence_blocks_cached_and_active_work_before_provider_dispatch()
+ {
+    let f = ActiveFixture::new().await;
+    let parent = f
+        .cache
+        .snapshot()
+        .unwrap()
+        .parent(id(2), id(100))
+        .unwrap()
+        .key
+        .clone();
+    let operation = Uuid::new_v4();
+    f.control
+        .serialize_observation(|_| {
+            f.cache.fence_explicit_correction(
+                id(2),
+                &parent,
+                operation,
+                &kegari_v0::digest::bytes_digest(b"exact future correction"),
+                &id(5).to_string(),
+            )
+        })
+        .unwrap();
+    let blocked = f.cache.admission_snapshot().unwrap();
+    assert!(
+        blocked
+            .parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                Some(id(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(30)
+            )
+            .is_err()
+    );
+    assert!(f.active().is_err());
+    f.cache.refresh().await.unwrap();
+    assert!(
+        f.active().is_err(),
+        "a refresh without observed correction cannot clear an uncertain publication fence"
+    );
+    let rejected = f.control.mutate(
+        kegari_v0::control::MutationRequest {
+            request_id: operation,
+            runtime_id: id(1),
+            actor: kegari_v0::control::Actor {
+                identity: "fixture".into(),
+                principal: None,
+                roles: ["correct".into()].into(),
+            },
+            kind: "fixture_corrective_publication".into(),
+            canonical_targets: vec![parent.identity().unwrap()],
+            expected: BTreeMap::new(),
+            payload: json!({}),
+        },
+        None,
+        Some("correct"),
+        || {
+            Err(kegari_v0::error::Error::new(
+                "stale_result",
+                "fixture rejects before transmission",
+            ))
+        },
+        |_| panic!("rejected effect cannot execute"),
+    );
+    assert!(rejected.is_err());
+    f.cache.refresh().await.unwrap();
+    f.active().unwrap();
+}

@@ -66,6 +66,280 @@ fn private_dir(path: &Path) {
     }
 }
 
+#[tokio::test]
+async fn owned_git_sequence_fences_every_subprocess_and_preserves_fixture_checkout() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    let fixture = Fixture::new(false);
+    let source = fixture.source.clone();
+    let original = git_run(&source, &["rev-parse", "HEAD"]);
+    let current = Arc::new(AtomicBool::new(true));
+    let starts = Arc::new(AtomicUsize::new(0));
+    let gate_current = current.clone();
+    let gate_starts = starts.clone();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+    let running = fixture
+        .git
+        .start_operation(
+            GitLimits::default(),
+            Arc::new(move |launch| {
+                if !gate_current.load(Ordering::SeqCst) {
+                    return Err(Error::new("stale_generation", "fixture durable fence"));
+                }
+                gate_starts.fetch_add(1, Ordering::SeqCst);
+                launch()
+            }),
+            move |git| {
+                let first = git.revision(&source, "HEAD")?;
+                ready_tx.send(first).unwrap();
+                continue_rx.recv().unwrap();
+                git.revision(&source, "HEAD")
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        ready_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap()
+            .commit,
+        original
+    );
+    let completed_starts = starts.load(Ordering::SeqCst);
+    current.store(false, Ordering::SeqCst);
+    continue_tx.send(()).unwrap();
+    assert_eq!(running.wait().await.unwrap_err().code, "stale_generation");
+    assert_eq!(starts.load(Ordering::SeqCst), completed_starts);
+    assert_eq!(git_run(&fixture.source, &["rev-parse", "HEAD"]), original);
+    assert!(git_run(&fixture.source, &["status", "--porcelain"]).is_empty());
+}
+
+#[tokio::test]
+async fn owned_git_output_bound_and_cancellation_prevent_following_commands() {
+    use std::sync::Arc;
+    let fixture = Fixture::new(false);
+    let source = fixture.source.clone();
+    let base = fixture.base.clone();
+    let head = fixture.head.clone();
+    let running = fixture
+        .git
+        .start_operation(
+            GitLimits {
+                output_bytes: 16,
+                ..GitLimits::default()
+            },
+            Arc::new(|launch| launch()),
+            move |git| git.patch(&source, &base, &head),
+        )
+        .unwrap();
+    assert_eq!(running.wait().await.unwrap_err().code, "output_limit");
+
+    let source = fixture.source.clone();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+    let running = fixture
+        .git
+        .start_operation(
+            GitLimits::default(),
+            Arc::new(|launch| launch()),
+            move |git| {
+                ready_tx.send(()).unwrap();
+                continue_rx.recv().unwrap();
+                git.revision(&source, "HEAD")
+            },
+        )
+        .unwrap();
+    ready_rx
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap();
+    running.cancellation().cancel().unwrap();
+    continue_tx.send(()).unwrap();
+    assert_eq!(running.wait().await.unwrap_err().code, "cancelled");
+}
+
+#[tokio::test]
+async fn execution_clone_is_exact_independent_and_reuses_dirty_work_without_reset() {
+    use std::sync::Arc;
+    let fixture = Fixture::new(false);
+    fs::write(
+        fixture.source.join("operator-untracked"),
+        "preserve operator work",
+    )
+    .unwrap();
+    fs::write(fixture.source.join("a.txt"), "operator staged bytes").unwrap();
+    git_run(&fixture.source, &["add", "a.txt"]);
+    fs::write(fixture.source.join("a.txt"), "operator working bytes").unwrap();
+    let index = fs::read(fixture.source.join(".git/index")).unwrap();
+    let path = fixture.runs.canonicalize().unwrap().join("repository");
+    let identity = kegari_v0::execution::DirectoryIdentity {
+        schema_version: 1,
+        runtime_id: Uuid::new_v4(),
+        directory_id: Uuid::new_v4(),
+        repository: fixture.repository.clone(),
+        work: work(fixture.parent, Some(fixture.child)),
+        repository_path: path.clone(),
+        operator_checkout: fixture.source.canonicalize().unwrap(),
+    };
+    let revision = fixture
+        .git
+        .exact_revision(&fixture.source, &fixture.base)
+        .unwrap();
+    let source = fixture.source.clone();
+    let root = fixture.runs.clone();
+    let owned_identity = identity.clone();
+    let owned_revision = revision.clone();
+    let running = fixture
+        .git
+        .start_operation(
+            GitLimits::default(),
+            Arc::new(|launch| launch()),
+            move |git| {
+                git.prepare_execution_clone(&source, &root, &owned_identity, &owned_revision)
+            },
+        )
+        .unwrap();
+    assert_eq!(running.wait().await.unwrap(), path);
+    assert_eq!(fixture.git.revision(&path, "HEAD").unwrap(), revision);
+    assert!(!path.join("operator-untracked").exists());
+    assert!(git_run(&path, &["status", "--porcelain"]).is_empty());
+    fs::write(path.join("a.txt"), "retained staged edit").unwrap();
+    git_run(&path, &["add", "a.txt"]);
+    fs::write(path.join("a.txt"), "retained later edit").unwrap();
+    let retained_index = fs::read(path.join(".git/index")).unwrap();
+    fixture
+        .git
+        .prepare_execution_clone(&fixture.source, &fixture.runs, &identity, &revision)
+        .unwrap();
+    assert_eq!(fs::read(path.join(".git/index")).unwrap(), retained_index);
+    assert_eq!(
+        fs::read_to_string(path.join("a.txt")).unwrap(),
+        "retained later edit"
+    );
+    assert_eq!(fs::read(fixture.source.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        fs::read_to_string(fixture.source.join("a.txt")).unwrap(),
+        "operator working bytes"
+    );
+    let mut wrong = identity.clone();
+    wrong.work.generation.definition = bytes_digest(b"different generation");
+    assert_eq!(
+        fixture
+            .git
+            .prepare_execution_clone(&fixture.source, &fixture.runs, &wrong, &revision)
+            .unwrap_err()
+            .code,
+        "reconciliation_required"
+    );
+    let other = fixture
+        .git
+        .exact_revision(&fixture.source, &fixture.head)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .git
+            .prepare_execution_clone(&fixture.source, &fixture.runs, &identity, &other)
+            .unwrap_err()
+            .code,
+        "reconciliation_required"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let relative = format!("objects/{}/{}", &fixture.base[..2], &fixture.base[2..]);
+        assert_ne!(
+            fs::metadata(path.join(".git").join(&relative))
+                .unwrap()
+                .ino(),
+            fs::metadata(fixture.source.join(".git").join(relative))
+                .unwrap()
+                .ino()
+        );
+    }
+}
+
+#[test]
+fn independent_review_clone_binds_provider_pr_without_fabricated_parent_authority() {
+    let fixture = Fixture::new(false);
+    let head = fixture
+        .git
+        .exact_revision(&fixture.source, &fixture.head)
+        .unwrap();
+    let base = fixture
+        .git
+        .exact_revision(&fixture.source, &fixture.base)
+        .unwrap();
+    let root = fixture.runs.canonicalize().unwrap();
+    let identity = IndependentCloneIdentity {
+        schema_version: 1,
+        runtime_id: Uuid::new_v4(),
+        workspace_id: Uuid::new_v4(),
+        directory_id: Uuid::new_v4(),
+        repository: fixture.repository.clone(),
+        pull_request: 9,
+        review_identity: canonical_digest(
+            1,
+            &serde_json::json!({"repository":101,"pr":9,"head":head.commit,"base":base.commit}),
+        )
+        .unwrap(),
+        head,
+        base,
+        repository_path: root.join("review"),
+        operator_checkout: fixture.source.canonicalize().unwrap(),
+    };
+    assert!(
+        fixture
+            .git
+            .observe_independent_review_clone(&root, &identity)
+            .is_err()
+    );
+    assert!(!identity.repository_path.exists());
+    assert!(
+        !root
+            .join(format!("prepared-clone-{}.json", identity.directory_id))
+            .exists()
+    );
+    let path = fixture
+        .git
+        .prepare_independent_review_clone(&fixture.source, &root, &identity)
+        .unwrap();
+    assert_eq!(fixture.git.revision(&path, "HEAD").unwrap(), identity.head);
+    let index = fs::read(path.join(".git/index")).unwrap();
+    fs::write(
+        path.join("retained-untracked-note"),
+        "preserve review scratch\n",
+    )
+    .unwrap();
+    fixture
+        .git
+        .observe_independent_review_clone(&root, &identity)
+        .unwrap();
+    assert_eq!(fs::read(path.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        fs::read_to_string(path.join("retained-untracked-note")).unwrap(),
+        "preserve review scratch\n"
+    );
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(root.join(format!("prepared-clone-{}.json", identity.directory_id))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["identity"]["kind"], "independent_review");
+    assert!(record["identity"].get("work").is_none());
+    assert!(record["identity"].get("parent").is_none());
+    let mut wrong = identity.clone();
+    wrong.pull_request += 1;
+    assert_eq!(
+        fixture
+            .git
+            .prepare_independent_review_clone(&fixture.source, &root, &wrong)
+            .unwrap_err()
+            .code,
+        "execution_ownership"
+    );
+    assert_eq!(fixture.git.revision(&path, "HEAD").unwrap(), identity.head);
+}
+
 struct Fixture {
     _root: TempDir,
     source: PathBuf,
@@ -1205,6 +1479,7 @@ impl GateFixture {
                 production: candidate.manifest.production.clone(),
                 deployed_revision: None,
                 deployed_artifact: None,
+                target_artifacts: BTreeMap::new(),
                 deployment_free: true,
                 successor_recovery_operation: None,
             });
@@ -1912,6 +2187,7 @@ fn parent_fixture_for_candidates(
                 production: c.production.clone(),
                 deployed_revision: None,
                 deployed_artifact: None,
+                target_artifacts: BTreeMap::new(),
                 deployment_free: true,
                 successor_recovery_operation: None,
             })
@@ -2186,8 +2462,67 @@ fn v0_t21_partial_production_merge_is_accounted_without_replaying_or_manufacturi
     );
     let (manifest, children) =
         parent_fixture_for_candidates(vec![recovered.manifest], vec![child], &key);
-    verify_fixture_parent_with_integrations(&manifest, &children, std::slice::from_ref(&proof))
-        .unwrap();
+    let parent =
+        verify_fixture_parent_with_integrations(&manifest, &children, std::slice::from_ref(&proof))
+            .unwrap();
+    let production = &parent.manifest().candidates[0].production;
+    let production_revision = RevisionBinding {
+        repository: f.repository.clone(),
+        head: production.commit.clone(),
+        base: production.commit.clone(),
+        tested_commit: production.commit.clone(),
+        tested_tree: production.tree.clone(),
+    };
+    let required: Vec<_> = [("unit", 400), ("integration", 401)]
+        .into_iter()
+        .map(|(name, workflow)| CheckRequirement {
+            id: name.into(),
+            kind: CheckKind::ProductionCi,
+            workflow_id: Some(workflow),
+            command: vec![],
+        })
+        .collect();
+    let mut snapshot = checks(&parent.manifest().work, &production_revision);
+    snapshot.runs = required
+        .iter()
+        .map(|requirement| {
+            let mut run = snapshot.runs[1].clone();
+            run.id = requirement.id.clone();
+            run.kind = CheckKind::ProductionCi;
+            run.workflow_id = requirement.workflow_id;
+            run
+        })
+        .collect();
+    let validated = verify_existing_production(
+        &parent,
+        &production_revision,
+        &required,
+        &snapshot,
+        std::slice::from_ref(&proof),
+    )
+    .unwrap();
+    assert!(validated.is_existing_production());
+    assert_eq!(validated.revision(), &production_revision);
+    assert_eq!(
+        verify_existing_production(&parent, &production_revision, &required, &snapshot, &[])
+            .unwrap_err()
+            .code,
+        "production_validation"
+    );
+    let mut missing = snapshot.clone();
+    missing.runs.pop();
+    assert_eq!(
+        verify_existing_production(
+            &parent,
+            &production_revision,
+            &required,
+            &missing,
+            std::slice::from_ref(&proof)
+        )
+        .unwrap_err()
+        .code,
+        "validation_gate"
+    );
     assert_eq!(
         verify_fixture_parent(&manifest, &children)
             .unwrap_err()
@@ -2374,6 +2709,115 @@ fn v0_t21_no_release_required_needs_accepted_complete_production_outcome_and_sat
             .code,
         "release_hold"
     );
+}
+
+#[test]
+fn no_release_preserves_distinct_target_artifacts_and_rejects_unaccounted_inventory() {
+    let f = Fixture::new(false);
+    let key = AttestationKey::new("target-map-fixture-key".into(), vec![32; 32]).unwrap();
+    let unchanged = candidate_with_integrations(&f, &f.production, &[], &[]).unwrap();
+    let (mut manifest, children) =
+        parent_fixture_for_candidates(vec![unchanged.manifest], vec![], &key);
+    manifest.production_targets = BTreeSet::from(["web".into(), "jobs".into()]);
+    let baseline = &mut manifest.baselines[0];
+    baseline.deployment_free = false;
+    baseline.deployed_revision = Some(baseline.production.commit.clone());
+    baseline.target_artifacts = BTreeMap::from([
+        ("web".into(), d("web artifact")),
+        ("jobs".into(), d("jobs artifact")),
+    ]);
+    assert!(baseline.deployed_artifact.is_none());
+    baseline.validate().unwrap();
+    let mut inconsistent = baseline.clone();
+    inconsistent.deployed_artifact = Some(d("web artifact"));
+    assert_eq!(
+        inconsistent.validate().unwrap_err().code,
+        "production_baseline"
+    );
+    let configured: BTreeMap<_, _> = manifest
+        .production_targets
+        .iter()
+        .map(|target| (target.clone(), ("github".into(), f.repository.clone())))
+        .collect();
+    let check = |manifest: &ParentEvidence| {
+        let mut manifest = manifest.clone();
+        manifest.integrated_results[0].candidate_vector_digest =
+            manifest.candidate_vector_digest().unwrap();
+        let parent = verify_parent(
+            &manifest,
+            ParentRequirements {
+                work: &manifest.work,
+                required_children: &manifest.required_children,
+                e2e_child: manifest.e2e_child,
+                criteria: &manifest.fulfilled_criteria,
+                integrated_commands: &BTreeMap::from([(
+                    "integrated".into(),
+                    vec!["./e2e.sh".into()],
+                )]),
+                test_resources: &BTreeSet::new(),
+                production_targets: &manifest.production_targets,
+                visual: false,
+                required_contributions: &manifest.required_contributions,
+                production_integrations: &[],
+            },
+            &children,
+            &publication(&manifest, "linear"),
+            "selected-user",
+        )
+        .unwrap();
+        let acceptance = accept_fixture_parent(&parent, &key);
+        let record = NoReleaseRequired {
+            schema_version: 1,
+            runtime_id: Uuid::new_v4(),
+            operation_id: Uuid::new_v4(),
+            work: manifest.work.clone(),
+            evidence_token: parent.token().into(),
+            acceptance_digest: acceptance.digest().into(),
+            baselines: manifest.baselines.clone(),
+            targets: configured
+                .keys()
+                .map(|target| ProductionTargetBaseline {
+                    provider: "github".into(),
+                    target: target.clone(),
+                    repository: f.repository.clone(),
+                    source: manifest.baselines[0].production.clone(),
+                    artifact_digest: d(if target == "web" {
+                        "web artifact"
+                    } else {
+                        "jobs artifact"
+                    }),
+                    provider_record: format!("fixture-deployment-{target}"),
+                    observed_at: Utc::now(),
+                })
+                .collect(),
+            recorded_at: Utc::now(),
+        };
+        prepare_no_release_required(
+            record,
+            &parent,
+            &acceptance,
+            NoReleaseRequirements {
+                current_work: &manifest.work,
+                pending_correction: false,
+                targets: &configured,
+            },
+            &key,
+        )
+    };
+    check(&manifest).unwrap();
+    let mut extra = manifest.clone();
+    extra.baselines[0]
+        .target_artifacts
+        .insert("unconfigured".into(), d("extra"));
+    assert_eq!(check(&extra).unwrap_err().code, "no_release_gate");
+    let mut missing = manifest.clone();
+    missing.baselines[0].target_artifacts.remove("jobs");
+    assert_eq!(check(&missing).unwrap_err().code, "no_release_gate");
+    let mut swapped = manifest;
+    swapped.baselines[0]
+        .target_artifacts
+        .insert("jobs".into(), d("web artifact"));
+    assert_eq!(check(&swapped).unwrap_err().code, "no_release_gate");
 }
 
 #[test]

@@ -55,6 +55,7 @@ impl AgentRole {
     pub fn permits(self, capability: ToolCapability) -> bool {
         match capability {
             ToolCapability::ContextRead | ToolCapability::OutcomeSubmit => true,
+            ToolCapability::SourceWrite => self.permits_source_writes(),
             ToolCapability::CorrectionProposal => self == Self::Coordination,
             ToolCapability::ReviewFeedback => {
                 matches!(self, Self::Review | Self::IndependentReview)
@@ -82,6 +83,7 @@ impl AgentRole {
 #[serde(rename_all = "snake_case")]
 pub enum ToolCapability {
     ContextRead,
+    SourceWrite,
     OutcomeSubmit,
     CorrectionProposal,
     ReviewFeedback,
@@ -98,6 +100,8 @@ pub struct ExposedTool {
 pub struct PermissionManifest {
     pub read_roots: Vec<PathBuf>,
     pub source_write_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub resource_write_paths: Vec<PathBuf>,
     pub scratch_roots: Vec<PathBuf>,
     pub repository_code_execution: bool,
     /// Version/digest of the concrete enforcement policy, not an assertion that
@@ -314,11 +318,16 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
     for path in &mut permissions.source_write_paths {
         *path = contained_path(path, &permissions.read_roots, false)?;
     }
+    for path in &mut permissions.resource_write_paths {
+        *path = contained_path(path, &permissions.read_roots, true)?;
+    }
     for root in &mut permissions.scratch_roots {
         *root = std::fs::canonicalize(&*root)
             .map_err(|e| Error::io("resolve private scratch root", e))?;
     }
     if (!input.role.permits_source_writes() && !permissions.source_write_paths.is_empty())
+        || (!input.role.permits_repository_execution()
+            && !permissions.resource_write_paths.is_empty())
         || (!input.role.permits_repository_execution() && permissions.repository_code_execution)
         || permissions.enforcement_profile.trim().is_empty()
     {
@@ -414,6 +423,16 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
             return Err(Error::new(
                 "access_denied",
                 "source writes exceed the single assigned repository",
+            ));
+        }
+        if permissions
+            .resource_write_paths
+            .iter()
+            .any(|path| path.starts_with(&root) || root.starts_with(path))
+        {
+            return Err(Error::new(
+                "access_denied",
+                "test-resource writes cannot reopen repository source",
             ));
         }
         let mut directories = BTreeSet::new();

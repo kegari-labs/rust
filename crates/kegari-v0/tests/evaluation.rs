@@ -69,6 +69,7 @@ fn setup(variant: &Variant) -> (TempDir, PreparedFixture, ValidatedIsolation, Pa
             path: fixture.repository.clone(),
             directory: true,
         }],
+        resource_writes: vec![],
         source_writes: writes,
         forbidden_roots: vec![
             fixture.grader_root.clone(),
@@ -519,6 +520,7 @@ fn assembly_uses_real_workflow_assets_scoped_guidance_and_context() {
         project_doc_max_bytes: 32768,
         permissions: PermissionManifest {
             read_roots: vec![fixture.repository.clone()],
+            resource_write_paths: vec![],
             source_write_paths: isolation
                 .plan()
                 .source_writes
