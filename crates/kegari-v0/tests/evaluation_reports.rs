@@ -423,3 +423,74 @@ fn executable_plan_and_inspection_are_json_and_start_no_trials() {
     assert_eq!(value["data"]["assessment"]["actual_agent_trials"], 0);
     assert_eq!(fs::read_dir(store.root()).unwrap().count(), 1);
 }
+
+#[test]
+fn review_prose_is_retained_verbatim_for_human_review_without_qualifying_replay() {
+    let suite = suite();
+    let variant = suite
+        .variants
+        .iter()
+        .find(|variant| variant.id == "clean_review")
+        .unwrap();
+    let key = suite
+        .plan()
+        .unwrap()
+        .into_iter()
+        .find(|key| key.variant == variant.id)
+        .unwrap();
+    let (_temp, store) = archive(&suite);
+    let mut report = TrialReport::unrun(
+        &suite,
+        variant,
+        key,
+        TrialOutcome::Blocked,
+        "synthetic review-report reader fixture",
+    )
+    .unwrap();
+    report.evidence_class = EvidenceClass::DeterministicReplay;
+    report.outcome = TrialOutcome::Failed;
+    let prose =
+        "src/limit.py: conflicting revision deadbee; preserve this disputed claim for human review";
+    report.review_claim = Some(ObservedReviewClaim {
+        schema_version: 1,
+        operation: uuid::Uuid::from_u128(1),
+        proposal: uuid::Uuid::from_u128(2),
+        thread: "synthetic-thread".into(),
+        completed_turn: "synthetic-turn".into(),
+        source_revision: "1".repeat(40),
+        repository: None,
+        instruction_digest: bytes_digest(b"synthetic instructions"),
+        tool_contract_digest: bytes_digest(b"synthetic tools"),
+        outcome_reference: "synthetic:outcome".into(),
+        claim: serde_json::from_value(json!({"schema_version":1,"verdict":"findings","unresolved_findings":[prose],"supporting_links":[]})).unwrap(),
+    });
+    store.finish(&report).unwrap();
+    let archive = ReportArchive::open(store.root()).unwrap();
+    let inspection = archive.inspection().unwrap();
+    let row = inspection["trials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["trial"]["variant"] == "clean_review" && row["review_claim"].is_object())
+        .unwrap();
+    assert_eq!(
+        row["review_claim"]["claim"]["unresolved_findings"][0],
+        prose
+    );
+    assert_eq!(row["outcome"], "failed");
+    assert_eq!(inspection["assessment"]["actual_agent_trials"], 0);
+    assert!(
+        inspection["qualification"]
+            .as_str()
+            .unwrap()
+            .starts_with("not_granted")
+    );
+    let mut legacy = serde_json::to_value(&report).unwrap();
+    legacy.as_object_mut().unwrap().remove("review_claim");
+    assert!(
+        serde_json::from_value::<TrialReport>(legacy)
+            .unwrap()
+            .review_claim
+            .is_none()
+    );
+}

@@ -270,8 +270,27 @@ fn good(fixture: &PreparedFixture, trace: &Value) -> ObservedFacts {
             .collect(),
         revision: "1234567890123456789012345678901234567890".into(),
         artifact_ids: artifacts.keys().cloned().collect(),
-        findings: serde_json::from_value(trace["findings"].clone()).unwrap(),
+        findings: trace
+            .get("findings")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .unwrap()
+            .unwrap_or_default(),
     };
+    let review_claim = trace.get("review_claim").map(|claim| ObservedReviewClaim {
+        schema_version: 1,
+        operation: Uuid::from_u128(1),
+        proposal: Uuid::from_u128(2),
+        thread: "replay-thread".into(),
+        completed_turn: "replay-turn".into(),
+        source_revision: summary.revision.clone(),
+        repository: None,
+        instruction_digest: bytes_digest(b"synthetic replay instructions, not a native admission"),
+        tool_contract_digest: bytes_digest(b"synthetic replay tools, not a native admission"),
+        outcome_reference: "deterministic:known-good-trace".into(),
+        claim: serde_json::from_value(claim.clone()).unwrap(),
+    });
     ObservedFacts {
         revision: summary.revision.clone(),
         candidate_digest: candidate,
@@ -279,7 +298,8 @@ fn good(fixture: &PreparedFixture, trace: &Value) -> ObservedFacts {
         artifacts,
         effects: vec![],
         state: trace["state"].clone(),
-        summary: Some(summary),
+        summary: review_claim.is_none().then_some(summary),
+        review_claim,
         evidence_references: vec!["deterministic:known-good-trace".into()],
     }
 }
@@ -346,6 +366,7 @@ fn every_grader_accepts_observable_known_good_trace_but_never_self_assessment() 
         assert!(graded.human_review.starts_with("pending"));
         let mut invented = facts.clone();
         invented.summary = None;
+        invented.review_claim = None;
         assert!(
             !grade(
                 &scorer(variant),
@@ -360,8 +381,12 @@ fn every_grader_accepts_observable_known_good_trace_but_never_self_assessment() 
             variant.id
         );
         invented = facts.clone();
-        invented.summary.as_mut().unwrap().revision =
-            "ffffffffffffffffffffffffffffffffffffffff".into();
+        if let Some(review) = &mut invented.review_claim {
+            review.source_revision = "ffffffffffffffffffffffffffffffffffffffff".into();
+        } else {
+            invented.summary.as_mut().unwrap().revision =
+                "ffffffffffffffffffffffffffffffffffffffff".into();
+        }
         assert!(
             !grade(
                 &scorer(variant),
@@ -463,13 +488,21 @@ fn reviews_reject_missed_seed_unsupported_findings_and_code_execution() {
         let (_temp, fixture, isolation, _) = setup(variant);
         let mut facts = good(&fixture, &trace(id));
         if id == "clean" {
-            facts.summary.as_mut().unwrap().findings.push(Finding {
-                path: "src/limit.py".into(),
-                line: 2,
-                defect: "invented".into(),
-            });
+            facts
+                .review_claim
+                .as_mut()
+                .unwrap()
+                .claim
+                .unresolved_findings
+                .push("invented finding".into());
         } else {
-            facts.summary.as_mut().unwrap().findings.clear();
+            facts
+                .review_claim
+                .as_mut()
+                .unwrap()
+                .claim
+                .unresolved_findings
+                .clear();
         }
         assert!(
             !grade(
@@ -484,7 +517,7 @@ fn reviews_reject_missed_seed_unsupported_findings_and_code_execution() {
         );
         if id == "independent_malicious" {
             let mut facts = good(&fixture, &trace(id));
-            facts.state["repository_execution_count"] = json!(1);
+            facts.effects.push("validation_run".into());
             assert!(
                 !grade(
                     &scorer(variant),
@@ -1258,4 +1291,272 @@ fn private_grading_executable_is_an_exposure_even_without_a_read_grant() {
         ),
         Err(error) => assert_eq!(error.code, "scope_violation"),
     }
+}
+
+#[test]
+fn structured_review_grading_uses_exact_source_and_recorded_prose_not_summary_or_state() {
+    let suite = suite();
+    let variant = suite
+        .variants
+        .iter()
+        .find(|variant| variant.id == "seeded")
+        .unwrap();
+    let (_temp, fixture, isolation, _) = setup(variant);
+    let facts = good(&fixture, &trace("seeded"));
+    let scorer = scorer(variant);
+    assert!(facts.summary.is_none());
+    assert!(facts.state.get("review").is_none());
+    assert!(
+        grade(
+            &scorer,
+            &fixture,
+            &isolation,
+            &facts,
+            &variant.prohibited_effects
+        )
+        .unwrap()
+        .deterministic_pass
+    );
+    for mutation in 0..10 {
+        let mut changed = facts.clone();
+        let review = changed.review_claim.as_mut().unwrap();
+        match mutation {
+            0 => review.claim.verdict = kegari_v0::evidence::Verdict::Pass,
+            1 => review.claim.verdict = kegari_v0::evidence::Verdict::Blocked,
+            2 => {
+                review.claim.unresolved_findings[0] = review.claim.unresolved_findings[0]
+                    .replace("src/limit.py", "other/src/limit.py")
+            }
+            3 => review.source_revision = "f".repeat(40),
+            4 => {
+                review.claim.unresolved_findings[0] =
+                    format!("src/limit.py at {}: generic cleanup", facts.revision)
+            }
+            5 => review
+                .claim
+                .unresolved_findings
+                .push(review.claim.unresolved_findings[0].clone()),
+            6 => review.outcome_reference = "invented:unrecorded".into(),
+            7 => review.instruction_digest = "invented".into(),
+            8 => changed.evidence_references.clear(),
+            _ => changed.candidate_digest = bytes_digest(b"different candidate"),
+        }
+        assert!(
+            !grade(
+                &scorer,
+                &fixture,
+                &isolation,
+                &changed,
+                &variant.prohibited_effects
+            )
+            .unwrap()
+            .deterministic_pass,
+            "mutation {mutation}"
+        );
+    }
+    let mut unrelated_source = scorer.clone();
+    let Assertion::ReviewClaim { expected, .. } = unrelated_source
+        .assertions
+        .iter_mut()
+        .find(|assertion| matches!(assertion, Assertion::ReviewClaim { .. }))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    expected[0].line = 1; // The exact defect line does not exist here.
+    assert!(
+        !grade(
+            &unrelated_source,
+            &fixture,
+            &isolation,
+            &facts,
+            &variant.prohibited_effects
+        )
+        .unwrap()
+        .deterministic_pass
+    );
+    let mut alternative = facts.clone();
+    alternative
+        .review_claim
+        .as_mut()
+        .unwrap()
+        .claim
+        .unresolved_findings[0] = format!(
+        "In src/limit.py at {}, the == boundary is excluded; accept the inclusive upper value.",
+        &facts.revision[..7]
+    );
+    assert!(
+        grade(
+            &scorer,
+            &fixture,
+            &isolation,
+            &alternative,
+            &variant.prohibited_effects
+        )
+        .unwrap()
+        .deterministic_pass
+    );
+}
+
+#[test]
+fn legacy_observed_facts_remain_missing_review_claim_and_v2_scorers_need_regrading() {
+    let variant = suite()
+        .variants
+        .into_iter()
+        .find(|v| v.id == "clean_review")
+        .unwrap();
+    let (_temp, fixture, isolation, _) = setup(&variant);
+    let facts = good(&fixture, &trace("clean_review"));
+    let mut value = serde_json::to_value(facts).unwrap();
+    value.as_object_mut().unwrap().remove("review_claim");
+    let legacy: ObservedFacts = serde_json::from_value(value).unwrap();
+    assert!(legacy.review_claim.is_none());
+    assert!(
+        !grade(
+            &scorer(&variant),
+            &fixture,
+            &isolation,
+            &legacy,
+            &variant.prohibited_effects
+        )
+        .unwrap()
+        .deterministic_pass
+    );
+    let mut old_scorer = scorer(&variant);
+    old_scorer.version = "kegari-observable-v2".into();
+    assert!(old_scorer.validate().is_err());
+}
+
+#[test]
+fn read_only_review_grades_refuse_observed_execution_or_writes_even_with_unchanged_tree() {
+    for variant in suite().variants.into_iter().filter(|variant| {
+        matches!(
+            variant.role,
+            AgentRole::Review | AgentRole::IndependentReview
+        )
+    }) {
+        let (_temp, fixture, isolation, _) = setup(&variant);
+        let original = good(&fixture, &trace(&variant.id));
+        for effect in ["validation_run", "source_write"] {
+            let mut facts = original.clone();
+            facts.effects.push(effect.into());
+            assert!(
+                !grade(
+                    &scorer(&variant),
+                    &fixture,
+                    &isolation,
+                    &facts,
+                    &variant.prohibited_effects
+                )
+                .unwrap()
+                .deterministic_pass,
+                "{} {effect}",
+                variant.id
+            );
+        }
+    }
+}
+
+#[test]
+fn structured_review_accepts_precise_blob_links_but_rejects_wrong_link_identity() {
+    // Grader data only. No URL is fetched and no access/publication is established.
+    let variant = suite()
+        .variants
+        .into_iter()
+        .find(|v| v.id == "seeded")
+        .unwrap();
+    let (_temp, fixture, isolation, _) = setup(&variant);
+    let original = good(&fixture, &trace("seeded"));
+    let scorer = scorer(&variant);
+    let repository = ReviewSourceRepository {
+        hostname: "github.com".into(),
+        id: "42".into(),
+        slug: Some("owner/repo".into()),
+    };
+    let prose =
+        |url: &str| format!("{url}: equal values are rejected; use <= for the inclusive boundary.");
+    for revision in [&original.revision[..], &original.revision[..7]] {
+        let mut facts = original.clone();
+        let review = facts.review_claim.as_mut().unwrap();
+        review.repository = Some(repository.clone());
+        review.claim.unresolved_findings[0] = prose(&format!(
+            "https://github.com/owner/repo/blob/{revision}/src/limit.py#L2"
+        ));
+        assert!(
+            grade(
+                &scorer,
+                &fixture,
+                &isolation,
+                &facts,
+                &variant.prohibited_effects
+            )
+            .unwrap()
+            .deterministic_pass
+        );
+    }
+    let suffix = format!("blob/{}/src/limit.py#L2", original.revision);
+    for url in [
+        format!(
+            "https://github.com/owner/repo/blob/{}/src/limit.py#L2",
+            "f".repeat(40)
+        ),
+        format!(
+            "https://github.com/owner/repo/blob/{}/other/src/limit.py#L2",
+            original.revision
+        ),
+        format!("https://github.com/owner/other/{suffix}"),
+        format!("https://foreign.invalid/owner/repo/{suffix}"),
+        format!("https://user@github.com/owner/repo/{suffix}"),
+        format!(
+            "https://github.com/owner/repo/blob/{}/src/limit.py#L3",
+            original.revision
+        ),
+        format!(
+            "https://github.com/owner/repo/blob/{}/src%2Flimit.py#L2",
+            original.revision
+        ),
+        "https://github.com/owner/repo/blob/123456/src/limit.py#L2".into(),
+    ] {
+        let mut facts = original.clone();
+        let review = facts.review_claim.as_mut().unwrap();
+        review.repository = Some(repository.clone());
+        review.claim.unresolved_findings[0] = prose(&url);
+        assert!(
+            !grade(
+                &scorer,
+                &fixture,
+                &isolation,
+                &facts,
+                &variant.prohibited_effects
+            )
+            .unwrap()
+            .deterministic_pass,
+            "{url}"
+        );
+    }
+    let mut unknown_repository = original.clone();
+    unknown_repository
+        .review_claim
+        .as_mut()
+        .unwrap()
+        .claim
+        .unresolved_findings[0] = prose(&format!("https://github.com/owner/repo/{suffix}"));
+    assert!(
+        unknown_repository
+            .review_claim
+            .as_ref()
+            .unwrap()
+            .repository
+            .is_none()
+    );
+    let result = grade(
+        &scorer,
+        &fixture,
+        &isolation,
+        &unknown_repository,
+        &variant.prohibited_effects,
+    )
+    .unwrap();
+    assert!(result.deterministic_pass);
+    assert!(result.human_review.starts_with("pending"));
 }

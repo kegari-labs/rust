@@ -2703,3 +2703,76 @@ async fn protected_recovery_candidate_requires_actual_input_and_after_hook_and_f
         assert!(f.executions.active_operations().unwrap().is_empty());
     }
 }
+
+#[tokio::test]
+async fn evaluation_review_claim_requires_actual_current_recorded_completion() {
+    // Actual ScopedWorker/Control/journal with declared synthetic provider state.
+    // This is neither a live model trial nor a native confinement qualification.
+    let mut fixture = Fixture::new(AgentRole::IndependentReview);
+    let claim =
+        json!({"schema_version":1,"verdict":"pass","unresolved_findings":[],"supporting_links":[]});
+    let call = fixture.call("outcome_submit", json!({"claim":claim,"artifact_refs":[]}));
+    let submitted = fixture.worker.call(&call).await.unwrap();
+    assert_eq!(submitted["state"], "pending_host_verification");
+    assert!(fixture.worker.observe().unwrap().review_claim.is_none());
+    fixture.state.notification("turn/completed", &json!({"threadId":"thread","turn":{"id":"turn","status":"completed","items":[],"error":null}})).unwrap();
+    fixture.worker.checkpoint(&fixture.state, None).unwrap();
+    let facts = fixture.worker.observe().unwrap();
+    let review = facts.review_claim.unwrap();
+    assert!(facts.summary.is_none());
+    assert_eq!(review.operation, fixture.permit.operation_id);
+    assert_eq!(
+        review.proposal.to_string(),
+        submitted["proposal_id"].as_str().unwrap()
+    );
+    assert_eq!(
+        review.source_revision,
+        fixture
+            .contract
+            .instructions()
+            .manifest
+            .repository_revision
+            .clone()
+            .unwrap()
+    );
+    let repository = review.repository.as_ref().unwrap();
+    assert_eq!(
+        repository.hostname,
+        fixture.input.repository.as_ref().unwrap().hostname
+    );
+    let target = fixture.input.review.as_ref().unwrap();
+    assert_eq!(
+        repository.slug.as_deref(),
+        Some(format!("{}/{}", target.repository.owner, target.repository.name).as_str())
+    );
+    assert_eq!(serde_json::to_value(&review.claim).unwrap(), claim);
+    assert!(
+        facts
+            .evidence_references
+            .contains(&review.outcome_reference)
+    );
+    assert_eq!(facts.state["delivery"], "pending"); // The claim granted no product success.
+    fixture.worker.checkpoint(&fixture.state, None).unwrap();
+    assert_eq!(fixture.sink.0.lock().unwrap().len(), 1);
+    fixture.state.notification("turn/started", &json!({"threadId":"thread","turn":{"id":"later","status":"inProgress","items":[],"error":null}})).unwrap();
+    fixture.worker.checkpoint(&fixture.state, None).unwrap();
+    assert!(fixture.worker.observe().unwrap().review_claim.is_none());
+}
+
+#[tokio::test]
+async fn evaluation_does_not_fall_back_from_malformed_latest_review_to_earlier_pass() {
+    let mut fixture = Fixture::new(AgentRole::IndependentReview);
+    for claim in [
+        json!({"schema_version":1,"verdict":"pass","unresolved_findings":[],"supporting_links":[]}),
+        json!({"schema_version":1,"verdict":"pass","unresolved_findings":[],"supporting_links":[],"summary":{"all_passed":true}}),
+    ] {
+        let call = fixture.call("outcome_submit", json!({"claim":claim,"artifact_refs":[]}));
+        fixture.worker.call(&call).await.unwrap();
+    }
+    fixture.state.notification("turn/completed", &json!({"threadId":"thread","turn":{"id":"turn","status":"completed","items":[],"error":null}})).unwrap();
+    fixture.worker.checkpoint(&fixture.state, None).unwrap();
+    assert_eq!(
+        fixture.worker.observe().unwrap_err().code,
+        "invalid_outcome"
+    );
+}

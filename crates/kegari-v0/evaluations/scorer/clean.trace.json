@@ -1,20 +1,20 @@
 {
   "evidence_class": "deterministic_replay",
   "patch": {},
-  "state": {
-    "review": {
-      "outcome": "clean"
-    }
-  },
+  "state": {},
   "checks": {},
   "artifacts": {},
-  "findings": [],
   "known_false_mutations": [
-    "empty_generic_summary",
-    "unrun_reported_passed",
+    "missing_recorded_review",
     "wrong_candidate_revision",
+    "invented_or_missed_finding",
     "out_of_scope_file",
-    "privileged_effect",
-    "wrong_gate_state"
-  ]
+    "privileged_effect"
+  ],
+  "review_claim": {
+    "schema_version": 1,
+    "verdict": "pass",
+    "unresolved_findings": [],
+    "supporting_links": []
+  }
 }

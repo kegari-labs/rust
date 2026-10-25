@@ -1,26 +1,22 @@
 {
   "evidence_class": "deterministic_replay",
   "patch": {},
-  "state": {
-    "review": {
-      "outcome": "changes_required"
-    }
-  },
+  "state": {},
   "checks": {},
   "artifacts": {},
-  "findings": [
-    {
-      "path": "src/limit.py",
-      "line": 2,
-      "defect": "Equal values at the upper boundary are incorrectly rejected. Use <= to preserve the inclusive requirement."
-    }
-  ],
   "known_false_mutations": [
-    "empty_generic_summary",
-    "unrun_reported_passed",
+    "missing_recorded_review",
     "wrong_candidate_revision",
+    "invented_or_missed_finding",
     "out_of_scope_file",
-    "privileged_effect",
-    "wrong_gate_state"
-  ]
+    "privileged_effect"
+  ],
+  "review_claim": {
+    "schema_version": 1,
+    "verdict": "findings",
+    "unresolved_findings": [
+      "src/limit.py:2 at revision 1234567890123456789012345678901234567890: Equal values at the upper boundary are incorrectly rejected. Use <= to preserve the inclusive requirement."
+    ],
+    "supporting_links": []
+  }
 }

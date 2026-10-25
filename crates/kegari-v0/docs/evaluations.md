@@ -7,7 +7,7 @@ the concrete fixture/native context and live authority composition is still
 required, OS sandbox and
 provider compatibility remain unqualified, and human review remains pending.
 
-Suite version 2 uses grader `kegari-observable-v2`. It binds the complete trial
+Suite version 3 uses grader `kegari-observable-v3`. It binds the complete trial
 declaration and prepared context, rejects undeclared host-metadata hints and
 counts nested `.git` paths in source/scope grading. Only the repository root's
 Git administration is checked separately. Earlier grader results remain
@@ -100,6 +100,54 @@ expansion, file aliasing and grader access, including executable paths through
 private grading directories. These checks verify configured
 boundaries and resolution; they do not replace the required live OS canary.
 
+## Structured review grading
+
+The five review-role variants grade the shipped schema-1 `ReviewResultClaim`
+(`verdict`, `unresolved_findings`, `supporting_links`) directly. They no longer
+require an invented `AgentSummary` or a synthetic `/review/outcome` state. The
+worker projects only the latest proposal actually recorded for its current
+completed turn, including the admitted source revision, exact instruction/tool
+digests and outcome reference. Pending, old-turn or malformed latest proposals
+do not fall back to an earlier clean result. This observation is serializable
+claim data, not a delivery, check, admission or publication capability.
+
+The scorer independently checks the resulting source delta, actual candidate
+identity and host-observed prohibited effects. For a seeded finding it reads the
+declared file and exact source line, then matches that file in the reviewer prose and each explicit
+concept-alternative group. The host binds the complete admitted revision; the
+prose may use short SHAs or links. A parsed HTTPS GitHub blob link can supply the
+exact path after its revision segment and, when present, a line anchor containing
+the expected defect line. The URL revision must be the full admitted SHA or a
+7–39 hexadecimal-character prefix of it. This is a lexical abbreviation match,
+not a claim that Git/provider lookup established prefix uniqueness. Bound host
+repository hostname and available native owner/name must match; with missing
+repository metadata only github.com links are lexical candidates, still requiring
+human calibration. No URL is fetched, arbitrary suffix paths are rejected, and
+links never establish source access or publication. Conflicting prose revision descriptions remain
+verbatim in the report for human review, rather than being silently normalized. It
+requires a one-to-one match: missing, duplicate, extraneous or generic findings
+fail. Alternative ordinary wording is allowed. These textual rubrics are
+reviewable qualitative criteria, not a semantic proof; representative human
+calibration remains mandatory and every material failure remains visible. The
+clean controls require no invented findings. Independent-review execution checks
+use the worker's observed `validation_run` effect, alongside its source and
+permission restrictions, rather than an absent synthetic execution counter.
+
+An outcome sink reference establishes only that this completed session recorded
+this claim. It does not prove PR feedback publication, supporting-link truth,
+validation success, current delivery readiness or sandbox confinement. Those
+require their independent native provider/receipt/effect evidence; this grading
+migration does not supply the still-missing concrete native trial caller. Other
+legacy fixture state predicates remain explicit native-composition blockers.
+
+Non-review `AgentSummary` rubrics remain unchanged and still need their separate
+production contract migration. Old observation data without a review field stays
+missing and cannot pass a new review rubric. Old grader reports remain readable
+by `Inspect`/`Compare`, but v2 and v3 outcomes are incomparable without regrading.
+The suite/scorer version and every changed scorer digest are explicit; no old
+trial or model result is relabelled. The five revised traces are synthetic grader
+controls, not successful agent trials.
+
 ## Production integration contract
 
 The runtime must explicitly invoke the suite; startup, polling, configuration
@@ -129,7 +177,8 @@ checks and profile edits must not call it. The API is in `src/evaluation.rs`:
    callers cannot supply an unjournaled subprocess. The production `TrialHost`
    trait extends the same `codex::ToolBroker` used by product execution. Its
    `observe` projection must come from verified host receipts, actual gates,
-   checks and artifacts. Worker claims belong only in `AgentSummary`. Its
+   checks and artifacts. Worker claims belong in the explicit untrusted
+   `AgentSummary` or `ObservedReviewClaim` fields, never in product state. Its
    `reconcile_prior` consumes only declared synthetic earlier state. Its `rate_limits` feeds the actual provider snapshot into the runtime
    allowance gate. Its
    `checkpoint` durably records pending adapter requests before dispatch and

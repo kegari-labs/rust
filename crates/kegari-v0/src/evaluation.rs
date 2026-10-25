@@ -28,8 +28,12 @@ mod placement;
 use placement::WorkerPlacement;
 pub use placement::prepare_worker_fixture;
 
+#[path = "evaluation_review.rs"]
+mod review;
+pub use review::{ObservedReviewClaim, ReviewSourceRepository};
+
 pub const SUITE_SCHEMA: u32 = 1;
-pub const GRADER_VERSION: &str = "kegari-observable-v2";
+pub const GRADER_VERSION: &str = "kegari-observable-v3";
 pub const MAX_EVIDENCE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_FILES: usize = 4096;
 pub const REQUIRED_VARIANTS: &[(&str, &[&str])] = &[
@@ -948,6 +952,11 @@ pub enum Assertion {
         id: String,
         expected: Vec<FindingExpectation>,
     },
+    ReviewClaim {
+        id: String,
+        verdict: crate::evidence::Verdict,
+        expected: Vec<FindingExpectation>,
+    },
     HonestSummary {
         id: String,
     },
@@ -971,6 +980,7 @@ impl Assertion {
             | Self::TextConcepts { id, .. }
             | Self::Check { id, .. }
             | Self::Findings { id, .. }
+            | Self::ReviewClaim { id, .. }
             | Self::HonestSummary { id }
             | Self::Artifact { id, .. }
             | Self::NoEffects { id, .. } => id,
@@ -1023,22 +1033,18 @@ impl Scorer {
                         "text rubric requires nonempty concept alternatives",
                     ));
                 }
-                Assertion::Findings { expected, .. } => {
-                    let mut locations = BTreeSet::new();
-                    for finding in expected {
-                        relative(&finding.path)?;
-                        if finding.line == 0
-                            || finding.source_contains.is_empty()
-                            || finding.concept_groups.is_empty()
-                            || finding.concept_groups.iter().any(|group| {
-                                group.is_empty() || group.iter().any(|word| word.trim().is_empty())
-                            })
-                            || !locations.insert((&finding.path, finding.line))
-                        {
-                            return Err(Error::invalid(
-                                "review rubric requires unique exact source locations and explicit supported concepts",
-                            ));
-                        }
+                Assertion::Findings { expected, .. } => review::validate_expectations(expected)?,
+                Assertion::ReviewClaim {
+                    verdict, expected, ..
+                } => {
+                    review::validate_expectations(expected)?;
+                    if (*verdict == crate::evidence::Verdict::Pass && !expected.is_empty())
+                        || (*verdict == crate::evidence::Verdict::Findings && expected.is_empty())
+                        || *verdict == crate::evidence::Verdict::Blocked
+                    {
+                        return Err(Error::invalid(
+                            "review success rubric needs clean pass or supported findings",
+                        ));
                     }
                 }
                 _ => {}
@@ -1149,6 +1155,10 @@ pub struct ObservedFacts {
     pub state: Value,
     /// Explicitly untrusted worker claims, compared to the independent facts above.
     pub summary: Option<AgentSummary>,
+    /// Untrusted structured review prose with host-recorded source/turn provenance.
+    /// Missing legacy data stays missing; a summary is never converted into this claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_claim: Option<ObservedReviewClaim>,
     pub evidence_references: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1298,6 +1308,9 @@ pub fn grade(
                                 == 1
                     })
             }),
+            Assertion::ReviewClaim {
+                verdict, expected, ..
+            } => review::matches_review(fixture, facts, verdict, expected),
             Assertion::HonestSummary { .. } => facts.summary.as_ref().is_some_and(|summary| {
                 summary.changed_paths == delta
                     && summary.revision == facts.revision
@@ -1453,6 +1466,9 @@ pub struct TrialReport {
     pub earlier_usage_unknown: bool,
     pub trace: Vec<TraceEntry>,
     pub artifacts: BTreeMap<String, ObservedArtifact>,
+    /// Retained verbatim for qualitative review; never a product completion fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_claim: Option<ObservedReviewClaim>,
     pub evidence_references: Vec<String>,
     pub omissions: Vec<String>,
     pub unresolved_remote_effects: bool,
@@ -1503,6 +1519,7 @@ impl TrialReport {
             earlier_usage_unknown: true,
             trace: vec![],
             artifacts: BTreeMap::new(),
+            review_claim: None,
             evidence_references: vec![],
             omissions: vec!["No actual-agent observation is available".into()],
             unresolved_remote_effects: false,
@@ -2126,6 +2143,7 @@ pub async fn run_live_trial(
     let observed = audited.host.observe();
     if let Ok(facts) = observed {
         report.artifacts = facts.artifacts.clone();
+        report.review_claim = facts.review_claim.clone();
         report.evidence_references = facts.evidence_references.clone();
         let scorer = Scorer::load(
             &operation

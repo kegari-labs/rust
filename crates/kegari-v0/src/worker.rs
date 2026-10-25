@@ -830,7 +830,7 @@ pub struct ScopedWorker {
     pending: Option<String>,
     calls: BTreeMap<String, CallReceipt>,
     proposals: Vec<Proposal>,
-    published: BTreeSet<Uuid>,
+    published: BTreeMap<Uuid, String>,
     checks: Vec<VerifiedCheckExecution>,
     failed_checks: Vec<crate::execution::FailedCheckExecution>,
     check_records: Vec<Value>,
@@ -914,7 +914,7 @@ impl ScopedWorker {
             pending: None,
             calls: BTreeMap::new(),
             proposals: vec![],
-            published: BTreeSet::new(),
+            published: BTreeMap::new(),
             checks: vec![],
             failed_checks: vec![],
             check_records: vec![],
@@ -1685,7 +1685,7 @@ impl ScopedWorker {
         self.control
             .validate_permit(&self.permit, || self.fresh())?;
         for proposal in &self.proposals {
-            if self.published.contains(&proposal.id)
+            if self.published.contains_key(&proposal.id)
                 || state.thread_id.as_deref() != Some(&proposal.thread)
                 || proposal.turn != completed_turn
                 || self.correction_requirement().watermark > 0
@@ -1735,8 +1735,8 @@ impl ScopedWorker {
                 "outcome_recorded",
                 &json!({"proposal_id":proposal.id,"reference":reference}),
             )?;
-            self.evidence.push(reference);
-            self.published.insert(proposal.id);
+            self.evidence.push(reference.clone());
+            self.published.insert(proposal.id, reference);
         }
         Ok(())
     }
@@ -1872,19 +1872,106 @@ impl TrialHost for ScopedWorker {
                 );
             }
         }
-        let summary = self
-            .proposals
-            .iter()
-            .rev()
-            .find_map(|p| p.claim.get("summary").cloned())
-            .map(serde_json::from_value::<AgentSummary>)
-            .transpose()
-            .map_err(|_| {
-                Error::new(
-                    "invalid_outcome",
-                    "worker summary does not match its declared schema",
-                )
-            })?;
+        let review_role = matches!(
+            self.contract.assembled.manifest.role,
+            AgentRole::Review | AgentRole::IndependentReview
+        );
+        // Review observations come only from a proposal actually recorded for
+        // the current completed turn. Submission alone is not completion, and
+        // a prior/unfinished turn cannot substitute an old clean review.
+        let review_claim = if review_role {
+            self.session
+                .as_ref()
+                .filter(|state| {
+                    self.pending.is_none()
+                        && state.turn_id.is_none()
+                        && state.completion_is_current()
+                        && state.terminal.as_deref() == Some("completed")
+                        && state.intervention.is_none()
+                        && !state.input_required
+                })
+                .and_then(|state| {
+                    self.proposals.iter().rev().find(|proposal| {
+                        self.published.contains_key(&proposal.id)
+                            && state.thread_id.as_deref() == Some(&proposal.thread)
+                            && state.last_completed_turn.as_deref() == Some(&proposal.turn)
+                            && (self.correction_requirement().watermark == 0
+                                || proposal.processed_correction.as_ref()
+                                    == Some(&self.correction_requirement()))
+                    })
+                })
+                .map(|proposal| {
+                    let observed = crate::evaluation::ObservedReviewClaim {
+                        schema_version: 1,
+                        operation: self.permit.operation_id,
+                        proposal: proposal.id,
+                        thread: proposal.thread.clone(),
+                        completed_turn: proposal.turn.clone(),
+                        source_revision: self
+                            .contract
+                            .assembled
+                            .manifest
+                            .repository_revision
+                            .clone()
+                            .unwrap_or_default(),
+                        repository: self.contract.repository.as_ref().map(|repository| {
+                            crate::evaluation::ReviewSourceRepository {
+                                hostname: repository.hostname.clone(),
+                                id: repository.id.clone(),
+                                slug: self
+                                    .contract
+                                    .review
+                                    .as_ref()
+                                    .filter(|review| {
+                                        review.repository.id.to_string() == repository.id
+                                    })
+                                    .map(|review| {
+                                        format!(
+                                            "{}/{}",
+                                            review.repository.owner, review.repository.name
+                                        )
+                                    }),
+                            }
+                        }),
+                        instruction_digest: self.contract.assembled.manifest_digest.clone(),
+                        tool_contract_digest: self.contract.tools.digest().into(),
+                        outcome_reference: self
+                            .published
+                            .get(&proposal.id)
+                            .expect("recorded proposal selected")
+                            .clone(),
+                        claim: serde_json::from_value(proposal.claim.clone()).map_err(|_| {
+                            Error::new(
+                                "invalid_outcome",
+                                "recorded review does not match its declared schema",
+                            )
+                        })?,
+                    };
+                    observed.validate()?;
+                    Ok::<_, Error>(observed)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        // Legacy non-review summaries remain explicit grader inputs. Production
+        // review claims are not wrapped in an invented AgentSummary contract.
+        let summary = if review_role {
+            None
+        } else {
+            self.proposals
+                .iter()
+                .rev()
+                .find_map(|p| p.claim.get("summary").cloned())
+                .map(serde_json::from_value::<AgentSummary>)
+                .transpose()
+                .map_err(|_| {
+                    Error::new(
+                        "invalid_outcome",
+                        "worker summary does not match its declared schema",
+                    )
+                })?
+        };
         Ok(ObservedFacts {
             revision,
             candidate_digest: candidate,
@@ -1893,6 +1980,7 @@ impl TrialHost for ScopedWorker {
             effects: self.effects.clone(),
             state: self.host.observed_state(self.permit.operation_id)?,
             summary,
+            review_claim,
             evidence_references: self.evidence.clone(),
         })
     }

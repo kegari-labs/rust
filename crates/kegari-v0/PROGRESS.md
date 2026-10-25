@@ -2,6 +2,27 @@
 
 Local implementation and validation remain in progress; the Goal is incomplete.
 
+Structured-review evaluation source1 passed96 focused tests (29 evaluation,
+10 report/archive,39 worker,18 module), all-target check, strict Clippy, formatting,
+496-block inventory, diff and dispatch-disabled Plan. Eight invocation artifacts
+retain unchanged616 inputs and before/after Rust/Cargo1.99.1 identities:
+`sha256:19ea8279293431fe4db5cb7c0cbdb162e2f0321062eb4d65e6a1e01fb52d0bfd`.
+Session86937 is closed; root prepares the local checkpoint. The original precise-
+URL false rejection was corrected in v2 and independently reviewed by Config.
+No full crate suite or actual-agent trial is claimed for this increment. See
+[the structured-review report](validation/LOCAL-STRUCTURED-REVIEW.md).
+
+Paired recovery composition remains TEMP at
+`/private/tmp/kegari-paired-recovery-composed-on-51e035e-v1`:41 source files,
+original bases and merge outputs preserved. Two conflicts were end-of-file test
+addition/module alias collisions; all test bodies and existing source4 fixture
+fixes are retained. The original recovery test file is registered once. The
+combined draft is not installed or compiled and still awaits the independent
+review's actual inherited-grant closure correction in Config v2. Native/data
+joined success is not inferred. Carry's33-file vertical draft is held for review,
+with object-acquisition integration separately in progress and cold/no-release
+carry remaining incomplete.
+
 The isolated first-new-grant review-round omission fix passed all-target check,
 strict Clippy,24 unique child-continuation/scheduler tests, formatting,496-block
 inventory and diff checks. Source1 retains615 unchanged inputs at
@@ -9,7 +30,12 @@ inventory and diff checks. Source1 retains615 unchanged inputs at
 Sessions84681/97996 are closed, with eight verified before/after source/tool/log
 artifacts. The new marked1 regression is included in continuation1 and not counted
 twice. This focused result is not a new full-suite or native qualification.
-Root prepares its local checkpoint; broader paired native/results remain TEMP.
+The verified guard checkpoint is `51e035e2d8811f5a75518bf2f5599a05e6f5361e` —
+`fix(kegari-v0): retain review rounds across retry grants`. All11 committed file
+bodies and615 tested inputs match; the tree was clean afterward. No consolidation,
+history rewrite or push occurred. Proof:
+`/private/tmp/kegari-v0-review-retry-round-guard-commit-verification.json`.
+Broader paired native/results remain TEMP.
 See[the guard report](validation/LOCAL-REVIEW-RETRY-ROUND-GUARD.md). This separate
 fix closes a review-grant admission gap; the prior checkpoint implements changed-
 source validation continuation, so keeping their local commits separate preserves

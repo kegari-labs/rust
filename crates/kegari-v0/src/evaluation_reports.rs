@@ -188,7 +188,7 @@ impl ReportArchive {
             "reason":r.reason,"started_at":(!r.started_at.is_empty()).then_some(&r.started_at),"ended_at":(!r.ended_at.is_empty()).then_some(&r.ended_at),
             "elapsed_ms":(!self.reconstructed.contains(&r.trial.name()?)).then_some(r.elapsed_ms),"turns_started":r.turns_started,"usage_tokens":r.usage_tokens,
             "earlier_usage_unknown":r.earlier_usage_unknown,"unresolved_remote_effects":r.unresolved_remote_effects,
-            "runtime_build":r.runtime_build,"instruction_digest":r.instruction_manifest.as_ref().map(|m|canonical_digest(1,m)).transpose()?
+            "runtime_build":r.runtime_build,"review_claim":r.review_claim,"instruction_digest":r.instruction_manifest.as_ref().map(|m|canonical_digest(1,m)).transpose()?
         }))).collect::<Result<Vec<_>>>()?;
         Ok(
             json!({"schema_version":1,"report_root":self.root,"suite_digest":self.suite.digest()?,
@@ -211,6 +211,24 @@ fn validate_actual_report(
     let manifest: crate::instructions::InstructionManifest =
         serde_json::from_value(report.instruction_manifest.clone().ok_or_else(conflict)?)
             .map_err(|_| conflict())?;
+    if let Some(review) = &report.review_claim {
+        review.validate().map_err(|_| conflict())?;
+        if !matches!(
+            manifest.role,
+            crate::instructions::AgentRole::Review
+                | crate::instructions::AgentRole::IndependentReview
+        ) || review.operation != manifest.operation_id
+            || Some(&review.source_revision) != manifest.repository_revision.as_ref()
+            || review.instruction_digest
+                != canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &manifest)?
+            || Some(&review.tool_contract_digest) != report.tool_contract_digest.as_ref()
+            || !report
+                .evidence_references
+                .contains(&review.outcome_reference)
+        {
+            return Err(conflict());
+        }
+    }
     let profile = report.profile.as_ref().ok_or_else(conflict)?;
     let definitions = report.tool_definitions.as_ref().ok_or_else(conflict)?;
     let started =
