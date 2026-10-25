@@ -1,0 +1,48 @@
+{
+  "issue": {
+    "id": "PARENT",
+    "description": "Authorized parent correction CORR-1 changes existing child boundary to inclusive. Route concrete source/test changes to existing CHILD-A/CHILD-T; leave unrelated CHILD-D untouched."
+  },
+  "parent": {
+    "id": "PARENT",
+    "intent": "Inclusive boundary with verified scoped child work"
+  },
+  "children": [
+    {
+      "id": "CHILD-A",
+      "scope": [
+        "src/limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-T",
+      "scope": [
+        "tests/check_limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-D",
+      "scope": [
+        "README.md"
+      ]
+    }
+  ],
+  "scope": {
+    "repository": "synthetic-repository",
+    "write_paths": [],
+    "remote_mutations": false
+  },
+  "dependencies": [],
+  "corrections": [
+    {
+      "id": "CORR-1",
+      "revision": 1,
+      "body": "Include equality at upper boundary",
+      "authorized": true
+    }
+  ],
+  "evidence": {
+    "provider_substitution": "Synthetic fixture state. Actual agent and local tool path required for behavioral qualification."
+  },
+  "attempt": 1
+}

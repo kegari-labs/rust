@@ -1,0 +1,41 @@
+{
+  "issue": {
+    "id": "PARENT",
+    "description": "Informational parent comment: Thank you for the update. No requested behavior change. Retain readiness and do not manufacture rework."
+  },
+  "parent": {
+    "id": "PARENT",
+    "intent": "Inclusive boundary with verified scoped child work"
+  },
+  "children": [
+    {
+      "id": "CHILD-A",
+      "scope": [
+        "src/limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-T",
+      "scope": [
+        "tests/check_limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-D",
+      "scope": [
+        "README.md"
+      ]
+    }
+  ],
+  "scope": {
+    "repository": "synthetic-repository",
+    "write_paths": [],
+    "remote_mutations": false
+  },
+  "dependencies": [],
+  "corrections": [],
+  "evidence": {
+    "provider_substitution": "Synthetic fixture state. Actual agent and local tool path required for behavioral qualification."
+  },
+  "attempt": 1
+}

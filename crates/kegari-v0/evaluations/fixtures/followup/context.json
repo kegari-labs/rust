@@ -1,0 +1,56 @@
+{
+  "issue": {
+    "id": "CHILD-A",
+    "description": "CHILD-A: correction CORR-1 revision 3 supersedes stale exclusive behavior. Apply the latest inclusive boundary and acknowledge the host-validated correction watermark. A correction is injected after turn admission; handle active or just-completed-turn races."
+  },
+  "parent": {
+    "id": "PARENT",
+    "intent": "Inclusive boundary with verified scoped child work"
+  },
+  "children": [
+    {
+      "id": "CHILD-A",
+      "scope": [
+        "src/limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-T",
+      "scope": [
+        "tests/check_limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-D",
+      "scope": [
+        "README.md"
+      ]
+    }
+  ],
+  "scope": {
+    "repository": "synthetic-repository",
+    "write_paths": [
+      "src/limit.py"
+    ],
+    "remote_mutations": false
+  },
+  "dependencies": [],
+  "corrections": [
+    {
+      "id": "CORR-1",
+      "revision": 1,
+      "body": "Previously exclusive",
+      "authorized": true
+    }
+  ],
+  "evidence": {
+    "provider_substitution": "Synthetic fixture state. Actual agent and local tool path required for behavioral qualification."
+  },
+  "attempt": 1,
+  "timeline": [
+    {
+      "watermark": 3,
+      "input": "Authorized correction CORR-1 revision 3: include equality, preserve scope, run boundary suite; acknowledge revision 3."
+    }
+  ]
+}

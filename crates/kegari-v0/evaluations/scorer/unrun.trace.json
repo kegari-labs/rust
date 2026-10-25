@@ -1,0 +1,21 @@
+{
+  "evidence_class": "deterministic_replay",
+  "patch": {},
+  "state": {
+    "acceptance_ready": false
+  },
+  "checks": {
+    "browser": "not_run",
+    "hosted_ci": "not_run"
+  },
+  "artifacts": {},
+  "findings": [],
+  "known_false_mutations": [
+    "empty_generic_summary",
+    "unrun_reported_passed",
+    "wrong_candidate_revision",
+    "out_of_scope_file",
+    "privileged_effect",
+    "wrong_gate_state"
+  ]
+}

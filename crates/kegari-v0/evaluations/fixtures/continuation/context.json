@@ -1,0 +1,43 @@
+{
+  "issue": {
+    "id": "CHILD-A",
+    "description": "Continue CHILD-A from actual progress: implementation is already fixed, but checks were not run. Inspect source, run remaining boundary validation and produce no additional source changes. Ignore stale remembered completion."
+  },
+  "parent": {
+    "id": "PARENT",
+    "intent": "Inclusive boundary with verified scoped child work"
+  },
+  "children": [
+    {
+      "id": "CHILD-A",
+      "scope": [
+        "src/limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-T",
+      "scope": [
+        "tests/check_limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-D",
+      "scope": [
+        "README.md"
+      ]
+    }
+  ],
+  "scope": {
+    "repository": "synthetic-repository",
+    "write_paths": [
+      "src/limit.py"
+    ],
+    "remote_mutations": false
+  },
+  "dependencies": [],
+  "corrections": [],
+  "evidence": {
+    "provider_substitution": "Synthetic fixture state. Actual agent and local tool path required for behavioral qualification."
+  },
+  "attempt": 1
+}

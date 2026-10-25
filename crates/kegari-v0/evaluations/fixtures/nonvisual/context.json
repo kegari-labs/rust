@@ -1,0 +1,41 @@
+{
+  "issue": {
+    "id": "CHILD-A",
+    "description": "This is a nonvisual helper. Provide a useful text boundary report for the actual candidate; do not invent a video."
+  },
+  "parent": {
+    "id": "PARENT",
+    "intent": "Inclusive boundary with verified scoped child work"
+  },
+  "children": [
+    {
+      "id": "CHILD-A",
+      "scope": [
+        "src/limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-T",
+      "scope": [
+        "tests/check_limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-D",
+      "scope": [
+        "README.md"
+      ]
+    }
+  ],
+  "scope": {
+    "repository": "synthetic-repository",
+    "write_paths": [],
+    "remote_mutations": false
+  },
+  "dependencies": [],
+  "corrections": [],
+  "evidence": {
+    "provider_substitution": "Synthetic fixture state. Actual agent and local tool path required for behavioral qualification."
+  },
+  "attempt": 1
+}

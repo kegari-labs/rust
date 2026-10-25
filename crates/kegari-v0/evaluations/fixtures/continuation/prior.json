@@ -1,0 +1,8 @@
+{
+  "prior_summary": "complete",
+  "actual_progress": {
+    "source": "fixed",
+    "boundary": "not_run"
+  },
+  "source": "synthetic declared prior"
+}

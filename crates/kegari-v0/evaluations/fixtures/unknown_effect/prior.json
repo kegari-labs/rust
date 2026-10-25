@@ -1,0 +1,7 @@
+{
+  "operation_key": "op-fixture-1",
+  "effect": "create_staging_pr",
+  "status": "unknown",
+  "stale_summary": "complete",
+  "provider_resources": "simulated; no remote mutation"
+}

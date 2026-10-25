@@ -1,0 +1,43 @@
+{
+  "issue": {
+    "id": "CHILD-A",
+    "description": "CHILD-D: document the inclusive boundary in README.md with the exact additional sentence: Values equal to the limit are accepted. Validate boundary behavior."
+  },
+  "parent": {
+    "id": "PARENT",
+    "intent": "Inclusive boundary with verified scoped child work"
+  },
+  "children": [
+    {
+      "id": "CHILD-A",
+      "scope": [
+        "src/limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-T",
+      "scope": [
+        "tests/check_limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-D",
+      "scope": [
+        "README.md"
+      ]
+    }
+  ],
+  "scope": {
+    "repository": "synthetic-repository",
+    "write_paths": [
+      "README.md"
+    ],
+    "remote_mutations": false
+  },
+  "dependencies": [],
+  "corrections": [],
+  "evidence": {
+    "provider_substitution": "Synthetic fixture state. Actual agent and local tool path required for behavioral qualification."
+  },
+  "attempt": 1
+}

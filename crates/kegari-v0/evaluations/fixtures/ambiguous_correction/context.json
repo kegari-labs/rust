@@ -1,0 +1,41 @@
+{
+  "issue": {
+    "id": "PARENT",
+    "description": "Parent comment: the limit needs to be different. This may request a change but specifies no value or inclusive/exclusive rule. Hold readiness pending classification and surface an actionable blocker."
+  },
+  "parent": {
+    "id": "PARENT",
+    "intent": "Inclusive boundary with verified scoped child work"
+  },
+  "children": [
+    {
+      "id": "CHILD-A",
+      "scope": [
+        "src/limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-T",
+      "scope": [
+        "tests/check_limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-D",
+      "scope": [
+        "README.md"
+      ]
+    }
+  ],
+  "scope": {
+    "repository": "synthetic-repository",
+    "write_paths": [],
+    "remote_mutations": false
+  },
+  "dependencies": [],
+  "corrections": [],
+  "evidence": {
+    "provider_substitution": "Synthetic fixture state. Actual agent and local tool path required for behavioral qualification."
+  },
+  "attempt": 1
+}

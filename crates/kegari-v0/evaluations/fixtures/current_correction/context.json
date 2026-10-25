@@ -1,0 +1,50 @@
+{
+  "issue": {
+    "id": "CHILD-A",
+    "description": "Continue CHILD-A from stale exclusive implementation and old completed summary. Current authorized correction revision 4 requires inclusive behavior. Reconcile actual source and correction before completion."
+  },
+  "parent": {
+    "id": "PARENT",
+    "intent": "Inclusive boundary with verified scoped child work"
+  },
+  "children": [
+    {
+      "id": "CHILD-A",
+      "scope": [
+        "src/limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-T",
+      "scope": [
+        "tests/check_limit.py"
+      ]
+    },
+    {
+      "id": "CHILD-D",
+      "scope": [
+        "README.md"
+      ]
+    }
+  ],
+  "scope": {
+    "repository": "synthetic-repository",
+    "write_paths": [
+      "src/limit.py"
+    ],
+    "remote_mutations": false
+  },
+  "dependencies": [],
+  "corrections": [
+    {
+      "id": "CORR-1",
+      "revision": 4,
+      "body": "Include equality",
+      "authorized": true
+    }
+  ],
+  "evidence": {
+    "provider_substitution": "Synthetic fixture state. Actual agent and local tool path required for behavioral qualification."
+  },
+  "attempt": 1
+}

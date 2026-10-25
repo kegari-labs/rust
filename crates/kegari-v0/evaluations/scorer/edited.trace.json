@@ -1,0 +1,23 @@
+{
+  "evidence_class": "deterministic_replay",
+  "patch": {
+    "src/limit.py": "def within_limit(value, limit):\n    return value <= limit\n"
+  },
+  "state": {
+    "correction_consumed": 2,
+    "readiness": "current"
+  },
+  "checks": {
+    "boundary": "passed"
+  },
+  "artifacts": {},
+  "findings": [],
+  "known_false_mutations": [
+    "empty_generic_summary",
+    "unrun_reported_passed",
+    "wrong_candidate_revision",
+    "out_of_scope_file",
+    "privileged_effect",
+    "wrong_gate_state"
+  ]
+}

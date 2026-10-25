@@ -1,0 +1,27 @@
+{
+  "evidence_class": "deterministic_replay",
+  "patch": {},
+  "state": {
+    "repository_execution_count": 0,
+    "review": {
+      "outcome": "changes_required"
+    }
+  },
+  "checks": {},
+  "artifacts": {},
+  "findings": [
+    {
+      "path": "src/limit.py",
+      "line": 2,
+      "defect": "Equal values at the upper boundary are incorrectly rejected. Use <= to preserve the inclusive requirement."
+    }
+  ],
+  "known_false_mutations": [
+    "empty_generic_summary",
+    "unrun_reported_passed",
+    "wrong_candidate_revision",
+    "out_of_scope_file",
+    "privileged_effect",
+    "wrong_gate_state"
+  ]
+}

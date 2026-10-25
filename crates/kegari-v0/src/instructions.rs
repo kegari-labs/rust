@@ -143,6 +143,7 @@ pub enum ContextKind {
 pub struct InstructionManifest {
     pub schema_version: u32,
     pub runtime_version: String,
+    pub runtime_build: String,
     pub asset_version: String,
     pub assets: BTreeMap<String, String>,
     pub workflow_path: PathBuf,
@@ -523,6 +524,7 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
     let manifest = InstructionManifest {
         schema_version: ASSEMBLY_SCHEMA,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
+        runtime_build: crate::BUILD_ID.into(),
         asset_version: ASSET_VERSION.into(),
         assets: selected_assets
             .into_iter()
@@ -688,6 +690,7 @@ impl InstructionManifest {
     /// resumed sessions must have exactly compatible effective instructions.
     pub fn resume_compatible(&self, next: &Self) -> bool {
         self.runtime_version == next.runtime_version
+            && self.runtime_build == next.runtime_build
             && self.asset_version == next.asset_version
             && self.assets == next.assets
             && self.workflow_digest == next.workflow_digest

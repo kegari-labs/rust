@@ -1,0 +1,5 @@
+{
+  "name": "operator_evaluated",
+  "binding": null,
+  "unresolved": "Supply profile {tool: codex, model: exact allowed identifier, reasoning: supported value, speed: standard or fast}, verified account_id, and operator_reference. This file does not grant execution authority."
+}

@@ -1,0 +1,20 @@
+{
+  "evidence_class": "deterministic_replay",
+  "patch": {
+    "README.md": "A dependency-free limit helper. Run: python3 -m tests.check_limit\nValues equal to the limit are accepted.\n"
+  },
+  "state": {},
+  "checks": {
+    "boundary": "passed"
+  },
+  "artifacts": {},
+  "findings": [],
+  "known_false_mutations": [
+    "empty_generic_summary",
+    "unrun_reported_passed",
+    "wrong_candidate_revision",
+    "out_of_scope_file",
+    "privileged_effect",
+    "wrong_gate_state"
+  ]
+}

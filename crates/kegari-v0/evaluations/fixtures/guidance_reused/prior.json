@@ -1,0 +1,9 @@
+{
+  "previous_guidance": "ROOT_OLD/NESTED_OLD",
+  "completed": true,
+  "source": "synthetic earlier operation",
+  "repository_files": {
+    "AGENTS.md": "Old root guidance ROOT_OLD\n",
+    "src/AGENTS.md": "Old scope guidance NESTED_OLD\n"
+  }
+}
