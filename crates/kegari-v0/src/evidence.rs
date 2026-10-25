@@ -6,7 +6,10 @@
 
 use crate::digest::{bytes_digest, canonical_bytes, canonical_digest};
 use crate::error::{Error, Result};
-use crate::git::{CandidateManifest, DeltaManifest, RepositoryId, Revision, validate_oid};
+use crate::git::{
+    CandidateManifest, DeltaManifest, RepositoryId, Revision, VerifiedProductionIntegration,
+    validate_oid,
+};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -203,6 +206,68 @@ impl<T: Serialize> Signed<T> {
     pub fn digest(&self) -> Result<String> {
         canonical_digest(1, self)
     }
+}
+
+/// Canonical whole-comment framing shared by publication and recovery. Framing
+/// is deliberately exact: quoted examples and incidental markers are not records.
+pub fn encode_signed_publication<T: Serialize>(
+    purpose: &str,
+    signed: &Signed<T>,
+) -> Result<String> {
+    if purpose.is_empty()
+        || purpose.len() > 80
+        || !purpose.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+        || signed.purpose != purpose
+        || signed.schema_version != 1
+    {
+        return Err(Error::new(
+            "invalid_attestation",
+            "publication domain/schema is invalid",
+        ));
+    }
+    let payload = serde_json::to_string(signed)
+        .map_err(|_| Error::invalid("cannot encode canonical publication"))?;
+    let body = format!("<!-- kegari:v0:{purpose} -->\n```json\n{payload}\n```");
+    if body.len() > 1024 * 1024 {
+        return Err(Error::new(
+            "bounded_input",
+            "signed publication exceeds 1 MiB",
+        ));
+    }
+    Ok(body)
+}
+
+pub fn decode_signed_publication<T: serde::de::DeserializeOwned + Serialize>(
+    body: &str,
+    purpose: &str,
+    key: &AttestationKey,
+) -> Result<Signed<T>> {
+    if body.len() > 1024 * 1024 {
+        return Err(Error::new(
+            "bounded_input",
+            "signed publication exceeds 1 MiB",
+        ));
+    }
+    let prefix = format!("<!-- kegari:v0:{purpose} -->\n```json\n");
+    let payload = body
+        .strip_prefix(&prefix)
+        .and_then(|s| s.strip_suffix("\n```"))
+        .ok_or_else(|| {
+            Error::new(
+                "invalid_attestation",
+                "publication is not an exact canonical record",
+            )
+        })?;
+    let signed: Signed<T> = serde_json::from_str(payload)
+        .map_err(|_| Error::new("invalid_attestation", "publication schema is invalid"))?;
+    if encode_signed_publication(purpose, &signed)? != body {
+        return Err(Error::new(
+            "invalid_attestation",
+            "publication contains noncanonical or duplicate fields",
+        ));
+    }
+    key.verify(purpose, &signed)?;
+    Ok(signed)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -675,6 +740,10 @@ pub enum ChildOutcome {
         pull_request: u64,
         delta: Box<DeltaManifest>,
     },
+    Replacement {
+        related_pull_request: u64,
+        delta: Box<DeltaManifest>,
+    },
     NoChange {
         reason: String,
         change_gates_inapplicable: BTreeSet<String>,
@@ -701,6 +770,14 @@ pub struct ChildRequirements<'a> {
     pub revision: &'a RevisionBinding,
     pub checks: &'a [CheckRequirement],
     pub required_contexts: &'a BTreeSet<String>,
+}
+
+pub struct ReplacementGates<'a> {
+    pub staged_result: &'a VerifiedChild,
+    pub related_pull_request: u64,
+    pub repository: &'a RepositoryId,
+    pub github_publication: &'a Publication,
+    pub github_writer: &'a str,
 }
 
 pub fn no_change_digest(
@@ -738,6 +815,58 @@ pub fn verify_child(
     publication: &Publication,
     linear_writer: &str,
 ) -> Result<VerifiedChild> {
+    verify_child_inner(
+        evidence,
+        requirements,
+        review,
+        protection,
+        publication,
+        linear_writer,
+        None,
+    )
+}
+
+pub fn verify_replacement_child(
+    evidence: &ChildEvidence,
+    requirements: ChildRequirements<'_>,
+    review: &VerifiedReview,
+    gates: ReplacementGates<'_>,
+    publication: &Publication,
+    linear_writer: &str,
+) -> Result<VerifiedChild> {
+    if !matches!(evidence.outcome, ChildOutcome::Replacement { .. }) {
+        return Err(Error::new(
+            "replacement_gate",
+            "replacement validation requires an explicit replacement outcome",
+        ));
+    }
+    verify_child_inner(
+        evidence,
+        requirements,
+        review,
+        None,
+        publication,
+        linear_writer,
+        Some(gates),
+    )
+}
+
+/// Check a draft without inventing a publication or minting a completion proof.
+pub fn validate_child_candidate(
+    evidence: &ChildEvidence,
+    requirements: ChildRequirements<'_>,
+    review: &VerifiedReview,
+    protection: Option<&RepositoryProtection>,
+) -> Result<()> {
+    validate_child_candidate_inner(evidence, requirements, review, protection, None)
+}
+fn validate_child_candidate_inner(
+    evidence: &ChildEvidence,
+    requirements: ChildRequirements<'_>,
+    review: &VerifiedReview,
+    protection: Option<&RepositoryProtection>,
+    replacement_gates: Option<ReplacementGates<'_>>,
+) -> Result<()> {
     evidence.work.validate()?;
     evidence.revision.validate()?;
     if evidence.schema_version != 1
@@ -784,6 +913,7 @@ pub fn verify_child(
             delta,
         } => {
             if *pull_request == 0
+                || delta.replacement.is_some()
                 || review.attestation.pull_request != Some(*pull_request)
                 || delta.repository != evidence.revision.repository
                 || delta.parent_id != evidence.work.parent
@@ -795,7 +925,7 @@ pub fn verify_child(
                 || delta.validated_head.tree != evidence.revision.tested_tree
                 || delta.staging_parent != delta.validated_base
                 || delta.staging_commit.tree != delta.validated_head.tree
-                || delta.digest()? != review.attestation.delta_digest
+                || delta.review_digest()? != review.attestation.delta_digest
                 || delta.paths.is_empty()
             {
                 return Err(Error::new(
@@ -815,6 +945,72 @@ pub fn verify_child(
                     "staging",
                     requirements.required_contexts,
                 )?;
+        }
+        ChildOutcome::Replacement {
+            related_pull_request,
+            delta,
+        } => {
+            let gates = replacement_gates.ok_or_else(|| {
+                Error::new(
+                    "replacement_gate",
+                    "separate staged-result and related PR publication proofs are required",
+                )
+            })?;
+            let mapping = delta.replacement.as_ref().ok_or_else(|| {
+                Error::new(
+                    "replacement_mapping",
+                    "replacement has no original contribution mapping",
+                )
+            })?;
+            let staged = gates.staged_result.evidence();
+            let staged_revision = match &staged.outcome {
+                ChildOutcome::Changed { delta, .. } => &delta.staging_commit,
+                ChildOutcome::NoChange { .. } => &Revision {
+                    commit: staged.revision.tested_commit.clone(),
+                    tree: staged.revision.tested_tree.clone(),
+                },
+                ChildOutcome::Replacement { .. } => {
+                    return Err(Error::new(
+                        "replacement_gate",
+                        "staged proof must be a normal integration or evidenced no-change result",
+                    ));
+                }
+            };
+            if *related_pull_request == 0
+                || *related_pull_request != gates.related_pull_request
+                || delta.repository != *gates.repository
+                || delta.repository != evidence.revision.repository
+                || delta.parent_id != evidence.work.parent
+                || Some(delta.child_id) != evidence.work.child
+                || delta.work_generation != evidence.work.generation.definition
+                || delta.correction_generation != evidence.work.generation.correction
+                || delta.validated_base.commit != evidence.revision.base
+                || delta.validated_head.commit != evidence.revision.head
+                || delta.validated_head.tree != evidence.revision.tested_tree
+                || delta.review_digest()? != review.attestation.delta_digest
+                || !matches!(review.attestation.review, ReviewKind::Agent { .. })
+                || staged.work != evidence.work
+                || staged.fulfilled_criteria != evidence.fulfilled_criteria
+                || mapping.staging_result_digest != gates.staged_result.digest()
+                || delta.staging_commit != *staged_revision
+                || delta.staging_parent != *staged_revision
+                || mapping.reason.trim().is_empty()
+                || delta.original_contributions()?.is_empty()
+                || mapping.originals.iter().any(|m| {
+                    m.child_id != delta.child_id
+                        || m.parent_id != delta.parent_id
+                        || m.repository != delta.repository
+                        || m.scope != delta.scope
+                })
+            {
+                return Err(Error::new(
+                    "replacement_gate",
+                    "replacement mapping, scoped review or independently validated staged result differs",
+                ));
+            }
+            gates
+                .github_publication
+                .verify(evidence, "github", gates.github_writer)?;
         }
         ChildOutcome::NoChange {
             reason,
@@ -846,6 +1042,25 @@ pub fn verify_child(
             }
         }
     }
+    Ok(())
+}
+
+fn verify_child_inner(
+    evidence: &ChildEvidence,
+    requirements: ChildRequirements<'_>,
+    review: &VerifiedReview,
+    protection: Option<&RepositoryProtection>,
+    publication: &Publication,
+    linear_writer: &str,
+    replacement_gates: Option<ReplacementGates<'_>>,
+) -> Result<VerifiedChild> {
+    validate_child_candidate_inner(
+        evidence,
+        requirements,
+        review,
+        protection,
+        replacement_gates,
+    )?;
     publication.verify(evidence, "linear", linear_writer)?;
     Ok(VerifiedChild {
         evidence: evidence.clone(),
@@ -936,6 +1151,7 @@ pub struct ParentEvidence {
     pub required_children: BTreeSet<Uuid>,
     pub e2e_child: Uuid,
     pub child_results: BTreeMap<Uuid, String>,
+    pub required_contributions: BTreeMap<Uuid, BTreeSet<String>>,
     pub executive_summary: String,
     pub touched_components: Vec<String>,
     pub fulfilled_criteria: BTreeSet<String>,
@@ -974,6 +1190,10 @@ pub struct ParentRequirements<'a> {
     pub test_resources: &'a BTreeSet<String>,
     pub production_targets: &'a BTreeSet<String>,
     pub visual: bool,
+    /// Host-reconstructed complete contribution history for the current child
+    /// responsibilities, including earlier known effects of partial releases.
+    pub required_contributions: &'a BTreeMap<Uuid, BTreeSet<String>>,
+    pub production_integrations: &'a [VerifiedProductionIntegration],
 }
 
 #[derive(Clone, Debug)]
@@ -981,6 +1201,7 @@ pub struct VerifiedParent {
     manifest: ParentEvidence,
     token: String,
     child_satisfaction_digest: String,
+    source_review_digests: BTreeMap<String, String>,
 }
 
 impl VerifiedParent {
@@ -1014,6 +1235,11 @@ pub fn verify_parent(
         || evidence.fulfilled_criteria != *requirements.criteria
         || requirements.criteria.is_empty()
         || evidence.production_targets != *requirements.production_targets
+        || evidence.required_contributions != *requirements.required_contributions
+        || evidence
+            .required_contributions
+            .keys()
+            .any(|id| !requirements.required_children.contains(id))
         || evidence.visual != requirements.visual
         || evidence.executive_summary.trim().is_empty()
         || evidence.touched_components.is_empty()
@@ -1070,6 +1296,45 @@ pub fn verify_parent(
     }
     let mut candidate_repositories = BTreeSet::new();
     let mut selected_delta_digests = BTreeSet::new();
+    let mut accounted_contributions = BTreeSet::new();
+    let required_delta_digests: BTreeSet<String> = evidence
+        .required_contributions
+        .values()
+        .flatten()
+        .cloned()
+        .collect();
+    if required_delta_digests.len()
+        != evidence
+            .required_contributions
+            .values()
+            .map(BTreeSet::len)
+            .sum::<usize>()
+    {
+        return Err(Error::new(
+            "candidate_provenance",
+            "one original contribution is assigned to multiple child responsibilities",
+        ));
+    }
+    let mut reviewed_mappings = BTreeMap::new();
+    for child in children {
+        if let ChildOutcome::Changed { delta, .. } | ChildOutcome::Replacement { delta, .. } =
+            &child.evidence.outcome
+        {
+            let contributions = delta.original_contributions()?;
+            if evidence
+                .required_contributions
+                .get(&delta.child_id)
+                .is_none_or(|required| !contributions.is_subset(required))
+            {
+                return Err(Error::new(
+                    "candidate_provenance",
+                    "current child contribution is missing from the required complete inventory",
+                ));
+            }
+            reviewed_mappings.insert(delta.digest()?, contributions);
+        }
+    }
+    let mut used_integrations = BTreeSet::new();
     for candidate in &evidence.candidates {
         if candidate.schema_version != 1
             || candidate.parent_id != evidence.work.parent
@@ -1077,7 +1342,11 @@ pub fn verify_parent(
             || candidate.correction_generation != evidence.work.generation.correction
             || !candidate_repositories.insert(candidate.repository.clone())
             || candidate.ordered_delta_digests.len() != candidate.ordered_patch_digests.len()
-            || candidate.ordered_delta_digests.is_empty()
+            || candidate
+                .ordered_delta_digests
+                .iter()
+                .collect::<BTreeSet<_>>()
+                != candidate.selected_contributions.keys().collect()
             || candidate.result.is_none()
             || candidate.combined_patch_digest.is_none()
             || !evidence.baselines.iter().any(|b| {
@@ -1097,27 +1366,68 @@ pub fn verify_parent(
                     "selected delta is duplicated",
                 ));
             }
+            let contributions = &candidate.selected_contributions[digest];
+            let expected = reviewed_mappings.get(digest).cloned().or_else(|| {
+                required_delta_digests
+                    .contains(digest)
+                    .then(|| BTreeSet::from([digest.clone()]))
+            });
+            if expected.as_ref() != Some(contributions) {
+                return Err(Error::new(
+                    "candidate_provenance",
+                    "selected artifact has no exact reviewed contribution or replacement mapping",
+                ));
+            }
+            for contribution in contributions {
+                if !accounted_contributions.insert(contribution.clone()) {
+                    return Err(Error::new(
+                        "candidate_provenance",
+                        "required contribution is selected more than once",
+                    ));
+                }
+            }
         }
         for digest in &candidate.ordered_patch_digests {
             validate_digest(digest)?;
         }
+        if candidate.ordered_delta_digests.is_empty()
+            && (candidate.result.as_ref() != Some(&candidate.production)
+                || candidate.combined_patch_digest.as_deref() != Some(bytes_digest(&[]).as_str()))
+        {
+            return Err(Error::new(
+                "candidate_provenance",
+                "no-change candidate must exactly retain the production baseline without a manufactured commit",
+            ));
+        }
+        for integration in &candidate.production_integrations {
+            if integration.repository != candidate.repository
+                || integration.parent_id != evidence.work.parent
+                || integration.observed_main != candidate.production
+                || !requirements
+                    .production_integrations
+                    .iter()
+                    .any(|p| p.record() == integration)
+                || !used_integrations.insert(integration.digest()?)
+            {
+                return Err(Error::new(
+                    "production_provenance",
+                    "already-integrated contribution requires its current verified Git-object proof",
+                ));
+            }
+            for contribution in integration.selected_contributions.values().flatten() {
+                if !accounted_contributions.insert(contribution.clone()) {
+                    return Err(Error::new(
+                        "candidate_provenance",
+                        "already-integrated contribution is selected or counted again",
+                    ));
+                }
+            }
+        }
     }
-    let required_delta_digests: BTreeSet<String> = children
-        .iter()
-        .filter_map(|child| match &child.evidence.outcome {
-            ChildOutcome::Changed { delta, .. } => Some(delta.digest()),
-            ChildOutcome::NoChange { .. } => None,
-        })
-        .collect::<Result<_>>()?;
-    if selected_delta_digests
-        .into_iter()
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        != required_delta_digests
-    {
+    if accounted_contributions != required_delta_digests {
         return Err(Error::new(
             "candidate_provenance",
-            "selected deltas must account for exactly the required changed child contributions; extra or missing patches block readiness",
+            "selected, replaced and already-integrated artifacts must account for exactly every required child contribution",
         ));
     }
     validate_digest(&evidence.dependency_snapshot_digest)?;
@@ -1206,7 +1516,7 @@ pub fn verify_parent(
     publication.verify(evidence, "linear", linear_writer)?;
     let satisfaction: Vec<_> = children.iter().map(|child| {
         let delta = match &child.evidence.outcome {
-            ChildOutcome::Changed { delta, .. } => Some(delta.digest()),
+            ChildOutcome::Changed { delta, .. } | ChildOutcome::Replacement { delta, .. } => Some(delta.digest()),
             ChildOutcome::NoChange { .. } => None,
         }.transpose()?;
         Ok(serde_json::json!({ "work": child.evidence.work, "criteria": child.evidence.fulfilled_criteria, "changed_delta": delta }))
@@ -1215,6 +1525,19 @@ pub fn verify_parent(
         manifest: evidence.clone(),
         token: evidence.token()?,
         child_satisfaction_digest: canonical_digest(1, &satisfaction)?,
+        source_review_digests: children
+            .iter()
+            .filter_map(|child| match &child.evidence.outcome {
+                ChildOutcome::Changed { delta, .. } | ChildOutcome::Replacement { delta, .. } => {
+                    Some(
+                        delta
+                            .digest()
+                            .map(|digest| (digest, child.evidence.review_digest.clone())),
+                    )
+                }
+                ChildOutcome::NoChange { .. } => None,
+            })
+            .collect::<Result<_>>()?,
     })
 }
 
@@ -1382,6 +1705,55 @@ impl VerifiedCarry {
     }
 }
 
+/// Recovery authority is rooted in a verified human decision, not in mutable
+/// candidate metadata. This capability cannot be deserialized from a receipt.
+#[derive(Clone, Debug)]
+pub struct VerifiedAcceptedCandidate {
+    candidate_digest: String,
+    evidence_token: String,
+    acceptance_digest: String,
+}
+
+impl VerifiedAcceptedCandidate {
+    pub fn candidate_digest(&self) -> &str {
+        &self.candidate_digest
+    }
+    pub fn evidence_token(&self) -> &str {
+        &self.evidence_token
+    }
+    pub fn acceptance_digest(&self) -> &str {
+        &self.acceptance_digest
+    }
+}
+
+pub fn verify_accepted_candidate(
+    parent: &VerifiedParent,
+    acceptance: &VerifiedAcceptance,
+    carry: Option<&VerifiedCarry>,
+    candidate: &CandidateManifest,
+) -> Result<VerifiedAcceptedCandidate> {
+    let a = acceptance.acceptance();
+    if !parent.manifest.candidates.contains(candidate)
+        || a.work != parent.manifest.work
+        || (a.reviewed_token != parent.token
+            && carry.is_none_or(|c| {
+                c.record.original_reviewed_token != a.reviewed_token
+                    || c.record.original_acceptance_digest != acceptance.digest()
+                    || c.record.current_evidence_token != parent.token
+            }))
+    {
+        return Err(Error::new(
+            "acceptance_required",
+            "candidate recovery requires its authenticated accepted evidence or verified unchanged carry lineage",
+        ));
+    }
+    Ok(VerifiedAcceptedCandidate {
+        candidate_digest: canonical_digest(1, candidate)?,
+        evidence_token: parent.token.clone(),
+        acceptance_digest: acceptance.digest().into(),
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct VerifiedProduction {
     revision: RevisionBinding,
@@ -1427,7 +1799,8 @@ pub fn verify_production(
         || review.attestation.revision != *requirements.revision
         || !matches!(review.attestation.review, ReviewKind::Derived { .. })
         || !requirements.parent.manifest.candidates.iter().any(|c| {
-            c.repository == requirements.revision.repository
+            !c.ordered_delta_digests.is_empty()
+                && c.repository == requirements.revision.repository
                 && c.production.commit == requirements.revision.base
                 && c.result.as_ref().is_some_and(|r| {
                     r.commit == requirements.revision.head
@@ -1473,6 +1846,7 @@ pub fn carry_acceptance(
         || acceptance.acceptance.work != original.manifest.work
         || original.manifest.work != newer.manifest.work
         || original.manifest.required_children != newer.manifest.required_children
+        || original.manifest.required_contributions != newer.manifest.required_contributions
         || original.child_satisfaction_digest != newer.child_satisfaction_digest
         || original.manifest.fulfilled_criteria != newer.manifest.fulfilled_criteria
         || original.manifest.production_targets != newer.manifest.production_targets
@@ -1517,6 +1891,9 @@ pub fn carry_acceptance(
         ));
     }
     for candidate in &newer.manifest.candidates {
+        if candidate.ordered_delta_digests.is_empty() {
+            continue;
+        }
         let result = candidate.result.as_ref().ok_or_else(|| {
             Error::new(
                 "candidate_provenance",
@@ -1559,6 +1936,154 @@ pub fn carry_acceptance(
     })
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductionTargetBaseline {
+    pub provider: String,
+    pub target: String,
+    pub repository: RepositoryId,
+    pub source: Revision,
+    pub artifact_digest: String,
+    pub provider_record: String,
+    pub observed_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoReleaseRequired {
+    pub schema_version: u32,
+    pub runtime_id: Uuid,
+    pub operation_id: Uuid,
+    pub work: WorkIdentity,
+    pub evidence_token: String,
+    pub acceptance_digest: String,
+    pub baselines: Vec<ProductionBaseline>,
+    pub targets: Vec<ProductionTargetBaseline>,
+    pub recorded_at: DateTime<Utc>,
+}
+
+pub struct NoReleaseRequirements<'a> {
+    pub current_work: &'a WorkIdentity,
+    pub pending_correction: bool,
+    /// Complete configured target ID -> (provider, repository) inventory.
+    pub targets: &'a BTreeMap<String, (String, RepositoryId)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VerifiedNoReleaseRequired {
+    record: NoReleaseRequired,
+    digest: String,
+}
+
+impl VerifiedNoReleaseRequired {
+    pub fn record(&self) -> &NoReleaseRequired {
+        &self.record
+    }
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
+fn validate_no_release_required(
+    record: &NoReleaseRequired,
+    parent: &VerifiedParent,
+    acceptance: &VerifiedAcceptance,
+    requirements: NoReleaseRequirements<'_>,
+) -> Result<()> {
+    let p = parent.manifest();
+    if record.schema_version != 1
+        || record.runtime_id.is_nil()
+        || record.operation_id.is_nil()
+        || &record.work != requirements.current_work
+        || record.work != p.work
+        || requirements.pending_correction
+        || record.evidence_token != parent.token()
+        || record.acceptance_digest != acceptance.digest()
+        || acceptance.acceptance().reviewed_token != parent.token()
+        || acceptance.acceptance().work != p.work
+        || record.baselines != p.baselines
+        || record.recorded_at < p.created_at
+        || p.candidates.iter().any(|c| {
+            !c.ordered_delta_digests.is_empty() || c.result.as_ref() != Some(&c.production)
+        })
+        || requirements
+            .targets
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != p.production_targets
+    {
+        return Err(Error::new(
+            "no_release_gate",
+            "no-release-required needs the current integrated outcome and its exact human acceptance with no selected change",
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for target in &record.targets {
+        target.source.validate()?;
+        validate_digest(&target.artifact_digest)?;
+        if !seen.insert(target.target.clone())
+            || target.provider_record.is_empty()
+            || target.provider.is_empty()
+            || target.observed_at > record.recorded_at
+            || requirements.targets.get(&target.target)
+                != Some(&(target.provider.clone(), target.repository.clone()))
+            || !p.baselines.iter().any(|b| {
+                b.repository == target.repository
+                    && !b.deployment_free
+                    && b.production == target.source
+                    && b.deployed_revision.as_ref() == Some(&target.source.commit)
+                    && b.deployed_artifact.as_ref() == Some(&target.artifact_digest)
+            })
+        {
+            return Err(Error::new(
+                "no_release_gate",
+                "every production target must already serve the exact validated baseline artifact",
+            ));
+        }
+    }
+    if seen != p.production_targets
+        || p.baselines.iter().any(|b| {
+            !b.deployment_free && !record.targets.iter().any(|t| t.repository == b.repository)
+        })
+    {
+        return Err(Error::new(
+            "no_release_gate",
+            "a production target is missing or a required deployment remains unfinished",
+        ));
+    }
+    Ok(())
+}
+
+pub fn prepare_no_release_required(
+    record: NoReleaseRequired,
+    parent: &VerifiedParent,
+    acceptance: &VerifiedAcceptance,
+    requirements: NoReleaseRequirements<'_>,
+    key: &AttestationKey,
+) -> Result<Signed<NoReleaseRequired>> {
+    validate_no_release_required(&record, parent, acceptance, requirements)?;
+    key.sign("no_release_required", &record)
+}
+
+pub fn verify_no_release_required(
+    signed: &Signed<NoReleaseRequired>,
+    parent: &VerifiedParent,
+    acceptance: &VerifiedAcceptance,
+    requirements: NoReleaseRequirements<'_>,
+    publication: &Publication,
+    writer: &str,
+    key: &AttestationKey,
+) -> Result<VerifiedNoReleaseRequired> {
+    key.verify("no_release_required", signed)?;
+    validate_no_release_required(&signed.payload, parent, acceptance, requirements)?;
+    publication.verify(signed, "linear", writer)?;
+    Ok(VerifiedNoReleaseRequired {
+        record: signed.payload.clone(),
+        digest: signed.digest()?,
+    })
+}
+
 /// Builds a derived status payload, not an extra agent review. All selected
 /// patches must be accounted for by verified original/replacement reviews.
 pub struct HostOperation {
@@ -1581,6 +2106,7 @@ pub fn derive_review(
         operation_id,
     } = operation;
     if parent.manifest.work.child.is_some()
+        || candidate.ordered_delta_digests.is_empty()
         || !parent.manifest.candidates.contains(candidate)
         || candidate
             .result
@@ -1597,10 +2123,19 @@ pub fn derive_review(
     }
     let mut source_digests = Vec::new();
     for delta_digest in &candidate.ordered_delta_digests {
+        let reviewed = parent
+            .source_review_digests
+            .get(delta_digest)
+            .ok_or_else(|| {
+                Error::new(
+                    "derived_review_gate",
+                    "selected artifact lacks its verified child review binding",
+                )
+            })?;
         let matching: Vec<&VerifiedReview> = sources
             .iter()
             .filter(|r| {
-                r.attestation.delta_digest == *delta_digest
+                &r.digest == reviewed
                     && r.attestation.work.parent == parent.manifest.work.parent
                     && r.attestation.revision.repository == candidate.repository
                     && r.attestation.verdict == Verdict::Pass

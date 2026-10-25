@@ -185,6 +185,7 @@ impl Fixture {
                 deltas,
                 child_dependencies: &BTreeMap::new(),
                 satisfied_children: &BTreeSet::new(),
+                production_integrations: &[],
                 identity: CommitIdentity {
                     name: "Disposable Fixture Human".into(),
                     email: "fixture@example.test".into(),
@@ -270,6 +271,72 @@ fn v0_t16_missing_b_context_blocks_without_fuzz_or_import_and_preserves_partial_
         f.candidate(operation, &[f.delta()]).unwrap_err().code,
         "ownership_conflict"
     );
+}
+
+#[test]
+fn review_identity_is_available_before_squash_and_excludes_future_commit_metadata() {
+    let f = Fixture::new(false);
+    let proposed = f
+        .git
+        .propose_delta(
+            &f.source,
+            ProposeDelta {
+                repository: f.repository.clone(),
+                parent_id: f.parent,
+                child_id: f.child,
+                work_generation: &d("definition"),
+                correction_generation: &d("correction"),
+                scope: WriteScope {
+                    paths: vec!["a.txt".into()],
+                },
+                base: &f.base,
+                head: &f.head,
+            },
+        )
+        .unwrap();
+    let review_before_merge = proposed.review_digest().unwrap();
+    git_run(
+        &f.source,
+        &["switch", "-c", "second-staging-fixture", &f.base],
+    );
+    git_run(&f.source, &["merge", "--squash", &f.head]);
+    let second_squash = commit(&f.source, "feat: observe second squash metadata");
+    let staged = f
+        .git
+        .capture_delta(
+            &f.source,
+            CaptureDelta {
+                repository: f.repository.clone(),
+                parent_id: f.parent,
+                child_id: f.child,
+                work_generation: &d("definition"),
+                correction_generation: &d("correction"),
+                scope: WriteScope {
+                    paths: vec!["a.txt".into()],
+                },
+                base: &f.base,
+                head: &f.head,
+                staging_parent: &f.base,
+                staging_commit: &second_squash,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        review_before_merge,
+        staged.manifest.review_digest().unwrap()
+    );
+    assert_eq!(proposed.patch(), staged.patch);
+    assert_eq!(
+        review_before_merge,
+        f.delta().manifest.review_digest().unwrap()
+    );
+    assert_ne!(
+        staged.manifest.digest().unwrap(),
+        f.delta().manifest.digest().unwrap()
+    );
+    let mut changed = staged.manifest;
+    changed.scope.paths.push("another-child.txt".into());
+    assert_ne!(review_before_merge, changed.review_digest().unwrap());
 }
 
 #[test]
@@ -1016,7 +1083,8 @@ fn verified_child(
         ChildOutcome::Changed {
             pull_request,
             delta,
-        } => (delta.digest().unwrap(), Some(*pull_request)),
+        } => (delta.review_digest().unwrap(), Some(*pull_request)),
+        ChildOutcome::Replacement { delta, .. } => (delta.review_digest().unwrap(), None),
         ChildOutcome::NoChange { reason, .. } => (
             no_change_digest(&w, &revision, &criteria, reason).unwrap(),
             None,
@@ -1070,6 +1138,14 @@ fn verify_fixture_parent(
     manifest: &ParentEvidence,
     children: &[VerifiedChild],
 ) -> Result<VerifiedParent> {
+    verify_fixture_parent_with_integrations(manifest, children, &[])
+}
+
+fn verify_fixture_parent_with_integrations(
+    manifest: &ParentEvidence,
+    children: &[VerifiedChild],
+    integrations: &[VerifiedProductionIntegration],
+) -> Result<VerifiedParent> {
     verify_parent(
         manifest,
         ParentRequirements {
@@ -1081,6 +1157,8 @@ fn verify_fixture_parent(
             test_resources: &BTreeSet::new(),
             production_targets: &BTreeSet::new(),
             visual: false,
+            required_contributions: &manifest.required_contributions,
+            production_integrations: integrations,
         },
         children,
         &publication(manifest, "linear"),
@@ -1169,6 +1247,16 @@ impl GateFixture {
             child_results: children
                 .iter()
                 .map(|c| (c.evidence().work.child.unwrap(), c.digest().into()))
+                .collect(),
+            required_contributions: children
+                .iter()
+                .filter_map(|c| match &c.evidence().outcome {
+                    ChildOutcome::Changed { delta, .. }
+                    | ChildOutcome::Replacement { delta, .. } => {
+                        Some((delta.child_id, delta.original_contributions().unwrap()))
+                    }
+                    ChildOutcome::NoChange { .. } => None,
+                })
                 .collect(),
             executive_summary:
                 "Prepared outcome delivered by scoped children; isolated E2E checks passed.".into(),
@@ -1406,6 +1494,40 @@ impl GateFixture {
 }
 
 #[test]
+fn manual_release_readiness_is_read_only_and_does_not_invent_a_command() {
+    let f = GateFixture::new(1);
+    let queue = ReleaseQueue::default();
+    let mut facts = f.facts();
+    facts.explicit_manual_request = None;
+    facts.actor_may_release = false;
+    let proof =
+        verify_release_eligibility(&f.plan, f.evidence(), facts, &queue, Utc::now()).unwrap();
+    assert!(proof.awaiting_manual_command());
+    assert_eq!(proof.evidence_token(), f.parent.token());
+    assert_eq!(proof.plan_digest(), f.plan.digest().unwrap());
+    assert!(!queue.owns_all(&f.plan));
+    let mut facts = f.facts();
+    facts.explicit_manual_request = None;
+    facts.actor_may_release = false;
+    assert_eq!(
+        ReleaseAttempt::admit(f.plan.clone(), f.evidence(), facts, Utc::now())
+            .unwrap_err()
+            .code,
+        "release_authorization_required"
+    );
+    let mut facts = f.facts();
+    facts.running = false;
+    assert!(verify_release_eligibility(&f.plan, f.evidence(), facts, &queue, Utc::now()).is_err());
+    let mut held = ReleaseQueue::default();
+    let mut overlapping = f.plan.clone();
+    overlapping.operation_id = Uuid::new_v4();
+    held.reserve(&overlapping, Utc::now()).unwrap();
+    assert!(
+        verify_release_eligibility(&f.plan, f.evidence(), f.facts(), &held, Utc::now()).is_err()
+    );
+}
+
+#[test]
 fn review_regression_release_cannot_drop_an_accepted_repository_or_required_step() {
     let f = GateFixture::new(2);
     ReleaseAttempt::admit(f.plan.clone(), f.evidence(), f.facts(), Utc::now()).unwrap();
@@ -1570,5 +1692,1066 @@ fn v0_t19_stale_token_pending_correction_and_wrong_acceptor_cannot_approve() {
             .unwrap_err()
             .code,
         "release_ineligible"
+    );
+}
+
+fn replacement_fixture(
+    f: &Fixture,
+    key: &AttestationKey,
+) -> (DeltaArtifact, VerifiedChild, VerifiedReview) {
+    let original = f.delta();
+    let staged_revision = f.git.exact_revision(&f.source, &f.squash).unwrap();
+    let staging_binding = RevisionBinding {
+        repository: f.repository.clone(),
+        head: f.squash.clone(),
+        base: f.squash.clone(),
+        tested_commit: f.squash.clone(),
+        tested_tree: staged_revision.tree,
+    };
+    let (staged, _) = verified_child(
+        work(f.parent, Some(f.child)),
+        staging_binding,
+        ChildOutcome::NoChange {
+            reason: "staging already contains the required A behavior; no extra merge is necessary"
+                .into(),
+            change_gates_inapplicable: BTreeSet::from([
+                "branch".into(),
+                "pull_request".into(),
+                "staging_merge".into(),
+            ]),
+            exact_sha_validation: "complete staging exact-SHA workflow".into(),
+        },
+        key,
+    );
+    git_run(
+        &f.source,
+        &["switch", "-c", "A-reviewed-replacement", &f.production],
+    );
+    fs::write(f.source.join("a.txt"), "first\nsecond\nthird\nA fourth\n").unwrap();
+    let replacement_head = commit(
+        &f.source,
+        "fix: produce scoped A replacement against production",
+    );
+    let replacement = f
+        .git
+        .capture_replacement(
+            &f.source,
+            CaptureReplacement {
+                repository: f.repository.clone(),
+                parent_id: f.parent,
+                child_id: f.child,
+                work_generation: &d("definition"),
+                correction_generation: &d("correction"),
+                scope: original.manifest.scope.clone(),
+                production_base: &f.production,
+                head: &replacement_head,
+                staging_revision: &f.squash,
+                staging_result_digest: staged.digest(),
+                originals: &[original],
+                reason: "the original patch requires unapproved B context",
+            },
+        )
+        .unwrap();
+    let binding = RevisionBinding {
+        repository: f.repository.clone(),
+        head: replacement_head.clone(),
+        base: f.production.clone(),
+        tested_commit: replacement_head,
+        tested_tree: replacement.manifest.validated_head.tree.clone(),
+    };
+    let w = work(f.parent, Some(f.child));
+    let (signed, published, status) = review(
+        &w,
+        &binding,
+        &replacement.manifest.review_digest().unwrap(),
+        None,
+        key,
+    );
+    let reviewed = verify_review(
+        &signed,
+        &published,
+        status.as_ref(),
+        key,
+        ReviewRequirements {
+            work: &w,
+            revision: &binding,
+            delta_digest: &replacement.manifest.review_digest().unwrap(),
+            writer: "selected-user",
+        },
+    )
+    .unwrap();
+    let evidence = ChildEvidence {
+        schema_version: 1,
+        work: w.clone(),
+        revision: binding.clone(),
+        fulfilled_criteria: BTreeSet::from(["prepared-outcome".into()]),
+        outcome: ChildOutcome::Replacement {
+            related_pull_request: 1,
+            delta: Box::new(replacement.manifest.clone()),
+        },
+        checks: checks(&w, &binding),
+        review_digest: reviewed.digest().into(),
+        results_for_dependents: vec![artifact_bytes(
+            "fixture://replacement-result",
+            b"isolated replacement and staged result both validated",
+        )],
+    };
+    let verify = |record: &ChildEvidence, staged: &VerifiedChild| {
+        verify_replacement_child(
+            record,
+            ChildRequirements {
+                work: &w,
+                revision: &binding,
+                criteria: &BTreeSet::from(["prepared-outcome".into()]),
+                checks: &check_requirements(),
+                required_contexts: &BTreeSet::from([REVIEW_CONTEXT.into()]),
+            },
+            &reviewed,
+            ReplacementGates {
+                staged_result: staged,
+                related_pull_request: 1,
+                repository: &f.repository,
+                github_publication: &publication(record, "github"),
+                github_writer: "selected-user",
+            },
+            &publication(record, "linear"),
+            "selected-user",
+        )
+    };
+    let child = verify(&evidence, &staged).unwrap();
+    let mut failed = evidence.clone();
+    failed.checks.runs[1].conclusion = Conclusion::Failure;
+    assert_eq!(
+        verify(&failed, &staged).unwrap_err().code,
+        "validation_gate"
+    );
+    assert_eq!(
+        verify_child(
+            &evidence,
+            ChildRequirements {
+                work: &w,
+                revision: &binding,
+                criteria: &evidence.fulfilled_criteria,
+                checks: &check_requirements(),
+                required_contexts: &BTreeSet::new(),
+            },
+            &reviewed,
+            None,
+            &publication(&evidence, "linear"),
+            "selected-user"
+        )
+        .unwrap_err()
+        .code,
+        "replacement_gate"
+    );
+    (replacement, child, reviewed)
+}
+
+fn parent_fixture_for_candidates(
+    candidates: Vec<CandidateManifest>,
+    mut children: Vec<VerifiedChild>,
+    key: &AttestationKey,
+) -> (ParentEvidence, Vec<VerifiedChild>) {
+    let first = &candidates[0];
+    let parent_id = first.parent_id;
+    let e2e_id = Uuid::new_v4();
+    let result = first.result.as_ref().unwrap();
+    let (e2e, _) = verified_child(
+        work(parent_id, Some(e2e_id)),
+        RevisionBinding {
+            repository: first.repository.clone(),
+            head: result.commit.clone(),
+            base: first.production.commit.clone(),
+            tested_commit: result.commit.clone(),
+            tested_tree: result.tree.clone(),
+        },
+        ChildOutcome::NoChange {
+            reason: "E2E validated the complete exact isolated vector".into(),
+            change_gates_inapplicable: BTreeSet::from([
+                "branch".into(),
+                "pull_request".into(),
+                "staging_merge".into(),
+            ]),
+            exact_sha_validation: "complete candidate exact-SHA validation".into(),
+        },
+        key,
+    );
+    children.push(e2e);
+    let now = Utc::now();
+    let mut manifest = ParentEvidence {
+        schema_version: 1,
+        work: work(parent_id, None),
+        required_children: children
+            .iter()
+            .map(|c| c.evidence().work.child.unwrap())
+            .collect(),
+        e2e_child: e2e_id,
+        child_results: children
+            .iter()
+            .map(|c| (c.evidence().work.child.unwrap(), c.digest().into()))
+            .collect(),
+        required_contributions: children
+            .iter()
+            .filter_map(|c| match &c.evidence().outcome {
+                ChildOutcome::Changed { delta, .. } | ChildOutcome::Replacement { delta, .. } => {
+                    Some((delta.child_id, delta.original_contributions().unwrap()))
+                }
+                ChildOutcome::NoChange { .. } => None,
+            })
+            .collect(),
+        executive_summary: "Candidate fulfills the parent and complete required child inventory"
+            .into(),
+        touched_components: vec!["a.txt".into()],
+        fulfilled_criteria: BTreeSet::from(["prepared-outcome".into()]),
+        caveats: vec![],
+        go: true,
+        baselines: candidates
+            .iter()
+            .map(|c| ProductionBaseline {
+                repository: c.repository.clone(),
+                production: c.production.clone(),
+                deployed_revision: None,
+                deployed_artifact: None,
+                deployment_free: true,
+                successor_recovery_operation: None,
+            })
+            .collect(),
+        candidates,
+        dependency_snapshot_digest: d("dependencies"),
+        production_targets: BTreeSet::new(),
+        integrated_results: vec![],
+        visual: false,
+        video: None,
+        publication_operation: Uuid::new_v4(),
+        created_at: now,
+        supersedes: None,
+    };
+    manifest.integrated_results.push(IntegratedRun {
+        id: "integrated".into(),
+        operation_id: Uuid::new_v4(),
+        e2e_child: e2e_id,
+        candidate_vector_digest: manifest.candidate_vector_digest().unwrap(),
+        command: vec!["./e2e.sh".into()],
+        test_resources: BTreeSet::new(),
+        started_at: now - Duration::seconds(2),
+        completed_at: now - Duration::seconds(1),
+        conclusion: Conclusion::Success,
+        after_staging_integration: true,
+        artifacts: vec![artifact_bytes(
+            "fixture://integrated-run",
+            b"actual fixture result",
+        )],
+    });
+    (manifest, children)
+}
+
+#[test]
+fn v0_t28_reviewed_replacement_isolated_from_b_retains_history_and_requires_complete_mapping() {
+    let f = Fixture::new(true);
+    let original = f.delta();
+    assert_eq!(
+        f.candidate(Uuid::new_v4(), std::slice::from_ref(&original))
+            .unwrap_err()
+            .code,
+        "isolated_patch_conflict"
+    );
+    let key = AttestationKey::new("replacement-fixture-key".into(), vec![23; 32]).unwrap();
+    let (replacement, child, source_review) = replacement_fixture(&f, &key);
+    f.git.verify_delta(&f.source, &original).unwrap();
+    assert_eq!(
+        replacement.manifest.original_contributions().unwrap(),
+        BTreeSet::from([original.manifest.digest().unwrap()])
+    );
+    let candidate = f
+        .candidate(Uuid::new_v4(), std::slice::from_ref(&replacement))
+        .unwrap();
+    assert!(!candidate.path().join("unapproved-b.txt").exists());
+    assert_eq!(
+        fs::read_to_string(candidate.path().join("a.txt")).unwrap(),
+        "first\nsecond\nthird\nA fourth\n"
+    );
+    assert_eq!(
+        git_run(&f.source, &["show", &format!("{}:a.txt", f.squash)]),
+        "first\nB-only context\nthird\nA fourth"
+    );
+    let (manifest, children) =
+        parent_fixture_for_candidates(vec![candidate.manifest.clone()], vec![child], &key);
+    let parent = verify_fixture_parent(&manifest, &children).unwrap();
+    let result = candidate.manifest.result.as_ref().unwrap();
+    derive_review(
+        &parent,
+        &candidate.manifest,
+        RevisionBinding {
+            repository: f.repository.clone(),
+            head: result.commit.clone(),
+            base: f.production.clone(),
+            tested_commit: result.commit.clone(),
+            tested_tree: result.tree.clone(),
+        },
+        2,
+        &[source_review],
+        HostOperation {
+            runtime_id: Uuid::new_v4(),
+            operation_id: Uuid::new_v4(),
+            owner_generation: 1,
+        },
+    )
+    .unwrap();
+    let mut missing = manifest.clone();
+    missing
+        .required_contributions
+        .get_mut(&f.child)
+        .unwrap()
+        .insert(d("omitted-child-contribution"));
+    assert_eq!(
+        verify_fixture_parent(&missing, &children).unwrap_err().code,
+        "candidate_provenance"
+    );
+    assert_ne!(
+        original.manifest.digest().unwrap(),
+        replacement.manifest.digest().unwrap()
+    );
+    let mut forged = replacement.clone();
+    forged
+        .manifest
+        .replacement
+        .as_mut()
+        .unwrap()
+        .originals
+        .clear();
+    assert_eq!(
+        f.git.verify_delta(&f.source, &forged).unwrap_err().code,
+        "replacement_mapping"
+    );
+    let mut cross_child = original.clone();
+    cross_child.manifest.child_id = Uuid::new_v4();
+    assert_eq!(
+        f.git
+            .capture_replacement(
+                &f.source,
+                CaptureReplacement {
+                    repository: f.repository.clone(),
+                    parent_id: f.parent,
+                    child_id: f.child,
+                    work_generation: &d("definition"),
+                    correction_generation: &d("correction"),
+                    scope: original.manifest.scope.clone(),
+                    production_base: &f.production,
+                    head: &replacement.manifest.validated_head.commit,
+                    staging_revision: &f.squash,
+                    staging_result_digest: &d("stage"),
+                    originals: &[cross_child],
+                    reason: "must not rewrite another child's contribution",
+                }
+            )
+            .unwrap_err()
+            .code,
+        "scope_violation"
+    );
+}
+
+fn merge_fixture_candidate(f: &Fixture, candidate: &Candidate) -> String {
+    git_run(
+        &f.source,
+        &[
+            "fetch",
+            "--no-tags",
+            candidate.path().to_str().unwrap(),
+            &candidate.manifest.result.as_ref().unwrap().commit,
+        ],
+    );
+    git_run(&f.source, &["switch", "main"]);
+    git_run(&f.source, &["merge", "--squash", "FETCH_HEAD"]);
+    commit(
+        &f.source,
+        "feat: observe approved isolated production squash",
+    )
+}
+
+fn accepted_candidate_fixture(f: &Fixture, candidate: &Candidate) -> VerifiedAcceptedCandidate {
+    let key = AttestationKey::new("accepted-candidate-fixture".into(), vec![41; 32]).unwrap();
+    let delta = f.delta();
+    let (child, _) = verified_child(
+        work(f.parent, Some(f.child)),
+        RevisionBinding {
+            repository: f.repository.clone(),
+            head: f.head.clone(),
+            base: f.base.clone(),
+            tested_commit: f.head.clone(),
+            tested_tree: delta.manifest.validated_head.tree.clone(),
+        },
+        ChildOutcome::Changed {
+            pull_request: 1,
+            delta: Box::new(delta.manifest),
+        },
+        &key,
+    );
+    let (manifest, children) =
+        parent_fixture_for_candidates(vec![candidate.manifest.clone()], vec![child], &key);
+    let parent = verify_fixture_parent(&manifest, &children).unwrap();
+    let acceptance = accept_fixture_parent(&parent, &key);
+    verify_accepted_candidate(&parent, &acceptance, None, &candidate.manifest).unwrap()
+}
+
+fn candidate_with_integrations(
+    f: &Fixture,
+    main: &str,
+    deltas: &[DeltaArtifact],
+    integrations: &[VerifiedProductionIntegration],
+) -> Result<Candidate> {
+    f.git.assemble_candidate(
+        &f.source,
+        &f.runs,
+        CandidateRequest {
+            operation_id: Uuid::new_v4(),
+            runtime_id: Uuid::new_v4(),
+            repository: f.repository.clone(),
+            parent_id: f.parent,
+            work_generation: &d("definition"),
+            correction_generation: &d("correction"),
+            production_commit: main,
+            deltas,
+            child_dependencies: &BTreeMap::new(),
+            satisfied_children: &BTreeSet::new(),
+            production_integrations: integrations,
+            identity: CommitIdentity {
+                name: "Disposable Fixture Human".into(),
+                email: "fixture@example.test".into(),
+            },
+        },
+    )
+}
+
+#[test]
+fn v0_t21_partial_production_merge_is_accounted_without_replaying_or_manufacturing_commit() {
+    let f = Fixture::new(false);
+    let delta = f.delta();
+    let candidate = f
+        .candidate(Uuid::new_v4(), std::slice::from_ref(&delta))
+        .unwrap();
+    let merged = merge_fixture_candidate(&f, &candidate);
+    let authority = accepted_candidate_fixture(&f, &candidate);
+    let proof = f
+        .git
+        .observe_production_integration(
+            &f.source,
+            ObserveProductionIntegration {
+                release_operation: Uuid::new_v4(),
+                pull_request: 4,
+                candidate: &candidate,
+                authority: &authority,
+                merged_commit: &merged,
+                current_main: &merged,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        candidate_with_integrations(
+            &f,
+            &merged,
+            std::slice::from_ref(&delta),
+            std::slice::from_ref(&proof)
+        )
+        .unwrap_err()
+        .code,
+        "duplicate_delta"
+    );
+    let recovered =
+        candidate_with_integrations(&f, &merged, &[], std::slice::from_ref(&proof)).unwrap();
+    assert_eq!(
+        recovered.manifest.result,
+        Some(recovered.manifest.production.clone())
+    );
+    assert!(recovered.manifest.ordered_delta_digests.is_empty());
+    assert_eq!(git_run(recovered.path(), &["rev-parse", "HEAD"]), merged);
+    f.git
+        .inspect_candidate(&f.runs, recovered.manifest.operation_id)
+        .unwrap();
+    let key = AttestationKey::new("partial-fixture-key".into(), vec![29; 32]).unwrap();
+    let binding = RevisionBinding {
+        repository: f.repository.clone(),
+        head: f.head.clone(),
+        base: f.base.clone(),
+        tested_commit: f.head.clone(),
+        tested_tree: delta.manifest.validated_head.tree.clone(),
+    };
+    let (child, _) = verified_child(
+        work(f.parent, Some(f.child)),
+        binding,
+        ChildOutcome::Changed {
+            pull_request: 1,
+            delta: Box::new(delta.manifest.clone()),
+        },
+        &key,
+    );
+    let (manifest, children) =
+        parent_fixture_for_candidates(vec![recovered.manifest], vec![child], &key);
+    verify_fixture_parent_with_integrations(&manifest, &children, std::slice::from_ref(&proof))
+        .unwrap();
+    assert_eq!(
+        verify_fixture_parent(&manifest, &children)
+            .unwrap_err()
+            .code,
+        "production_provenance"
+    );
+    let mut forged = proof.record().clone();
+    forged
+        .selected_contributions
+        .values_mut()
+        .next()
+        .unwrap()
+        .insert(d("forged-extra-effect"));
+    assert_eq!(
+        f.git
+            .reverify_production_integration(&f.source, &forged, &candidate, &authority, &merged)
+            .unwrap_err()
+            .code,
+        "production_provenance"
+    );
+    assert!(
+        f.git
+            .reverify_production_integration(
+                &f.source,
+                proof.record(),
+                &candidate,
+                &authority,
+                &f.production
+            )
+            .is_err()
+    );
+}
+
+fn accept_fixture_parent(parent: &VerifiedParent, key: &AttestationKey) -> VerifiedAcceptance {
+    let acceptors = BTreeSet::from(["human-linear-user".into()]);
+    let signed = prepare_acceptance(
+        parent,
+        AcceptanceRequest {
+            supplied_token: parent.token(),
+            current_work: &parent.manifest().work,
+            pending_correction: false,
+            actor: AcceptanceActor {
+                control_actor: "os-user-501",
+                linear_actor: "human-linear-user",
+                provider_writer: "selected-user",
+                has_accept_role: true,
+                permitted_acceptors: &acceptors,
+            },
+            runtime_id: Uuid::new_v4(),
+            operation_id: Uuid::new_v4(),
+            now: Utc::now(),
+        },
+        key,
+    )
+    .unwrap();
+    verify_acceptance(
+        &signed,
+        &publication(&signed, "linear"),
+        parent,
+        &parent.manifest().work,
+        false,
+        &acceptors,
+        key,
+    )
+    .unwrap()
+}
+
+#[test]
+fn v0_t21_no_release_required_needs_accepted_complete_production_outcome_and_satisfies_dependencies()
+ {
+    let f = Fixture::new(false);
+    let key = AttestationKey::new("no-release-fixture-key".into(), vec![31; 32]).unwrap();
+    let unchanged = candidate_with_integrations(&f, &f.production, &[], &[]).unwrap();
+    assert_eq!(
+        git_run(unchanged.path(), &["rev-parse", "HEAD"]),
+        f.production
+    );
+    let revision = unchanged.manifest.production.clone();
+    let (child, _) = verified_child(
+        work(f.parent, Some(f.child)),
+        RevisionBinding {
+            repository: f.repository.clone(),
+            head: revision.commit.clone(),
+            base: revision.commit.clone(),
+            tested_commit: revision.commit.clone(),
+            tested_tree: revision.tree,
+        },
+        ChildOutcome::NoChange {
+            reason: "requested behavior already exists in the production baseline".into(),
+            change_gates_inapplicable: BTreeSet::from([
+                "branch".into(),
+                "pull_request".into(),
+                "staging_merge".into(),
+            ]),
+            exact_sha_validation: "complete production baseline validation".into(),
+        },
+        &key,
+    );
+    let (manifest, children) =
+        parent_fixture_for_candidates(vec![unchanged.manifest], vec![child], &key);
+    let parent = verify_fixture_parent(&manifest, &children).unwrap();
+    let acceptance = accept_fixture_parent(&parent, &key);
+    let record = NoReleaseRequired {
+        schema_version: 1,
+        runtime_id: Uuid::new_v4(),
+        operation_id: Uuid::new_v4(),
+        work: parent.manifest().work.clone(),
+        evidence_token: parent.token().into(),
+        acceptance_digest: acceptance.digest().into(),
+        baselines: parent.manifest().baselines.clone(),
+        targets: vec![],
+        recorded_at: Utc::now(),
+    };
+    let no_targets = BTreeMap::new();
+    let requirements = || NoReleaseRequirements {
+        current_work: &manifest.work,
+        pending_correction: false,
+        targets: &no_targets,
+    };
+    let signed =
+        prepare_no_release_required(record.clone(), &parent, &acceptance, requirements(), &key)
+            .unwrap();
+    let verified = verify_no_release_required(
+        &signed,
+        &parent,
+        &acceptance,
+        requirements(),
+        &publication(&signed, "linear"),
+        "selected-user",
+        &key,
+    )
+    .unwrap();
+    let mut queue = ReleaseQueue::default();
+    let outcome = queue.record_no_release_required(&verified).unwrap();
+    assert!(outcome.no_release_required);
+    let mut dependent = synthetic_plan(Uuid::new_v4(), &f.repository, 'd');
+    dependent.spacing_seconds = 86400;
+    dependent.dependencies.push(DependencyRequirement {
+        parent_id: f.parent,
+        generation: outcome.generation.clone(),
+        outcome_digest: outcome.outcome_digest,
+    });
+    queue.eligible(&dependent, Utc::now()).unwrap();
+    dependent.dependencies[0].generation.correction = d("new-corrected-required-outcome");
+    assert_eq!(
+        queue.eligible(&dependent, Utc::now()).unwrap_err().code,
+        "release_dependency"
+    );
+    let mut changed = record;
+    changed.evidence_token = d("a-different-result");
+    assert_eq!(
+        prepare_no_release_required(changed, &parent, &acceptance, requirements(), &key)
+            .unwrap_err()
+            .code,
+        "no_release_gate"
+    );
+    assert_eq!(
+        prepare_no_release_required(
+            signed.payload.clone(),
+            &parent,
+            &acceptance,
+            NoReleaseRequirements {
+                current_work: &manifest.work,
+                pending_correction: true,
+                targets: &BTreeMap::new()
+            },
+            &key
+        )
+        .unwrap_err()
+        .code,
+        "no_release_gate"
+    );
+    let mut locked = ReleaseQueue::default();
+    locked
+        .reserve(
+            &synthetic_plan(Uuid::new_v4(), &f.repository, 'l'),
+            Utc::now(),
+        )
+        .unwrap();
+    assert_eq!(
+        locked
+            .record_no_release_required(&verified)
+            .unwrap_err()
+            .code,
+        "release_hold"
+    );
+}
+
+#[test]
+fn v0_t28_changed_selected_replacement_requires_new_acceptance_even_if_result_bytes_match() {
+    let gates = GateFixture::new(1);
+    let f = &gates._git_fixtures[0];
+    let (replacement, child, _) = replacement_fixture(f, &gates.key);
+    let candidate = f.candidate(Uuid::new_v4(), &[replacement]).unwrap();
+    let mut manifest = gates.parent.manifest().clone();
+    manifest.candidates = vec![candidate.manifest];
+    let mut children = gates.children.clone();
+    let child_index = children
+        .iter()
+        .position(|c| c.evidence().work.child == Some(f.child))
+        .unwrap();
+    children[child_index] = child;
+    manifest.child_results = children
+        .iter()
+        .map(|c| (c.evidence().work.child.unwrap(), c.digest().into()))
+        .collect();
+    manifest.created_at = Utc::now();
+    manifest.integrated_results[0].candidate_vector_digest =
+        manifest.candidate_vector_digest().unwrap();
+    let newer = verify_fixture_parent(&manifest, &children).unwrap();
+    assert_eq!(
+        gates.parent.manifest().candidates[0].ordered_patch_digests,
+        newer.manifest().candidates[0].ordered_patch_digests
+    );
+    assert_ne!(
+        gates.parent.manifest().candidates[0].ordered_delta_digests,
+        newer.manifest().candidates[0].ordered_delta_digests
+    );
+    assert_eq!(
+        carry_acceptance(
+            &gates.parent,
+            &newer,
+            &gates.acceptance,
+            &artifact_bytes("fixture://known-baseline", b"known"),
+            &[],
+            Utc::now()
+        )
+        .unwrap_err()
+        .code,
+        "acceptance_required"
+    );
+    let renewed = accept_fixture_parent(&newer, &gates.key);
+    assert_eq!(renewed.acceptance().reviewed_token, newer.token());
+}
+
+#[test]
+fn v0_t30_partial_a_delivered_b_merged_recovery_has_no_replayed_contribution_or_false_delivery() {
+    let key = AttestationKey::new("partial-vector-fixture-key".into(), vec![37; 32]).unwrap();
+    let parent_id = Uuid::new_v4();
+    let mut a = Fixture::new(false);
+    a.parent = parent_id;
+    a.repository.id = "repo-a".into();
+    let mut b = Fixture::new(false);
+    b.parent = parent_id;
+    b.repository.id = "repo-b".into();
+    let mut candidates = vec![];
+    let mut children = vec![];
+    let mut proofs = vec![];
+    let release_operation = Uuid::new_v4();
+    for (index, f) in [&a, &b].into_iter().enumerate() {
+        let delta = f.delta();
+        let binding = RevisionBinding {
+            repository: f.repository.clone(),
+            head: f.head.clone(),
+            base: f.base.clone(),
+            tested_commit: f.head.clone(),
+            tested_tree: delta.manifest.validated_head.tree.clone(),
+        };
+        let (child, _) = verified_child(
+            work(parent_id, Some(f.child)),
+            binding,
+            ChildOutcome::Changed {
+                pull_request: 1,
+                delta: Box::new(delta.manifest.clone()),
+            },
+            &key,
+        );
+        children.push(child);
+        let selected = f.candidate(Uuid::new_v4(), &[delta]).unwrap();
+        let merged = merge_fixture_candidate(f, &selected);
+        let authority = accepted_candidate_fixture(f, &selected);
+        let proof = f
+            .git
+            .observe_production_integration(
+                &f.source,
+                ObserveProductionIntegration {
+                    release_operation,
+                    pull_request: 10 + index as u64,
+                    candidate: &selected,
+                    authority: &authority,
+                    merged_commit: &merged,
+                    current_main: &merged,
+                },
+            )
+            .unwrap();
+        let recovered =
+            candidate_with_integrations(f, &merged, &[], std::slice::from_ref(&proof)).unwrap();
+        assert!(recovered.manifest.ordered_delta_digests.is_empty());
+        assert_eq!(git_run(recovered.path(), &["rev-parse", "HEAD"]), merged);
+        assert_eq!(
+            fs::read_to_string(recovered.path().join("a.txt")).unwrap(),
+            "first\nsecond\nthird\nA fourth\n"
+        );
+        candidates.push(recovered.manifest);
+        proofs.push(proof);
+    }
+    let (mut manifest, children) = parent_fixture_for_candidates(candidates, children, &key);
+    // A is delivered. B's exact merge is known, but its deployment is still the
+    // previous baseline. The recovery vector must preserve that distinction.
+    for baseline in &mut manifest.baselines {
+        baseline.deployment_free = false;
+        baseline.deployed_revision = Some(if baseline.repository == a.repository {
+            baseline.production.commit.clone()
+        } else {
+            b.production.clone()
+        });
+        baseline.deployed_artifact = Some(d(if baseline.repository == a.repository {
+            "delivered-a"
+        } else {
+            "previous-b"
+        }));
+        baseline.successor_recovery_operation = Some(release_operation);
+    }
+    manifest.production_targets = BTreeSet::from(["target-a".into(), "target-b".into()]);
+    manifest.integrated_results[0].candidate_vector_digest =
+        manifest.candidate_vector_digest().unwrap();
+    let parent = verify_parent(
+        &manifest,
+        ParentRequirements {
+            work: &manifest.work,
+            required_children: &manifest.required_children,
+            e2e_child: manifest.e2e_child,
+            criteria: &manifest.fulfilled_criteria,
+            integrated_commands: &BTreeMap::from([("integrated".into(), vec!["./e2e.sh".into()])]),
+            test_resources: &BTreeSet::new(),
+            production_targets: &manifest.production_targets,
+            visual: false,
+            required_contributions: &manifest.required_contributions,
+            production_integrations: &proofs,
+        },
+        &children,
+        &publication(&manifest, "linear"),
+        "selected-user",
+    )
+    .unwrap();
+    let acceptance = accept_fixture_parent(&parent, &key);
+    let targets = BTreeMap::from([
+        ("target-a".into(), ("github".into(), a.repository.clone())),
+        ("target-b".into(), ("github".into(), b.repository.clone())),
+    ]);
+    let record = NoReleaseRequired {
+        schema_version: 1,
+        runtime_id: Uuid::new_v4(),
+        operation_id: Uuid::new_v4(),
+        work: manifest.work.clone(),
+        evidence_token: parent.token().into(),
+        acceptance_digest: acceptance.digest().into(),
+        baselines: manifest.baselines.clone(),
+        targets: vec![ProductionTargetBaseline {
+            provider: "github".into(),
+            target: "target-a".into(),
+            repository: a.repository,
+            source: manifest.baselines[0].production.clone(),
+            artifact_digest: d("delivered-a"),
+            provider_record: "observed-deployment-a".into(),
+            observed_at: Utc::now(),
+        }],
+        recorded_at: Utc::now(),
+    };
+    assert_eq!(
+        prepare_no_release_required(
+            record,
+            &parent,
+            &acceptance,
+            NoReleaseRequirements {
+                current_work: &manifest.work,
+                pending_correction: false,
+                targets: &targets
+            },
+            &key
+        )
+        .unwrap_err()
+        .code,
+        "no_release_gate"
+    );
+}
+
+#[test]
+fn v0_t21_later_correction_selects_only_new_delta_and_preserves_earlier_production_history() {
+    let f = Fixture::new(false);
+    let original = f.delta();
+    let old_candidate = f
+        .candidate(Uuid::new_v4(), std::slice::from_ref(&original))
+        .unwrap();
+    let merged = merge_fixture_candidate(&f, &old_candidate);
+    let authority = accepted_candidate_fixture(&f, &old_candidate);
+    let proof = f
+        .git
+        .observe_production_integration(
+            &f.source,
+            ObserveProductionIntegration {
+                release_operation: Uuid::new_v4(),
+                pull_request: 7,
+                candidate: &old_candidate,
+                authority: &authority,
+                merged_commit: &merged,
+                current_main: &merged,
+            },
+        )
+        .unwrap();
+    git_run(
+        &f.source,
+        &["switch", "-c", "A-authorized-correction", &f.squash],
+    );
+    fs::write(
+        f.source.join("a.txt"),
+        "first\nsecond\nthird\nA corrected fourth\n",
+    )
+    .unwrap();
+    let corrected_head = commit(
+        &f.source,
+        "fix: implement authorized correction in original child",
+    );
+    git_run(&f.source, &["switch", "staging"]);
+    git_run(&f.source, &["merge", "--squash", "A-authorized-correction"]);
+    let corrected_squash = commit(
+        &f.source,
+        "fix: squash reviewed child correction into staging",
+    );
+    let delta = f
+        .git
+        .capture_delta(
+            &f.source,
+            CaptureDelta {
+                repository: f.repository.clone(),
+                parent_id: f.parent,
+                child_id: f.child,
+                work_generation: &d("definition"),
+                correction_generation: &d("corrected-generation"),
+                scope: original.manifest.scope.clone(),
+                base: &f.squash,
+                head: &corrected_head,
+                staging_parent: &f.squash,
+                staging_commit: &corrected_squash,
+            },
+        )
+        .unwrap();
+    let request = CandidateRequest {
+        operation_id: Uuid::new_v4(),
+        runtime_id: Uuid::new_v4(),
+        repository: f.repository.clone(),
+        parent_id: f.parent,
+        work_generation: &d("definition"),
+        correction_generation: &d("corrected-generation"),
+        production_commit: &merged,
+        deltas: std::slice::from_ref(&delta),
+        child_dependencies: &BTreeMap::new(),
+        satisfied_children: &BTreeSet::new(),
+        production_integrations: std::slice::from_ref(&proof),
+        identity: CommitIdentity {
+            name: "Disposable Fixture Human".into(),
+            email: "fixture@example.test".into(),
+        },
+    };
+    let corrected = f
+        .git
+        .assemble_candidate(&f.source, &f.runs, request)
+        .unwrap();
+    assert_eq!(
+        corrected.manifest.ordered_delta_digests,
+        vec![delta.manifest.digest().unwrap()]
+    );
+    assert_eq!(
+        corrected.manifest.production_integrations[0].selected_delta_digests,
+        vec![original.manifest.digest().unwrap()]
+    );
+    assert_eq!(git_run(corrected.path(), &["rev-parse", "HEAD^"]), merged);
+    assert_eq!(
+        fs::read_to_string(corrected.path().join("a.txt")).unwrap(),
+        "first\nsecond\nthird\nA corrected fourth\n"
+    );
+    assert!(!corrected.path().join("unapproved-b.txt").exists());
+    assert_eq!(
+        git_run(&f.source, &["show", &format!("{merged}:a.txt")]),
+        "first\nsecond\nthird\nA fourth"
+    );
+    f.git.verify_delta(&f.source, &original).unwrap();
+}
+
+#[test]
+fn recovery_cannot_reassign_contributions_by_rewriting_both_retained_metadata_and_receipt() {
+    let f = Fixture::new(false);
+    let candidate = f.candidate(Uuid::new_v4(), &[f.delta()]).unwrap();
+    let authority = accepted_candidate_fixture(&f, &candidate);
+    let merged = merge_fixture_candidate(&f, &candidate);
+    let integration = f
+        .git
+        .observe_production_integration(
+            &f.source,
+            ObserveProductionIntegration {
+                release_operation: Uuid::new_v4(),
+                pull_request: 8,
+                candidate: &candidate,
+                authority: &authority,
+                merged_commit: &merged,
+                current_main: &merged,
+            },
+        )
+        .unwrap();
+    let mut forged_manifest = candidate.manifest.clone();
+    forged_manifest
+        .selected_contributions
+        .values_mut()
+        .next()
+        .unwrap()
+        .insert(d("another-required-outcome-never-produced"));
+    fs::write(
+        candidate.path().join(".git/kegari-candidate.json"),
+        serde_json::to_vec(&forged_manifest).unwrap(),
+    )
+    .unwrap();
+    let inspected = f
+        .git
+        .inspect_candidate(&f.runs, candidate.manifest.operation_id)
+        .unwrap();
+    assert_eq!(inspected.manifest.result, candidate.manifest.result);
+    let mut forged_receipt = integration.record().clone();
+    forged_receipt.selected_contributions = forged_manifest.selected_contributions;
+    forged_receipt.source_candidate_digest = canonical_digest(1, &inspected.manifest).unwrap();
+    assert_eq!(
+        f.git
+            .reverify_production_integration(
+                &f.source,
+                &forged_receipt,
+                &inspected,
+                &authority,
+                &merged
+            )
+            .unwrap_err()
+            .code,
+        "production_provenance"
+    );
+}
+
+#[test]
+fn canonical_publications_reject_quotes_trailing_data_duplicates_and_wrong_domains() {
+    let key = AttestationKey::new("fixture-key".into(), vec![17; 32]).unwrap();
+    let value = serde_json::json!({"schema_version":1,"exact":"record"});
+    let signed = key.sign("fixture_record", &value).unwrap();
+    let body = encode_signed_publication("fixture_record", &signed).unwrap();
+    assert_eq!(
+        decode_signed_publication::<serde_json::Value>(&body, "fixture_record", &key).unwrap(),
+        signed
+    );
+    for bad in [
+        format!("Example: {body}"),
+        format!("{body}\n"),
+        format!("{body}{body}"),
+        body.replacen("\"signature\":", "\"unexpected\":1,\"signature\":", 1),
+        body.replacen(
+            "\"schema_version\":1",
+            "\"schema_version\":1,\"schema_version\":1",
+            1,
+        ),
+    ] {
+        assert!(
+            decode_signed_publication::<serde_json::Value>(&bad, "fixture_record", &key).is_err()
+        );
+    }
+    assert!(
+        decode_signed_publication::<serde_json::Value>(&body, "human_acceptance", &key).is_err()
+    );
+    let other = AttestationKey::new("fixture-key".into(), vec![18; 32]).unwrap();
+    assert!(
+        decode_signed_publication::<serde_json::Value>(&body, "fixture_record", &other).is_err()
     );
 }

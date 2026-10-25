@@ -8,8 +8,8 @@
 use crate::digest::canonical_digest;
 use crate::error::{Error, Result};
 use crate::evidence::{
-    CarriedAcceptance, Generation, VerifiedAcceptance, VerifiedCarry, VerifiedParent,
-    VerifiedProduction, validate_digest,
+    CarriedAcceptance, Generation, VerifiedAcceptance, VerifiedCarry, VerifiedNoReleaseRequired,
+    VerifiedParent, VerifiedProduction, validate_digest,
 };
 use crate::git::{RepositoryId, Revision, validate_oid};
 use chrono::{DateTime, Duration, Utc};
@@ -521,12 +521,67 @@ pub struct RecoveryDecision<'a> {
     pub now: DateTime<Utc>,
 }
 
+/// Read-only readiness is separate from authority to dispatch. In manual mode
+/// this proof may truthfully report that the release command is still awaited.
+#[derive(Clone, Debug)]
+pub struct VerifiedReleaseEligibility {
+    plan_digest: String,
+    evidence_token: String,
+    checked_at: DateTime<Utc>,
+    awaiting_manual_command: bool,
+}
+impl VerifiedReleaseEligibility {
+    pub fn plan_digest(&self) -> &str {
+        &self.plan_digest
+    }
+    pub fn evidence_token(&self) -> &str {
+        &self.evidence_token
+    }
+    pub fn checked_at(&self) -> DateTime<Utc> {
+        self.checked_at
+    }
+    pub fn awaiting_manual_command(&self) -> bool {
+        self.awaiting_manual_command
+    }
+}
+
+pub fn verify_release_eligibility(
+    plan: &ReleasePlan,
+    evidence: DeliveryEvidence<'_>,
+    facts: AdmissionFacts,
+    queue: &ReleaseQueue,
+    now: DateTime<Utc>,
+) -> Result<VerifiedReleaseEligibility> {
+    queue.eligible(plan, now)?;
+    let awaiting_manual_command =
+        facts.manual_mode && (facts.explicit_manual_request.is_none() || !facts.actor_may_release);
+    // The evaluated draft is not returned or persisted and grants no dispatch
+    // capability. All ordinary admission predicates remain identical.
+    ReleaseAttempt::evaluate(plan.clone(), evidence, facts, now, false)?;
+    Ok(VerifiedReleaseEligibility {
+        plan_digest: plan.digest()?,
+        evidence_token: plan.evidence_token.clone(),
+        checked_at: now,
+        awaiting_manual_command,
+    })
+}
+
 impl ReleaseAttempt {
     pub fn admit(
         plan: ReleasePlan,
         evidence: DeliveryEvidence<'_>,
         facts: AdmissionFacts,
         now: DateTime<Utc>,
+    ) -> Result<Self> {
+        Self::evaluate(plan, evidence, facts, now, true)
+    }
+
+    fn evaluate(
+        plan: ReleasePlan,
+        evidence: DeliveryEvidence<'_>,
+        facts: AdmissionFacts,
+        now: DateTime<Utc>,
+        dispatch_authority: bool,
     ) -> Result<Self> {
         let DeliveryEvidence {
             parent,
@@ -558,7 +613,8 @@ impl ReleaseAttempt {
                 "runtime intent, inclusion, authority, preparation or current provider gates prevent release",
             ));
         }
-        if facts.manual_mode
+        if dispatch_authority
+            && facts.manual_mode
             && (facts.explicit_manual_request.is_none() || !facts.actor_may_release)
         {
             return Err(Error::new(
@@ -610,6 +666,7 @@ impl ReleaseAttempt {
             .manifest()
             .candidates
             .iter()
+            .filter(|c| !c.ordered_delta_digests.is_empty())
             .map(|c| &c.repository)
             .collect();
         let planned_repositories: BTreeSet<_> = plan
@@ -1465,6 +1522,7 @@ pub struct SuccessfulRelease {
     pub resources: BTreeSet<ResourceKey>,
     pub completed_at: DateTime<Utc>,
     pub spacing_seconds: u64,
+    pub no_release_required: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1527,6 +1585,7 @@ impl ReleaseQueue {
             resources: attempt.plan.resources.clone(),
             completed_at,
             spacing_seconds: attempt.plan.spacing_seconds,
+            no_release_required: false,
         };
         if let Some(previous) = self
             .successes
@@ -1551,10 +1610,67 @@ impl ReleaseQueue {
         Ok(record)
     }
 
+    /// A verified accepted already-production outcome satisfies dependencies,
+    /// but creates no merge/deployment activity or spacing event. Unknown
+    /// overlapping effects still have to be reconciled first.
+    pub fn record_no_release_required(
+        &mut self,
+        verified: &VerifiedNoReleaseRequired,
+    ) -> Result<SuccessfulRelease> {
+        let proof = verified.record();
+        let mut resources: BTreeSet<_> = proof
+            .baselines
+            .iter()
+            .map(|b| ResourceKey::Repository {
+                repository: b.repository.clone(),
+            })
+            .collect();
+        resources.extend(proof.targets.iter().map(|t| ResourceKey::Target {
+            provider: t.provider.clone(),
+            id: t.target.clone(),
+        }));
+        if self.owners.keys().any(|r| resources.contains(r))
+            || self
+                .holds
+                .values()
+                .any(|h| !h.resources.is_disjoint(&resources))
+        {
+            return Err(Error::new(
+                "release_hold",
+                "already-production classification cannot clear active or unresolved delivery",
+            ));
+        }
+        let record = SuccessfulRelease {
+            operation_id: proof.operation_id,
+            parent_id: proof.work.parent,
+            generation: proof.work.generation.clone(),
+            outcome_digest: verified.digest().into(),
+            resources,
+            completed_at: proof.recorded_at,
+            spacing_seconds: 0,
+            no_release_required: true,
+        };
+        if let Some(previous) = self
+            .successes
+            .iter()
+            .find(|s| s.operation_id == record.operation_id)
+        {
+            if previous != &record {
+                return Err(Error::new(
+                    "operation_conflict",
+                    "already-production decision changed after recording",
+                ));
+            }
+            return Ok(previous.clone());
+        }
+        self.successes.push(record.clone());
+        Ok(record)
+    }
+
     pub fn earliest_start(&self, plan: &ReleasePlan, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
         let mut earliest = now;
         for previous in &self.successes {
-            if previous.resources.is_disjoint(&plan.resources) {
+            if previous.no_release_required || previous.resources.is_disjoint(&plan.resources) {
                 continue;
             }
             let spacing = previous.spacing_seconds.max(plan.spacing_seconds);

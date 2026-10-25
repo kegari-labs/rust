@@ -6,6 +6,7 @@
 
 use crate::digest::{bytes_digest, canonical_digest};
 use crate::error::{Error, Result};
+use crate::evidence::VerifiedAcceptedCandidate;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -203,12 +204,128 @@ pub struct DeltaManifest {
     pub staging_commit: Revision,
     pub patch_digest: String,
     pub paths: Vec<String>,
+    /// Retained superseded artifacts are immutable history. A replacement is
+    /// authored by the same scoped child, not synthesized by this controller.
+    pub replacement: Option<ReplacementMapping>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplacementMapping {
+    pub originals: Vec<DeltaManifest>,
+    pub reason: String,
+    pub staging_result_digest: String,
 }
 
 impl DeltaManifest {
     pub fn digest(&self) -> Result<String> {
         canonical_digest(DELTA_SCHEMA, self)
     }
+
+    /// Review precedes integration. Its canonical identity excludes the future
+    /// squash commit while binding every reviewed byte, scope and generation.
+    pub fn review_digest(&self) -> Result<String> {
+        ReviewDelta {
+            schema_version: 1,
+            git_version: self.git_version.clone(),
+            repository: self.repository.clone(),
+            parent_id: self.parent_id,
+            child_id: self.child_id,
+            work_generation: self.work_generation.clone(),
+            correction_generation: self.correction_generation.clone(),
+            scope: self.scope.clone(),
+            base: self.validated_base.clone(),
+            head: self.validated_head.clone(),
+            patch_digest: self.patch_digest.clone(),
+            paths: self.paths.clone(),
+            replacement_digest: self
+                .replacement
+                .as_ref()
+                .map(|m| canonical_digest(1, m))
+                .transpose()?,
+        }
+        .digest()
+    }
+
+    pub fn original_contributions(&self) -> Result<BTreeSet<String>> {
+        fn collect(m: &DeltaManifest, depth: usize, found: &mut BTreeSet<String>) -> Result<()> {
+            if depth > 8 {
+                return Err(Error::new(
+                    "replacement_mapping",
+                    "replacement history exceeds supported depth",
+                ));
+            }
+            if let Some(mapping) = &m.replacement {
+                if mapping.originals.is_empty() {
+                    return Err(Error::new(
+                        "replacement_mapping",
+                        "replacement drops its original contribution inventory",
+                    ));
+                }
+                for original in &mapping.originals {
+                    collect(original, depth + 1, found)?;
+                }
+            } else if !found.insert(m.digest()?) {
+                return Err(Error::new(
+                    "replacement_mapping",
+                    "original contribution is accounted for more than once",
+                ));
+            }
+            Ok(())
+        }
+        let mut found = BTreeSet::new();
+        collect(self, 0, &mut found)?;
+        Ok(found)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewDelta {
+    pub schema_version: u32,
+    pub git_version: String,
+    pub repository: RepositoryId,
+    pub parent_id: Uuid,
+    pub child_id: Uuid,
+    pub work_generation: String,
+    pub correction_generation: String,
+    pub scope: WriteScope,
+    pub base: Revision,
+    pub head: Revision,
+    pub patch_digest: String,
+    pub paths: Vec<String>,
+    pub replacement_digest: Option<String>,
+}
+impl ReviewDelta {
+    pub fn digest(&self) -> Result<String> {
+        canonical_digest(1, self)
+    }
+}
+#[derive(Clone, Debug)]
+pub struct ProposedDelta {
+    review: ReviewDelta,
+    patch: Vec<u8>,
+}
+impl ProposedDelta {
+    pub fn review(&self) -> &ReviewDelta {
+        &self.review
+    }
+    pub fn patch(&self) -> &[u8] {
+        &self.patch
+    }
+    pub fn review_digest(&self) -> Result<String> {
+        self.review.digest()
+    }
+}
+pub struct ProposeDelta<'a> {
+    pub repository: RepositoryId,
+    pub parent_id: Uuid,
+    pub child_id: Uuid,
+    pub work_generation: &'a str,
+    pub correction_generation: &'a str,
+    pub scope: WriteScope,
+    pub base: &'a str,
+    pub head: &'a str,
 }
 
 /// Patch bytes are an evidence artifact, not content copied into a run receipt.
@@ -231,6 +348,70 @@ pub struct CaptureDelta<'a> {
     pub staging_commit: &'a str,
 }
 
+pub struct CaptureReplacement<'a> {
+    pub repository: RepositoryId,
+    pub parent_id: Uuid,
+    pub child_id: Uuid,
+    pub work_generation: &'a str,
+    pub correction_generation: &'a str,
+    pub scope: WriteScope,
+    pub production_base: &'a str,
+    pub head: &'a str,
+    pub staging_revision: &'a str,
+    pub staging_result_digest: &'a str,
+    pub originals: &'a [DeltaArtifact],
+    pub reason: &'a str,
+}
+
+/// An exact observed squash, independently of whether deployment succeeded.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductionIntegration {
+    pub repository: RepositoryId,
+    pub parent_id: Uuid,
+    pub release_operation: Uuid,
+    pub pull_request: u64,
+    pub source_candidate_digest: String,
+    pub accepted_evidence_token: String,
+    pub acceptance_digest: String,
+    pub production_parent: Revision,
+    pub candidate: Revision,
+    pub merged: Revision,
+    pub observed_main: Revision,
+    pub selected_delta_digests: Vec<String>,
+    pub selected_patch_digests: Vec<String>,
+    pub selected_contributions: BTreeMap<String, BTreeSet<String>>,
+    pub combined_patch_digest: String,
+}
+
+impl ProductionIntegration {
+    pub fn digest(&self) -> Result<String> {
+        canonical_digest(1, self)
+    }
+}
+
+/// Not deserializable: recovery must reproduce the Git-object proof before it
+/// can omit a recorded production delta from the next candidate.
+#[derive(Clone, Debug)]
+pub struct VerifiedProductionIntegration {
+    record: ProductionIntegration,
+}
+
+impl VerifiedProductionIntegration {
+    pub fn record(&self) -> &ProductionIntegration {
+        &self.record
+    }
+}
+
+pub struct ObserveProductionIntegration<'a> {
+    pub release_operation: Uuid,
+    pub pull_request: u64,
+    pub candidate: &'a Candidate,
+    pub authority: &'a VerifiedAcceptedCandidate,
+    pub merged_commit: &'a str,
+    pub current_main: &'a str,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateManifest {
@@ -245,6 +426,8 @@ pub struct CandidateManifest {
     pub production: Revision,
     pub ordered_delta_digests: Vec<String>,
     pub ordered_patch_digests: Vec<String>,
+    pub selected_contributions: BTreeMap<String, BTreeSet<String>>,
+    pub production_integrations: Vec<ProductionIntegration>,
     pub result: Option<Revision>,
     pub combined_patch_digest: Option<String>,
 }
@@ -279,6 +462,7 @@ pub struct CandidateRequest<'a> {
     pub deltas: &'a [DeltaArtifact],
     pub child_dependencies: &'a BTreeMap<Uuid, BTreeSet<Uuid>>,
     pub satisfied_children: &'a BTreeSet<Uuid>,
+    pub production_integrations: &'a [VerifiedProductionIntegration],
     pub identity: CommitIdentity,
 }
 
@@ -611,6 +795,60 @@ impl Git {
         Ok(())
     }
 
+    pub fn propose_delta(&self, source: &Path, request: ProposeDelta<'_>) -> Result<ProposedDelta> {
+        request.repository.validate()?;
+        request.scope.validate()?;
+        if request.parent_id.is_nil()
+            || request.child_id.is_nil()
+            || request.work_generation.is_empty()
+            || request.correction_generation.is_empty()
+        {
+            return Err(Error::invalid(
+                "proposed delta requires current child and generation identities",
+            ));
+        }
+        let base = self.exact_revision(source, request.base)?;
+        let head = self.exact_revision(source, request.head)?;
+        if !self.is_ancestor(source, &base.commit, &head.commit)? {
+            return Err(Error::new(
+                "provenance_mismatch",
+                "proposed head is not based on recorded staging",
+            ));
+        }
+        let patch = self.patch(source, &base.commit, &head.commit)?;
+        let paths = self.changed_paths(source, &base.commit, &head.commit)?;
+        if patch.is_empty() || paths.is_empty() {
+            return Err(Error::new(
+                "no_change",
+                "empty proposal requires evidenced no-change completion",
+            ));
+        }
+        if paths.iter().any(|p| !request.scope.permits(p)) {
+            return Err(Error::new(
+                "scope_violation",
+                "proposed patch escapes the authorized child paths",
+            ));
+        }
+        Ok(ProposedDelta {
+            review: ReviewDelta {
+                schema_version: 1,
+                git_version: self.version.clone(),
+                repository: request.repository,
+                parent_id: request.parent_id,
+                child_id: request.child_id,
+                work_generation: request.work_generation.into(),
+                correction_generation: request.correction_generation.into(),
+                scope: request.scope,
+                base,
+                head,
+                patch_digest: bytes_digest(&patch),
+                paths,
+                replacement_digest: None,
+            },
+            patch,
+        })
+    }
+
     pub fn capture_delta(&self, source: &Path, request: CaptureDelta<'_>) -> Result<DeltaArtifact> {
         request.repository.validate()?;
         request.scope.validate()?;
@@ -668,6 +906,7 @@ impl Git {
             staging_commit,
             patch_digest: bytes_digest(&patch),
             paths,
+            replacement: None,
         };
         Ok(DeltaArtifact { manifest, patch })
     }
@@ -682,6 +921,49 @@ impl Git {
                 "provenance_mismatch",
                 "delta schema, Git profile or exact artifact digest mismatch",
             ));
+        }
+        if let Some(mapping) = &m.replacement {
+            // Bound recursion and reject duplicate contribution mappings before
+            // traversing retained Git objects.
+            m.original_contributions()?;
+            let originals = mapping
+                .originals
+                .iter()
+                .map(|original| {
+                    Ok(DeltaArtifact {
+                        patch: self.patch(
+                            source,
+                            &original.validated_base.commit,
+                            &original.validated_head.commit,
+                        )?,
+                        manifest: original.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let reproduced = self.capture_replacement(
+                source,
+                CaptureReplacement {
+                    repository: m.repository.clone(),
+                    parent_id: m.parent_id,
+                    child_id: m.child_id,
+                    work_generation: &m.work_generation,
+                    correction_generation: &m.correction_generation,
+                    scope: m.scope.clone(),
+                    production_base: &m.validated_base.commit,
+                    head: &m.validated_head.commit,
+                    staging_revision: &m.staging_commit.commit,
+                    staging_result_digest: &mapping.staging_result_digest,
+                    originals: &originals,
+                    reason: &mapping.reason,
+                },
+            )?;
+            if reproduced.manifest != *m || reproduced.patch != delta.patch {
+                return Err(Error::new(
+                    "provenance_mismatch",
+                    "retained objects do not reproduce the replacement mapping",
+                ));
+            }
+            return Ok(());
         }
         let captured = self.capture_delta(
             source,
@@ -705,6 +987,208 @@ impl Git {
             ));
         }
         Ok(())
+    }
+
+    pub fn capture_replacement(
+        &self,
+        source: &Path,
+        request: CaptureReplacement<'_>,
+    ) -> Result<DeltaArtifact> {
+        request.repository.validate()?;
+        request.scope.validate()?;
+        if request.originals.is_empty()
+            || request.originals.len() > 1024
+            || request.reason.trim().is_empty()
+            || request.work_generation.is_empty()
+            || request.correction_generation.is_empty()
+            || request.staging_result_digest.is_empty()
+        {
+            return Err(Error::new(
+                "replacement_mapping",
+                "replacement needs original contributions, reason and explicit staged-result evidence",
+            ));
+        }
+        let mut originals = Vec::new();
+        for original in request.originals {
+            self.verify_delta(source, original)?;
+            let m = &original.manifest;
+            if m.repository != request.repository
+                || m.parent_id != request.parent_id
+                || m.child_id != request.child_id
+                || m.scope != request.scope
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "a replacement may account only for its own child's unchanged write boundary; route other contributions through their children",
+                ));
+            }
+            originals.push(m.clone());
+        }
+        let base = self.exact_revision(source, request.production_base)?;
+        let head = self.exact_revision(source, request.head)?;
+        let staging = self.exact_revision(source, request.staging_revision)?;
+        if !self.is_ancestor(source, &base.commit, &head.commit)? {
+            return Err(Error::new(
+                "replacement_mapping",
+                "replacement head must be authored against the exact isolated production baseline",
+            ));
+        }
+        let patch = self.patch(source, &base.commit, &head.commit)?;
+        let paths = self.changed_paths(source, &base.commit, &head.commit)?;
+        if patch.is_empty() || paths.is_empty() || paths.iter().any(|p| !request.scope.permits(p)) {
+            return Err(Error::new(
+                "scope_violation",
+                "replacement requires a nonempty exact patch inside the original child scope",
+            ));
+        }
+        let manifest = DeltaManifest {
+            schema_version: DELTA_SCHEMA,
+            git_version: self.version.clone(),
+            repository: request.repository,
+            parent_id: request.parent_id,
+            child_id: request.child_id,
+            work_generation: request.work_generation.into(),
+            correction_generation: request.correction_generation.into(),
+            scope: request.scope,
+            validated_base: base,
+            validated_head: head,
+            staging_parent: staging.clone(),
+            staging_commit: staging,
+            patch_digest: bytes_digest(&patch),
+            paths,
+            replacement: Some(ReplacementMapping {
+                originals,
+                reason: request.reason.into(),
+                staging_result_digest: request.staging_result_digest.into(),
+            }),
+        };
+        manifest.original_contributions()?;
+        Ok(DeltaArtifact { manifest, patch })
+    }
+
+    pub fn observe_production_integration(
+        &self,
+        source: &Path,
+        request: ObserveProductionIntegration<'_>,
+    ) -> Result<VerifiedProductionIntegration> {
+        let c = &request.candidate.manifest;
+        let result = c.result.as_ref().ok_or_else(|| {
+            Error::new("production_provenance", "candidate assembly is unfinished")
+        })?;
+        if request.release_operation.is_nil()
+            || request.pull_request == 0
+            || c.ordered_delta_digests.is_empty()
+            || c.ordered_delta_digests.iter().collect::<BTreeSet<_>>()
+                != c.selected_contributions.keys().collect()
+            || c.ordered_delta_digests.len() != c.ordered_patch_digests.len()
+        {
+            return Err(Error::new(
+                "production_provenance",
+                "production integration needs a completely accounted nonempty candidate and observed release identity",
+            ));
+        }
+        let record = ProductionIntegration {
+            repository: c.repository.clone(),
+            parent_id: c.parent_id,
+            release_operation: request.release_operation,
+            pull_request: request.pull_request,
+            source_candidate_digest: canonical_digest(1, c)?,
+            accepted_evidence_token: request.authority.evidence_token().into(),
+            acceptance_digest: request.authority.acceptance_digest().into(),
+            production_parent: c.production.clone(),
+            candidate: result.clone(),
+            merged: self.exact_revision(source, request.merged_commit)?,
+            observed_main: self.exact_revision(source, request.current_main)?,
+            selected_delta_digests: c.ordered_delta_digests.clone(),
+            selected_patch_digests: c.ordered_patch_digests.clone(),
+            selected_contributions: c.selected_contributions.clone(),
+            combined_patch_digest: c.combined_patch_digest.clone().ok_or_else(|| {
+                Error::new("production_provenance", "candidate patch proof is missing")
+            })?,
+        };
+        self.reverify_production_integration(
+            source,
+            &record,
+            request.candidate,
+            request.authority,
+            request.current_main,
+        )
+    }
+
+    pub fn reverify_production_integration(
+        &self,
+        source: &Path,
+        recorded: &ProductionIntegration,
+        retained_candidate: &Candidate,
+        authority: &VerifiedAcceptedCandidate,
+        current_main: &str,
+    ) -> Result<VerifiedProductionIntegration> {
+        let mut record = recorded.clone();
+        let retained = self.inspect_candidate(
+            retained_candidate.path.parent().ok_or_else(|| {
+                Error::new("production_provenance", "retained candidate root missing")
+            })?,
+            retained_candidate.manifest.operation_id,
+        )?;
+        let c = &retained.manifest;
+        if record.release_operation.is_nil()
+            || record.pull_request == 0
+            || record.source_candidate_digest != authority.candidate_digest()
+            || record.accepted_evidence_token != authority.evidence_token()
+            || record.acceptance_digest != authority.acceptance_digest()
+            || c != &retained_candidate.manifest
+            || record.source_candidate_digest != canonical_digest(1, c)?
+            || record.repository != c.repository
+            || record.parent_id != c.parent_id
+            || record.production_parent != c.production
+            || Some(&record.candidate) != c.result.as_ref()
+            || record.selected_delta_digests != c.ordered_delta_digests
+            || record.selected_patch_digests != c.ordered_patch_digests
+            || record.selected_contributions != c.selected_contributions
+            || Some(&record.combined_patch_digest) != c.combined_patch_digest.as_ref()
+            || self.exact_revision(source, &record.production_parent.commit)?
+                != record.production_parent
+            || self.exact_revision(source, &record.candidate.commit)? != record.candidate
+            || self.exact_revision(source, &record.merged.commit)? != record.merged
+            || record.merged.tree != record.candidate.tree
+        {
+            return Err(Error::new(
+                "production_provenance",
+                "observed production objects differ from the exact candidate",
+            ));
+        }
+        self.single_parent(
+            source,
+            &record.merged.commit,
+            &record.production_parent.commit,
+        )?;
+        self.single_parent(
+            source,
+            &record.candidate.commit,
+            &record.production_parent.commit,
+        )?;
+        let patch = self.patch(
+            source,
+            &record.production_parent.commit,
+            &record.candidate.commit,
+        )?;
+        if patch.is_empty()
+            || bytes_digest(&patch) != record.combined_patch_digest
+            || patch
+                != self.patch(
+                    source,
+                    &record.production_parent.commit,
+                    &record.merged.commit,
+                )?
+            || !self.is_ancestor(source, &record.merged.commit, current_main)?
+        {
+            return Err(Error::new(
+                "production_provenance",
+                "production squash is not the exact assembled patch or is absent from current main",
+            ));
+        }
+        record.observed_main = self.exact_revision(source, current_main)?;
+        Ok(VerifiedProductionIntegration { record })
     }
 
     /// Requires a unique order from child dependencies and observed staging
@@ -803,6 +1287,53 @@ impl Git {
         Ok(())
     }
 
+    /// Validation gates must test the recorded commit/tree, not a dirty working
+    /// tree accidentally labelled with HEAD. Only previously declared untracked
+    /// output files may differ; tracked source changes always invalidate it.
+    pub fn verify_execution_tree(
+        &self,
+        source: &Path,
+        expected: &Revision,
+        outputs: &BTreeSet<PathBuf>,
+    ) -> Result<()> {
+        if self.revision(source, "HEAD")? != *expected {
+            return Err(Error::new(
+                "stale_revision",
+                "execution HEAD differs from its admitted revision",
+            ));
+        }
+        let status = self.run(
+            source,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+                "--ignored=matching",
+            ],
+            None,
+        )?;
+        for entry in status.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+            if entry.len() < 4 || !matches!(&entry[..2], b"??" | b"!!") {
+                return Err(Error::new(
+                    "dirty_execution",
+                    "tracked source/index differs from the exact revision under validation",
+                ));
+            }
+            let path = std::str::from_utf8(&entry[3..]).map_err(|_| {
+                Error::new("dirty_execution", "untracked execution path is not UTF-8")
+            })?;
+            validate_repo_path(path)?;
+            if !outputs.contains(&source.join(path)) {
+                return Err(Error::new(
+                    "dirty_execution",
+                    "execution contains an undeclared untracked or ignored file",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Copies committed local Git objects into a fresh owned directory. The
     /// operator checkout/index and its dirty or partially staged files are read
     /// only and are never used as candidate input.
@@ -814,12 +1345,6 @@ impl Git {
     ) -> Result<Candidate> {
         request.repository.validate()?;
         request.identity.validate()?;
-        if request.deltas.is_empty() {
-            return Err(Error::new(
-                "no_change",
-                "no selected patch: validate an already-in-production outcome without a candidate commit",
-            ));
-        }
         let source =
             fs::canonicalize(source).map_err(|e| Error::io("resolve source repository", e))?;
         let root = owner_directory(execution_root)?;
@@ -832,6 +1357,33 @@ impl Git {
         let production = self.exact_revision(&source, request.production_commit)?;
         let mut ordered_delta_digests = Vec::new();
         let mut ordered_patch_digests = Vec::new();
+        let mut selected_contributions = BTreeMap::new();
+        let mut accounted_contributions = BTreeSet::new();
+        let mut production_integrations = Vec::new();
+        let mut integrated_ids = BTreeSet::new();
+        for verified in request.production_integrations {
+            let integration = verified.record();
+            if integration.repository != request.repository
+                || integration.parent_id != request.parent_id
+                || integration.observed_main != production
+                || !integrated_ids.insert(integration.digest()?)
+                || !self.is_ancestor(&source, &integration.merged.commit, &production.commit)?
+            {
+                return Err(Error::new(
+                    "production_provenance",
+                    "prior integration proof is duplicated, stale or outside this parent's exact production baseline",
+                ));
+            }
+            for contribution in integration.selected_contributions.values().flatten() {
+                if !accounted_contributions.insert(contribution.clone()) {
+                    return Err(Error::new(
+                        "duplicate_delta",
+                        "production contribution is counted twice",
+                    ));
+                }
+            }
+            production_integrations.push(integration.clone());
+        }
         let mut seen = BTreeSet::new();
         for delta in request.deltas {
             self.verify_delta(&source, delta)?;
@@ -850,6 +1402,22 @@ impl Git {
                     "candidate includes a delta more than once",
                 ));
             }
+            if delta.manifest.replacement.is_some() && delta.manifest.validated_base != production {
+                return Err(Error::new(
+                    "replacement_baseline",
+                    "replacement was authored against a different isolated production baseline",
+                ));
+            }
+            let contributions = delta.manifest.original_contributions()?;
+            for contribution in &contributions {
+                if !accounted_contributions.insert(contribution.clone()) {
+                    return Err(Error::new(
+                        "duplicate_delta",
+                        "selected contribution is already integrated or selected through another artifact",
+                    ));
+                }
+            }
+            selected_contributions.insert(digest.clone(), contributions);
             ordered_delta_digests.push(digest);
             ordered_patch_digests.push(delta.manifest.patch_digest.clone());
         }
@@ -927,6 +1495,8 @@ impl Git {
             production: production.clone(),
             ordered_delta_digests,
             ordered_patch_digests,
+            selected_contributions,
+            production_integrations,
             result: None,
             combined_patch_digest: None,
         };
@@ -971,10 +1541,16 @@ impl Git {
         let tree = self.text(&path, &["write-tree"])?;
         validate_oid(&tree)?;
         if tree == production.tree {
-            return Err(Error::new(
-                "no_change",
-                "selected patches have no net production change; require evidenced no-change classification",
-            ));
+            if !request.deltas.is_empty() {
+                return Err(Error::new(
+                    "no_change",
+                    "selected patches cancel out; establish an evidenced no-change outcome before assembly",
+                ));
+            }
+            manifest.result = Some(production);
+            manifest.combined_patch_digest = Some(bytes_digest(&[]));
+            write_candidate_manifest(&path, &manifest)?;
+            return Ok(Candidate { path, manifest });
         }
         let message = format!(
             "feat(kegari): assemble accepted parent candidate\n\nParent: {}\nOperation: {}\nGeneration: {}\nPatch-manifest: {}\n",
@@ -1066,7 +1642,16 @@ impl Git {
                 "candidate Git state differs from its recorded identity",
             ));
         }
-        self.single_parent(&path, &result.commit, &manifest.production.commit)?;
+        if result != &manifest.production {
+            self.single_parent(&path, &result.commit, &manifest.production.commit)?;
+        } else if !manifest.ordered_delta_digests.is_empty()
+            || !manifest.ordered_patch_digests.is_empty()
+        {
+            return Err(Error::new(
+                "provenance_mismatch",
+                "unchanged candidate must not claim an applied patch",
+            ));
+        }
         self.assert_clean(&path)?;
         Ok(Candidate { path, manifest })
     }
