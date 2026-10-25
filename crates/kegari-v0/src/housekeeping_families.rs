@@ -225,6 +225,148 @@ fn immutable_registration(value: &ExecutionRegistration) -> Result<String> {
 }
 
 impl Housekeeping {
+    /// Recover a fixed metadata read root from an actual protected execution
+    /// registration. The configured source remains the operator checkout; the
+    /// owned clone is authorized by its original admission and closed family.
+    /// No Git process runs here and no unchanged-source claim is made.
+    pub(crate) fn retained_execution_read_root(
+        &self,
+        configuration: &crate::config::Config,
+        binding: &ExecutionBinding,
+        isolation: &crate::isolation::ValidatedIsolation,
+        directory: &OwnedDirectory,
+        workflow: &Workflow,
+    ) -> Result<crate::git::VerifiedHostReadRoot> {
+        self.control.serialize_observation(|state| {
+            self.registration_updates_allowed(state)?;
+            let storage = self.root.child("cleanup")?;
+            let _guard = storage.lock("families.lock")?;
+            binding.validate(isolation)?;
+            directory.verify(binding, isolation)?;
+            let registration = self.registration(binding.operation_id)?;
+            let receipt = self.control.operation(binding.operation_id)?;
+            let run = crate::control::RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+                Error::new(
+                    "resume_incompatible",
+                    "retained execution has no actual run admission",
+                )
+            })?;
+            let workspace = configuration
+                .workspaces
+                .values()
+                .find(|w| w.id == run.workspace)
+                .ok_or_else(|| {
+                    Error::new(
+                        "scope_violation",
+                        "retained execution workspace is no longer configured",
+                    )
+                })?;
+            let repository = workspace
+                .repositories
+                .get(&binding.repository.id)
+                .ok_or_else(|| {
+                    Error::new(
+                        "scope_violation",
+                        "retained execution repository is no longer configured",
+                    )
+                })?;
+            let operator = Path::new(&repository.source)
+                .canonicalize()
+                .map_err(|e| Error::io("resolve retained execution configured source", e))?;
+            let configured_root = Path::new(&configuration.runtime.execution_root)
+                .canonicalize()
+                .map_err(|e| Error::io("resolve configured execution root", e))?;
+            let configured_workflow = Path::new(&workspace.workflow)
+                .canonicalize()
+                .map_err(|e| Error::io("resolve retained execution configured workflow", e))?;
+            if configuration.runtime.id != binding.runtime_id
+                || registration.binding != *binding
+                || registration.directory_digest != directory.digest()
+                || registration.marker != directory.marker()
+                || registration.workflow_path != workflow.path
+                || registration.workflow_digest != workflow.digest
+                || canonical_digest(1, &registration.isolation)?
+                    != canonical_digest(1, isolation.plan())?
+                || configured_workflow != workflow.path
+                || !isolation
+                    .plan()
+                    .execution_root
+                    .starts_with(&configured_root)
+                || directory.identity().operator_checkout != operator
+                || workspace.linear_workspace_id != binding.work.linear_workspace
+                || repository.hostname != binding.repository.hostname
+                || receipt.runtime_id != binding.runtime_id
+                || receipt.phase != ReceiptPhase::Reconciled
+                || run.phase.work != execution_work_key(binding)?
+                || receipt.canonical_targets != [run.phase.work.clone()]
+                || state
+                    .active_operations
+                    .iter()
+                    .any(|p| p.work_key == run.phase.work)
+                || state
+                    .unresolved_operations
+                    .values()
+                    .any(|targets| targets.contains(&run.phase.work))
+            {
+                return Err(Error::new(
+                    "resume_incompatible",
+                    "retained metadata root differs from its exact closed configured execution",
+                ));
+            }
+            let family = self.directory_family(&registration)?.ok_or_else(|| {
+                Error::new(
+                    "resume_incompatible",
+                    "legacy directory cannot supply retained session metadata authority",
+                )
+            })?;
+            let observations =
+                self.cleanup_observations(&registration, &family.registrations, None)?;
+            for (operation, member) in &family.registrations {
+                let closed = self.control.operation(*operation)?;
+                let result = closed.observed_result.as_ref().ok_or_else(|| {
+                    Error::new(
+                        "reconciliation_required",
+                        "retained directory member has no observed exit",
+                    )
+                })?;
+                if closed.phase != ReceiptPhase::Reconciled
+                    || result["local_execution"] != "exited"
+                    || result["unresolved_effects"]
+                        .as_array()
+                        .is_none_or(|effects| !effects.is_empty())
+                {
+                    return Err(Error::new(
+                        "reconciliation_required",
+                        "retained directory member is not fully reconciled",
+                    ));
+                }
+                for process in &member.processes {
+                    if self.probe.observe(process)? == ProcessObservation::Running {
+                        return Err(Error::new(
+                            "reconciliation_required",
+                            "retained directory member still has a live owned process",
+                        ));
+                    }
+                }
+            }
+            let lineage = canonical_digest(
+                1,
+                &json!({
+                    "purpose":"retained_execution_read","registration":registration,
+                    "family":family.digest,"observations":observations,"receipt":receipt,
+                    "configuration":configuration.revision()?,"workflow":workflow.digest,
+                }),
+            )?;
+            crate::git::retained_execution_host_read_root(
+                configuration,
+                binding,
+                isolation,
+                directory,
+                lineage,
+            )
+        })
+    }
+
     pub fn prepare_directory_reuse(
         &self,
         source: &crate::git::VerifiedReusableSource,

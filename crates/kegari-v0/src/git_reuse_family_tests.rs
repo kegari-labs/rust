@@ -1109,3 +1109,125 @@ fn transmitted_first_turn_releases_only_the_startup_source_constraint() {
         "source release must not bypass the actual permit gate"
     );
 }
+
+#[test]
+fn retained_execution_metadata_uses_protected_family_without_repointing_configured_source() {
+    let f = FamilyFixture::new();
+    let mut config = f.source.services.configuration.snapshot().unwrap();
+    let workspace = config.workspaces.get_mut("example").unwrap();
+    workspace.repositories.get_mut("42").unwrap().source = f
+        .source
+        .ownership
+        .identity()
+        .operator_checkout
+        .to_string_lossy()
+        .into_owned();
+    workspace.workflow = f.workflow.path.to_string_lossy().into_owned();
+    let read_root = || {
+        f.housekeeping.retained_execution_read_root(
+            &config,
+            &f.source.binding,
+            &f.source.boundary,
+            &f.source.ownership,
+            &f.workflow,
+        )
+    };
+    let root = read_root().unwrap();
+    assert_eq!(root.root(), f.source.source);
+    assert_ne!(
+        Path::new(&config.workspaces["example"].repositories["42"].source),
+        root.root()
+    );
+    let mut services = f.source.services.clone();
+    services.configuration = Arc::new(ReadConfiguration(Mutex::new(config.clone())));
+    let authority = LocalProcessPermit::metadata(
+        services,
+        MetadataRequest {
+            request_id: Uuid::new_v4(),
+            work_key: f.reference.phase.work.clone(),
+            roots: vec![root.clone()],
+            git_binary: BinaryIdentity::inspect(f.source.unscoped.executable(), true).unwrap(),
+        },
+    )
+    .unwrap();
+    let git = f
+        .source
+        .unscoped
+        .with_host_execution_scope(HostGitExecutionScope {
+            limits: GitLimits::default(),
+            authority: authority.clone(),
+        })
+        .unwrap();
+    let actual_source = git
+        .verify_reusable_execution(&f.source.ownership, &f.source.binding, &f.source.boundary)
+        .unwrap();
+    assert_eq!(actual_source.binding(), &f.source.binding);
+    authority
+        .finish(json!({"fixture":"actual retained metadata complete"}))
+        .unwrap();
+    actual_source.revalidate_filesystem().unwrap();
+
+    // An operator-checkout replacement or raw binding change does not acquire
+    // authority to read some other directory through this retained registration.
+    let mut wrong_source = config.clone();
+    wrong_source
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .repositories
+        .get_mut("42")
+        .unwrap()
+        .source = f.source.source.to_string_lossy().into_owned();
+    assert_eq!(
+        f.housekeeping
+            .retained_execution_read_root(
+                &wrong_source,
+                &f.source.binding,
+                &f.source.boundary,
+                &f.source.ownership,
+                &f.workflow,
+            )
+            .unwrap_err()
+            .code,
+        "resume_incompatible"
+    );
+    let mut wrong_binding = f.source.binding.clone();
+    wrong_binding.operation_id = Uuid::new_v4();
+    assert!(
+        f.housekeeping
+            .retained_execution_read_root(
+                &config,
+                &wrong_binding,
+                &f.source.boundary,
+                &f.source.ownership,
+                &f.workflow,
+            )
+            .is_err()
+    );
+
+    let operation = Uuid::new_v4();
+    f.source
+        .services
+        .control
+        .admit_run(&f.lease, f.input(operation), || Ok(()))
+        .unwrap();
+    assert_eq!(read_root().unwrap_err().code, "resume_incompatible");
+    f.source
+        .services
+        .control
+        .retire_local(operation, failed_observation())
+        .unwrap();
+    read_root().unwrap();
+
+    // A previously issued read root still fences changed protected ownership
+    // bytes at each actual metadata process start.
+    let marker = f.source.ownership.marker();
+    let bytes = fs::read(marker).unwrap();
+    fs::write(marker, b"changed ownership").unwrap();
+    assert_eq!(
+        root.revalidate_filesystem().unwrap_err().code,
+        "execution_ownership"
+    );
+    assert!(read_root().is_err());
+    fs::write(marker, bytes).unwrap();
+}

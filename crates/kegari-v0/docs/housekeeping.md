@@ -191,3 +191,13 @@ Automatic scheduler selection, broader/cold session recovery and live native
 qualification remain incomplete. Component fixtures use real Git/control/family
 operations with explicitly synthetic terminal metadata; they do not qualify native
 provider execution or create a joined-runtime cache entry.
+
+
+The native recovery producer can obtain a metadata read root from
+`retained_execution_read_root`. This checks the actual protected family,
+reconciled member exits and hooks, original marker and isolation, and the current
+configured operator checkout/workflow. The configuration continues to point at
+the operator source; it is not rewritten to authorize the clone. The returned
+root permits only the host metadata grammar. Fresh scoped Git inspection still
+has to establish `VerifiedReusableSource` before any directory reuse or model
+admission. Native staged selection and its qualification remain in progress.

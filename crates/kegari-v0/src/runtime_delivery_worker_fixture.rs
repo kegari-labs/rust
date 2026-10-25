@@ -445,9 +445,22 @@ fn complete_inner(
     }
     if let Some(proof) = review_retry {
         reference.phase = proof.phase().clone();
-        reference.attempt = 1;
+        reference.attempt = proof.next_attempt().unwrap();
         reference.max_turns = proof.grant().new_budget().max_turns;
         reference.max_review_rounds = proof.grant().new_budget().max_review_rounds;
+        for old in host
+            .operations()
+            .unwrap()
+            .iter()
+            .filter_map(|receipt| RunReference::from_receipt(receipt).unwrap())
+        {
+            if old.phase == reference.phase {
+                reference.max_attempts = reference.max_attempts.min(old.max_attempts);
+                reference.max_turns = reference.max_turns.min(old.max_turns);
+                reference.max_review_rounds =
+                    reference.max_review_rounds.min(old.max_review_rounds);
+            }
+        }
     }
     let input = RunAdmission {
         request_id: manifest.operation_id,
@@ -546,6 +559,35 @@ pub(crate) async fn failed_review(
     lease: &Lease,
     fixture: &WorkerFixture,
 ) -> Arc<RunCompletion> {
+    failed_review_inner(host, lease, fixture, None, None, None).await
+}
+pub(crate) async fn failed_review_retry(
+    host: &crate::control::ControlHost,
+    lease: &Lease,
+    fixture: &WorkerFixture,
+    proof: &ReviewRetryWork,
+    schedule: &crate::runtime_schedule::RunSchedule,
+    retry_after_ms: Option<u64>,
+    failure_code: &str,
+) -> Arc<RunCompletion> {
+    failed_review_inner(
+        host,
+        lease,
+        fixture,
+        Some((proof, schedule)),
+        retry_after_ms,
+        Some(failure_code),
+    )
+    .await
+}
+async fn failed_review_inner(
+    host: &crate::control::ControlHost,
+    lease: &Lease,
+    fixture: &WorkerFixture,
+    retry: Option<(&ReviewRetryWork, &crate::runtime_schedule::RunSchedule)>,
+    retry_after_ms: Option<u64>,
+    failure_code: Option<&str>,
+) -> Arc<RunCompletion> {
     use crate::codex::{CodexProfile, RpcClient, SessionBinding, SessionState};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     struct Deny;
@@ -568,7 +610,7 @@ pub(crate) async fn failed_review(
     let WorkerAuthority::Authorized(gate) = contract.authority() else {
         panic!()
     };
-    let reference = RunReference {
+    let mut reference = RunReference {
         workspace: gate.workspace_id(),
         account: contract.account_id().into(),
         normalized_state: Some("in progress".into()),
@@ -585,6 +627,15 @@ pub(crate) async fn failed_review(
         max_review_rounds: 1,
         attempt: 1,
     };
+    if let Some((proof, schedule)) = retry {
+        assert_eq!(schedule.attempt, proof.next_attempt().unwrap());
+        reference.phase = proof.phase().clone();
+        reference.attempt = schedule.attempt;
+        reference.max_attempts = schedule.max_attempts;
+        reference.max_turns = schedule.max_turns;
+        reference.max_review_rounds = schedule.max_review_rounds;
+    }
+    let max_turns = reference.max_turns;
     host.admit_run(
         lease,
         RunAdmission {
@@ -593,7 +644,13 @@ pub(crate) async fn failed_review(
             scope_digest: contract.scope_digest().into(),
             reference,
         },
-        || Ok(()),
+        || {
+            if let Some((proof, _)) = retry {
+                proof.verify_contract(contract)?;
+                proof.verify_current(&host.operations()?, std::slice::from_ref(proof.grant()))?;
+            }
+            Ok(())
+        },
     )
     .unwrap();
     let mut state = SessionState::new(
@@ -616,13 +673,14 @@ pub(crate) async fn failed_review(
             },
             cwd: manifest.cwd.clone(),
         },
-        20,
+        max_turns,
     )
     .unwrap();
     state.thread_id = Some("failed-review-fixture".into());
     let (client, server) = tokio::io::duplex(16384);
     let (cr, cw) = tokio::io::split(client);
     let (sr, mut sw) = tokio::io::split(server);
+    let failure_code = failure_code.map(str::to_owned);
     let server = tokio::spawn(async move {
         let mut lines = BufReader::new(sr).lines();
         let init: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
@@ -631,7 +689,7 @@ pub(crate) async fn failed_review(
         let request: Value =
             serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
         assert_eq!(request["method"], "review/start");
-        sw.write_all(format!("{}\n{}\n",json!({"id":request["id"],"result":{"reviewThreadId":"failed-review-fixture","turn":{"id":"failed-review-turn","status":"inProgress"}}}),json!({"method":"turn/completed","params":{"threadId":"failed-review-fixture","turn":{"id":"failed-review-turn","status":"failed","items":[],"error":{"message":"synthetic provider failure"}}}})).as_bytes()).await.unwrap();
+        sw.write_all(format!("{}\n{}\n",json!({"id":request["id"],"result":{"reviewThreadId":"failed-review-fixture","turn":{"id":"failed-review-turn","status":"inProgress"}}}),json!({"method":"turn/completed","params":{"threadId":"failed-review-fixture","turn":{"id":"failed-review-turn","status":"failed","items":[],"error":{"message":"synthetic provider failure","codexErrorInfo":failure_code}}}})).as_bytes()).await.unwrap();
     });
     let mut rpc = RpcClient::from_transport(cr, cw, std::time::Duration::from_secs(2)).unwrap();
     rpc.initialize().await.unwrap();
@@ -655,14 +713,15 @@ pub(crate) async fn failed_review(
     server.await.unwrap();
     assert_eq!(state.terminal.as_deref(), Some("failed"));
     assert!(state.turn_id.is_none());
+    let mut error = Error::new("turn_incomplete", "synthetic provider failed terminal");
+    if let Some(retry_after_ms) = retry_after_ms {
+        error = error.detail(json!({"retry_after_ms":retry_after_ms}));
+    }
     let completion = Arc::new(RunCompletion {
         operation_id: manifest.operation_id,
         state,
         outcome: RunOutcome::Failed,
-        error: Some(Error::new(
-            "turn_incomplete",
-            "synthetic provider failed terminal",
-        )),
+        error: Some(error),
         elapsed_ms: 1,
         hook_error: None,
         checks: vec![],

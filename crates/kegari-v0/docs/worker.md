@@ -164,8 +164,19 @@ does not freeze the worker's legitimate later changes.
 The evaluator rejects resumed admissions before binding a trial; it cannot
 replace the sealed resumed state with its fresh-thread trial protocol.
 
-Selection of eligible recovery work is not yet wired. This first consumer also
-excludes configured before/after-run hooks, corrected or previously resumed
-sessions, review sessions and cold reconstruction of owned execution. Offline
+The native driver now selects eligible same-process child implementation recovery
+separately from ordinary model attempts. It schedules provider readback, retained
+source verification and resumed admission as separate bounded tasks under the
+same canonical-work fairness reservation. Successful opaque metadata/source
+proofs survive pause and capacity waits; only RUNNING admission can start another
+stage. Metadata does not consume a model attempt. Persisted stage receipts without
+their original in-memory capabilities block replay after restart. Recovery errors
+are exposed in account observations. A metadata reservation releases only after
+its actual task joins and its admission records confirmed exit with no remaining
+holds; later reconciliation is rechecked without inventing a join from disk.
+
+This first consumer excludes configured before/after-run hooks, corrected or
+previously resumed sessions, review sessions and cold reconstruction of owned
+execution. Offline
 protocol, control, source/family and hook tests establish component behavior;
 no native resume/model call or complete runtime recovery qualification was run.

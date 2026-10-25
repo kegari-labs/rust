@@ -15,6 +15,8 @@ pub struct ReviewRetryWork {
     assignment: DeliveryWorkerAssignment,
     failed: Arc<RunCompletion>,
     reference: RunReference,
+    origin_reference: RunReference,
+    transient_failure: Option<crate::codex::TransientTurnFailure>,
     receipt: Receipt,
     receipt_digest: String,
     inventory_digest: String,
@@ -47,6 +49,16 @@ impl ReviewRetryWork {
     pub fn digest(&self) -> &str {
         &self.digest
     }
+    pub(crate) fn next_attempt(&self) -> Result<u32> {
+        if self.reference.phase == self.phase {
+            self.reference
+                .attempt
+                .checked_add(1)
+                .ok_or_else(|| Error::new("attempts_exhausted", "review attempt ordinal overflow"))
+        } else {
+            Ok(1)
+        }
+    }
     pub fn verify_completion(&self, actual: &Arc<RunCompletion>) -> Result<()> {
         if !Arc::ptr_eq(actual, &self.failed) {
             return Err(Error::new(
@@ -54,7 +66,20 @@ impl ReviewRetryWork {
                 "review retry lost its actual joined failed completion",
             ));
         }
-        failed_review(actual)
+        failed_review(actual)?;
+        self.verify_retry_cause()
+    }
+    pub(crate) fn verify_retry_cause(&self) -> Result<()> {
+        if self.reference.phase == self.phase
+            && (self.transient_failure.is_none()
+                || self.failed.state.terminal_transient_failure()? != self.transient_failure)
+        {
+            return Err(Error::new(
+                "persistent_blocker",
+                "automatic review retry requires an observed transient terminal cause",
+            ));
+        }
+        Ok(())
     }
     pub fn verify_assignment(&self, assignment: &DeliveryWorkerAssignment) -> Result<()> {
         if assignment.digest()? != self.assignment.digest()? {
@@ -98,6 +123,15 @@ impl ReviewRetryWork {
         grants: &[VerifiedRetryGrant],
         operation: Uuid,
     ) -> Result<()> {
+        self.verify_terminal_inventory(receipts, grants, operation, "completed")
+    }
+    fn verify_terminal_inventory(
+        &self,
+        receipts: &[Receipt],
+        grants: &[VerifiedRetryGrant],
+        operation: Uuid,
+        outcome: &str,
+    ) -> Result<()> {
         let receipt = receipts
             .iter()
             .find(|r| r.operation_id == operation)
@@ -114,11 +148,17 @@ impl ReviewRetryWork {
             || run.phase != self.phase
             || run.workspace != self.reference.workspace
             || run.account != self.reference.account
-            || run.attempt != 1
+            || run.attempt != self.next_attempt()?
+            || run.attempt > run.max_attempts
+            || [run.max_attempts, run.max_turns, run.max_review_rounds].contains(&0)
             || run.profile_digest != self.reference.profile_digest
             || run.max_attempts > self.grant.new_budget().max_attempts
             || run.max_turns > self.grant.new_budget().max_turns
             || run.max_review_rounds > self.grant.new_budget().max_review_rounds
+            || self.reference.phase == self.phase
+                && (run.max_attempts > self.reference.max_attempts
+                    || run.max_turns > self.reference.max_turns
+                    || run.max_review_rounds > self.reference.max_review_rounds)
             || receipt.phase != ReceiptPhase::Reconciled
             || result
                 .and_then(|v| v.get("local_execution"))
@@ -131,11 +171,11 @@ impl ReviewRetryWork {
             || result
                 .and_then(|v| v.pointer("/observation/outcome"))
                 .and_then(Value::as_str)
-                != Some("completed")
+                != Some(outcome)
         {
             return Err(Error::new(
                 "reconciliation_required",
-                "retried review is not a closed completed exact granted run",
+                "retried review is not a closed terminal exact granted run",
             ));
         }
         let prior: Vec<_> = receipts
@@ -151,30 +191,66 @@ impl ReviewRetryWork {
         grants: &[VerifiedRetryGrant],
     ) -> Result<()> {
         self.verify_inventory(receipts)?;
+        self.verify_retry_cause()?;
         if grants.iter().any(|g| g.phase() == &self.phase) {
             return Err(Error::new(
                 "stale_result",
                 "review retry grant was superseded",
             ));
         }
+        let mut ancestral = Vec::new();
+        let mut granted = Vec::new();
+        for receipt in receipts {
+            match RunReference::from_receipt(receipt)? {
+                Some(run) if run.phase == self.phase => granted.push((receipt, run)),
+                _ => ancestral.push(receipt.clone()),
+            }
+        }
         verify_lineage(
             &self.grant,
             self.authority(),
-            &self.reference,
+            &self.origin_reference,
             self.receipt.runtime_id,
-            receipts,
+            &ancestral,
             grants,
         )?;
-        if receipts
-            .iter()
-            .filter_map(|r| RunReference::from_receipt(r).transpose())
-            .collect::<Result<Vec<_>>>()?
-            .iter()
-            .any(|r| r.phase == self.phase)
+        granted.sort_by_key(|(_, run)| run.attempt);
+        if granted.len() != (self.next_attempt()? - 1) as usize {
+            return Err(Error::new(
+                "stale_result",
+                "review retry no longer binds the latest granted attempt",
+            ));
+        }
+        let mut caps = (
+            self.grant.new_budget().max_attempts,
+            self.grant.new_budget().max_turns,
+            self.grant.new_budget().max_review_rounds,
+        );
+        for (index, (receipt, run)) in granted.iter().enumerate() {
+            closed_failed_review(receipt)?;
+            if !same_group(self.receipt.runtime_id, &self.reference, receipt, run)
+                || run.account != self.reference.account
+                || run.profile_digest != self.reference.profile_digest
+                || run.attempt as usize != index + 1
+                || run.attempt > run.max_attempts
+                || [run.max_attempts, run.max_turns, run.max_review_rounds].contains(&0)
+                || run.max_attempts > caps.0
+                || run.max_turns > caps.1
+                || run.max_review_rounds > caps.2
+            {
+                return Err(Error::new(
+                    "stale_result",
+                    "granted review history changes identity, ordinal or captured bounds",
+                ));
+            }
+            caps = (run.max_attempts, run.max_turns, run.max_review_rounds);
+        }
+        if let Some((latest, _)) = granted.last()
+            && latest.operation_id != self.predecessor()
         {
             return Err(Error::new(
                 "stale_result",
-                "review retry budget already has an admission",
+                "review retry predecessor is no longer latest",
             ));
         }
         Ok(())
@@ -249,6 +325,34 @@ impl DeliveryCoordinator {
     pub async fn retry_failed_review(
         &self,
         request: ReviewRetryRequest<'_>,
+    ) -> Result<ReviewRetryWork> {
+        self.prepare_review_retry(request, None).await
+    }
+    /// A later failed session consumes the same granted budget. Its exact
+    /// completed effect replaces only the retry cause, never the grant/source.
+    pub async fn continue_failed_review(
+        &self,
+        admission: &DeliveryAdmission,
+        prior: &ReviewRetryWork,
+        failed: Arc<RunCompletion>,
+        current_grants: &[VerifiedRetryGrant],
+    ) -> Result<ReviewRetryWork> {
+        self.prepare_review_retry(
+            ReviewRetryRequest {
+                admission,
+                assignment: prior.assignment(),
+                failed,
+                grant: prior.grant().clone(),
+                current_grants,
+            },
+            Some(prior),
+        )
+        .await
+    }
+    async fn prepare_review_retry(
+        &self,
+        request: ReviewRetryRequest<'_>,
+        prior: Option<&ReviewRetryWork>,
     ) -> Result<ReviewRetryWork> {
         self.current(
             request.admission,
@@ -328,15 +432,40 @@ impl DeliveryCoordinator {
                 "failed review differs from original admitted contract",
             ));
         }
+        let transient_failure = if let Some(prior) = prior {
+            prior.verify_terminal_inventory(
+                &receipts,
+                request.current_grants,
+                request.failed.operation_id,
+                "failed",
+            )?;
+            Some(
+                request
+                    .failed
+                    .state
+                    .terminal_transient_failure()?
+                    .ok_or_else(|| {
+                        Error::new(
+                            "persistent_blocker",
+                            "known review failure is not a supported transient provider failure",
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
         let receipt_digest = canonical_digest(1, &receipt)?;
         let inventory_digest = review_inventory(&receipts, receipt.runtime_id, &reference)?;
         let digest = canonical_digest(
             1,
-            &json!({"purpose":"exact_source_review_retry","assignment":request.assignment.digest()?,"failed":receipt_digest,"inventory":inventory_digest,"grant":request.grant.digest()}),
+            &json!({"purpose":"exact_source_review_retry","assignment":request.assignment.digest()?,"failed":receipt_digest,"inventory":inventory_digest,"grant":request.grant.digest(),"previous":prior.map(ReviewRetryWork::digest),"transient_failure":transient_failure}),
         )?;
         let result = ReviewRetryWork {
             assignment: request.assignment.clone(),
             failed: request.failed,
+            transient_failure,
+            origin_reference: prior
+                .map_or_else(|| reference.clone(), |p| p.origin_reference.clone()),
             reference,
             receipt,
             receipt_digest,
@@ -382,9 +511,15 @@ fn review_contract(assignment: &DeliveryWorkerAssignment, contract: &WorkerContr
             "review must have child authority",
         ));
     };
-    assignment
-        .authority()
-        .compare_current(gate, Utc::now(), chrono::Duration::seconds(30))?;
+    // These are immutable admission records, potentially retained long after
+    // the review finished. Fresh authority is checked separately at producer,
+    // preparation, final model admission and publication gates.
+    if assignment.authority().digest()? != gate.digest()? {
+        return Err(Error::new(
+            "worker_binding",
+            "review contract changed its admitted authority",
+        ));
+    }
     if assignment.role() != AgentRole::Review
         || assignment.phase() != "child_codex_review"
         || !assignment.read_sources().is_empty()

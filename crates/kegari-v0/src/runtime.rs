@@ -28,8 +28,12 @@ use std::{
 use uuid::Uuid;
 #[path = "runtime_corrections.rs"]
 mod correction_transitions;
+#[path = "runtime_recovery.rs"]
+mod session_recovery;
 #[path = "runtime_resume.rs"]
 mod session_resume;
+pub(crate) use session_recovery::recovery_wait as session_recovery_wait;
+pub(crate) use session_recovery::{SessionRecoveryAction, SessionRecoveryStage};
 
 #[derive(Clone)]
 struct RegisteredRun {
@@ -67,6 +71,8 @@ struct State {
     correction_wakes: BTreeMap<Uuid, Arc<tokio::sync::Notify>>,
     provider_holds: BTreeMap<Uuid, crate::codex::SessionState>,
     completions: BTreeMap<Uuid, Arc<RunCompletion>>,
+    session_recovery: BTreeMap<String, session_recovery::RecoveryEntry>,
+    session_recovery_errors: BTreeMap<Uuid, Error>,
 }
 /// Shared authority and evidence projection for native runtime phases. The
 /// orchestration driver registers exact admitted contracts before launching and
@@ -721,30 +727,19 @@ impl RuntimeCoordinator {
                         Utc::now(),
                     )
                 }
-                WorkerReadmission::Retried(_) | WorkerReadmission::ReviewRetry(_) => {
+                WorkerReadmission::ReviewRetry(proof) => {
+                    crate::runtime_schedule::plan_review_retry(
+                        &limits,
+                        phase,
+                        workspace,
+                        &receipts,
+                        proof,
+                        Utc::now(),
+                    )
+                }
+                WorkerReadmission::Retried(_) => {
                     let now = Utc::now();
-                    let mut not_before = readmission_spacing(predecessor, failure, now)?;
-                    if matches!(proof, WorkerReadmission::ReviewRetry(_)) {
-                        not_before = not_before.max(crate::scheduler::retry_at(
-                            failure.updated_at,
-                            1,
-                            limits.retry_cap_ms,
-                            failure
-                                .observed_result
-                                .as_ref()
-                                .and_then(|v| {
-                                    v.pointer("/observation/error/details/retry_after_ms")
-                                })
-                                .and_then(Value::as_u64),
-                        )?);
-                        if not_before > now {
-                            return Err(Error::new(
-                                "retry_wait",
-                                "failed review waits for bounded failure spacing",
-                            )
-                            .detail(json!({"not_before":not_before})));
-                        }
-                    }
+                    let not_before = readmission_spacing(predecessor, failure, now)?;
                     let mut schedule =
                         crate::runtime_schedule::plan(&limits, phase, workspace, &receipts, now)?;
                     schedule.not_before = schedule.not_before.max(not_before);
@@ -2087,7 +2082,7 @@ impl RuntimeCoordinator {
             .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
         let holds=state.provider_holds.iter().map(|(id,session)| json!({"operation_id":id,"account":session.binding.account_id,"work":session.binding.work_identity,"intervention":session.intervention,"input_required":session.input_required})).collect::<Vec<_>>();
         Ok(
-            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors}),
+            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"session_recovery":state.session_recovery_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors}),
         )
     }
     pub fn execution_registry(&self) -> Arc<ExecutionRegistry> {

@@ -7,7 +7,10 @@ use crate::{
     error::{Error, Result},
     preparation::AuthorizationPublisher,
     process_records::{ProcessJournal, ProcessRecovery},
-    runtime::{RuntimeAction, RuntimeCoordinator, WorkerAction},
+    runtime::{
+        RuntimeAction, RuntimeCoordinator, SessionRecoveryAction, SessionRecoveryStage,
+        WorkerAction,
+    },
     runtime_workers::{self, LaunchRequest},
     scheduler::{Limits, Scheduler},
     storage::PrivateDir,
@@ -74,6 +77,8 @@ enum DispatchState {
 #[serde(deny_unknown_fields)]
 struct DispatchRecord {
     schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_recovery: Option<SessionRecoveryDispatch>,
     #[serde(default)]
     correction: Option<CorrectionReference>,
     #[serde(default)]
@@ -87,6 +92,13 @@ struct DispatchRecord {
     state: DispatchState,
     observed_at: chrono::DateTime<Utc>,
     error: Option<Error>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionRecoveryDispatch {
+    predecessor: Uuid,
+    candidate: String,
+    stage: SessionRecoveryStage,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +137,9 @@ struct DriverState {
     last_refresh: Option<tokio::time::Instant>,
     last_error: Option<Error>,
     dispatch_errors: BTreeMap<String, Error>,
+    // Populated only after awaiting this process's actual metadata task. Loaded
+    // dispatch JSON cannot establish that an old task or its children exited.
+    joined_recovery: BTreeMap<Uuid, DispatchRecord>,
 }
 pub struct RuntimeDriver {
     runtime: Arc<RuntimeCoordinator>,
@@ -208,6 +223,7 @@ impl RuntimeDriver {
                 last_refresh: None,
                 last_error: None,
                 dispatch_errors: BTreeMap::new(),
+                joined_recovery: BTreeMap::new(),
             }),
             cycle: tokio::sync::Mutex::new(()),
         }))
@@ -432,6 +448,7 @@ impl RuntimeDriver {
         let operation = Uuid::new_v4();
         let record = DispatchRecord {
             schema_version: 1,
+            session_recovery: None,
             correction: None,
             metadata: None,
             runtime: lease.runtime_id,
@@ -477,6 +494,81 @@ impl RuntimeDriver {
                     Ok(())
                 }
                 .await;
+                runtime.services.wake.notify_one();
+                result
+            })
+        });
+        self.state()?.tasks.insert(
+            operation,
+            PendingTask {
+                record,
+                worker: true,
+                join,
+            },
+        );
+        Ok(operation)
+    }
+    fn recovery_dispatch_available(&self, action: &SessionRecoveryAction) -> Result<bool> {
+        let state = self.state()?;
+        let Some(record) = state.records.get(&action.key) else {
+            return Ok(true);
+        };
+        if !matches!(record.state, DispatchState::Blocked)
+            || record
+                .error
+                .as_ref()
+                .is_none_or(|error| !crate::runtime::session_recovery_wait(error))
+            || state.tasks.contains_key(&record.operation)
+        {
+            return Ok(false);
+        }
+        drop(state);
+        Ok(!self
+            .runtime
+            .control
+            .operations()?
+            .iter()
+            .any(|receipt| receipt.operation_id == action.operation))
+    }
+    fn launch_recovery(&self, lease: &Lease, action: SessionRecoveryAction) -> Result<Uuid> {
+        self.fresh(lease)?;
+        if !self.recovery_dispatch_available(&action)? {
+            return Err(Error::new(
+                "dispatch_retained",
+                "recovery stage has an existing owned or non-replayable dispatch",
+            ));
+        }
+        let operation = action.operation;
+        let record = DispatchRecord {
+            schema_version: 1,
+            session_recovery: Some(SessionRecoveryDispatch {
+                predecessor: action.predecessor,
+                candidate: action.candidate.clone(),
+                stage: action.stage,
+            }),
+            correction: None,
+            metadata: None,
+            runtime: lease.runtime_id,
+            action: action.key.clone(),
+            operation,
+            work: action.ready.canonical_key.clone(),
+            phase: "session_recovery".into(),
+            lease: lease.clone(),
+            state: DispatchState::Dispatched,
+            observed_at: Utc::now(),
+            error: None,
+        };
+        self.record(&record)?;
+        let runtime = self.runtime.clone();
+        let lease = lease.clone();
+        let processes = self.processes.clone();
+        let bound = self.limits.worker_seconds;
+        let handle = tokio::runtime::Handle::current();
+        let join = tokio::task::spawn_blocking(move || {
+            handle.block_on(async move {
+                let result = runtime
+                    .advance_session_recovery(&lease, &action, processes, bound)
+                    .await;
                 runtime.services.wake.notify_one();
                 result
             })
@@ -540,6 +632,7 @@ impl RuntimeDriver {
         let operation = Uuid::new_v4();
         let record = DispatchRecord {
             schema_version: 1,
+            session_recovery: None,
             correction: None,
             metadata: Some(metadata),
             runtime: lease.runtime_id,
@@ -628,6 +721,7 @@ impl RuntimeDriver {
         let operation = Uuid::new_v4();
         let record = DispatchRecord {
             schema_version: 1,
+            session_recovery: None,
             runtime: lease.runtime_id,
             action,
             operation,
@@ -693,23 +787,32 @@ impl RuntimeDriver {
                 .and_then(|value| value);
             let mut record = task.record;
             record.observed_at = Utc::now();
-            record.state = match (&result, task.worker) {
+            let metadata_recovery = record
+                .session_recovery
+                .as_ref()
+                .is_some_and(|reference| !reference.stage.model());
+            record.state = match (&result, task.worker && !metadata_recovery) {
                 (Ok(_), true) => DispatchState::ModelOwned,
                 (Ok(_), false) => DispatchState::Returned,
                 (Err(_), _) => DispatchState::Blocked,
             };
             record.error = result.err();
+            if metadata_recovery {
+                self.state()?
+                    .joined_recovery
+                    .insert(record.operation, record.clone());
+            }
             // Retain each joined result in memory before attempting persistence.
             // A failed disk write must not discard the remaining owned joins.
             retain_error(&mut first_error, self.record_observation(&record));
             if record.error.is_some() {
                 match self.runtime.control.snapshot() {
                     Ok(snapshot) => {
-                        for permit in snapshot
-                            .active_operations
-                            .iter()
-                            .filter(|permit| permit.work_key == record.work)
-                        {
+                        for permit in snapshot.active_operations.iter().filter(|permit| {
+                            permit.work_key == record.work
+                                && (record.session_recovery.is_none()
+                                    || permit.operation_id == record.operation)
+                        }) {
                             // Cancellation is authorized only after durable fencing.
                             match self.runtime.control.fence(permit.operation_id) {
                                 Ok(()) => retain_error(
@@ -730,7 +833,7 @@ impl RuntimeDriver {
                     }
                 }
             }
-            if task.worker && record.error.is_some() {
+            if task.worker && record.error.is_some() && !metadata_recovery {
                 let release = (|| {
                     let snapshot = self.runtime.control.snapshot()?;
                     if !snapshot
@@ -741,6 +844,12 @@ impl RuntimeDriver {
                             .unresolved_operations
                             .values()
                             .any(|targets| targets.contains(&record.work))
+                        && !self.runtime.control.operations()?.iter().any(|receipt| {
+                            snapshot
+                                .pending_local_processes
+                                .contains(&receipt.operation_id)
+                                && receipt.canonical_targets.contains(&record.work)
+                        })
                     {
                         self.state()?.scheduler.finish(record.operation)?;
                     }
@@ -787,8 +896,27 @@ impl RuntimeDriver {
             }
         }
         retain_error(&mut first_error, self.runtime.observe_local_exits());
+        retain_error(&mut first_error, self.release_joined_recovery());
         self.state()?.last_error = first_error.clone();
         first_error.map_or(Ok(()), Err)
+    }
+    fn release_joined_recovery(&self) -> Result<()> {
+        let joined = self
+            .state()?
+            .joined_recovery
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let snapshot = self.runtime.control.snapshot()?;
+        let receipts = self.runtime.control.operations()?;
+        for record in joined {
+            if recovery_allocation_clear(&record, &snapshot, &receipts)? {
+                let mut state = self.state()?;
+                state.scheduler.finish(record.operation)?;
+                state.joined_recovery.remove(&record.operation);
+            }
+        }
+        Ok(())
     }
     fn drain_state(&self, snapshot: &ControlSnapshot) -> Result<DrainState> {
         let state = self.state()?;
@@ -1058,7 +1186,28 @@ impl SupervisorDriver for RuntimeDriver {
                     }
                 }
             }
-            let selected = workers.keys().cloned().collect();
+            let mut recoveries = BTreeMap::new();
+            for action in self.runtime.ready_session_recoveries()? {
+                if workers.contains_key(&action.ready.canonical_key)
+                    || recoveries
+                        .insert(action.ready.canonical_key.clone(), action)
+                        .is_some()
+                {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "ordinary and recovery selectors claim the same work",
+                    ));
+                }
+            }
+            let selected = workers.keys().chain(recoveries.keys()).cloned().collect();
+            let eligible_recoveries = recoveries
+                .values()
+                .filter_map(|action| match self.recovery_dispatch_available(action) {
+                    Ok(true) => Some(Ok(action)),
+                    Ok(false) => None,
+                    Err(error) => Some(Err(error)),
+                })
+                .collect::<Result<Vec<_>>>()?;
             let mut scheduler = {
                 let mut state = self.state()?;
                 state.scheduler.replace_limits(scheduler_limits(&config))?;
@@ -1071,6 +1220,13 @@ impl SupervisorDriver for RuntimeDriver {
                         state.scheduler.enqueue(action.ready.clone())?;
                     }
                 }
+                for action in eligible_recoveries {
+                    if !state.scheduler.running().iter().any(|allocation| {
+                        allocation.work.canonical_key == action.ready.canonical_key
+                    }) {
+                        state.scheduler.enqueue(action.ready.clone())?;
+                    }
+                }
                 std::mem::replace(
                     &mut state.scheduler,
                     Scheduler::new(scheduler_limits(&config))?,
@@ -1079,15 +1235,13 @@ impl SupervisorDriver for RuntimeDriver {
             let scheduled = (|| {
                 while scheduler
                     .admit_next(Utc::now(), |ready| {
-                        self.launch_worker(
-                            lease,
-                            workers
-                                .get(&ready.canonical_key)
-                                .ok_or_else(|| {
-                                    Error::new("stale_result", "selected work disappeared")
-                                })?
-                                .clone(),
-                        )
+                        if let Some(worker) = workers.get(&ready.canonical_key) {
+                            self.launch_worker(lease, worker.clone())
+                        } else if let Some(recovery) = recoveries.get(&ready.canonical_key) {
+                            self.launch_recovery(lease, recovery.clone())
+                        } else {
+                            Err(Error::new("stale_result", "selected work disappeared"))
+                        }
                     })?
                     .is_some()
                 {}
@@ -1151,6 +1305,77 @@ fn record_file(action: &str) -> Result<String> {
             .next()
             .ok_or_else(|| Error::invalid("action digest missing"))?
     ))
+}
+
+/// Invoked only for an actual same-process joined metadata task. Absence of
+/// in-memory handles alone never proves exit; an admitted stage must also have
+/// its own exact terminal receipt and positive owned-exit observation.
+fn recovery_allocation_clear(
+    record: &DispatchRecord,
+    snapshot: &ControlSnapshot,
+    receipts: &[crate::control::Receipt],
+) -> Result<bool> {
+    let Some(reference) = record.session_recovery.as_ref() else {
+        return Ok(false);
+    };
+    if reference.stage.model()
+        || snapshot
+            .active_operations
+            .iter()
+            .any(|permit| permit.work_key == record.work)
+        || snapshot
+            .unresolved_operations
+            .values()
+            .any(|targets| targets.contains(&record.work))
+        || receipts.iter().any(|receipt| {
+            snapshot
+                .pending_local_processes
+                .contains(&receipt.operation_id)
+                && receipt.canonical_targets.contains(&record.work)
+        })
+    {
+        return Ok(false);
+    }
+    let Some(receipt) = receipts
+        .iter()
+        .find(|receipt| receipt.operation_id == record.operation)
+    else {
+        // The actual task joined without ever acquiring an admission.
+        return Ok(record.error.is_some());
+    };
+    if receipt.runtime_id != record.runtime || receipt.canonical_targets != [record.work.clone()] {
+        return Err(Error::new(
+            "record_corrupt",
+            "joined recovery stage receipt changed identity",
+        ));
+    }
+    let Some(observed) = receipt.observed_result.as_ref() else {
+        return Ok(false);
+    };
+    match reference.stage {
+        SessionRecoveryStage::Provider { attempt } => {
+            let admission =
+                crate::control::SessionRecoveryPreparationReference::from_receipt(receipt)?;
+            if admission.as_ref().is_none_or(|admission| {
+                admission.predecessor() != reference.predecessor || admission.attempt != attempt
+            }) {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "joined provider recovery lineage changed",
+                ));
+            }
+            Ok(receipt.phase == ReceiptPhase::Reconciled
+                && observed["local_execution"] == "exited"
+                && observed["unresolved_effects"]
+                    .as_array()
+                    .is_some_and(Vec::is_empty)
+                && observed["observation"]["local_exit_confirmed"] == true)
+        }
+        SessionRecoveryStage::Source => Ok(receipt.kind == "host_metadata"
+            && receipt.phase == ReceiptPhase::Acknowledged
+            && observed["owned_handles_joined"] == true),
+        SessionRecoveryStage::Resume => Ok(false),
+    }
 }
 
 fn validate_process_admission(
@@ -1357,6 +1582,7 @@ mod tests {
         for operation in [id(8), id(9)] {
             let record = DispatchRecord {
                 schema_version: 1,
+                session_recovery: None,
                 correction: None,
                 metadata: None,
                 runtime: id(1),
@@ -1399,6 +1625,7 @@ mod tests {
         error.retryable = true;
         DispatchRecord {
             schema_version: 1,
+            session_recovery: None,
             correction: None,
             metadata,
             runtime: id(1),
@@ -1414,6 +1641,91 @@ mod tests {
             state: DispatchState::Blocked,
             observed_at: Utc::now(),
             error: Some(error),
+        }
+    }
+    #[tokio::test]
+    async fn joined_recovery_reservation_waits_for_actual_terminal_metadata_receipt() {
+        for failed in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let host = ControlHost::setup(
+                PrivateDir::create(&temp.path().canonicalize().unwrap().join("control")).unwrap(),
+                id(1),
+                id(99),
+            )
+            .unwrap();
+            let mut record = failed_dispatch(None);
+            record.phase = "session_recovery".into();
+            record.session_recovery = Some(SessionRecoveryDispatch {
+                predecessor: id(3),
+                candidate: bytes_digest(b"candidate"),
+                stage: SessionRecoveryStage::Source,
+            });
+            record.error =
+                failed.then(|| Error::new("source_changed", "actual metadata observation failed"));
+            record.state = if failed {
+                DispatchState::Blocked
+            } else {
+                DispatchState::Returned
+            };
+            let token = host
+                .begin_host_process(
+                    crate::control::MutationRequest {
+                        request_id: record.operation,
+                        runtime_id: id(1),
+                        actor: crate::control::Actor {
+                            identity: "component-host-owner".into(),
+                            principal: None,
+                            roles: Default::default(),
+                        },
+                        kind: "host_metadata".into(),
+                        canonical_targets: vec![record.work.clone()],
+                        expected: BTreeMap::new(),
+                        payload: Value::Null,
+                    },
+                    1,
+                    |_| Ok(()),
+                )
+                .unwrap();
+            // Real task join and Control receipt; this component launches no OS
+            // process and does not fabricate a provider or source capability.
+            let joined = tokio::spawn(async move { record }).await.unwrap();
+            assert!(
+                !recovery_allocation_clear(
+                    &joined,
+                    &host.snapshot().unwrap(),
+                    &host.operations().unwrap()
+                )
+                .unwrap()
+            );
+            let receipt = host.complete_host_process(&token, || Ok(()), json!({"owned_handles_joined":true,"metadata_observation":{"error":joined.error}})).unwrap();
+            assert!(
+                recovery_allocation_clear(
+                    &joined,
+                    &host.snapshot().unwrap(),
+                    &host.operations().unwrap()
+                )
+                .unwrap(),
+                "a later cycle can release an actual joined stage after exit confirmation"
+            );
+            let mut unknown = receipt.clone();
+            unknown.observed_result = Some(json!({"owned_handles_joined":false}));
+            assert!(
+                !recovery_allocation_clear(&joined, &host.snapshot().unwrap(), &[unknown]).unwrap(),
+                "empty registry and terminal phase are not exit proof"
+            );
+            let mut wrong = receipt;
+            wrong.canonical_targets = vec!["different-work".into()];
+            assert_eq!(
+                recovery_allocation_clear(&joined, &host.snapshot().unwrap(), &[wrong])
+                    .unwrap_err()
+                    .code,
+                "record_corrupt"
+            );
+            assert_eq!(
+                recovery_allocation_clear(&joined, &host.snapshot().unwrap(), &[]).unwrap(),
+                failed,
+                "only joined pre-admission errors may lack an admission"
+            );
         }
     }
     #[test]

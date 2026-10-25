@@ -192,7 +192,66 @@ pub fn plan(
     receipts: &[Receipt],
     now: DateTime<Utc>,
 ) -> Result<RunSchedule> {
-    plan_inner(runtime, phase, workspace, receipts, None, now)
+    plan_inner(runtime, phase, workspace, receipts, None, None, now)
+}
+/// Only a retained exact-source failed review can use terminal review failure
+/// as a retry cause. Ordinary failed runs keep the generic failure taxonomy.
+pub(crate) fn plan_review_retry(
+    runtime: &RuntimeConfig,
+    phase: &PhaseKey,
+    workspace: Uuid,
+    receipts: &[Receipt],
+    review: &crate::delivery::ReviewRetryWork,
+    now: DateTime<Utc>,
+) -> Result<RunSchedule> {
+    review.verify_inventory(receipts)?;
+    review.verify_retry_cause()?;
+    let failed = receipts
+        .iter()
+        .find(|r| r.operation_id == review.predecessor())
+        .ok_or_else(|| Error::new("reconciliation_required", "failed review disappeared"))?;
+    if phase != review.phase()
+        || workspace != review.authority().workspace_id()
+        || runtime.id != failed.runtime_id
+    {
+        return Err(Error::new(
+            "worker_binding",
+            "review schedule changes its verified scope",
+        ));
+    }
+    let mut limits = runtime.clone();
+    limits.max_attempts_per_phase = limits
+        .max_attempts_per_phase
+        .min(review.grant().new_budget().max_attempts);
+    limits.max_turns = limits.max_turns.min(review.grant().new_budget().max_turns);
+    limits.max_review_rounds = limits
+        .max_review_rounds
+        .min(review.grant().new_budget().max_review_rounds);
+    let mut next = plan_inner(&limits, phase, workspace, receipts, None, Some(review), now)?;
+    if next.attempt != review.next_attempt()? {
+        return Err(Error::new(
+            "stale_result",
+            "review retry does not follow its exact predecessor",
+        ));
+    }
+    next.not_before = next.not_before.max(retry_at(
+        failed.updated_at,
+        next.attempt.saturating_sub(1).max(1),
+        runtime.retry_cap_ms,
+        failed
+            .observed_result
+            .as_ref()
+            .and_then(|v| v.pointer("/observation/error/details/retry_after_ms"))
+            .and_then(Value::as_u64),
+    )?);
+    if next.not_before > now {
+        return Err(Error::new(
+            "retry_wait",
+            "failed review waits for bounded failure spacing",
+        )
+        .detail(json!({"not_before":next.not_before,"attempt":next.attempt})));
+    }
+    Ok(next)
 }
 /// Planning is diagnostic, not a continuation capability. Only the runtime's
 /// opaque unfinished-work proof can reach the continued admission transaction.
@@ -210,6 +269,7 @@ pub(crate) fn plan_unfinished(
         workspace,
         receipts,
         Some(PlanTrigger::Unfinished(continuation)),
+        None,
         now,
     )
 }
@@ -236,6 +296,7 @@ pub(crate) fn plan_source_advanced(
         workspace,
         receipts,
         Some(PlanTrigger::SourceAdvanced(source)),
+        None,
         now,
     )
 }
@@ -289,6 +350,7 @@ fn plan_inner(
     workspace: Uuid,
     receipts: &[Receipt],
     continuation: Option<PlanTrigger<'_>>,
+    review_retry: Option<&crate::delivery::ReviewRetryWork>,
     now: DateTime<Utc>,
 ) -> Result<RunSchedule> {
     crate::evidence::validate_digest(&phase.generation)?;
@@ -545,7 +607,8 @@ fn plan_inner(
     if !matches!(
         error.code.as_str(),
         "process_exit" | "provider_transport" | "timeout" | "stream_timeout" | "stall_timeout"
-    ) {
+    ) && !(review_retry.is_some() && error.code == "turn_incomplete")
+    {
         return Err(Error::new(
             "persistent_blocker",
             "this failure requires explicit resolution before another phase budget",

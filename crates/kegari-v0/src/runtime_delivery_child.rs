@@ -645,6 +645,17 @@ impl RuntimeDelivery {
                     "review preparation exists without a known model admission; preserve its original identity",
                 ));
             }
+            if self
+                .current_review_grants(&child.reference.work)?
+                .iter()
+                .any(|grant| grant.phase() == proof.phase())
+            {
+                // No preparation/model effect exists for this pending launch.
+                // A newer explicit grant is selected from the actual latest
+                // failed review on the next tick, without reusing this proof.
+                child.reference.stage = Stage::RetryReview;
+                return self.persist_child(child);
+            }
             let schedule = self.runtime.next_attempt_for_review_retry(&proof)?;
             if schedule.not_before > Utc::now() {
                 return Err(Error::new(
@@ -1287,13 +1298,20 @@ impl RuntimeDelivery {
                 .cloned()
                 .collect();
             match matching.as_slice() {
+                [] if child
+                    .review_retry
+                    .as_ref()
+                    .is_some_and(|proof| proof.phase() == &run.phase) =>
+                {
+                    Some((None, grants))
+                }
                 [] => {
                     return Err(Error::new(
                         "retry_required",
                         "known failed review awaits an explicit operator grant",
                     ));
                 }
-                [grant] => Some((grant.clone(), grants)),
+                [grant] => Some((Some(grant.clone()), grants)),
                 _ => {
                     return Err(Error::new(
                         "stale_result",
@@ -1616,18 +1634,32 @@ impl RuntimeDelivery {
                             "actual failed review completion missing",
                         )
                     })?;
-                let proof = coordinator
-                    .retry_failed_review(ReviewRetryRequest {
-                        admission: &admission,
-                        assignment: required(
-                            &child.review_worker_assignment,
-                            "original review worker assignment",
-                        )?,
-                        failed: completion,
-                        grant,
-                        current_grants: &grants,
-                    })
-                    .await?;
+                let proof = match grant {
+                    Some(grant) => {
+                        coordinator
+                            .retry_failed_review(ReviewRetryRequest {
+                                admission: &admission,
+                                assignment: required(
+                                    &child.review_worker_assignment,
+                                    "original review worker assignment",
+                                )?,
+                                failed: completion,
+                                grant,
+                                current_grants: &grants,
+                            })
+                            .await?
+                    }
+                    None => {
+                        coordinator
+                            .continue_failed_review(
+                                &admission,
+                                required(&child.review_retry, "previous review retry proof")?,
+                                completion,
+                                &grants,
+                            )
+                            .await?
+                    }
+                };
                 child.reference.review_retry_digest = Some(proof.digest().into());
                 child.review_retry = Some(Arc::new(proof));
                 self.finish_child_phase(child, Stage::LaunchReviewRetry)?;

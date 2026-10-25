@@ -13,12 +13,44 @@ struct RecordedTurn {
     id: String,
     status: String,
     content_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transient_failure: Option<RecordedTransientFailure>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedTransientFailure {
+    classification: TransientTurnFailure,
+    terminal_digest: String,
+    error_digest: String,
+    policy_free: bool,
 }
 impl RecordedThreadHistory {
     pub(super) fn observe(&mut self, turn: &Value) -> Result<()> {
         let id = required_str(turn, "id")?;
         let status = required_str(turn, "status")?;
         let content_digest = full_turn_digest(turn)?;
+        let transient_failure = match (&content_digest, turn.get("error")) {
+            (Some(digest), Some(error))
+                if status == "failed" && error.get("misalignment").is_none_or(Value::is_null) =>
+            {
+                let classification = match error.get("codexErrorInfo").and_then(Value::as_str) {
+                    Some("serverOverloaded") => Some(TransientTurnFailure::ServerOverloaded),
+                    Some("internalServerError") => Some(TransientTurnFailure::InternalServerError),
+                    _ => None,
+                };
+                classification
+                    .map(|classification| {
+                        Ok::<_, Error>(RecordedTransientFailure {
+                            classification,
+                            terminal_digest: digest.clone(),
+                            error_digest: canonical_digest(1, error)?,
+                            policy_free: true,
+                        })
+                    })
+                    .transpose()?
+            }
+            _ => None,
+        };
         if let Some(existing) = self.turns.iter().find(|t| t.id == id) {
             if existing.status != status
                 || existing.content_digest.is_some() && existing.content_digest != content_digest
@@ -40,6 +72,7 @@ impl RecordedThreadHistory {
             id: id.into(),
             status: status.into(),
             content_digest,
+            transient_failure,
         });
         Ok(())
     }
@@ -70,6 +103,7 @@ impl RecordedThreadHistory {
             if let Some(digest) = &turn.content_digest {
                 crate::evidence::validate_digest(digest)?;
             }
+            validate_failure(turn)?;
         }
         if &observed != completed {
             return Err(Error::new(
@@ -78,6 +112,23 @@ impl RecordedThreadHistory {
             ));
         }
         Ok(())
+    }
+    pub(super) fn terminal_transient_failure(
+        &self,
+        last: &str,
+    ) -> Result<Option<TransientTurnFailure>> {
+        let Some(turn) = self
+            .turns
+            .last()
+            .filter(|turn| turn.id == last && turn.status == "failed")
+        else {
+            return Ok(None);
+        };
+        validate_failure(turn)?;
+        Ok(turn
+            .transient_failure
+            .as_ref()
+            .map(|failure| failure.classification.clone()))
     }
     pub(super) fn verify_readback(&self, turns: &[Value]) -> Result<()> {
         if turns.len() != self.turns.len() {
@@ -101,6 +152,22 @@ impl RecordedThreadHistory {
         }
         Ok(())
     }
+}
+fn validate_failure(turn: &RecordedTurn) -> Result<()> {
+    if let Some(failure) = &turn.transient_failure {
+        crate::evidence::validate_digest(&failure.terminal_digest)?;
+        crate::evidence::validate_digest(&failure.error_digest)?;
+        if turn.status != "failed"
+            || !failure.policy_free
+            || turn.content_digest.as_deref() != Some(failure.terminal_digest.as_str())
+        {
+            return Err(Error::new(
+                "corrupt_receipt",
+                "transient classification differs from its full failed terminal observation",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Missing optional fields are normalized only according to the pinned Turn

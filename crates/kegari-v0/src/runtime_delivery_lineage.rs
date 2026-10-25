@@ -221,15 +221,33 @@ impl RuntimeDelivery {
             if matches!(state, StepState::NotStarted | StepState::Retired { .. }) {
                 continue;
             }
-            let effect = workspace
-                .coordinator
-                .recover_owned_release_step(
-                    &record.attempt.plan,
-                    id,
-                    record.attempt.step_attempt(id)?,
-                    &workspace.observer,
-                )
-                .await?;
+            let effect = if let StepState::Succeeded { effect, .. } = state
+                && matches!(
+                    effect.as_ref(),
+                    domain::ObservedEffect::Deployment { .. }
+                        | domain::ObservedEffect::Verification { .. }
+                ) {
+                workspace
+                    .coordinator
+                    .recover_terminal_release_step(
+                        &record.attempt.plan,
+                        id,
+                        record.attempt.step_attempt(id)?,
+                        effect,
+                        &workspace.observer,
+                    )
+                    .await?
+            } else {
+                workspace
+                    .coordinator
+                    .recover_owned_release_step(
+                        &record.attempt.plan,
+                        id,
+                        record.attempt.step_attempt(id)?,
+                        &workspace.observer,
+                    )
+                    .await?
+            };
             if !match (state, effect.outcome()) {
                 (
                     StepState::Succeeded {

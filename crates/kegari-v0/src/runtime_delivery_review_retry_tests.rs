@@ -3,10 +3,12 @@
 use super::*;
 use crate::evidence::Signed;
 use crate::runtime_delivery::worker_fixture::{
-    WorkerFixture, complete_review_retry, failed_review,
+    WorkerFixture, complete_review_retry, failed_review, failed_review_retry,
 };
 use std::{path::Path, sync::Mutex};
 pub(super) struct ReviewFixture<'a> {
+    pub retry_again: bool,
+    pub failure_code: Option<&'a str>,
     pub service: &'a RuntimeDelivery,
     pub built: &'a crate::runtime_fixture::RuntimeFixture,
     pub wire: &'a Arc<Mutex<crate::corrections::wire_fixture::Fixture>>,
@@ -119,7 +121,7 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
             .is_err()
     );
     Arc::get_mut(&mut failed).unwrap().state.binding.generation = original_generation;
-    let proof = Arc::new(
+    let mut proof = Arc::new(
         phase
             .coordinator
             .retry_failed_review(make(failed.clone()))
@@ -218,6 +220,13 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
             .code,
         "reconciliation_required"
     );
+    let first_proof = proof.clone();
+    if f.retry_again {
+        let Some(next) = another_failed_review(&f, &proof, &config).await else {
+            return;
+        };
+        proof = Arc::new(next);
+    }
     let next = worker(WorkerInput {
         root: &f.root.join("retried-review"),
         source: f.source,
@@ -277,6 +286,17 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
     assert!(wrong_generation.validate_binding().is_err());
     let (_records, outcome, completion) =
         complete_review_retry(&f.built.runtime.control, f.lease, &next, &proof);
+    if f.retry_again {
+        assert!(
+            first_proof
+                .verify_completed_inventory(
+                    &f.built.runtime.control.operations().unwrap(),
+                    &current().unwrap(),
+                    completion.operation_id,
+                )
+                .is_err()
+        );
+    }
     assert!(
         proof
             .verify_current(
@@ -452,7 +472,253 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
     assert_eq!(retained.payload.review, Some(failed.operation_id));
     assert_eq!(prior.max_attempts, 1);
     assert_eq!(prior.max_review_rounds, 1);
-    assert_eq!(new.attempt, 1);
-    assert_eq!(new.max_attempts, grant.new_budget().max_attempts);
+    assert_eq!(new.attempt, if f.retry_again { 2 } else { 1 });
+    assert_eq!(
+        new.max_attempts,
+        if f.retry_again {
+            2
+        } else {
+            grant.new_budget().max_attempts
+        }
+    );
     assert_eq!(new.phase, grant.phase_key());
+    if f.retry_again {
+        assert_eq!((new.max_turns, new.max_review_rounds), (7, 2));
+    }
+}
+
+async fn another_failed_review(
+    f: &ReviewFixture<'_>,
+    prior: &Arc<ReviewRetryWork>,
+    config: &crate::config::Config,
+) -> Option<ReviewRetryWork> {
+    let host = &f.built.runtime.control;
+    let inventory = host.operations().unwrap();
+    let failed_at = host.operation(prior.predecessor()).unwrap().updated_at;
+    // The component advances only the planner's clock. No native worker is
+    // launched, and no synthetic completion enters the runtime joined cache.
+    let mut lowered = config.runtime.clone();
+    lowered.max_attempts_per_phase = 2;
+    lowered.max_turns = 7;
+    lowered.max_review_rounds = 2;
+    assert_eq!(
+        crate::runtime_schedule::plan_review_retry(
+            &lowered,
+            prior.phase(),
+            f.gate.workspace_id(),
+            &inventory,
+            prior,
+            failed_at,
+        )
+        .unwrap_err()
+        .code,
+        "retry_wait"
+    );
+    let schedule = crate::runtime_schedule::plan_review_retry(
+        &lowered,
+        prior.phase(),
+        f.gate.workspace_id(),
+        &inventory,
+        prior,
+        failed_at + Duration::seconds(60),
+    )
+    .unwrap();
+    assert_eq!(schedule.attempt, 1);
+    let fixture = worker(WorkerInput {
+        root: &f.root.join("granted-failed-review"),
+        source: f.source,
+        binary: f.binary,
+        git: f.tool.clone(),
+        gate: f.gate,
+        workflow: &f.workspace.workflow,
+        revision: f.revision,
+        repository: f.repository,
+        runtime: f.lease.runtime_id,
+        operation: Uuid::new_v4(),
+        role: AgentRole::Review,
+        phase: "child_codex_review",
+        context: Value::Null,
+        assignment: Some(prior.assignment()),
+        account: f.account,
+    });
+    let mut failed = failed_review_retry(
+        host,
+        f.lease,
+        &fixture,
+        prior,
+        &schedule,
+        Some(30_000),
+        f.failure_code.unwrap(),
+    )
+    .await;
+    let transient = failed.state.terminal_transient_failure().unwrap();
+    let receipt = host.operation(failed.operation_id).unwrap();
+    let receipt_digest = canonical_digest(1, &receipt).unwrap();
+    f.built.runtime.observations.refresh().await.unwrap();
+    let grants = crate::runtime_workflow::current_retry_grants(
+        config,
+        &f.built.runtime.observations.admission_snapshot().unwrap(),
+        f.gate.work(),
+        &host.operations().unwrap(),
+        &f.built.runtime.services.key,
+    )
+    .unwrap();
+    assert!(
+        prior
+            .verify_current(&host.operations().unwrap(), &grants)
+            .is_err()
+    );
+    let phase = f
+        .service
+        .admit_delivery_phase(
+            f.workspace,
+            f.gate,
+            f.lease,
+            PhaseRequest {
+                operation: Uuid::new_v4(),
+                scope: f.scope.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    if transient.is_none() {
+        let count = host.operations().unwrap().len();
+        let error = phase
+            .coordinator
+            .continue_failed_review(&phase.admission, prior, failed.clone(), &grants)
+            .await
+            .err()
+            .expect("nontransient review cannot retry automatically");
+        assert_eq!(error.code, "persistent_blocker");
+        assert_eq!(host.operations().unwrap().len(), count);
+        assert_eq!(
+            canonical_digest(1, &host.operation(failed.operation_id).unwrap()).unwrap(),
+            receipt_digest
+        );
+        f.service
+            .retire_delivery_phase(&phase, json!({"blocked":error.code}))
+            .unwrap();
+        return None;
+    }
+    assert_eq!(
+        transient,
+        Some(crate::codex::TransientTurnFailure::ServerOverloaded)
+    );
+    Arc::get_mut(&mut failed).unwrap().local_exit_confirmed = false;
+    assert!(
+        phase
+            .coordinator
+            .continue_failed_review(&phase.admission, prior, failed.clone(), &grants)
+            .await
+            .is_err()
+    );
+    Arc::get_mut(&mut failed).unwrap().local_exit_confirmed = true;
+    let path = prior.source().root().join("tests/main.txt");
+    let original = fs::read(&path).unwrap();
+    fs::write(&path, "movement before same-budget retry\n").unwrap();
+    assert!(
+        phase
+            .coordinator
+            .continue_failed_review(&phase.admission, prior, failed.clone(), &grants)
+            .await
+            .is_err()
+    );
+    fs::write(&path, original).unwrap();
+    let next = phase
+        .coordinator
+        .continue_failed_review(&phase.admission, prior, failed.clone(), &grants)
+        .await
+        .unwrap();
+    assert_ne!(next.digest(), prior.digest());
+    assert_eq!(next.grant().digest(), prior.grant().digest());
+    assert_eq!(
+        next.assignment().digest().unwrap(),
+        prior.assignment().digest().unwrap()
+    );
+    assert_eq!(next.source().revision(), prior.source().revision());
+    assert_eq!(next.predecessor(), failed.operation_id);
+    next.verify_current(&host.operations().unwrap(), &grants)
+        .unwrap();
+    let mut forked = grants.clone();
+    forked.push(prior.grant().clone());
+    assert!(
+        next.verify_current(&host.operations().unwrap(), &forked)
+            .is_err()
+    );
+    let receipts = host.operations().unwrap();
+    assert_eq!(
+        crate::runtime_schedule::plan(
+            &config.runtime,
+            next.phase(),
+            f.gate.workspace_id(),
+            &receipts,
+            receipt.updated_at + Duration::seconds(60)
+        )
+        .unwrap_err()
+        .code,
+        "persistent_blocker"
+    );
+    assert_eq!(
+        crate::runtime_schedule::plan_review_retry(
+            &config.runtime,
+            next.phase(),
+            f.gate.workspace_id(),
+            &receipts,
+            &next,
+            receipt.updated_at
+        )
+        .unwrap_err()
+        .code,
+        "retry_wait"
+    );
+    let scheduled = crate::runtime_schedule::plan_review_retry(
+        &config.runtime,
+        next.phase(),
+        f.gate.workspace_id(),
+        &receipts,
+        &next,
+        receipt.updated_at + Duration::seconds(60),
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            scheduled.attempt,
+            scheduled.max_attempts,
+            scheduled.max_turns,
+            scheduled.max_review_rounds
+        ),
+        (2, 2, 7, 2)
+    );
+    assert_eq!(
+        scheduled.not_before,
+        receipt.updated_at + Duration::seconds(30)
+    );
+    let mut exhausted = config.runtime.clone();
+    exhausted.max_attempts_per_phase = 1;
+    assert_eq!(
+        crate::runtime_schedule::plan_review_retry(
+            &exhausted,
+            next.phase(),
+            f.gate.workspace_id(),
+            &receipts,
+            &next,
+            receipt.updated_at + Duration::seconds(60)
+        )
+        .unwrap_err()
+        .code,
+        "attempts_exhausted"
+    );
+    let mut raced = receipts.clone();
+    let mut extra = receipt.clone();
+    extra.operation_id = Uuid::new_v4();
+    raced.push(extra);
+    assert!(next.verify_current(&raced, &grants).is_err());
+    f.service
+        .retire_delivery_phase(&phase, json!({"review_retry":next.digest()}))
+        .unwrap();
+    assert_eq!(
+        canonical_digest(1, &host.operation(failed.operation_id).unwrap()).unwrap(),
+        receipt_digest
+    );
+    Some(next)
 }

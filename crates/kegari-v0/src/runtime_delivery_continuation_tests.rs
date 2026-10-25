@@ -12,19 +12,30 @@ use serde_json::Value;
 use std::fs;
 #[tokio::test]
 async fn exact_review_findings_produce_repair_from_real_owned_source_and_contracts() {
-    repair_cycle(false, false).await;
+    repair_cycle(false, false, None).await;
 }
 #[tokio::test]
 async fn exhausted_completed_work_uses_actual_operator_retry_budget_and_bound_repair_source() {
-    repair_cycle(true, false).await;
+    repair_cycle(true, false, None).await;
 }
 #[path = "runtime_delivery_retry_fixture.rs"]
 mod retry_fixture;
 #[tokio::test]
 async fn failed_review_uses_exact_source_and_actual_native_grant_before_clean_review() {
-    repair_cycle(false, true).await;
+    repair_cycle(false, true, None).await;
 }
-async fn repair_cycle(explicit_retry: bool, review_retry: bool) {
+#[tokio::test]
+async fn granted_review_retries_another_known_failure_with_same_budget_and_source() {
+    repair_cycle(false, true, Some("serverOverloaded")).await;
+}
+#[tokio::test]
+async fn granted_review_does_not_automatically_retry_auth_unknown_or_nontransient_failure() {
+    for code in ["unauthorized", "other", "badRequest"] {
+        Box::pin(repair_cycle(false, true, Some(code))).await;
+    }
+}
+async fn repair_cycle(explicit_retry: bool, review_retry: bool, failure_code: Option<&str>) {
+    let retry_again = failure_code.is_some();
     let (root, built, old_service, wire, owner) =
         super::super::tests::fixture_authorization_with_wire(true).await;
     let binary = old_service.git_path().unwrap();
@@ -234,12 +245,43 @@ async fn repair_cycle(explicit_retry: bool, review_retry: bool) {
     service
         .retire_delivery_phase(&review_phase, json!({"assignment_prepared":true}))
         .unwrap();
+    // Recover only historical host-authenticated provenance with an old
+    // observation time. It is deliberately unusable as a current provider gate;
+    // the actual delivery admission still uses the fresh native projection.
+    let historical_review_gate = if retry_again {
+        let mut saved = serde_json::to_value(&gate).unwrap();
+        saved["observed_at"] = json!(Utc::now() - Duration::minutes(10));
+        let envelope = built
+            .runtime
+            .services
+            .key
+            .sign(
+                "pending_worker_claim",
+                &json!({
+                    "schema_version":1,"authority":saved,"outcome":validation_outcome.outcome(),
+                }),
+            )
+            .unwrap();
+        let historical = FreshGate::recover_host_claim(
+            &built.runtime.services.key,
+            &envelope,
+            &gate.digest().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            gate.compare_current(&historical, Utc::now(), Duration::seconds(30))
+                .is_err()
+        );
+        historical
+    } else {
+        gate.clone()
+    };
     let reviewer = worker(WorkerInput {
         root: &root.join("review"),
         source: &source,
         binary: &binary,
         git: tool.clone(),
-        gate: &gate,
+        gate: &historical_review_gate,
         workflow: &workspace.workflow,
         revision: &revision,
         repository: &repository,
@@ -253,6 +295,8 @@ async fn repair_cycle(explicit_retry: bool, review_retry: bool) {
     });
     if review_retry {
         review_retry_fixture::run(ReviewFixture {
+            retry_again,
+            failure_code,
             service: &service,
             built: &built,
             wire: &wire,

@@ -219,6 +219,15 @@ legacy missing provenance remain incompatible. Full native input bytes must matc
 the actual submitted input fingerprint; summaries or unchanged IDs are
 insufficient.
 
+Complete failed-turn observations also retain a minimal typed transient code for
+bounded fresh-thread retry planning. Only `serverOverloaded` and
+`internalServerError` qualify, with no policy/misalignment or input requirement.
+The protected history links that code to the terminal and error digests; it does
+not serialize raw error messages. Restore rejects inconsistent terminal links,
+and legacy history gains no inferred classification. The getter is observational:
+retry admission still needs the actual joined completion, exact receipt and
+current authority; caller-created state is not a retry capability.
+
 The guarded metadata wrapper uses a new owned transport and only
 initialize/account/config/thread-read operations. It retains intervention
 notifications even during initialization, refuses unsolicited server requests,

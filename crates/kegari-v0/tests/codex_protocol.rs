@@ -1312,6 +1312,108 @@ async fn owned_thread_history_rejects_divergence_and_retains_policy_before_resum
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_transient_classification_requires_full_native_failed_observation() {
+    for (code, shape, expected) in [
+        (
+            "serverOverloaded",
+            "full",
+            Some(TransientTurnFailure::ServerOverloaded),
+        ),
+        (
+            "internalServerError",
+            "full",
+            Some(TransientTurnFailure::InternalServerError),
+        ),
+        ("unauthorized", "full", None),
+        ("other", "full", None),
+        ("badRequest", "full", None),
+        ("cyberPolicy", "full", None),
+        ("serverOverloaded", "misalignment", None),
+        ("serverOverloaded", "summary", None),
+        ("serverOverloaded", "missing_items", None),
+        ("serverOverloaded", "completed", None),
+    ] {
+        let (client, server) = tokio::io::duplex(16_384);
+        let (cr, cw) = tokio::io::split(client);
+        let (sr, mut sw) = tokio::io::split(server);
+        let mut sr = BufReader::new(sr);
+        let task = tokio::spawn(async move {
+            handshake(&mut sr, &mut sw).await;
+            let mut turn = json!({"id":"turn-one","status":"failed","items":[],
+                "error":{"message":"private diagnostic sentinel","codexErrorInfo":code}});
+            match shape {
+                "misalignment" => turn["error"]["misalignment"] = json!({"reason":"policy detail"}),
+                "summary" => turn["itemsView"] = json!("summary"),
+                "missing_items" => {
+                    turn.as_object_mut().unwrap().remove("items");
+                }
+                "completed" => turn["status"] = json!("completed"),
+                _ => (),
+            }
+            write_json(
+                &mut sw,
+                json!({"method":"turn/completed","params":{"threadId":"thread-one","turn":turn}}),
+            )
+            .await;
+        });
+        let mut rpc = RpcClient::from_transport(cr, cw, Duration::from_secs(2)).unwrap();
+        rpc.initialize().await.unwrap();
+        let mut state = active();
+        let mut broker = ObservingBroker::default();
+        rpc.pump(
+            &mut state,
+            &mut broker,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        task.await.unwrap();
+        assert_eq!(
+            state.terminal_transient_failure().unwrap(),
+            expected,
+            "{code}/{shape}"
+        );
+        let serialized = serde_json::to_vec(&state).unwrap();
+        assert!(!String::from_utf8_lossy(&serialized).contains("private diagnostic sentinel"));
+        assert_eq!(
+            SessionState::restore(&serialized)
+                .unwrap()
+                .terminal_transient_failure()
+                .unwrap(),
+            expected
+        );
+        if expected.is_some() {
+            let retained: Value = serde_json::from_slice(&serialized).unwrap();
+            for field in ["terminal_digest", "policy_free"] {
+                let mut changed = retained.clone();
+                changed["provider_history"]["turns"][0]["transient_failure"][field] = if field
+                    == "policy_free"
+                {
+                    json!(false)
+                } else {
+                    json!(kegari_v0::digest::canonical_digest(1, &"different terminal").unwrap())
+                };
+                assert!(SessionState::restore(&serde_json::to_vec(&changed).unwrap()).is_err());
+            }
+            let mut legacy = retained;
+            legacy["provider_history"]["turns"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("transient_failure");
+            assert!(
+                SessionState::restore(&serde_json::to_vec(&legacy).unwrap())
+                    .unwrap()
+                    .terminal_transient_failure()
+                    .unwrap()
+                    .is_none(),
+                "legacy history must not acquire inferred transient provenance"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn late_policy_completions_checkpoint_before_protocol_rejection_on_both_read_paths() {
     for request_path in [false, true] {

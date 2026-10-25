@@ -1,46 +1,51 @@
 # Kegari v0 build progress
 
-Local implementation remains in progress. The worker/release recovery checkpoint
-passed a complete base suite of **668 tests, zero failures and two native ignores**
-across 38 groups, then **122 affected checks** after two protocol files changed.
-These are distinct evidence sets, not 790 unique tests. Final all-target strict
-Clippy, formatting, contract inventory and diff checks passed. All 561 final
-inputs retained
-`sha256:4a2cae298403517bb107b5d80584b7fd4b090bd8143a3e69f91028628b35c631`.
-The [checkpoint report](validation/LOCAL-WORKER-RELEASE-RECOVERY.md) and
-[machine-readable evidence](validation/worker-release-recovery-checks.json) record
-exact source versions, commands, review corrections, failures and limitations.
-The code is ready for its authorized local commit; all validation sessions closed.
+Local implementation remains in progress. The native recovery/history checkpoint
+passed **683 tests, zero failures and two explicitly ignored native qualifications**
+across 38 groups. Strict all-target Clippy, formatting, contract inventory and diff
+checks passed. All 564 final inputs retained
+`sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58`.
+The [checkpoint report](validation/LOCAL-NATIVE-RECOVERY-HISTORY.md) and
+[machine-readable evidence](validation/native-recovery-history-checks.json) retain
+exact source versions, commands, review corrections and failed attempts. The
+freshly built evaluation plan still declares 56 slots with dispatch disabled.
+All validation sessions closed. The verified increment is ready for its authorized
+signed-off local commit; all code/test owners remain held until it is recorded.
 
-Bounded provider metadata recovery, a sealed native resume consumer, protected
-directory-family reuse/cleanup, initial granted child-review retry and authenticated
-chained release recovery are implemented and locally checked. Automatic native
-resume selection and broader cold/corrected/repeated recovery remain unfinished.
-The full suite passed both successor fixtures cleanly. Final protocol corrections
-preserve policy before acknowledgement errors and explicitly retain uncertain
-first resumed usage instead of attributing prior work to the new operation.
+Automatic same-process recovery now selects an actual joined child completion,
+acquires bounded provider metadata and fresh retained-clone inspection, and
+consumes the sealed resumed admission through shared scheduling. Same-grant
+review retries require recorded transient terminal provenance. Historical target
+readback binds immutable original effects; current-proof recovery handles absent
+or authenticated-old indexes without creating new effects. These paths are
+locally checked, with no native/live qualification claim.
 
-The preceding local checkpoint is
+Previous local checkpoint: `c6b4b4b8d1aacfc8a860c34851c57cb11b7f4e2d` —
+`feat(kegari-v0): enforce bounded worker and release recovery` (668 base passes,
+two native ignores, then 122 affected repetitions). Earlier checkpoints are
 `63f4b1e39bc4dd08f3193c8556215a11bf973daa` —
-`feat(kegari-v0): bind retry preparation and owned evaluation` (638 passes, two
-native ignores), following `bd2964319bdb6722d219fc97ace1ab0e91f04aa8` —
-`feat(kegari-v0): resume unfinished delivery with bounded proofs` (613 passes,
-two native ignores) and `90ce6d4631dc605a43ba1aa4033c839832b9cf95` —
-`feat(kegari-v0): connect corrections and delivery recovery` (577 passes, two
-native ignores). The new common admission/recovery/source-preservation work has a
-distinct reviewed verification boundary, so a new commit preserves the earlier
-tested checkpoint; no amend, consolidation or history rewrite is planned.
+`feat(kegari-v0): bind retry preparation and owned evaluation` (638 passes),
+`bd2964319bdb6722d219fc97ace1ab0e91f04aa8` —
+`feat(kegari-v0): resume unfinished delivery with bounded proofs` (613 passes),
+and `90ce6d4631dc605a43ba1aa4033c839832b9cf95` —
+`feat(kegari-v0): connect corrections and delivery recovery` (577 passes).
+The new scheduler consumption and immutable target history form a distinct
+reviewed increment beyond the preceding recovery primitives. A separate commit
+preserves that verification boundary; no consolidation, history rewrite or push
+is planned. The preceding checkpoint's clean worktree and source hash were
+verified before this increment began.
 
-Next work: automatic native recovery selection and opaque metadata caching,
-immutable historical target readback, terminal transitive hold completion,
-further granted review/finding/validation lineage, cold continuation, carried
-acceptance and native evaluation fixture migration. Bounded next slices are
-recorded below. All agents currently hold sources after final verification.
+Next work: terminal transitive hold completion, granted findings-to-repair and
+changed-source review/validation lineage, cold/corrected/repeated recovery,
+configured-hook recovery, carried acceptance and native evaluation composition.
+The next bounded plans have been reviewed read-only; no next-slice edits have
+started. Root owns integration/progress/commits, delivery owns review lineage,
+release owns terminal chain completion, and Codex owns session recovery.
 
 Native descendant containment remains incomplete. Arbitrary repository commands
 fail closed before unqualified execution. Actual-agent/native qualifications and
-human calibration remain unrun; this local checkpoint does not establish readiness
-to coordinate the lasting build.
+human calibration remain unrun; this checkpoint does not establish readiness to
+coordinate the lasting build.
 
 The operator remains **unattended**. Live agents, remote mutations, installation,
 deployment and required human calibration have not been authorized or run.
@@ -75,8 +80,8 @@ complete SC/V0-T scenario or real-provider qualification.
 ## Remaining engineering slices
 
 - Exact-source failed child review retry now has producer, consumer and component
-  tests for the first granted retry through clean publication. Later failed retries,
-  review findings/repair across mixed grant budgets and cold lineage remain to be
+  tests through repeated transient failures and clean publication. Review
+  findings/repair across mixed grant budgets and cold lineage remain to be
   completed; old phase records and caps must stay visible.
 - Cold recovery cannot recreate original `WorkerContract`/`RunCompletion` from
   current digests. First persist a bounded signed recovery record at the genuine
@@ -88,41 +93,31 @@ complete SC/V0-T scenario or real-provider qualification.
 - Provider resume now has protected submitted-input/history provenance, guarded
   metadata recovery, actual source/family proofs, typed admission and a native
   preparation consumer for the narrow known transient terminal-failure case.
-  Automatic runtime selection and metadata/source acquisition orchestration still
-  need wiring. Repeated resumed-thread prefix reconciliation, corrected/review
+  Automatic same-process runtime selection and metadata/source acquisition are
+  wired and locally checked; native qualification is still required. Repeated
+  resumed-thread prefix reconciliation, corrected/review
   sessions, configured before/after hooks and active/unresolved turns require
   separate work. Preserve actual joined completion identity; no cold JSON may
   construct it. Shared-directory enrollment is tested, and every member's cleanup
   and retained redirect must remain valid through actual cleanup.
-- Chained integration recovery should precede carried acceptance. A bounded
-  verified signed release lineage must traverse predecessor admissions/supersede
-  receipts/native publications, reject cycles, acquire exact current-main objects
-  and prove ancestry while deduplicating original contributions. The planned
-  actual fixture is A merged, B held deployment-only, C corrected after restart;
-  actual Git/control/native-wire recovery must retain A exactly once and still
-  block at missing genuine integrated evidence. Carried acceptance needs a later
+- Chained integration recovery now verifies bounded signed admission/supersede/
+  publication lineage, rejects cycles and proves current-main Git ancestry while
+  deduplicating original contributions. The actual A/B/C Git/Control/native-wire
+  fixture retains A exactly once through a held deployment-only B and corrected
+  C after restart; it still blocks at missing genuine integrated evidence.
+  Carried acceptance needs a later
   sealed direct-or-carried selection, original human decision/publication lineage,
   fresh baseline/production validation and durable visible carry publication.
-- After the current checkpoint, automatic native recovery must select an actual
-  retained joined completion before generic failed-turn scheduling blocks it.
-  Cache the successful opaque metadata observation across pause/capacity waits,
-  keyed by the exact predecessor receipt/candidate/contract/phase/configuration;
-  durable references detect replay but cannot reconstruct the capability after a
-  cold restart. Original execution clones need a sealed owned-execution host-read
-  root, not a fabricated configured repository root. Fresh source/family proof and
-  current assembly still precede final admission.
-- The next release slice should recover exact original target proof files by
-  immutable challenge/dispatch/run/attempt/deployment/proof identity and complete
-  historical statuses, independently of the mutable latest-target index. Restrict
-  this capability to exact recorded terminal ancestor effects; current baselines
-  and readiness remain strict. Then add terminal transitive completion projection
+- Exact original target proof recovery now uses immutable authenticated identity
+  and complete historical observations, separately from current readiness. The
+  next release slice adds terminal transitive completion projection
   from actually successful, retired descendants and the authenticated chain,
   preserving original failed outcomes and unrelated holds.
-- The next review slice should mint a fresh per-attempt capability for another
-  failed review inside its existing native grant, preserving assignment/source,
-  original caps, backoff and contiguous history. Findings-to-repair and later
-  source-advanced review need their own retained grant lineage rechecked during
-  advisory, preparation, admission and publication; stale/deleted/forked grants
+- Same-grant transient failed reviews now mint fresh per-attempt capabilities
+  preserving assignment/source, original caps, backoff and contiguous history.
+  Findings-to-repair and later source-advanced review need their own retained
+  grant lineage rechecked during advisory, preparation, admission and publication;
+  stale/deleted/forked grants
   must not authorize repair. Validation retry lineage follows separately.
 
 
@@ -136,10 +131,10 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 | §§3.1–3.4: strict config, credentials, workflow/reload; REQ-34/35/40/41/50/51/57; H01/H02 | Config/workflow/secret/reload tests, installed asset assembly | 28 focused tests pass including context-composition review fixes; native Keychain implemented but unrun; serialized setup integration in flight |
 | §§3.5–4: preparation, provider reads, authorization/scope/review; REQ-01–04/29/37–39/43/44/62 | Paginated provider fixtures, event provenance and scope revocation | Offline provider/reconciliation/decision fixtures pass in the frozen checkpoint; real provider provenance/compatibility qualification remains unrun |
 | §5: lifecycle/dependencies/corrections; REQ-07–09/19/22–24/30 | Correction races, retained child sets, dependency generations | Local correction/scope primitives tested; provider reconciliation tested; full workflow loop in flight |
-| §6: scheduling/bounds/claims; REQ-12/21/32/35 | Fair account/workspace admission, attempts and pause races | Bounded scheduler/driver and protected process ownership integrated and locally tested; genuine repair/follow-up proofs tested; cold/corrected lineage and compatible session resume incomplete |
+| §6: scheduling/bounds/claims; REQ-12/21/32/35 | Fair account/workspace admission, attempts and pause races | Bounded scheduler/driver and protected process ownership integrated and locally tested; genuine repair/follow-up and narrow same-process recovery tested; cold/corrected/repeated recovery incomplete |
 | §7: isolation/Codex/harness; REQ-31/32/34/42/54; H01/H02 | Pinned-schema protocol fixtures, OS sandbox probes, manifest/discovery | Pinned protocol, active corrections and shared worker/evaluation path tested locally; actual containment canaries blocked and live discovery unverified |
 | §8: local/hosted/review/staging/evidence/acceptance; REQ-05/06/10/11/19–21/25–28/43/44/53 | Exact-revision evidence, attestation, Git fixtures, stale tokens/video | Native provider adapters and separate gate progression integrated and locally tested; complete live workflow/media qualification outstanding |
-| §9: candidates/carry/queues/release/recovery; REQ-13/15–18/27/28/30 | A/B isolation, patch bytes, partial effects/holds, correction races | Release/recovery decisions and no-release completion wired with focused fixtures; deployment-only successor capabilities tested; full runtime supersession and historical carry scenarios incomplete |
+| §9: candidates/carry/queues/release/recovery; REQ-13/15–18/27/28/30 | A/B isolation, patch bytes, partial effects/holds, correction races | Release/recovery decisions and no-release completion wired with focused fixtures; chained successor and immutable historical target recovery tested; terminal transitive completion and acceptance carry incomplete |
 | §10: complete CLI/control/overview/TLS; REQ-49–51/55–57 | CLI/API observable tests, peer identities, snapshot pagination | CLI/control/dispatcher/native executable factory wired; deterministic CLI/API/transport checks pass; native service qualification unrun |
 | §11: intent/cancellation/recovery/cleanup/logs/handover; REQ-31/33/36/40/41/52/58–62 | Crash boundaries, restart/stop/force, preservation and redaction | Offline control/process/recovery/cleanup fixtures pass in the frozen checkpoint; complete historical and native lifecycle qualification remains incomplete |
 | §12.1 SC-01–SC-26, each retained scenario | Observable deterministic + required live profiles | Partial primitive coverage; no complete end-to-end scenario claimed |
@@ -150,6 +145,34 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 | REQ-05/33/40/41/45–51/53 graphical/distribution portions | Dashboard, wrapper, frontend, Homebrew, other OS packaging | Deferred exactly as SPEC §§1/13 |
 
 ## Validation and evidence
+
+- **Native recovery/history checkpoint:** complete suite 683 passed, zero failed,
+  two native ignores across 38 groups. Library 190/190 in 255.01s includes both
+  corrected/chained successor fixtures. Final strict all-target Clippy passed in
+  17.76s; deployment 19/19 and terminal target 1/1 focused reruns passed before
+  the full run. Formatting, inventory and diff checks passed. Final 564-input
+  digest `sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58` was
+  unchanged during and after validation. The current report and JSON above
+  retain exact commands, log hashes, source versions and remaining limitations.
+- **Retained failures in this increment:** initial compilation used field access
+  as a method; first full invocation stopped after 187 library passes/3 failures
+  because target-proof validation rejected actual active Prepared admissions and
+  a fixture raced unstable refresh. Exact live permit checks and stable fixture
+  readback corrected these while keeping retired historical gates strict. A later
+  deployment run passed 18/19; its second-target fixture now supplies complete
+  native facts while retaining its missing-proof assertion. Strict Clippy found
+  argument-count/enum-size issues; grouped stage inputs and boxed payloads fixed
+  them without suppression. Final full evidence passed on the corrected source.
+- **Independent review corrections:** automatic review retry now requires minimal
+  typed transient provenance bound to the full terminal content digest; saved
+  contract identity is independent of fresh current authority. Actual joined
+  metadata task evidence controls delayed reservation release and recovery errors
+  are visible. Exact release plan/resume permit scope, reconciled dispatch effect
+  identity, interrupted index repair and read-only recovery from absent or valid
+  old current pointers are enforced. Corrupt/dangling pointers, ambiguous proofs,
+  unknown exits and cold Prepared receipts remain blocked. Bounded peer reviews
+  found no remaining material defect in these paths; complete conformance and
+  live/human qualification remain outstanding.
 
 - **Active session-resume admission component:** root added `RunResumeReference`
   and serialized same-phase admission binding the exact latest predecessor,

@@ -25,6 +25,10 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "deployment_history.rs"]
+mod history;
+pub use history::{HistoricalTargetDeployment, TargetProofReference};
+
 pub type CurrentAuthority = Arc<dyn Fn(&FreshGate) -> Result<()> + Send + Sync>;
 
 pub struct ProductionObserver {
@@ -466,7 +470,7 @@ impl ProductionObserver {
             operation: admission.operation_id(),
             dispatch: Uuid::new_v4(),
             challenge: Uuid::new_v4(),
-            admission_digest: admission.scope().digest()?,
+            admission_digest: permit.scope_digest.clone(),
             contract_digest: contract.digest()?,
             repository_id: contract.provider.id,
             step: step.id.clone(),
@@ -578,13 +582,40 @@ impl ProductionObserver {
         self.check_admission(contract, admission, permit)?;
         self.check_challenge(contract, challenge)?;
         let c = &challenge.signed.payload;
-        if c.operation != admission.operation_id()
-            || c.admission_digest != admission.scope().digest()?
-        {
+        if c.operation != admission.operation_id() || c.admission_digest != permit.scope_digest {
             return Err(blocked(
                 "target challenge belongs to another admitted phase",
             ));
         }
+        // Re-observing the same owned dispatch retains the original immutable
+        // proof and its original verification time; it does not reuse a JWT.
+        if let Some(mut record) =
+            self.retained_dispatch_proof(contract, &c.step, c.challenge, c.dispatch)?
+        {
+            let actual = self.retained_proof_receipt(contract, &record)?;
+            if dispatch.request_id != actual.request_id
+                || dispatch.operation_id != actual.operation_id
+                || dispatch.runtime_id != actual.runtime_id
+                || dispatch.payload_digest != actual.payload_digest
+            {
+                return Err(blocked(
+                    "supplied dispatch differs from the original immutable target receipt",
+                ));
+            }
+            self.reobserve_record(contract, &record).await?;
+            self.control.validate_permit(permit, || {
+                (self.current)(admission.fresh_gate())?;
+                let _lock = self.records.lock("deployment-proofs.lock")?;
+                record = self.persist_target_proof(contract, record.clone())?;
+                Ok(())
+            })?;
+            return Ok(VerifiedTargetDeployment {
+                record,
+                observed_at: Utc::now(),
+            });
+        }
+        // A new proof still requires the original successful dispatch ACK.
+        // A reconciled historical effect alone cannot mint fresh evidence.
         let dispatch = self.dispatch_receipt(contract, c, dispatch)?;
         let run_id = number(
             dispatch
@@ -674,7 +705,7 @@ impl ProductionObserver {
             ),
             observed_at: now,
         };
-        let record = TargetRecord {
+        let mut record = TargetRecord {
             challenge: c.clone(),
             dispatch_payload: dispatch.payload_digest,
             facts,
@@ -687,23 +718,11 @@ impl ProductionObserver {
             target,
         };
         self.reobserve_record(contract, &record).await?;
-        let signed = self.key.sign("target_deployment", &record)?;
-        let digest = signed.digest()?;
-        let file = format!("target-proof-{}.json", digest.rsplit(':').next().unwrap());
-        let index = TargetIndex {
-            contract_digest: c.contract_digest.clone(),
-            step: c.step.clone(),
-            proof_digest: digest,
-            proof_file: file.clone(),
-        };
         self.control.validate_permit(permit, || {
             (self.current)(admission.fresh_gate())?;
             let _lock = self.records.lock("deployment-proofs.lock")?;
-            self.records.write(&file, &signed)?;
-            self.records.write(
-                &index_file(contract, &c.step)?,
-                &self.key.sign("target_deployment_index", &index)?,
-            )
+            record = self.persist_target_proof(contract, record.clone())?;
+            Ok(())
         })?;
         Ok(VerifiedTargetDeployment {
             record,
@@ -717,34 +736,12 @@ impl ProductionObserver {
         contract: &RepositoryContract,
         step_id: &str,
     ) -> Result<VerifiedTargetDeployment> {
-        let record = self.retained_target_record(contract, step_id)?;
+        let record = self.retained_target_record(contract, step_id).await?;
         self.reobserve_record(contract, &record).await?;
         Ok(VerifiedTargetDeployment {
             record,
             observed_at: Utc::now(),
         })
-    }
-    fn retained_target_record(
-        &self,
-        contract: &RepositoryContract,
-        step_id: &str,
-    ) -> Result<TargetRecord> {
-        step(contract, step_id)?;
-        let index: Signed<TargetIndex> = self.records.read(&index_file(contract, step_id)?)
-            .map_err(|e| if e.code == "record_missing" { blocked("current target has no retained authenticated deployment proof")
-                .next("Run the configured trusted deployment or validation route under explicit release/recovery authority.") } else { e })?;
-        self.key.verify("target_deployment_index", &index)?;
-        if index.payload.contract_digest != contract.digest()? || index.payload.step != step_id {
-            return Err(blocked("retained target index belongs to another contract"));
-        }
-        let signed: Signed<TargetRecord> = self.records.read(&index.payload.proof_file)?;
-        self.key.verify("target_deployment", &signed)?;
-        if signed.digest()? != index.payload.proof_digest
-            || signed.payload.challenge.step != step_id
-        {
-            return Err(blocked("retained target proof/index differ"));
-        }
-        Ok(signed.payload)
     }
     /// Observe every configured environment without hiding a known main/target
     /// mismatch. Missing or uncertain native proof still fails closed. This is
@@ -768,7 +765,7 @@ impl ProductionObserver {
                             "configured recovery target/environment inventory is ambiguous",
                         ));
                     }
-                    let record = self.retained_target_record(contract, &step.id)?;
+                    let record = self.retained_target_record(contract, &step.id).await?;
                     self.reobserve_target_record(contract, &record).await?;
                     let mut target = record.target;
                     target.observed_at = Utc::now();
@@ -1150,8 +1147,7 @@ impl ProductionObserver {
                 signed: self.key.sign("deployment_challenge", &record.challenge)?,
             },
         )?;
-        let receipt = self.control.operation(record.challenge.dispatch)?;
-        self.dispatch_receipt(contract, &record.challenge, &receipt)?;
+        let receipt = self.retained_proof_receipt(contract, record)?;
         if receipt.payload_digest != record.dispatch_payload
             || record.target.source != record.challenge.source
             || record.target.target != record.challenge.target

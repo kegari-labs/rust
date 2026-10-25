@@ -27,6 +27,7 @@ pub(crate) use object_import::retained_object_read_root;
 #[path = "git_reuse.rs"]
 mod reuse;
 pub use reuse::VerifiedReusableSource;
+pub(crate) use reuse::retained_execution_host_read_root;
 #[cfg(all(test, target_os = "macos"))]
 #[path = "git_reuse_family_tests.rs"]
 mod reuse_family_tests;

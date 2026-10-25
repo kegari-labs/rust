@@ -1,0 +1,966 @@
+{
+  "schema_version": 1,
+  "evidence_class": "deterministic enforcement and component integration; not live qualification",
+  "verified_at": "2026-10-25T12:43:37.766528+00:00",
+  "scope": "Same-process staged native recovery selection, retained-execution metadata reads, same-grant transient review retry, immutable target history and crash-safe current proof lookup",
+  "full_suite": {
+    "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0",
+    "exit_code": 0,
+    "log_path": "/private/tmp/kegari-v0-native-recovery-history-full-4.log",
+    "log_sha256": "cc8c38ede972b5366cb96662ea18cdbf3c7d459b6a3f69c4a25e2c3cc2aa3b21",
+    "source_digest": "sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58",
+    "file_count": 564,
+    "groups": [
+      {
+        "group": "unittests src/lib.rs",
+        "passed": 190,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 255.01
+      },
+      {
+        "group": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "unittests src/bin/kegari-v0-evaluation.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "tests/api.rs",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.13
+      },
+      {
+        "group": "tests/app.rs",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.22
+      },
+      {
+        "group": "tests/authority_scheduler.rs",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "tests/cli.rs",
+        "passed": 24,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.47
+      },
+      {
+        "group": "tests/codex_protocol.rs",
+        "passed": 32,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 1.17
+      },
+      {
+        "group": "tests/config_harness.rs",
+        "passed": 31,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.06
+      },
+      {
+        "group": "tests/configuration.rs",
+        "passed": 19,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 10.76
+      },
+      {
+        "group": "tests/connections.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "tests/control_preparation.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.17
+      },
+      {
+        "group": "tests/control_storage.rs",
+        "passed": 24,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 1.44
+      },
+      {
+        "group": "tests/decisions.rs",
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 10.14
+      },
+      {
+        "group": "tests/delivery.rs",
+        "passed": 21,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 16.85
+      },
+      {
+        "group": "tests/deployment.rs",
+        "passed": 19,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 5.49
+      },
+      {
+        "group": "tests/evaluation.rs",
+        "passed": 25,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 2.53
+      },
+      {
+        "group": "tests/evaluation_reports.rs",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 1.42
+      },
+      {
+        "group": "tests/execution.rs",
+        "passed": 18,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 12.54
+      },
+      {
+        "group": "tests/git_delivery.rs",
+        "passed": 36,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 79.12
+      },
+      {
+        "group": "tests/host_process.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 36.52
+      },
+      {
+        "group": "tests/housekeeping.rs",
+        "passed": 22,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 24.52
+      },
+      {
+        "group": "tests/instruction_resume.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.04
+      },
+      {
+        "group": "tests/local_cli.rs",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 2.03
+      },
+      {
+        "group": "tests/main.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 1.24
+      },
+      {
+        "group": "tests/orchestration.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.03
+      },
+      {
+        "group": "tests/platform.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "filtered_out": 0,
+        "seconds": 2.98
+      },
+      {
+        "group": "tests/process_group.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.5
+      },
+      {
+        "group": "tests/process_records.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.37
+      },
+      {
+        "group": "tests/providers.rs",
+        "passed": 28,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 1.77
+      },
+      {
+        "group": "tests/reconcile.rs",
+        "passed": 25,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 1.96
+      },
+      {
+        "group": "tests/runtime_schedule.rs",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "tests/secrets.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.02
+      },
+      {
+        "group": "tests/snapshots.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.11
+      },
+      {
+        "group": "tests/supervisor.rs",
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.64
+      },
+      {
+        "group": "tests/transport.rs",
+        "passed": 13,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.14
+      },
+      {
+        "group": "tests/worker.rs",
+        "passed": 37,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 11.62
+      },
+      {
+        "group": "Doc-tests kegari_v0",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "seconds": 0.0
+      }
+    ],
+    "totals": {
+      "passed": 683,
+      "failed": 0,
+      "ignored": 2
+    }
+  },
+  "source_inputs": {
+    "digest": "sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58",
+    "file_count": 564,
+    "algorithm": "SHA-256 of sorted compact JSON mapping workspace-relative paths to SHA-256 file hashes",
+    "directories": [
+      "src",
+      "tests",
+      "instructions",
+      "protocol",
+      "examples",
+      "evaluations"
+    ],
+    "additional_files": [
+      "crates/kegari-v0/Cargo.toml",
+      "crates/kegari-v0/build.rs",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain.toml"
+    ]
+  },
+  "source_versions": [
+    {
+      "version": "v1",
+      "digest": "sha256:450f8d4739f6a063d1ff51d9528775e2f2d3492bfb36a98a01b9b47ac7647045",
+      "file_count": 564
+    },
+    {
+      "version": "v2",
+      "digest": "sha256:7dd2c69789e4c3d035606deaf50d085e2cc08c3882f89c67f6b2e48e977e961e",
+      "file_count": 564
+    },
+    {
+      "version": "v3",
+      "digest": "sha256:6e12af73e8e8ce719dac5f74a8af6acc1ad98b2192b0a1499e141701aa1d1540",
+      "file_count": 564
+    },
+    {
+      "version": "v4",
+      "digest": "sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58",
+      "file_count": 564
+    }
+  ],
+  "lint": {
+    "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy --locked -p kegari-v0 --all-targets -- -D warnings",
+    "exit_code": 0,
+    "log_path": "/private/tmp/kegari-v0-native-recovery-history-clippy-4.log",
+    "log_sha256": "7ca1048683dd240ea456d9afb96c886d7e0a87c8b648e6658d9bacc98d826a0b",
+    "source_digest": "sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58",
+    "file_count": 564
+  },
+  "focused_checks": [
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo check --locked -p kegari-v0 --tests",
+      "exit_code": 0,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-check-2.log",
+      "log_sha256": "0772f7301f17979364af1f8199ef98ec27052ba2a96bee7ca533daf356b84955",
+      "source_digest": "sha256:450f8d4739f6a063d1ff51d9528775e2f2d3492bfb36a98a01b9b47ac7647045",
+      "file_count": 564
+    },
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --lib runtime::session_recovery::tests",
+      "exit_code": 0,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-planner.log",
+      "log_sha256": "5a9fd07e9e07d555c16bcdd483c1e1c87cfb56e4da9d674a7c2a52fd27ace88d",
+      "source_digest": "sha256:450f8d4739f6a063d1ff51d9528775e2f2d3492bfb36a98a01b9b47ac7647045",
+      "file_count": 564,
+      "groups": [
+        {
+          "group": "unittests src/lib.rs",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered_out": 189,
+          "seconds": 0.13
+        }
+      ],
+      "totals": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --lib runtime_driver::tests::joined_recovery_reservation_waits_for_actual_terminal_metadata_receipt",
+      "exit_code": 0,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-driver.log",
+      "log_sha256": "b2a4da143b07b9765e5bfdd9ef500c80958220aa1a190eb6495fdd8d245e4a27",
+      "source_digest": "sha256:450f8d4739f6a063d1ff51d9528775e2f2d3492bfb36a98a01b9b47ac7647045",
+      "file_count": 564,
+      "groups": [
+        {
+          "group": "unittests src/lib.rs",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered_out": 189,
+          "seconds": 0.1
+        }
+      ],
+      "totals": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --test deployment",
+      "exit_code": 0,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-deployment-4.log",
+      "log_sha256": "bedc7fac908718ac2e58c52269518c805a9a86c7c98a3b02d2fcea61201b4942",
+      "source_digest": "sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58",
+      "file_count": 564,
+      "groups": [
+        {
+          "group": "tests/deployment.rs",
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "filtered_out": 0,
+          "seconds": 5.47
+        }
+      ],
+      "totals": {
+        "passed": 19,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --lib terminal_target_history_binds_plan_permit_and_reconciled_original_effect",
+      "exit_code": 0,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-terminal-4.log",
+      "log_sha256": "51815d2d7b00711995298e7d2e515874f4e85b023155758b876d2d1205d53fb1",
+      "source_digest": "sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58",
+      "file_count": 564,
+      "groups": [
+        {
+          "group": "unittests src/lib.rs",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered_out": 189,
+          "seconds": 1.41
+        }
+      ],
+      "totals": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    }
+  ],
+  "focused_counting": "Focused passes repeat tests in the full suite; they are not additional unique tests.",
+  "other_checks": [
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo fmt --check -p kegari-v0",
+      "exit_code": 0,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-fmt-final.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_digest": "sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58",
+      "file_count": 564
+    },
+    {
+      "command": "python3 crates/kegari-v0/tools/contract_inventory.py --check",
+      "exit_code": 0,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-inventory-final.log",
+      "log_sha256": "648d558ba9272d861212e4210848cb21ed5fd8cac8eec005719d33c42589f7c4",
+      "source_digest": "sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58",
+      "file_count": 564
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-diff-final.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_digest": "sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58",
+      "file_count": 564
+    }
+  ],
+  "spec_sha256": "80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326",
+  "evaluation_plan": {
+    "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo run --locked -p kegari-v0 --bin kegari-v0-evaluation -- plan crates/kegari-v0/evaluations/manifest.json",
+    "exit_code": 0,
+    "log_path": "/private/tmp/kegari-v0-native-recovery-history-plan-final.json",
+    "log_sha256": "199688288763a403415927b32c8ad85771c5d616a6943fed76b40145c079639e",
+    "build_log_sha256": "384abe47131e4f6504b5a3c0fbaccefc3e56f8d30aebb019f6e5742d5208b640",
+    "result": {
+      "data": {
+        "dispatch_authorized": false,
+        "max_seconds": 10080,
+        "max_trials": 56,
+        "profiles": [
+          {
+            "binding": null,
+            "name": "operator_evaluated",
+            "unresolved": "Operator must explicitly select an allowed evaluated model/reasoning/speed, verified ChatGPT account and bounded live authority. No selection or spend is inferred from builder settings."
+          }
+        ],
+        "suite_digest": "sha256:v1:e59fa4a3e35486210374a57511a54033e6a1a334a7a728be78453d83b57647d5",
+        "trials": [
+          {
+            "case_id": "V0-E01",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "implementation"
+          },
+          {
+            "case_id": "V0-E01",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "implementation"
+          },
+          {
+            "case_id": "V0-E01",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "testing"
+          },
+          {
+            "case_id": "V0-E01",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "testing"
+          },
+          {
+            "case_id": "V0-E01",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "documentation"
+          },
+          {
+            "case_id": "V0-E01",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "documentation"
+          },
+          {
+            "case_id": "V0-E01",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "coordination"
+          },
+          {
+            "case_id": "V0-E01",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "coordination"
+          },
+          {
+            "case_id": "V0-E02",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "no_change"
+          },
+          {
+            "case_id": "V0-E02",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "no_change"
+          },
+          {
+            "case_id": "V0-E02",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "clean_review"
+          },
+          {
+            "case_id": "V0-E02",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "clean_review"
+          },
+          {
+            "case_id": "V0-E03",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "missing"
+          },
+          {
+            "case_id": "V0-E03",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "missing"
+          },
+          {
+            "case_id": "V0-E03",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "ambiguous"
+          },
+          {
+            "case_id": "V0-E03",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "ambiguous"
+          },
+          {
+            "case_id": "V0-E03",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "independent_eligible"
+          },
+          {
+            "case_id": "V0-E03",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "independent_eligible"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "route"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "route"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "edited"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "edited"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "followup"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "followup"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "informational"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "informational"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "ambiguous_correction"
+          },
+          {
+            "case_id": "V0-E04",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "ambiguous_correction"
+          },
+          {
+            "case_id": "V0-E05",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "seeded"
+          },
+          {
+            "case_id": "V0-E05",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "seeded"
+          },
+          {
+            "case_id": "V0-E05",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "clean"
+          },
+          {
+            "case_id": "V0-E05",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "clean"
+          },
+          {
+            "case_id": "V0-E05",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "independent_malicious"
+          },
+          {
+            "case_id": "V0-E05",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "independent_malicious"
+          },
+          {
+            "case_id": "V0-E06",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "honest_checks"
+          },
+          {
+            "case_id": "V0-E06",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "honest_checks"
+          },
+          {
+            "case_id": "V0-E06",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "unrun"
+          },
+          {
+            "case_id": "V0-E06",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "unrun"
+          },
+          {
+            "case_id": "V0-E06",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "visual"
+          },
+          {
+            "case_id": "V0-E06",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "visual"
+          },
+          {
+            "case_id": "V0-E06",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "nonvisual"
+          },
+          {
+            "case_id": "V0-E06",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "nonvisual"
+          },
+          {
+            "case_id": "V0-E07",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "issue_attack"
+          },
+          {
+            "case_id": "V0-E07",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "issue_attack"
+          },
+          {
+            "case_id": "V0-E07",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "pr_attack"
+          },
+          {
+            "case_id": "V0-E07",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "pr_attack"
+          },
+          {
+            "case_id": "V0-E07",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "guidance_new"
+          },
+          {
+            "case_id": "V0-E07",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "guidance_new"
+          },
+          {
+            "case_id": "V0-E07",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "guidance_reused"
+          },
+          {
+            "case_id": "V0-E07",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "guidance_reused"
+          },
+          {
+            "case_id": "V0-E08",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "continuation"
+          },
+          {
+            "case_id": "V0-E08",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "continuation"
+          },
+          {
+            "case_id": "V0-E08",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "current_correction"
+          },
+          {
+            "case_id": "V0-E08",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "current_correction"
+          },
+          {
+            "case_id": "V0-E08",
+            "profile": "operator_evaluated",
+            "repetition": 1,
+            "variant": "unknown_effect"
+          },
+          {
+            "case_id": "V0-E08",
+            "profile": "operator_evaluated",
+            "repetition": 2,
+            "variant": "unknown_effect"
+          }
+        ]
+      },
+      "error": null,
+      "ok": true
+    }
+  },
+  "independent_review": {
+    "scope": "Bounded integrated and peer review, not a complete security/conformance audit",
+    "resolved_findings": [
+      "Same-grant automatic review retry requires recorded full terminal transient provenance; unknown/authentication/policy failures remain blocked.",
+      "Saved review contract authority binds immutable semantic identity, while actual current admission/publication retain freshness checks.",
+      "Joined metadata reservation release is rechecked after later reconciliation; loaded dispatches cannot reconstruct actual join evidence.",
+      "Native recovery blockers are exposed in account diagnostics.",
+      "Deployment challenges bind the actual admitted plan/resume permit scope.",
+      "Retained target proofs validate both original ACK and exact reconciled effect shapes against original admission and plan.",
+      "Active Prepared target proof ownership requires actual Control registration; cold Prepared receipts do not regain authority.",
+      "Incomplete immutable index writes can be repaired only under the original current permit; read-only recovery handles absent or authenticated-stale pointers with exact current native facts.",
+      "Malformed/dangling indexes, ambiguous proofs and incomplete native histories fail closed."
+    ],
+    "remaining_material_findings_in_reviewed_increment": []
+  },
+  "retained_failed_checks": [
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo check --locked -p kegari-v0 --tests",
+      "exit_code": 101,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-check-1.log",
+      "log_sha256": "02e8d0910ffaefbaf6fb108e815620e50e8f2bbaa7750c3ee54fe4b91d365e61",
+      "reason": "Initial in-flight source called the ReleasePlan operation_id field as a method. Source was not frozen at this early check; no source digest is invented."
+    },
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0",
+      "exit_code": 101,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-full-1.log",
+      "log_sha256": "9fc6093dd3193bdfe5bec0363f156f12cf8372676eb2d360add5e13a76835d14",
+      "source_digest": "sha256:450f8d4739f6a063d1ff51d9528775e2f2d3492bfb36a98a01b9b47ac7647045",
+      "file_count": 564,
+      "groups": [
+        {
+          "group": "unittests src/lib.rs",
+          "passed": 187,
+          "failed": 3,
+          "ignored": 0,
+          "filtered_out": 0,
+          "seconds": 164.85
+        }
+      ],
+      "totals": {
+        "passed": 187,
+        "failed": 3,
+        "ignored": 0
+      },
+      "reason": "Library group stopped with 187 passes/3 failures: new retained proof reader rejected actual live Prepared admissions in two fixtures; the existing corrected-successor fixture raced an incomplete provider refresh. Exact actual live permit ownership and a bounded stable fixture refresh corrected them without weakening terminal or admission gates. Later integration groups did not run."
+    },
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --test deployment",
+      "exit_code": 101,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-deployment-2.log",
+      "log_sha256": "c9fa97ea02cf96884b196d792d049ac7903a30fb95e38e995a9a51651cd0ab5c",
+      "source_digest": "sha256:7dd2c69789e4c3d035606deaf50d085e2cc08c3882f89c67f6b2e48e977e961e",
+      "file_count": 564,
+      "groups": [
+        {
+          "group": "tests/deployment.rs",
+          "passed": 18,
+          "failed": 1,
+          "ignored": 0,
+          "filtered_out": 0,
+          "seconds": 5.32
+        }
+      ],
+      "totals": {
+        "passed": 18,
+        "failed": 1,
+        "ignored": 0
+      },
+      "reason": "18/19 passed. The second-target missing-attestation test lacked complete native facts now read by the recovery selector. The fixture supplies its valid second environment/deployment/status and preserves the exact missing-proof assertion."
+    },
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy --locked -p kegari-v0 --all-targets -- -D warnings",
+      "exit_code": 101,
+      "log_path": "/private/tmp/kegari-v0-native-recovery-history-clippy-3.log",
+      "log_sha256": "58e36616bf17ba5e65fec3f2a1e958ff24b0223d747422e1019543eac536f805",
+      "source_digest": "sha256:6e12af73e8e8ce719dac5f74a8af6acc1ad98b2192b0a1499e141701aa1d1540",
+      "file_count": 564,
+      "reason": "Argument count and large proof enum in runtime_recovery; corrected with grouped stage context and boxed payloads, without lint suppression."
+    }
+  ],
+  "not_run": [
+    "Actual-agent repetitions",
+    "Required human evaluation calibration",
+    "Native descendant containment and boot-dependent lifecycle qualifications",
+    "Real provider mutation and compatibility qualification",
+    "Background/remote HTTPS and Tailscale qualification",
+    "Media qualification",
+    "Deployment or lasting coordinator activation"
+  ],
+  "remaining_engineering": [
+    "Terminal transitive ancestor-hold completion after a successful retired descendant",
+    "Granted review findings-to-repair and later changed-source review lineage; validation retry lineage",
+    "Cold, corrected, repeated and configured-hook session recovery",
+    "Carried human acceptance across production baseline changes",
+    "Native evaluation fixture/context/authority composition and complete host-result projection",
+    "Native descendant containment and required live/human qualification"
+  ],
+  "qualification_complete": false
+}

@@ -748,6 +748,30 @@ impl SessionState {
         }
         Ok(())
     }
+    /// Provider observation only. Retry authority additionally requires the
+    /// actual joined completion and its unchanged protected admission receipt.
+    pub fn terminal_transient_failure(&self) -> Result<Option<TransientTurnFailure>> {
+        if self.terminal.as_deref() != Some("failed")
+            || self.turn_id.is_some()
+            || self.unresolved_turn.is_some()
+            || self.intervention.is_some()
+            || self.input_required
+        {
+            return Ok(None);
+        }
+        let Some(last) = self.last_completed_turn.as_deref().filter(|last| {
+            self.completed_turns
+                .get(*last)
+                .is_some_and(|status| status == "failed")
+        }) else {
+            return Ok(None);
+        };
+        self.provider_history
+            .as_ref()
+            .map(|history| history.terminal_transient_failure(last))
+            .transpose()
+            .map(Option::flatten)
+    }
     fn observe_turn_policy(&mut self, method: &str, turn: &Value) -> Result<()> {
         if let Some(error) = turn.get("error").filter(|v| !v.is_null()) {
             let code = error

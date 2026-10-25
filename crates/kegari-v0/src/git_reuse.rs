@@ -11,6 +11,34 @@ const MAX_ENTRIES: usize = 100_000;
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DEPTH: usize = 128;
 
+/// Housekeeping calls this only after reading the protected closed family and
+/// exact original admission. It grants fixed read-only metadata access, not
+/// clean-source, process-exit or session-resumption authority.
+pub(crate) fn retained_execution_host_read_root(
+    configuration: &crate::config::Config,
+    binding: &ExecutionBinding,
+    boundary: &ValidatedIsolation,
+    ownership: &OwnedDirectory,
+    lineage_digest: String,
+) -> Result<VerifiedHostReadRoot> {
+    crate::evidence::validate_digest(&lineage_digest)?;
+    binding.validate(boundary)?;
+    ownership.verify(binding, boundary)?;
+    if binding.runtime_id != configuration.runtime.id {
+        return Err(Error::new(
+            "identity_mismatch",
+            "retained execution read belongs to another runtime",
+        ));
+    }
+    host_read_root(
+        binding.repository.clone(),
+        &boundary.plan().repository,
+        configuration.revision()?,
+        lineage_digest,
+        Some(ownership.marker().into()),
+    )
+}
+
 /// Minted only after fresh host-owned read-only Git checks and stable, complete
 /// filesystem observations. It cannot be reconstructed from a public record.
 #[derive(Clone)]

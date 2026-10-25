@@ -1,5 +1,8 @@
 #![allow(dead_code)] // Shared deterministic wire harness; no production exemption.
 use super::*;
+use crate as fixture_api;
+#[path = "deployment_wire.rs"]
+mod target_wire;
 // Delivery integration fixtures use production reconciliation/provider parsers.
 // HTTP observations are deterministic fixtures, never live qualification.
 mod pinned_git {
@@ -3257,3 +3260,343 @@ async fn original_release_reader_requires_actual_native_publications_and_immutab
 #[path = "lineage_wire.rs"]
 mod lineage_wire;
 pub(crate) use lineage_wire::RuntimeLineageWire;
+
+/// Accepted upstream plan/scope are explicit synthetic inputs. This regression
+/// uses actual host admissions, provider broker receipts, signed artifacts/OIDC,
+/// private storage and native-shaped HTTP readback. It grants no integrated test
+/// capability and never executes Git, a repository command or a remote request.
+#[tokio::test]
+async fn terminal_target_history_binds_plan_permit_and_reconciled_original_effect() {
+    let f = target_wire::Fixture::new();
+    let contract = target_wire::contract(true);
+    let (initial, initial_permit, _, _) = f.prepare(&contract).await;
+    f.host
+        .retire_local(
+            initial.operation_id(),
+            json!({"fixture":"initial owned metadata finished"}),
+        )
+        .unwrap();
+    {
+        let mut state = f.state.lock().unwrap();
+        state.run_id = 51;
+        state.deployment_id = 92;
+    }
+    let scope = initial.scope().clone();
+    let target = ResourceKey::Target {
+        provider: "github".into(),
+        id: "service-production".into(),
+    };
+    let deploy = StepKind::DeployExisting {
+        repository: contract.repository.clone(),
+        target: target.clone(),
+        workflow_id: 3,
+        workflow_revision: "1".repeat(40),
+        dispatch_ref: "heads/trusted".into(),
+        source_input: "source_sha".into(),
+        source: target_wire::source(),
+        expected_artifact: None,
+    };
+    let verify = StepKind::VerifyDeployed {
+        repository: contract.repository.clone(),
+        target,
+        source: target_wire::source(),
+        deployment_step: "deploy".into(),
+        expected_artifact: None,
+    };
+    let plan = ReleasePlan {
+        schema_version: 1,
+        runtime_id: id(1),
+        operation_id: Uuid::new_v4(),
+        parent_id: scope.work.parent,
+        linear_workspace: scope.work.linear_workspace,
+        generation: scope.work.generation.clone(),
+        evidence_token: canonical_digest(1, &"synthetic accepted parent").unwrap(),
+        acceptance_digest: canonical_digest(1, &"synthetic native acceptance").unwrap(),
+        carried_acceptance: None,
+        resources: BTreeSet::from([
+            ResourceKey::Repository {
+                repository: contract.repository.clone(),
+            },
+            ResourceKey::Target {
+                provider: "github".into(),
+                id: "service-production".into(),
+            },
+        ]),
+        dependencies: vec![],
+        spacing_seconds: 0,
+        deployment_free: BTreeSet::new(),
+        steps: vec![
+            crate::release::ReleaseStep {
+                id: "deploy".into(),
+                depends_on: BTreeSet::new(),
+                kind: deploy.clone(),
+            },
+            crate::release::ReleaseStep {
+                id: "verify".into(),
+                depends_on: BTreeSet::from(["deploy".into()]),
+                kind: verify.clone(),
+            },
+        ],
+    };
+    plan.validate().unwrap();
+    let permit = f
+        .host
+        .admit(
+            &initial_permit.lease,
+            plan.operation_id,
+            initial_permit.work_key.clone(),
+            plan.digest().unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    // Synthetic upstream accepted scope; actual plan permit is retained exactly.
+    let admission = DeliveryAdmission {
+        permit: permit.clone(),
+        observation: DeliveryObservation {
+            gate: initial.fresh_gate().clone(),
+            scope: scope.clone(),
+            admitted: Some(permit.clone()),
+        },
+    };
+    assert_ne!(scope.digest().unwrap(), permit.scope_digest);
+    let challenge = f
+        .observer
+        .prepare_target(
+            &contract,
+            &admission,
+            &permit,
+            "deploy",
+            target_wire::source(),
+        )
+        .await
+        .unwrap();
+    let command = f.observer.dispatch_command(&contract, &challenge).unwrap();
+    let mut request = target_wire::request(challenge.dispatch_request());
+    request.expected.extend(BTreeMap::from([
+        ("release_plan".into(), plan.digest().unwrap()),
+        ("release_step".into(), "deploy".into()),
+        ("release_attempt".into(), "1".into()),
+    ]));
+    let receipt = ProviderBroker {
+        linear: None,
+        github: Some(f.github.clone()),
+    }
+    .mutate(
+        f.host.clone(),
+        request,
+        Some(permit.clone()),
+        None,
+        command.clone(),
+        || Ok(()),
+    )
+    .await
+    .unwrap();
+    f.artifact(&contract, &challenge, |_| {});
+    let target_proof = f
+        .observer
+        .observe_target(
+            &contract,
+            &admission,
+            &permit,
+            &challenge,
+            &receipt,
+            &target_wire::verifier(),
+        )
+        .await
+        .unwrap();
+    let key = Arc::new(AttestationKey::new("fixture".into(), vec![7; 32]).unwrap());
+    let base = f.records.parent().unwrap();
+    let records = Arc::new(PrivateDir::create(&base.join("delivery-history")).unwrap());
+    let coordinator = DeliveryCoordinator::new(
+        DeliveryServices {
+            host: f.host.clone(),
+            broker: ProviderBroker {
+                linear: None,
+                github: Some(f.github.clone()),
+            },
+            records: records.clone(),
+            key: key.clone(),
+            git: Arc::new(Git::new(pinned_git::prepare(base)).unwrap()),
+            retained_git_sources: BTreeMap::new(),
+            current_gate: Arc::new(|_| {
+                Err(Error::new(
+                    "fixture_no_execution",
+                    "historical reads cannot invoke execution authority",
+                ))
+            }),
+            executions: Arc::new(crate::worker::ExecutionRegistry::default()),
+            processes: Arc::new(
+                crate::process_records::ProcessJournal::with_probe(
+                    PrivateDir::create(&base.join("historical-processes")).unwrap(),
+                    id(1),
+                    Arc::new(process_probe::FixtureBootProbe::new()),
+                )
+                .unwrap(),
+            ),
+        },
+        vec![contract.clone()],
+    )
+    .unwrap();
+    let mut record = ReleaseEffectRecord {
+        schema_version: 1,
+        plan_digest: plan.digest().unwrap(),
+        payload: crate::release::StepPayload {
+            operation_id: plan.operation_id,
+            step_id: "deploy".into(),
+            attempt: 1,
+            prerequisite_attempts: BTreeMap::new(),
+            plan_digest: plan.digest().unwrap(),
+            kind: deploy,
+            exact_source_commit: Some(target_wire::source().commit),
+        },
+        scope,
+        admission_operation: permit.operation_id,
+        admission_scope_digest: permit.scope_digest.clone(),
+        request_id: Some(challenge.dispatch_request()),
+        command: Some(command),
+        deployment_step: Some("deploy".into()),
+        challenge: Some(challenge.challenge()),
+    };
+    records
+        .write(
+            &release_effect_leaf(plan.operation_id, "deploy", 1),
+            &key.sign("release_effect", &record).unwrap(),
+        )
+        .unwrap();
+    let expected = coordinator
+        .release_target_effect(&plan, &record, &target_proof, false)
+        .unwrap();
+    assert!(
+        coordinator
+            .recover_terminal_release_step(&plan, "deploy", 1, &expected, &f.observer)
+            .await
+            .is_err()
+    );
+    let reconciled=f.host.reconcile_owned_checked(&receipt,crate::control::Reconciliation::UniqueVerified {remote_ids:receipt.remote_ids.clone(),result:json!({"release_plan":plan.digest().unwrap(),"step":"deploy","outcome":"succeeded","effect":expected}),payload_digest:receipt.payload_digest.clone(),actor:receipt.actor.clone()},||Ok(())).unwrap();
+    assert_eq!(reconciled.phase, crate::control::ReceiptPhase::Reconciled);
+    // A crash may leave the proof file but no indexes after reconciliation.
+    // Repair uses that immutable original proof, not an expired/new JWT.
+    for leaf in PrivateDir::open(&f.records).unwrap().records().unwrap() {
+        if leaf.starts_with("target-index-")
+            || leaf.starts_with("target-digest-")
+            || leaf.starts_with("target-dispatch-")
+        {
+            std::fs::remove_file(f.records.join(leaf)).unwrap();
+        }
+    }
+    {
+        let mut state = f.state.lock().unwrap();
+        state.archive.clear();
+        state.requests.clear();
+    }
+    let replayed = f
+        .observer
+        .observe_target(
+            &contract,
+            &admission,
+            &permit,
+            &challenge,
+            &reconciled,
+            &target_wire::verifier(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replayed.digest().unwrap(), target_proof.digest().unwrap());
+    assert!(
+        f.state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|(url, body)| body.is_null() && !url.contains("/artifacts"))
+    );
+    // The ordinary current proof remains usable after ACK fields are replaced
+    // by the runtime's exact reconciled effect, before target replacement.
+    assert_eq!(
+        f.observer
+            .recover_target(&contract, "deploy")
+            .await
+            .unwrap()
+            .digest()
+            .unwrap(),
+        target_proof.digest().unwrap()
+    );
+    assert!(
+        coordinator
+            .recover_terminal_release_step(&plan, "deploy", 1, &expected, &f.observer)
+            .await
+            .is_err()
+    );
+    let replacement = f.replace_target(&contract, &admission, &permit).await;
+    assert_eq!(replacement.deployment_id(), 93);
+    assert_eq!(
+        f.observer
+            .recover_target(&contract, "deploy")
+            .await
+            .unwrap()
+            .deployment_id(),
+        93
+    );
+    f.state.lock().unwrap().requests.clear();
+    let observed = coordinator
+        .recover_terminal_release_step(&plan, "deploy", 1, &expected, &f.observer)
+        .await
+        .unwrap();
+    assert_eq!(observed.effect(), Some(&expected));
+    let verification = coordinator
+        .release_target_effect(&plan, &record, &target_proof, true)
+        .unwrap();
+    record.payload.step_id = "verify".into();
+    record.payload.kind = verify;
+    record.payload.prerequisite_attempts = BTreeMap::from([("deploy".into(), 1)]);
+    record.request_id = None;
+    record.command = None;
+    record.challenge = None;
+    records
+        .write(
+            &release_effect_leaf(plan.operation_id, "verify", 1),
+            &key.sign("release_effect", &record).unwrap(),
+        )
+        .unwrap();
+    let verified = coordinator
+        .recover_terminal_release_step(&plan, "verify", 1, &verification, &f.observer)
+        .await
+        .unwrap();
+    assert_eq!(verified.effect(), Some(&verification));
+    assert!(
+        coordinator
+            .recover_terminal_release_step(&plan, "deploy", 2, &expected, &f.observer)
+            .await
+            .is_err()
+    );
+    let mut wrong = verification.clone();
+    if let ObservedEffect::Verification {
+        evidence_digest, ..
+    } = &mut wrong
+    {
+        *evidence_digest = bytes_digest(b"another proof");
+    }
+    assert!(
+        coordinator
+            .recover_terminal_release_step(&plan, "verify", 1, &wrong, &f.observer)
+            .await
+            .is_err()
+    );
+    assert!(
+        f.state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|(_, body)| body.is_null())
+    );
+    // A changed original dispatch observation cannot be rescued by a still
+    // matching protected proof or by the newer successful target.
+    f.host.reconcile_owned_checked(&reconciled,crate::control::Reconciliation::UniqueVerified {remote_ids:reconciled.remote_ids.clone(),result:json!({"release_plan":plan.digest().unwrap(),"step":"deploy","outcome":"succeeded","effect":verification}),payload_digest:reconciled.payload_digest.clone(),actor:reconciled.actor.clone()},||Ok(())).unwrap();
+    assert!(
+        coordinator
+            .recover_terminal_release_step(&plan, "deploy", 1, &expected, &f.observer)
+            .await
+            .is_err()
+    );
+}

@@ -298,10 +298,18 @@ new review admissions block this path. Preparation and final model admission
 recheck the grant; the result's publication checks its exact new completed
 admission and current grant again inside the provider mutation gate.
 
-This slice covers the first granted review followed by a clean result. Further
-failed attempts inside that granted budget and repair after new findings require
-additional lineage integration; they are not authorized by reusing the consumed
-first-session capability. Cross-correction and cold recovery remain unavailable.
+Another fully observed transient terminal failed review within that grant mints a new private
+per-attempt proof from its actual completion and complete current receipt
+inventory. It keeps the original grant, assignment and source, advances the same
+budget's contiguous ordinal, and preserves the minimum captured attempt/turn/
+review bounds and failure backoff. The consumed proof cannot admit a second run.
+Only supported provider terminal classifications qualify automatically; authentication,
+unknown and other persistent failures require explicit resolution. Historical
+assignment/contract identity is compared independently of observation age, while
+every current admission and publication still requires fresh native authority.
+A clean result must match that proof's exact next completed admission before
+publication. Repair after new findings still requires additional lineage
+integration; cross-correction and cold recovery remain unavailable.
 The deterministic review fixture uses a real in-process RPC failure notification,
 real Control receipts, owned Git objects and actual synthetic provider publication.
 It deliberately cannot populate the native runtime joined-run cache or establish
@@ -326,10 +334,16 @@ still block. Terminal completion accounting for transitive ancestor holds remain
 a separate incomplete path: an older ancestor can conservatively keep later
 unrelated work blocked after the final descendant succeeds.
 
-Historical successful target actions still require the ordinary current-target
-proof. If a later deployment replaces that proof or advances main, recovery is
-blocked until a separate immutable, receipt-bound historical target observation
-path is available. Carried-acceptance release history is also still blocked.
+Historical successful target actions now use a separate immutable proof selected
+by the original challenge/dispatch or exact verification digest. The terminal
+consumer requires the exact signed step and effect, locally retired admission,
+reconciled dispatch and reread original deployment/status/run-attempt identities.
+Replacing the current target does not rewrite that history; the final complete
+current baseline is still checked separately. This path cannot reconcile unknown
+effects or populate current readiness. Carried-acceptance release history and
+terminal transitive hold completion remain incomplete. The historical-target
+recovery boundary passes the local component/full-suite checks recorded in
+[the recovery report](../validation/LOCAL-NATIVE-RECOVERY-HISTORY.md).
 Deterministic historical accepted-input fixtures are synthetic upstream evidence;
 actual journal, provider wire and Git recovery do not replace genuine integrated
 checks, live deployment qualification or human acceptance review.

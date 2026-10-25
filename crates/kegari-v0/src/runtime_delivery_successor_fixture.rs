@@ -401,6 +401,16 @@ async fn run_successor_fixture(chained: bool) {
         });
     }
     plan.validate().unwrap();
+    // Publishing the two host records can invalidate an in-flight strict poll.
+    // Finish a complete read-only observation before admission; a failed cache
+    // still cannot pass the serialized production current-authority gate.
+    for attempt in 0..3 {
+        match built.runtime.observations.refresh().await {
+            Ok(_) => break,
+            Err(error) if error.code == "unstable_observation" && attempt < 2 => (),
+            Err(error) => panic!("fixture publication observation failed: {error}"),
+        }
+    }
     let plan_permit = built
         .runtime
         .control

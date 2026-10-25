@@ -54,6 +54,12 @@ impl RecoveryProviderLaunch {
     /// Acquires the original journal exclusively before actual finite metadata
     /// admission. Does not create a process, clone, hook, thread or model turn.
     pub fn admit(input: RecoveryPreparation) -> Result<Self> {
+        Self::admit_checked(input, |_| Ok(()))
+    }
+    pub(crate) fn admit_checked(
+        input: RecoveryPreparation,
+        fresh: impl FnOnce(&crate::control::ControlSnapshot) -> Result<()>,
+    ) -> Result<Self> {
         input.config.validate()?;
         let contract = &input.contract;
         let candidate = &input.candidate;
@@ -139,7 +145,8 @@ impl RecoveryProviderLaunch {
             &input.lease,
             recovery,
             scope,
-            |_| {
+            |snapshot| {
+                fresh(snapshot)?;
                 input.host.verify_owner(&input.lease)?;
                 contract
                     .authority()

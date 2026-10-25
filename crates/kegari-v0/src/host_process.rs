@@ -64,6 +64,15 @@ pub struct LocalProcessPermit {
 }
 impl LocalProcessPermit {
     pub fn metadata(services: HostProcessServices, request: MetadataRequest) -> Result<Arc<Self>> {
+        Self::metadata_observed(services, request, |_| Ok(()))
+    }
+    /// A narrower caller may require RUNNING admission before this otherwise
+    /// STOPPED-capable read scope. The predicate runs under the existing gate.
+    pub(crate) fn metadata_observed(
+        services: HostProcessServices,
+        request: MetadataRequest,
+        fresh: impl FnOnce(&crate::control::ControlSnapshot) -> Result<()>,
+    ) -> Result<Arc<Self>> {
         if request.request_id.is_nil()
             || request.work_key.is_empty()
             || request.work_key.len() > 512
@@ -122,16 +131,18 @@ impl LocalProcessPermit {
             ]),
             payload: json!({"identity":identity,"read_only":true}),
         };
-        let token =
-            services
-                .control
-                .begin_host_process(mutation, identity.owner_generation, |_| {
-                    verify_identity(&services, &identity)?;
-                    for root in &request.roots {
-                        root.revalidate_filesystem()?;
-                    }
-                    Ok(())
-                })?;
+        let token = services.control.begin_host_process(
+            mutation,
+            identity.owner_generation,
+            |snapshot| {
+                fresh(snapshot)?;
+                verify_identity(&services, &identity)?;
+                for root in &request.roots {
+                    root.revalidate_filesystem()?;
+                }
+                Ok(())
+            },
+        )?;
         Ok(Arc::new(Self {
             services,
             identity,
