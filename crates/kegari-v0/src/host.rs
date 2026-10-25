@@ -397,6 +397,7 @@ impl WorkflowControl for SwitchableBackend {
                 activities: vec![],
                 history: vec![],
                 release_details: BTreeMap::new(),
+                release_history: vec![],
             })
         })
     }

@@ -71,6 +71,9 @@ struct Workflow {
     config: Arc<Configuration>,
     reads: AtomicUsize,
     writes: AtomicUsize,
+    release_history: Mutex<Vec<kegari_v0::inspection::ReleaseInspectionRow>>,
+    history: Mutex<Vec<kegari_v0::reconcile::HistoryRow>>,
+    release_details: Mutex<BTreeMap<(Uuid, kegari_v0::authority::IssueKey), Value>>,
 }
 impl WorkflowControl for Workflow {
     fn inspect(&self) -> HostFuture<'_, RuntimeInspection> {
@@ -87,8 +90,9 @@ impl WorkflowControl for Workflow {
                 delivery: BTreeMap::new(),
                 outcomes: Default::default(),
                 activities: vec![],
-                history: vec![],
-                release_details: BTreeMap::new(),
+                history: self.history.lock().unwrap().clone(),
+                release_details: self.release_details.lock().unwrap().clone(),
+                release_history: self.release_history.lock().unwrap().clone(),
             })
         })
     }
@@ -226,6 +230,9 @@ impl Fixture {
             config: config.clone(),
             reads: AtomicUsize::new(0),
             writes: AtomicUsize::new(0),
+            release_history: Mutex::new(vec![]),
+            history: Mutex::new(vec![]),
+            release_details: Mutex::new(BTreeMap::new()),
         });
         let owner = Arc::new(Owner::default());
         let dispatcher = Arc::new(
@@ -320,6 +327,197 @@ async fn stopped_inspection_uses_shared_dispatcher_and_creates_no_receipts_or_wo
     assert_eq!(f.workflow.writes.load(Ordering::SeqCst), 0);
     assert_eq!(f.config.writes.load(Ordering::SeqCst), 0);
     assert_eq!(f.workflow.reads.load(Ordering::SeqCst), 1);
+}
+
+// Explicit presentation fixture, not a signed release or completion capability.
+// Authenticated retained-record producer coverage lives with runtime delivery.
+fn historical_display(
+    runtime: Uuid,
+    workspace: Uuid,
+) -> kegari_v0::inspection::ReleaseInspectionRow {
+    use kegari_v0::{
+        authority::IssueKey,
+        digest::bytes_digest,
+        evidence::{Generation, WorkIdentity},
+        inspection::{ParentDisplay, ReleaseInspectionRow},
+    };
+    let parent = IssueKey::new(
+        "https://linear.invalid",
+        Uuid::from_u128(40),
+        Uuid::from_u128(41),
+    )
+    .unwrap();
+    let generation = Generation {
+        authorization: bytes_digest(b"display authorization"),
+        definition: bytes_digest(b"display definition"),
+        correction: bytes_digest(b"display correction"),
+        scope: bytes_digest(b"display scope"),
+    };
+    let work = WorkIdentity {
+        linear_endpoint: parent.endpoint.clone(),
+        linear_workspace: parent.workspace,
+        parent: parent.issue,
+        child: None,
+        generation: generation.clone(),
+    };
+    let attempt = serde_json::from_value(json!({
+        "plan":{"schema_version":1,"runtime_id":runtime,"operation_id":Uuid::new_v4(),"parent_id":parent.issue,"linear_workspace":parent.workspace,"generation":generation,
+        "evidence_token":bytes_digest(b"display evidence"),"acceptance_digest":bytes_digest(b"display acceptance"),"carried_acceptance":null,"resources":[],"dependencies":[],"spacing_seconds":1,"deployment_free":[],"steps":[]},
+        "admitted_at":chrono::Utc::now(),"control_generation":1,"owner_generation":1,"steps":{},"step_history":{},"cancellations":{},"hold_reason":null,"abandoned":false,"resolved":true,"assigned_successor":null,"recovery_records":[]
+    })).unwrap();
+    ReleaseInspectionRow {
+        workspace,
+        parent,
+        work,
+        attempt,
+        active_hold: false,
+        completed_by: None,
+        completion: None,
+        diagnostic: Some(Error::new(
+            "record_missing",
+            "display fixture has no completion authority",
+        )),
+        display: ParentDisplay {
+            workspace_name: Some("removed-workspace".into()),
+            identifier: Some("OLD-41".into()),
+            title: None,
+            url: None,
+        },
+    }
+}
+
+fn page_data(response: Envelope) -> Value {
+    assert!(response.ok, "{:?}", response.error);
+    let page = serde_json::from_value(response.data).unwrap();
+    kegari_v0::snapshot::assemble(&[page]).unwrap()
+}
+
+#[tokio::test]
+async fn historical_show_and_overview_use_read_only_workspace_identity_without_mutation() {
+    let f = Fixture::new();
+    let runtime = f.config.snapshot().unwrap().runtime.id;
+    let workspace = Uuid::from_u128(30);
+    f.workflow
+        .release_history
+        .lock()
+        .unwrap()
+        .push(historical_display(runtime, workspace));
+    let before = f.control.operations().unwrap().len();
+    assert!(
+        resolve_workspace(&f.config.snapshot().unwrap(), Some(&workspace.to_string())).is_err()
+    );
+    let overview = page_data(
+        f.api(f.request(CommandName::Overview, json!({"workspace":workspace})))
+            .await,
+    );
+    assert_eq!(overview["release_history"].as_array().unwrap().len(), 1);
+    assert!(overview["history"].as_array().unwrap().is_empty());
+    assert!(overview["ready_for_release"].as_array().unwrap().is_empty());
+    let shown = page_data(
+        f.api(f.request(
+            CommandName::Show,
+            json!({"workspace":workspace,"parent":"OLD-41"}),
+        ))
+        .await,
+    );
+    assert!(shown["parent"].is_null());
+    assert!(shown["evidence_token"].is_null());
+    assert_eq!(shown["inspection_identity"]["workspace"], json!(workspace));
+    assert_eq!(
+        shown["release_history"][0]["diagnostic"]["code"],
+        "record_missing"
+    );
+    let missing_url = f
+        .api(f.request(
+            CommandName::Open,
+            json!({"workspace":workspace,"parent":"OLD-41"}),
+        ))
+        .await;
+    assert_eq!(missing_url.error.unwrap().code, "unknown_resource");
+    f.workflow.release_history.lock().unwrap()[0].display.url =
+        Some("file:///private/tmp/untrusted".into());
+    let unsafe_url = f
+        .api(f.request(
+            CommandName::Open,
+            json!({"workspace":workspace,"parent":"OLD-41"}),
+        ))
+        .await;
+    assert_eq!(unsafe_url.error.unwrap().code, "unsafe_url");
+    f.workflow.release_history.lock().unwrap()[0].display.url =
+        Some("https://linear.invalid/issue/OLD-41".into());
+    let opened = f
+        .api(f.request(
+            CommandName::Open,
+            json!({"workspace":workspace,"parent":"OLD-41"}),
+        ))
+        .await;
+    assert!(opened.ok, "{:?}", opened.error);
+    assert_eq!(opened.data["url"], "https://linear.invalid/issue/OLD-41");
+    let other = Uuid::from_u128(31);
+    f.workflow
+        .release_history
+        .lock()
+        .unwrap()
+        .push(historical_display(runtime, other));
+    for row in f.workflow.release_history.lock().unwrap().iter() {
+        f.workflow
+            .history
+            .lock()
+            .unwrap()
+            .push(kegari_v0::reconcile::HistoryRow {
+                parent_reference: row.parent_reference(),
+                parent: row.parent.clone(),
+                outcome: "no-release-required".into(),
+                generation: row.work.generation.clone(),
+                completed_at: row.attempt.admitted_at,
+                links: vec![],
+            });
+        f.workflow.release_details.lock().unwrap().insert(
+            (row.workspace, row.parent.clone()),
+            json!({"fixture_origin_workspace":row.workspace}),
+        );
+    }
+    let ambiguous = f
+        .api(f.request(CommandName::Show, json!({"parent":"OLD-41"})))
+        .await;
+    assert_eq!(ambiguous.error.unwrap().code, "ambiguous_reference");
+    let exact = page_data(
+        f.api(f.request(
+            CommandName::Show,
+            json!({"parent":format!("{workspace}/OLD-41")}),
+        ))
+        .await,
+    );
+    assert_eq!(exact["release_history"].as_array().unwrap().len(), 1);
+    assert_eq!(exact["history"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        exact["history"][0]["parent_reference"],
+        format!("{workspace}/{}", Uuid::from_u128(41))
+    );
+    assert_eq!(
+        exact["release"]["fixture_origin_workspace"],
+        json!(workspace)
+    );
+    let other_exact = page_data(
+        f.api(f.request(
+            CommandName::Show,
+            json!({"workspace":other,"parent":"OLD-41"}),
+        ))
+        .await,
+    );
+    assert_eq!(other_exact["history"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        other_exact["history"][0]["parent_reference"],
+        format!("{other}/{}", Uuid::from_u128(41))
+    );
+    assert_eq!(
+        other_exact["release"]["fixture_origin_workspace"],
+        json!(other)
+    );
+    assert_eq!(f.control.operations().unwrap().len(), before);
+    assert!(f.control.snapshot().unwrap().active_operations.is_empty());
+    assert_eq!(f.workflow.writes.load(Ordering::SeqCst), 0);
+    assert_eq!(f.config.writes.load(Ordering::SeqCst), 0);
 }
 #[tokio::test]
 async fn lifecycle_wait_observes_actual_admission_and_never_invents_start_completion() {

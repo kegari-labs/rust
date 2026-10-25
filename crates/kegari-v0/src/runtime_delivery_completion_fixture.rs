@@ -295,7 +295,7 @@ fn terminal_history(
                 .iter()
                 .any(|row| row["attempt"]["plan"]["operation_id"]
                     == json!(c.attempt.plan.operation_id)
-                    && !row["completion_error"].is_null())
+                    && !row["diagnostic"].is_null())
         );
         assert!(history.iter().any(|row| row["active_hold"] == true));
         assert!(
@@ -336,6 +336,25 @@ fn terminal_history(
             [&c.attempt.plan.operation_id]
             .clone();
         assert_eq!(proof.validate().unwrap().len(), 2);
+        let success = proof
+            .validate_for_configuration(&workspace.configuration)
+            .unwrap();
+        assert_eq!(proof.work(), &c.work);
+        assert_eq!(success.operation_id, c.attempt.plan.operation_id);
+        let outcomes = f.built.runtime.dependency_outcomes().unwrap();
+        assert_eq!(
+            outcomes.parent_outcome(&issue(&c).unwrap(), &c.work.generation),
+            Some(success.outcome_digest.as_str())
+        );
+        for ancestor in &initial_history {
+            assert_ne!(ancestor.plan.generation, c.work.generation);
+            assert!(
+                outcomes
+                    .parent_outcome(&issue(&c).unwrap(), &ancestor.plan.generation)
+                    .is_none(),
+                "a consumed ancestor hold is not a release of its failed generation"
+            );
+        }
         assert!(
             delivery
                 .release_history()
@@ -353,7 +372,7 @@ fn terminal_history(
                 .unwrap();
             assert_eq!(row["completed_by"], json!(c.attempt.plan.operation_id));
             assert_eq!(row["active_hold"], false);
-            assert!(row["completion_error"].is_null());
+            assert!(row["diagnostic"].is_null());
         }
         let queue = delivery.releases.state.lock().unwrap().queue.clone();
         assert_eq!(
@@ -673,6 +692,14 @@ fn terminal_history(
         let tamper_window = f.observation_barrier.lock().await;
         std::fs::remove_file(deployment_dir.path().join(target_leaf)).unwrap();
         assert!(queue.eligible(&later, after_spacing).is_err());
+        assert!(
+            f.built
+                .runtime
+                .dependency_outcomes()
+                .unwrap()
+                .parent_outcome(&issue(&c).unwrap(), &c.work.generation)
+                .is_none()
+        );
         assert_diagnostic_inspection(
             delivery,
             &c,
@@ -688,6 +715,15 @@ fn terminal_history(
         )
         .unwrap();
         assert!(cold.restore_releases().is_err());
+        cold.sync_released_completions().unwrap();
+        assert!(
+            f.built
+                .runtime
+                .dependency_outcomes()
+                .unwrap()
+                .parent_outcome(&issue(&c).unwrap(), &c.work.generation)
+                .is_none()
+        );
         assert_diagnostic_inspection(
             &cold,
             &c,
@@ -836,16 +872,14 @@ async fn assert_diagnostic_inspection(
         "release_gates_unavailable",
         "{stage}"
     );
-    let rows = view.release_details[&issue(terminal).unwrap()]["attempts"]
-        .as_array()
-        .unwrap();
+    let rows = inspection_rows(&view, terminal.workspace, &issue(terminal).unwrap());
     let current = rows
         .iter()
         .find(|row| {
             row["attempt"]["plan"]["operation_id"] == json!(terminal.attempt.plan.operation_id)
         })
         .unwrap();
-    assert!(!current["completion_error"].is_null());
+    assert!(!current["diagnostic"].is_null());
     assert!(current["completed_by"].is_null());
     for ancestor in ancestors {
         let row = rows
@@ -854,11 +888,9 @@ async fn assert_diagnostic_inspection(
             .unwrap();
         assert_eq!(row["active_hold"], true);
         assert!(row["completed_by"].is_null());
-        assert!(!row["completion_error"].is_null());
+        assert!(!row["diagnostic"].is_null());
     }
-    let rows = view.release_details[&issue(unrelated).unwrap()]["attempts"]
-        .as_array()
-        .unwrap();
+    let rows = inspection_rows(&view, unrelated.workspace, &issue(unrelated).unwrap());
     let other = rows
         .iter()
         .find(|row| {
@@ -866,7 +898,7 @@ async fn assert_diagnostic_inspection(
         })
         .unwrap();
     assert_eq!(other["attempt"], json!(unrelated.attempt));
-    assert!(other["completion_error"].is_null());
+    assert!(other["diagnostic"].is_null());
     assert_eq!(other["active_hold"], true);
 }
 
@@ -879,10 +911,19 @@ async fn inspect_history(delivery: &Arc<RuntimeDelivery>, parent: &IssueKey) -> 
     let view = crate::app::WorkflowControl::inspect(&workflow)
         .await
         .unwrap();
-    view.release_details[parent]["attempts"]
-        .as_array()
-        .unwrap()
-        .clone()
+    inspection_rows(&view, wire::id(2), parent)
+}
+
+fn inspection_rows(
+    view: &crate::app::RuntimeInspection,
+    workspace: Uuid,
+    parent: &IssueKey,
+) -> Vec<Value> {
+    view.release_history
+        .iter()
+        .filter(|row| row.workspace == workspace && &row.parent == parent)
+        .map(|row| serde_json::to_value(row).unwrap())
+        .collect()
 }
 
 struct ResumeEvidence {

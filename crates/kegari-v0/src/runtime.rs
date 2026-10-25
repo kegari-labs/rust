@@ -28,6 +28,8 @@ use std::{
 use uuid::Uuid;
 #[path = "runtime_corrections.rs"]
 mod correction_transitions;
+#[path = "runtime_released.rs"]
+mod released;
 #[path = "runtime_recovery.rs"]
 mod session_recovery;
 #[path = "runtime_resume.rs"]
@@ -50,6 +52,8 @@ struct State {
     prepared_active: BTreeMap<Uuid, crate::observations::ActiveSnapshot>,
     delivery: BTreeMap<IssueKey, ParentDelivery>,
     delivery_snapshots: BTreeMap<IssueKey, crate::delivery::VerifiedDeliverySnapshot>,
+    released_completions: BTreeMap<Uuid, crate::runtime_delivery::VerifiedReleaseCompletion>,
+    released_recovery_errors: BTreeMap<Uuid, Error>,
     archived_delivery: BTreeMap<(IssueKey, String), ParentDelivery>,
     explicit_corrections: BTreeMap<Uuid, crate::decisions::VerifiedExplicitCorrection>,
     retry_grants: BTreeMap<Uuid, crate::decisions::VerifiedRetryGrant>,
@@ -61,7 +65,7 @@ struct State {
     delivery_errors: BTreeMap<String, Error>,
     outcomes: DependencyOutcomes,
     history: Vec<HistoryRow>,
-    release_details: BTreeMap<IssueKey, Value>,
+    release_details: BTreeMap<(Uuid, IssueKey), Value>,
     quotas: BTreeMap<String, Quota>,
     rate_observations: BTreeMap<String, Value>,
     resume_proofs: BTreeMap<Uuid, String>,
@@ -229,6 +233,8 @@ impl RuntimeCoordinator {
                 &projection,
                 &config.revision()?,
                 &self.configuration.authority_fences()?,
+                &config,
+                &self.observations,
             );
             let current = projection
                 .parent(expected.workspace_id(), snapshot.work().parent)?
@@ -246,6 +252,7 @@ impl RuntimeCoordinator {
                 let current_parent = projection.parent(expected.workspace_id(), record.work.parent)?;
                 let links = snapshot.no_release_link().map(|url| vec![url.to_owned()]).unwrap_or_default();
                 if !state.history.iter().any(|row| row.parent == parent
+                    && row.parent_reference == current_parent.parent_reference
                     && row.generation == record.work.generation && row.outcome == "no-release-required"
                     && row.links == links)
                 {
@@ -255,7 +262,7 @@ impl RuntimeCoordinator {
                         completed_at: record.recorded_at, links,
                     });
                 }
-                state.release_details.insert(parent.clone(), json!({
+                state.release_details.insert((expected.workspace_id(), parent.clone()), json!({
                     "outcome":"no-release-required", "record":record, "record_digest":proof.digest(),
                     "publication":snapshot.no_release_link(), "production_changes":false,
                 }));
@@ -321,6 +328,8 @@ impl RuntimeCoordinator {
                 &projection,
                 &config.revision()?,
                 &self.configuration.authority_fences()?,
+                &config,
+                &self.observations,
             );
             (outcomes, delivery, state.retry_grants.clone())
         };
@@ -795,7 +804,8 @@ impl RuntimeCoordinator {
     /// They must never reacquire ControlHost or perform provider reads.
     pub fn current_delivery(&self, parent: &IssueKey) -> Result<ParentDelivery> {
         let projection = self.observations.admission_snapshot()?;
-        let revision = self.configuration.snapshot()?.revision()?;
+        let config = self.configuration.snapshot()?;
+        let revision = config.revision()?;
         let state = self
             .state
             .lock()
@@ -805,6 +815,8 @@ impl RuntimeCoordinator {
             &projection,
             &revision,
             &self.configuration.authority_fences()?,
+            &config,
+            &self.observations,
         )
         .0
         .remove(parent)
@@ -812,7 +824,8 @@ impl RuntimeCoordinator {
     }
     pub fn dependency_outcomes(&self) -> Result<DependencyOutcomes> {
         let projection = self.observations.admission_snapshot()?;
-        let revision = self.configuration.snapshot()?.revision()?;
+        let config = self.configuration.snapshot()?;
+        let revision = config.revision()?;
         let state = self
             .state
             .lock()
@@ -822,6 +835,8 @@ impl RuntimeCoordinator {
             &projection,
             &revision,
             &self.configuration.authority_fences()?,
+            &config,
+            &self.observations,
         )
         .1)
     }
@@ -841,7 +856,8 @@ impl RuntimeCoordinator {
             ));
         }
         let projection = self.observations.admission_snapshot()?;
-        let revision = self.configuration.snapshot()?.revision()?;
+        let config = self.configuration.snapshot()?;
+        let revision = config.revision()?;
         let fences = self.configuration.authority_fences()?;
         let mut state = self
             .state
@@ -884,7 +900,8 @@ impl RuntimeCoordinator {
         eligibility: crate::release::VerifiedReleaseEligibility,
     ) -> Result<()> {
         let projection = self.observations.admission_snapshot()?;
-        let revision = self.configuration.snapshot()?.revision()?;
+        let config = self.configuration.snapshot()?;
+        let revision = config.revision()?;
         let fences = self.configuration.authority_fences()?;
         let now = Utc::now();
         if eligibility.checked_at() > now + Duration::seconds(5)
@@ -2048,7 +2065,8 @@ impl RuntimeCoordinator {
     }
     pub fn inspection(&self) -> Result<RuntimeInspection> {
         let projection = self.observations.snapshot()?;
-        let revision = self.configuration.snapshot()?.revision()?;
+        let config = self.configuration.snapshot()?;
+        let revision = config.revision()?;
         let active = self
             .control
             .snapshot()?
@@ -2085,6 +2103,8 @@ impl RuntimeCoordinator {
             &projection,
             &revision,
             &self.configuration.authority_fences()?,
+            &config,
+            &self.observations,
         );
         Ok(RuntimeInspection {
             projection,
@@ -2093,16 +2113,21 @@ impl RuntimeCoordinator {
             activities,
             history: state.history.clone(),
             release_details: state.release_details.clone(),
+            release_history: Vec::new(),
         })
     }
     pub fn account_observations(&self) -> Result<Value> {
+        let config = self.configuration.snapshot()?;
+        let observed = self.observations.admission_snapshot();
+        let fences = self.configuration.authority_fences()?;
         let state = self
             .state
             .lock()
             .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
+        let (_, released_errors) = released::effective_outcomes(&state, &config, observed, &fences);
         let holds=state.provider_holds.iter().map(|(id,session)| json!({"operation_id":id,"account":session.binding.account_id,"work":session.binding.work_identity,"intervention":session.intervention,"input_required":session.input_required})).collect::<Vec<_>>();
         Ok(
-            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"session_recovery":state.session_recovery_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors}),
+            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"session_recovery":state.session_recovery_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors,"released_dependencies":released_errors}),
         )
     }
     pub fn execution_registry(&self) -> Arc<ExecutionRegistry> {
@@ -2489,7 +2514,8 @@ impl WorkerHost for RuntimeCoordinator {
     }
     fn observed_state(&self, operation: Uuid) -> Result<Value> {
         let projection = self.observations.admission_snapshot()?;
-        let revision = self.configuration.snapshot()?.revision()?;
+        let config = self.configuration.snapshot()?;
+        let revision = config.revision()?;
         let state = self
             .state
             .lock()
@@ -2505,6 +2531,8 @@ impl WorkerHost for RuntimeCoordinator {
             &projection,
             &revision,
             &self.configuration.authority_fences()?,
+            &config,
+            &self.observations,
         );
         let evidence = if let Some(work) = run.contract.authority().work() {
             let parent = IssueKey::new(&work.linear_endpoint, work.linear_workspace, work.parent)?;
@@ -2556,6 +2584,8 @@ fn effective_evidence(
     projection: &crate::reconcile::RuntimeProjection,
     revision: &str,
     fences: &crate::configuration::AuthorityFences,
+    config: &crate::config::Config,
+    observations: &ObservationCache,
 ) -> (BTreeMap<IssueKey, ParentDelivery>, DependencyOutcomes) {
     let mut delivery = BTreeMap::new();
     let mut outcomes = DependencyOutcomes::default();
@@ -2573,6 +2603,9 @@ fn effective_evidence(
             outcomes.merge(proof.outcomes());
         }
     }
+    let (released, _) =
+        released::effective_outcomes(state, config, observations.admission_snapshot(), fences);
+    outcomes.merge(&released);
     (delivery, outcomes)
 }
 fn fresh_admission_authority(

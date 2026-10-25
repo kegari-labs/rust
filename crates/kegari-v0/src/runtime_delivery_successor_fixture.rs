@@ -31,13 +31,41 @@ async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integ
 async fn chained_runtime_retains_merged_contribution_through_deployment_only_predecessor() {
     run_successor_fixture(true).await;
 }
-async fn run_successor_fixture(chained: bool) {
+fn run_successor_fixture(
+    chained: bool,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
+    Box::pin(run_release_fixture(chained, false))
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ordinary_release_seals_exact_historical_dependency_and_survives_later_production() {
+    Box::pin(run_release_fixture(false, true)).await;
+}
+async fn run_release_fixture(chained: bool, ordinary: bool) {
     let (root, built, original, data, owner) =
-        super::super::tests::fixture_authorization_with_configuration(true, |configuration| {
-            if chained {
-                RuntimeLineageWire::configure(configuration);
-            }
-        })
+        super::super::tests::fixture_authorization_with_provider_fixture(
+            true,
+            |configuration| {
+                if chained || ordinary {
+                    RuntimeLineageWire::configure(configuration);
+                    if ordinary {
+                        configuration
+                            .workspaces
+                            .get_mut("example")
+                            .unwrap()
+                            .repositories
+                            .get_mut("42")
+                            .unwrap()
+                            .deployment = crate::config::Deployment::None("none".into());
+                        extra_completion_fixture::configure_auxiliary(configuration);
+                    }
+                }
+            },
+            |_, data| {
+                if ordinary {
+                    extra_completion_fixture::bootstrap_auxiliary(data);
+                }
+            },
+        )
         .await;
     let root = Arc::new(root);
     let binary = original.git_path().unwrap();
@@ -57,8 +85,15 @@ async fn run_successor_fixture(chained: bool) {
     );
     let tool = Git::new(&binary).unwrap();
     let production = tool.revision(&source, "HEAD").unwrap();
+    let auxiliary_revision = ordinary.then(|| {
+        extra_completion_fixture::initialize_auxiliary(&binary, &source.with_file_name("source84"))
+    });
     let github = RuntimeSeedWire::new(&production);
-    let native = chained.then(|| RuntimeLineageWire::new(&github, production.clone()));
+    let native =
+        (chained || ordinary).then(|| RuntimeLineageWire::new(&github, production.clone()));
+    if let Some(revision) = &auxiliary_revision {
+        native.as_ref().unwrap().add_auxiliary(revision.clone());
+    }
     data.lock().unwrap().github_transport = Some(
         native
             .as_ref()
@@ -118,7 +153,9 @@ async fn run_successor_fixture(chained: bool) {
         }
     }));
     let repository = &workspace.contracts[0];
-    if let Some(native) = &native {
+    if let Some(native) = &native
+        && !ordinary
+    {
         native.capture_objects(
             &delivery.git_path().unwrap(),
             &source,
@@ -195,17 +232,59 @@ async fn run_successor_fixture(chained: bool) {
         serde_json::to_value(seed.slice.manifest()).unwrap()
     );
     let baseline = workspace.observer.observe(repository).await.unwrap();
+    let auxiliary = if let Some(revision) = auxiliary_revision {
+        // Each repository slice owns the canonical parent work exclusively.
+        // Finish the main assembly before admitting the auxiliary slice.
+        delivery
+            .retire_delivery_phase(&phase, json!({"candidate":seed.slice.manifest()}))
+            .unwrap();
+        Some(
+            extra_completion_fixture::assemble_auxiliary(
+                &delivery, &workspace, &gate, &lease, &revision,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let phase = if auxiliary.is_some() {
+        // Reopen scoped reads under a real new vector phase after both slice
+        // owners retired; a retired assembly permit cannot read the candidates.
+        extra_completion_fixture::vector_phase(&delivery, &workspace, &gate, &lease, &production)
+            .await
+    } else {
+        phase
+    };
+    let mut slices = vec![&seed.slice];
+    let mut baselines = vec![&baseline];
+    if let Some(auxiliary) = &auxiliary {
+        slices.push(&auxiliary.slice);
+        baselines.push(&auxiliary.baseline);
+    }
+
     let contract = phase
         .coordinator
         .parent_contract(gate.clone(), parent, &workspace.workflow)
         .unwrap();
     let vector = phase
         .coordinator
-        .prepare_parent_vector(&contract, &workspace.observer, &[&seed.slice], &[&baseline])
+        .prepare_parent_vector(&contract, &workspace.observer, &slices, &baselines)
         .await
         .unwrap();
-    assert_eq!(vector.candidates(), &[seed.slice.manifest().clone()]);
-    assert_eq!(vector.baselines(), &[baseline.baseline().clone()]);
+    assert_eq!(
+        vector.candidates(),
+        slices
+            .iter()
+            .map(|slice| slice.manifest().clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        vector.baselines(),
+        baselines
+            .iter()
+            .map(|baseline| baseline.baseline().clone())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(vector.candidates()[0].ordered_delta_digests.len(), 1);
     delivery
         .retire_delivery_phase(&phase, json!({"candidate_vector":vector.digest()}))
@@ -234,9 +313,16 @@ async fn run_successor_fixture(chained: bool) {
     // Establish actual native publication/receipt lineage for a retained,
     // accepted predecessor. Its upstream review/check observations are the
     // explicitly synthetic seed above, not a newly completed runtime parent.
-    let (manifest, accepted, references) = if chained {
+    let (manifest, accepted, references) = if chained || ordinary {
         let mut manifest = seed.parent.manifest().clone();
-        manifest.baselines = vec![baseline.baseline().clone()];
+        manifest.baselines = baselines
+            .iter()
+            .map(|baseline| baseline.baseline().clone())
+            .collect();
+        manifest.candidates = slices
+            .iter()
+            .map(|slice| slice.manifest().clone())
+            .collect();
         manifest.production_targets = baseline
             .targets()
             .iter()
@@ -244,15 +330,15 @@ async fn run_successor_fixture(chained: bool) {
             .collect();
         manifest.integrated_results[0].candidate_vector_digest =
             manifest.candidate_vector_digest().unwrap();
-        publish_origin(
+        Box::pin(publish_origin_with_slices(
             &delivery,
             &workspace,
             &gate,
             &lease,
             manifest,
-            &seed.slice,
+            &slices,
             baseline.targets(),
-        )
+        ))
         .await
     } else {
         let publication = built
@@ -472,6 +558,29 @@ async fn run_successor_fixture(chained: bool) {
     } else {
         None
     };
+    if ordinary {
+        ordinary_completion_fixture::complete_ordinary(
+            ordinary_completion_fixture::OrdinaryFixture {
+                built: &built,
+                delivery: &delivery,
+                github: &github,
+                data: &data,
+                observation_barrier: &observation_barrier,
+                permit: &plan_permit,
+                plan,
+                gate: &gate,
+                references,
+                merged: merged.unwrap(),
+                seed: &seed,
+                native: native.as_ref().unwrap(),
+                source: &source,
+                auxiliary: auxiliary.as_ref().unwrap(),
+            },
+        )
+        .await;
+        _poll.stop().await;
+        return;
+    }
     built.runtime.control.fence(plan.operation_id).unwrap();
     built
         .runtime
@@ -898,3 +1007,8 @@ async fn correct_parent(
 #[path = "runtime_delivery_chain_fixture.rs"]
 mod chain;
 use chain::*;
+#[path = "runtime_delivery_ordinary_completion_fixture.rs"]
+mod ordinary_completion_fixture;
+
+#[path = "runtime_delivery_extra_completion_fixture.rs"]
+mod extra_completion_fixture;

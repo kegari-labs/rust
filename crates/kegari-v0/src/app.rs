@@ -9,9 +9,7 @@ use crate::{
         Receipt, ReceiptPhase,
     },
     error::{Error, Result},
-    reconcile::{
-        Activity, DependencyOutcomes, HistoryRow, OverviewInputs, ParentDelivery, RuntimeProjection,
-    },
+    reconcile::{Activity, DependencyOutcomes, HistoryRow, ParentDelivery, RuntimeProjection},
     secrets::Secret,
     snapshot::Snapshots,
 };
@@ -128,7 +126,8 @@ pub struct RuntimeInspection {
     pub outcomes: DependencyOutcomes,
     pub activities: Vec<Activity>,
     pub history: Vec<HistoryRow>,
-    pub release_details: BTreeMap<IssueKey, Value>,
+    pub release_details: BTreeMap<(Uuid, IssueKey), Value>,
+    pub release_history: Vec<crate::inspection::ReleaseInspectionRow>,
 }
 pub trait WorkflowControl: Send + Sync {
     /// Read-only refresh. May run while STOPPED; must never admit or publish work.
@@ -357,51 +356,54 @@ impl HostDispatcher {
                         "provider view belongs to another configuration revision",
                     ));
                 }
-                let workspace = resolve_workspace(
+                crate::inspection::validate_rows(self.runtime, &view.release_history)?;
+                let workspace = crate::inspection::resolve_workspace(
                     &config,
+                    &view.release_history,
                     request.args.get("workspace").and_then(Value::as_str),
                 )?;
                 let control = self.control().await?;
                 let data = if request.command == Overview {
-                    serde_json::to_value(
-                        view.projection.overview(OverviewInputs {
-                            workspace,
-                            delivery: &view.delivery,
-                            outcomes: &view.outcomes,
-                            activities: &view.activities,
-                            history: &view.history,
-                            control: &control,
-                            now: Utc::now(),
-                            max_age: Duration::milliseconds(
-                                config
-                                    .runtime
-                                    .poll_ms
-                                    .saturating_mul(2)
-                                    .min(i64::MAX as u64) as i64,
-                            ),
-                        })?,
-                    )
+                    serde_json::to_value(crate::inspection::overview(
+                        &view,
+                        workspace,
+                        &control,
+                        Utc::now(),
+                        Duration::milliseconds(
+                            config
+                                .runtime
+                                .poll_ms
+                                .saturating_mul(2)
+                                .min(i64::MAX as u64) as i64,
+                        ),
+                    )?)
                     .map_err(|_| Error::invalid("overview encoding failed"))?
                 } else {
-                    let (workspace_id, key) = view
+                    let selected = crate::inspection::resolve_parent(
+                        &config,
+                        &view.projection,
+                        &view.release_history,
+                        text(&request.args, "parent")?,
+                        workspace,
+                    )?;
+                    let key = &selected.key;
+                    let parent = view
                         .projection
-                        .resolve_parent(text(&request.args, "parent")?)?;
-                    if workspace.is_some_and(|id| id != workspace_id) {
-                        return Err(Error::new(
-                            "unknown_resource",
-                            "parent is outside the inspection workspace",
-                        ));
-                    }
-                    let parent = view.projection.parent(workspace_id, key.issue)?;
-                    let proof = view.delivery.get(&key);
-                    let evidence = proof
-                        .and_then(ParentDelivery::verified_parent)
-                        .filter(|verified| Some(&verified.manifest().work) == parent.work.as_ref());
+                        .parent(selected.workspace, key.issue)
+                        .ok()
+                        .filter(|parent| parent.key == *key);
+                    let releases = crate::inspection::parent_rows(&view.release_history, &selected);
+                    let proof = parent.and_then(|_| view.delivery.get(key));
+                    let evidence =
+                        proof
+                            .and_then(ParentDelivery::verified_parent)
+                            .filter(|verified| {
+                                Some(&verified.manifest().work)
+                                    == parent.and_then(|parent| parent.work.as_ref())
+                            });
                     if request.command == Open {
-                        let issue = parent.issue.as_ref().ok_or_else(|| {
-                            Error::new("unknown_resource", "parent is not visible")
-                        })?;
-                        return self.result(&config,"observed",None,json!({"parent":parent.parent_reference,"url":issue.url,"evidence_token":evidence.map(|p|p.token())}));
+                        let url = crate::inspection::observed_url(parent, &releases)?;
+                        return self.result(&config,"observed",None,json!({"parent":selected.reference(),"url":url,"evidence_token":evidence.map(|p|p.token())}));
                     }
                     let children: BTreeMap<_, _> = proof
                         .map(|p| {
@@ -411,9 +413,9 @@ impl HostDispatcher {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    json!({"parent":parent,"children_evidence":children,"evidence_manifest":evidence.map(|p|p.manifest()),
+                    json!({"parent":parent,"inspection_identity":{"workspace":selected.workspace,"parent":key,"parent_reference":selected.reference()},"children_evidence":children,"evidence_manifest":evidence.map(|p|p.manifest()),
                         "evidence_token":evidence.map(|p|p.token()),"acceptance":proof.and_then(ParentDelivery::verified_acceptance).map(|a|a.acceptance()),
-                        "release":view.release_details.get(&key),"history":view.history.iter().filter(|h|h.parent==key).collect::<Vec<_>>()})
+                        "release":view.release_details.get(&(selected.workspace,key.clone())),"release_history":releases,"history":crate::inspection::history_for_parent(&view.history,selected.workspace,key)})
                 };
                 self.result(
                     &config,

@@ -6,7 +6,7 @@ use kegari_v0::{
     control::{ControlSnapshot, Intent, IntentRecord},
     digest::canonical_digest,
     error::Result,
-    evidence::{AttestationKey, Publication},
+    evidence::{self, AttestationKey, Publication},
     providers::*,
     reconcile::*,
     workflow::Workflow,
@@ -21,6 +21,8 @@ use std::{
     time::Duration as StdDuration,
 };
 use uuid::Uuid;
+#[path = "support/parent_evidence.rs"]
+mod parent_evidence;
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
 fn id(n: u128) -> Uuid {
@@ -60,6 +62,7 @@ struct Fixture {
     history: BTreeMap<Uuid, Vec<Value>>,
     selected: bool,
     fail_comments: bool,
+    inaccessible_comments_for: Option<Uuid>,
     changing: bool,
     discovery_count: u32,
     requests: Vec<(String, Value)>,
@@ -92,6 +95,7 @@ impl Fixture {
             )]),
             selected: true,
             fail_comments: false,
+            inaccessible_comments_for: None,
             changing: false,
             discovery_count: 0,
             requests: Vec::new(),
@@ -200,7 +204,7 @@ impl HttpTransport for Wire {
                         .collect();
                     json!({"issue":{"labels":connection(labels)}})
                 } else if query.contains("KegariComments") {
-                    if f.fail_comments {
+                    if f.fail_comments || f.inaccessible_comments_for == input_id {
                         return Ok(HttpResponse {status:200,headers:HeaderMap::new(),body:serde_json::to_vec(&json!({"data":{"issue":{"comments":connection(vec![])}},"errors":[{"message":"partial"}]})).unwrap()});
                     }
                     json!({"issue":{"comments":connection(f.comments.get(&input_id.unwrap()).cloned().unwrap_or_default())}})
@@ -697,6 +701,269 @@ fn long_dependency_chains_use_bounded_stack_and_find_cycles() {
     assert!(dependency_cycle(&graph).is_none());
     graph.insert(id(20_000), BTreeSet::from([id(1)]));
     assert_eq!(dependency_cycle(&graph).unwrap().len(), 20_001);
+}
+
+/// This uses the existing owned-Git no-change fixture and production domain
+/// validators with explicitly synthetic upstream check/publication facts. It
+/// tests graph pinning, not durable released-attempt completion or live CI.
+fn synthetic_no_release_dependency(
+    work: &evidence::WorkIdentity,
+    child: &evidence::WorkIdentity,
+) -> (tempfile::TempDir, evidence::VerifiedNoReleaseRequired) {
+    let key = AttestationKey::new("dependency-fixture".into(), vec![17; 32]).unwrap();
+    let (files, parent) = parent_evidence::parent(work, child, &key);
+    let writer = id(5).to_string();
+    let acceptors = BTreeSet::from([writer.clone()]);
+    let publication = |payload_digest| Publication {
+        provider: "linear".into(),
+        record_id: id(980).to_string(),
+        writer_account_id: writer.clone(),
+        payload_digest,
+        observed_at: Utc::now(),
+        url: "https://linear.invalid/comment/980".into(),
+    };
+    let accepted = evidence::prepare_acceptance(
+        &parent,
+        evidence::AcceptanceRequest {
+            supplied_token: parent.token(),
+            current_work: work,
+            pending_correction: false,
+            actor: evidence::AcceptanceActor {
+                control_actor: "fixture-operator",
+                linear_actor: &writer,
+                provider_writer: &writer,
+                has_accept_role: true,
+                permitted_acceptors: &acceptors,
+            },
+            runtime_id: id(1),
+            operation_id: Uuid::new_v4(),
+            now: Utc::now(),
+        },
+        &key,
+    )
+    .unwrap();
+    let acceptance = evidence::verify_acceptance(
+        &accepted,
+        &publication(canonical_digest(1, &accepted).unwrap()),
+        &parent,
+        work,
+        false,
+        &acceptors,
+        &key,
+    )
+    .unwrap();
+    let targets = BTreeMap::new();
+    let requirements = || evidence::NoReleaseRequirements {
+        current_work: work,
+        pending_correction: false,
+        targets: &targets,
+    };
+    let signed = evidence::prepare_no_release_required(
+        evidence::NoReleaseRequired {
+            schema_version: 1,
+            runtime_id: id(1),
+            operation_id: Uuid::new_v4(),
+            work: work.clone(),
+            evidence_token: parent.token().into(),
+            acceptance_digest: acceptance.digest().into(),
+            baselines: parent.manifest().baselines.clone(),
+            targets: vec![],
+            recorded_at: Utc::now(),
+        },
+        &parent,
+        &acceptance,
+        requirements(),
+        &key,
+    )
+    .unwrap();
+    let verified = evidence::verify_no_release_required(
+        &signed,
+        &parent,
+        &acceptance,
+        requirements(),
+        &publication(canonical_digest(1, &signed).unwrap()),
+        &writer,
+        &key,
+    )
+    .unwrap();
+    (files, verified)
+}
+
+#[tokio::test]
+async fn historical_dependency_pin_survives_new_generation_but_never_missing_or_undeclared_authority()
+ {
+    let cfg = config();
+    let fixture = Fixture::new();
+    {
+        let mut native = fixture.lock().unwrap();
+        let mut prerequisite = issue(200, None);
+        prerequisite["description"] = json!(
+            prerequisite["description"]
+                .as_str()
+                .unwrap()
+                .replace(&id(101).to_string(), &id(201).to_string())
+        );
+        native.issues.insert(id(200), prerequisite);
+        native.issues.insert(id(201), issue(201, Some(200)));
+        let mut history = native.history[&id(100)].clone();
+        history[0]["id"] = json!(id(901));
+        native.history.insert(id(200), history);
+    }
+    let first = refresh(&cfg, &fixture, &ReconcileRefs::new()).await;
+    let a = first.parent(id(2), id(200)).unwrap();
+    let a1 = a.work.as_ref().unwrap().clone();
+    let (_files, proof) =
+        synthetic_no_release_dependency(&a1, a.children[&id(201)].work.as_ref().unwrap());
+    let mut outcomes = DependencyOutcomes::default();
+    outcomes.no_release_required(&proof).unwrap();
+    fixture.lock().unwrap().relations.push(
+        json!({"id":id(970),"type":"blocks","issue":{"id":id(200)},"relatedIssue":{"id":id(100)}}),
+    );
+
+    // A completed A1 cannot choose B's undeclared required generation.
+    let undeclared = refresh(&cfg, &fixture, &ReconcileRefs::new()).await;
+    let b = undeclared.parent(id(2), id(100)).unwrap();
+    assert!(
+        b.blockers
+            .iter()
+            .any(|b| b.code == "dependency_requirement_unresolved")
+    );
+    assert_eq!(
+        b.dependency_blockers(None, &outcomes).unwrap()[0].code,
+        "dependency_unsatisfied"
+    );
+
+    // Pin the actual provider-observed A1 while authorizing B, then use the
+    // existing signed authorization validator to retain that immutable pin.
+    let mut refs = ReconcileRefs::new();
+    refs.entry(id(2))
+        .or_default()
+        .entry(id(100))
+        .or_default()
+        .dependency_generations
+        .insert(id(200), a1.generation.clone());
+    publish(&refresh(&cfg, &fixture, &refs).await, &mut refs);
+    let pinned = refresh(&cfg, &fixture, &refs).await;
+    pinned
+        .parent(id(2), id(100))
+        .unwrap()
+        .fresh_gate(
+            None,
+            GatePurpose::NewOperation,
+            &outcomes,
+            Utc::now(),
+            Duration::seconds(60),
+        )
+        .unwrap();
+    fixture.lock().unwrap().issues.get_mut(&id(200)).unwrap()["title"] =
+        json!("Current prerequisite A2");
+    let corrected = refresh(&cfg, &fixture, &refs).await;
+    let a2 = corrected
+        .parent(id(2), id(200))
+        .unwrap()
+        .work
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert_ne!(a1.generation, a2.generation);
+    let b = corrected.parent(id(2), id(100)).unwrap();
+    assert_eq!(
+        b.authorization_candidate
+            .as_ref()
+            .unwrap()
+            .dependency_generations[&id(200)],
+        a1.generation
+    );
+    assert!(b.dependency_blockers(None, &outcomes).unwrap().is_empty());
+    b.fresh_gate(
+        None,
+        GatePurpose::NewOperation,
+        &outcomes,
+        Utc::now(),
+        Duration::seconds(60),
+    )
+    .unwrap();
+
+    let removed = fixture.lock().unwrap().issues.remove(&id(200)).unwrap();
+    let missing = refresh(&cfg, &fixture, &refs).await;
+    let b = missing.parent(id(2), id(100)).unwrap();
+    assert!(b.blockers.iter().any(|b| b.code == "missing_dependency"));
+    assert_eq!(
+        b.fresh_gate(
+            None,
+            GatePurpose::NewOperation,
+            &outcomes,
+            Utc::now(),
+            Duration::seconds(60)
+        )
+        .unwrap_err()
+        .code,
+        "missing_dependency"
+    );
+    fixture.lock().unwrap().issues.insert(id(200), removed);
+    fixture.lock().unwrap().inaccessible_comments_for = Some(id(200));
+    let inaccessible = refresh(&cfg, &fixture, &refs).await;
+    assert!(!inaccessible.workspaces[&id(2)].complete);
+    assert_eq!(
+        inaccessible.workspaces[&id(2)].error.as_ref().unwrap().code,
+        "provider_response"
+    );
+    assert!(
+        inaccessible
+            .parent(id(2), id(100))
+            .unwrap()
+            .fresh_gate(
+                None,
+                GatePurpose::NewOperation,
+                &outcomes,
+                Utc::now(),
+                Duration::seconds(60)
+            )
+            .is_err()
+    );
+    fixture.lock().unwrap().inaccessible_comments_for = None;
+
+    // A genuinely renewed B authorization may require A2. The same opaque A1
+    // outcome remains historical credit and cannot satisfy that newer pin.
+    {
+        let mut native = fixture.lock().unwrap();
+        native.issues.get_mut(&id(100)).unwrap()["title"] = json!("B now requires corrected A2");
+        native.history.get_mut(&id(100)).unwrap().extend([
+            json!({"id":id(971),"actor":{"id":id(5)},"actorId":id(5),"actors":[{"id":id(5)}],"botActor":null,"addedLabelIds":[],"removedLabelIds":[id(4)],"createdAt":"2026-01-04T00:00:00Z","updatedAt":"2026-01-04T00:00:00Z"}),
+            json!({"id":id(972),"actor":{"id":id(5)},"actorId":id(5),"actors":[{"id":id(5)}],"botActor":null,"addedLabelIds":[id(4)],"removedLabelIds":[],"createdAt":"2026-01-05T00:00:00Z","updatedAt":"2026-01-05T00:00:00Z"}),
+        ]);
+    }
+    let b_refs = refs.get_mut(&id(2)).unwrap().get_mut(&id(100)).unwrap();
+    b_refs.authorization = None;
+    b_refs
+        .dependency_generations
+        .insert(id(200), a2.generation.clone());
+    publish(&refresh(&cfg, &fixture, &refs).await, &mut refs);
+    let repinned = refresh(&cfg, &fixture, &refs).await;
+    let b = repinned.parent(id(2), id(100)).unwrap();
+    assert_eq!(
+        b.authorization_candidate
+            .as_ref()
+            .unwrap()
+            .dependency_generations[&id(200)],
+        a2.generation
+    );
+    assert_eq!(
+        b.dependency_blockers(None, &outcomes).unwrap()[0].code,
+        "dependency_unsatisfied"
+    );
+    assert_eq!(
+        b.fresh_gate(
+            None,
+            GatePurpose::NewOperation,
+            &outcomes,
+            Utc::now(),
+            Duration::seconds(60)
+        )
+        .unwrap_err()
+        .code,
+        "dependency_unsatisfied"
+    );
 }
 
 #[tokio::test]

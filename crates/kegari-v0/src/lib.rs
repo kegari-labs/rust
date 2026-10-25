@@ -24,6 +24,7 @@ pub mod execution;
 pub mod git;
 pub mod host;
 pub mod housekeeping;
+pub mod inspection;
 pub mod instructions;
 pub mod isolation;
 pub mod local_cli;

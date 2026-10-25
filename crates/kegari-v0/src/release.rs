@@ -1993,7 +1993,8 @@ impl ReleaseQueue {
         }
         Ok(())
     }
-    /// Remove only the exact ancestor holds of a successful, retired chain.
+    /// Retain an ordinary completion or remove only the exact ancestor holds of
+    /// a successful, retired chain. An ordinary completion has no ancestor holds.
     /// Other owners/holds remain intact; only the terminal's ordinary success
     /// contributes dependency history and spacing during the subsequent rebuild.
     pub(crate) fn apply_completion(
@@ -2008,13 +2009,11 @@ impl ReleaseQueue {
             }
             return Ok(());
         }
-        if expected.is_empty()
-            || expected.iter().any(|(operation, hold)| {
-                self.holds.get(operation) != Some(hold)
-                    || hold.resources != terminal.plan.resources
-                    || *operation == terminal.plan.operation_id
-            })
-        {
+        if expected.iter().any(|(operation, hold)| {
+            self.holds.get(operation) != Some(hold)
+                || hold.resources != terminal.plan.resources
+                || *operation == terminal.plan.operation_id
+        }) {
             return Err(Error::new(
                 "release_hold",
                 "queue differs from exact completed ancestor hold inventory",

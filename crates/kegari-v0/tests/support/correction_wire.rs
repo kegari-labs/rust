@@ -60,6 +60,17 @@ pub(crate) struct Fixture {
     pub(crate) edit_route_on_read: bool,
 }
 impl Fixture {
+    pub(crate) fn set_read_repositories(&mut self, repositories: &[&str]) {
+        let issue = self.issues.get_mut(&id(101)).unwrap();
+        issue["description"] = json!(issue["description"].as_str().unwrap().replace(
+            "\"read_repositories\":[]",
+            &format!(
+                "\"read_repositories\":{}",
+                serde_json::to_string(repositories).unwrap()
+            ),
+        ));
+    }
+
     pub(crate) fn set_parent_title(&mut self, title: &str) {
         self.issues.get_mut(&id(100)).unwrap()["title"] = json!(title);
     }

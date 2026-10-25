@@ -457,13 +457,36 @@ impl DeliveryCoordinator {
         targets: &[ProductionTargetBaseline],
         runtime: Uuid,
     ) -> Result<String> {
+        self.fixture_original_manifest_body_with_slices(parent, &[slice], targets, runtime)
+    }
+    pub(crate) fn fixture_original_manifest_body_with_slices(
+        &self,
+        parent: &evidence::ParentEvidence,
+        slices: &[&IsolatedSlice],
+        targets: &[ProductionTargetBaseline],
+        runtime: Uuid,
+    ) -> Result<String> {
+        if slices
+            .iter()
+            .map(|slice| slice.manifest().clone())
+            .collect::<Vec<_>>()
+            != parent.candidates
+        {
+            return Err(Error::new(
+                "fixture_binding",
+                "synthetic upstream vector needs each actual owned candidate",
+            ));
+        }
         let contract_digest = canonical_digest(1, &"explicit synthetic parent contract")?;
         let vector = VectorRecord {
             schema_version: 1,
             runtime_id: runtime,
             work: parent.work.clone(),
             contract_digest: contract_digest.clone(),
-            slices: vec![(slice.manifest().repository.clone(), slice.operation_id())],
+            slices: slices
+                .iter()
+                .map(|slice| (slice.manifest().repository.clone(), slice.operation_id()))
+                .collect(),
             baselines: parent.baselines.clone(),
             candidates: parent.candidates.clone(),
             targets: targets.to_vec(),

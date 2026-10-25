@@ -20,6 +20,76 @@ struct OriginReference {
     receipts: BTreeSet<Uuid>,
     vector: ProofFile,
 }
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderBinding {
+    account: String,
+    endpoint: String,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DependencyBinding {
+    linear: ProviderBinding,
+    github: ProviderBinding,
+    linear_workspace: Uuid,
+    repositories: BTreeSet<RepositoryId>,
+}
+impl DependencyBinding {
+    fn configured(
+        config: &Config,
+        workspace_id: Uuid,
+        repositories: BTreeSet<RepositoryId>,
+    ) -> Result<Self> {
+        let workspace = config
+            .workspaces
+            .values()
+            .find(|w| w.id == workspace_id)
+            .ok_or_else(|| invalid("completed release workspace is no longer configured"))?;
+        let provider = |name: &str, kind: crate::config::ProviderKind| -> Result<ProviderBinding> {
+            let connection = config
+                .connections
+                .get(name)
+                .filter(|connection| connection.kind == kind)
+                .ok_or_else(|| invalid("completed release provider connection is unavailable"))?;
+            let policy = crate::providers::HttpPolicy::new(
+                connection
+                    .endpoint
+                    .as_deref()
+                    .ok_or_else(|| invalid("provider endpoint is absent"))?,
+                connection.account_id.clone(),
+                std::time::Duration::from_secs(1),
+            )?;
+            Ok(ProviderBinding {
+                account: policy.account_id,
+                endpoint: policy.endpoint.to_string(),
+            })
+        };
+        if repositories.is_empty()
+            || repositories.iter().any(|repository| {
+                workspace
+                    .repositories
+                    .get(&repository.id.to_string())
+                    .is_none_or(|configured| configured.hostname != repository.hostname)
+            })
+        {
+            return Err(invalid(
+                "completed release repository inventory is no longer configured",
+            ));
+        }
+        Ok(Self {
+            linear: provider(
+                &workspace.linear_connection,
+                crate::config::ProviderKind::Linear,
+            )?,
+            github: provider(
+                &workspace.github_connection,
+                crate::config::ProviderKind::Github,
+            )?,
+            linear_workspace: workspace.linear_workspace_id,
+            repositories,
+        })
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CompletionRecord {
@@ -37,6 +107,10 @@ struct CompletionRecord {
     target_proofs: Vec<ProofFile>,
     inventory_digest: String,
     observed_at: DateTime<Utc>,
+    // Omission preserves the signed schema-1 representation. A legacy record
+    // can settle queue history, but cannot establish the old GitHub account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dependency_binding: Option<DependencyBinding>,
 }
 
 #[derive(Clone)]
@@ -44,6 +118,7 @@ pub(crate) struct VerifiedReleaseCompletion {
     record: CompletionRecord,
     signed_digest: String,
     terminal: ReleaseAttempt,
+    work: WorkIdentity,
     holds: BTreeMap<Uuid, domain::ResourceHold>,
     records: Arc<crate::storage::PrivateDir>,
     control: Arc<crate::control::ControlHost>,
@@ -224,8 +299,10 @@ impl VerifiedReleaseCompletion {
     fn recover(delivery: &RuntimeDelivery, signed: Signed<CompletionRecord>) -> Result<Self> {
         delivery.runtime.services.key.verify(PURPOSE, &signed)?;
         let record = &signed.payload;
-        if record.schema_version != 1
-            || record.attempts.len() < 2
+        if !matches!(
+            (record.schema_version, record.dependency_binding.is_some()),
+            (1, false) | (2, true)
+        ) || record.attempts.is_empty()
             || record.attempts.len() > MAX_RELEASE_LINKS
             || record.attempts.last().map(|(id, _)| *id) != Some(record.terminal)
             || record.receipts.len() > MAX_REFERENCES
@@ -258,6 +335,12 @@ impl VerifiedReleaseCompletion {
                 || stored.payload.attempt.plan.operation_id != *id
                 || stored.payload.runtime != record.runtime
                 || stored.payload.workspace != record.workspace
+                || stored.payload.work.child.is_some()
+                || stored.payload.attempt.plan.runtime_id != record.runtime
+                || stored.payload.attempt.plan.parent_id != stored.payload.work.parent
+                || stored.payload.attempt.plan.linear_workspace
+                    != stored.payload.work.linear_workspace
+                || stored.payload.attempt.plan.generation != stored.payload.work.generation
             {
                 return Err(invalid(
                     "completion attempt reference changed or belongs to another runtime",
@@ -298,6 +381,7 @@ impl VerifiedReleaseCompletion {
             record: record.clone(),
             signed_digest: signed.digest()?,
             terminal: terminal.attempt.clone(),
+            work: terminal.work.clone(),
             holds,
             records: delivery.records.clone(),
             control: delivery.runtime.control.clone(),
@@ -463,6 +547,66 @@ impl VerifiedReleaseCompletion {
     pub(crate) fn digest(&self) -> &str {
         &self.signed_digest
     }
+    pub(crate) fn work(&self) -> &WorkIdentity {
+        &self.work
+    }
+    pub(crate) fn workspace_id(&self) -> Uuid {
+        self.record.workspace
+    }
+    pub(crate) fn dependency_repositories(&self) -> Result<&BTreeSet<RepositoryId>> {
+        self.record
+            .dependency_binding
+            .as_ref()
+            .map(|binding| &binding.repositories)
+            .ok_or_else(|| {
+                Error::new(
+                    "dependency_binding_unavailable",
+                    "legacy completion does not retain the originally observed provider identities",
+                )
+            })
+    }
+    /// Historical dependency credit does not require the old generation or
+    /// deployed pointer to remain current. It does require every original
+    /// immutable reference and the same configured provider identities.
+    pub(crate) fn validate_for_configuration(
+        &self,
+        config: &Config,
+    ) -> Result<domain::SuccessfulRelease> {
+        self.validate()?;
+        let binding = self.record.dependency_binding.as_ref().ok_or_else(|| {
+            Error::new(
+                "dependency_binding_unavailable",
+                "legacy completion does not retain the originally observed provider identities",
+            )
+        })?;
+        if config.runtime.id != self.record.runtime
+            || DependencyBinding::configured(
+                config,
+                self.record.workspace,
+                binding.repositories.clone(),
+            )? != *binding
+            || self.work.linear_endpoint != binding.linear.endpoint
+            || self.work.linear_workspace != binding.linear_workspace
+        {
+            return Err(invalid(
+                "completed release provider or workspace identity changed",
+            ));
+        }
+        let origin = self
+            .record
+            .origins
+            .get(&self.record.terminal)
+            .ok_or_else(|| invalid("completed release lacks its original publication identity"))?;
+        for id in &origin.receipts {
+            let receipt = self.control.operation(*id)?;
+            if receipt.expected.get("provider_writer") != Some(&binding.linear.account) {
+                return Err(invalid(
+                    "completed release publication writer differs from its binding",
+                ));
+            }
+        }
+        ReleaseQueue::default().record_success(&self.terminal)
+    }
 }
 
 /// Read-only presentation. These partial diagnostics are never accepted by
@@ -470,6 +614,7 @@ impl VerifiedReleaseCompletion {
 pub(in crate::runtime_delivery::release) struct CompletionInspection {
     pub(in crate::runtime_delivery::release) consumed: BTreeMap<Uuid, Uuid>,
     pub(in crate::runtime_delivery::release) errors: BTreeMap<Uuid, Error>,
+    pub(in crate::runtime_delivery::release) terminals: BTreeMap<Uuid, VerifiedReleaseCompletion>,
 }
 impl RuntimeDelivery {
     pub(in crate::runtime_delivery::release) fn inspect_release_completions(
@@ -548,10 +693,7 @@ impl RuntimeDelivery {
             }
         }
         for (terminal, record) in attempts {
-            if record.attempt.completed()
-                && record.local_retired
-                && !results.contains_key(terminal)
-                && predecessors.contains_key(terminal)
+            if record.attempt.completed() && record.local_retired && !results.contains_key(terminal)
             {
                 let mut error = invalid("terminal release has no retained completion reference");
                 let mut ids = BTreeSet::new();
@@ -580,6 +722,7 @@ impl RuntimeDelivery {
             }
         }
         let mut valid = BTreeMap::<Uuid, BTreeSet<Uuid>>::new();
+        let mut terminals = BTreeMap::new();
         for (terminal, result) in results {
             let result = result.and_then(|proof| {
                 for (id, digest) in &proof.record.attempts {
@@ -604,6 +747,7 @@ impl RuntimeDelivery {
                 Ok(proof) => {
                     errors.remove(&terminal);
                     valid.insert(terminal, proof.holds.keys().copied().collect());
+                    terminals.insert(terminal, proof);
                 }
                 Err(error) if error.code == "unsafe_storage" => return Err(error),
                 Err(error) => {
@@ -648,11 +792,115 @@ impl RuntimeDelivery {
                 }
             }
         }
-        Ok(CompletionInspection { consumed, errors })
+        terminals.retain(|terminal, _| !errors.contains_key(terminal));
+        Ok(CompletionInspection {
+            consumed,
+            errors,
+            terminals,
+        })
     }
 }
 
 impl RuntimeDelivery {
+    /// Run outside both the Control callback and the release-state lock. Cold
+    /// restoration of one broken historical fact must not hide unrelated facts.
+    pub(in crate::runtime_delivery) fn sync_released_completions(&self) -> Result<()> {
+        let inventory = self.released_completion_inventory();
+        match inventory {
+            Ok((proofs, errors)) => self.runtime.replace_released_completions(proofs, errors),
+            Err(error) => {
+                self.runtime
+                    .replace_released_completions(Vec::new(), BTreeMap::new())?;
+                Err(error)
+            }
+        }
+    }
+    fn released_completion_inventory(
+        &self,
+    ) -> Result<(Vec<VerifiedReleaseCompletion>, BTreeMap<Uuid, Error>)> {
+        self.released_completion_inventory_from_names(self.records.records_bounded(65536)?)
+    }
+    // Production supplies its actual bounded enumeration. Keeping that read
+    // separate also makes disappearance between enumeration and open testable.
+    pub(in crate::runtime_delivery::release) fn released_completion_inventory_from_names(
+        &self,
+        names: Vec<String>,
+    ) -> Result<(Vec<VerifiedReleaseCompletion>, BTreeMap<Uuid, Error>)> {
+        if names.len() > 65536 {
+            return Err(invalid("completion storage enumeration exceeds bound"));
+        }
+        let cached = {
+            let state = self.releases.state.lock().map_err(|_| unavailable())?;
+            state.completions.clone()
+        };
+        let mut records = BTreeMap::new();
+        let mut errors = BTreeMap::new();
+        for name in names {
+            let Some(id) = name
+                .strip_prefix("release-completion-")
+                .and_then(|s| s.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            let id: Uuid = id
+                .parse()
+                .map_err(|_| invalid("completion filename identity is invalid"))?;
+            if leaf(id) != name || records.len() + errors.len() >= MAX_REFERENCES {
+                return Err(invalid("completion filename or retained count differs"));
+            }
+            let signed: Signed<CompletionRecord> =
+                match self.records.read_bounded(&name, 1024 * 1024) {
+                    Ok(signed) => signed,
+                    Err(error) if error.code == "record_missing" => {
+                        errors.insert(id, error);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+            self.runtime.services.key.verify(PURPOSE, &signed)?;
+            if signed.payload.terminal != id || records.len() + errors.len() >= MAX_REFERENCES {
+                return Err(invalid("completion filename or retained count differs"));
+            }
+            records.insert(id, signed);
+        }
+        let mut proofs = Vec::new();
+        for (id, signed) in records {
+            let result = (|| {
+                if let Some(prior) = cached.get(&id)
+                    && prior.digest() != signed.digest()?
+                {
+                    return Err(invalid("cached completion reference was replaced"));
+                }
+                let proof = VerifiedReleaseCompletion::recover(self, signed)?;
+                proof.validate()?;
+                Ok(proof)
+            })();
+            match result {
+                Ok(proof) => proofs.push(proof),
+                Err(error) if error.code == "unsafe_storage" => return Err(error),
+                Err(error) => {
+                    errors.insert(id, error);
+                }
+            }
+        }
+        for (id, proof) in cached {
+            if !proofs.iter().any(|p| p.terminal().plan.operation_id == id)
+                && !errors.contains_key(&id)
+            {
+                errors.insert(
+                    id,
+                    proof
+                        .validate()
+                        .err()
+                        .unwrap_or_else(|| invalid("completion disappeared during inventory")),
+                );
+            }
+        }
+        if proofs.len() + errors.len() > MAX_REFERENCES {
+            return Err(invalid("completion inventory exceeds reference bound"));
+        }
+        Ok((proofs, errors))
+    }
     pub(in crate::runtime_delivery::release) fn restore_completions(
         &self,
     ) -> Result<BTreeMap<Uuid, VerifiedReleaseCompletion>> {
@@ -680,9 +928,6 @@ impl RuntimeDelivery {
         record: &AttemptRecord,
     ) -> Result<Option<CompletionRecord>> {
         validate_completed_owner(&self.runtime.control, record)?;
-        if self.recorded_predecessor(record)?.is_none() {
-            return Ok(None);
-        }
         let origin = workspace
             .coordinator
             .release_origin(
@@ -828,8 +1073,18 @@ impl RuntimeDelivery {
         {
             return Err(invalid("completion effect inventory exceeds bound"));
         }
+        let dependency_binding = DependencyBinding::configured(
+            &workspace.configuration,
+            record.workspace,
+            origin
+                .manifest()
+                .baselines
+                .iter()
+                .map(|baseline| baseline.repository.clone())
+                .collect(),
+        )?;
         let record = CompletionRecord {
-            schema_version: 1,
+            schema_version: 2,
             runtime: record.runtime,
             workspace: record.workspace,
             config_revision: workspace.configuration.revision()?,
@@ -859,6 +1114,7 @@ impl RuntimeDelivery {
                     .collect::<Vec<_>>(),
             )?,
             observed_at: Utc::now(),
+            dependency_binding: Some(dependency_binding),
         };
         Ok(Some(record))
     }
@@ -910,6 +1166,7 @@ impl RuntimeDelivery {
                 }
             }
         }
+        self.sync_released_completions()?;
         Ok(first)
     }
     async fn complete_release_chain(
@@ -917,9 +1174,6 @@ impl RuntimeDelivery {
         projection: &RuntimeProjection,
         record: &AttemptRecord,
     ) -> Result<()> {
-        if self.recorded_predecessor(record)?.is_none() {
-            return Ok(());
-        }
         match self
             .records
             .read::<Signed<CompletionRecord>>(&leaf(record.attempt.plan.operation_id))

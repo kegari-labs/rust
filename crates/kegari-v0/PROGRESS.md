@@ -1,90 +1,63 @@
 # Kegari v0 build progress
 
 Local implementation and validation remain in progress; the Goal is incomplete.
-The current uncommitted increment implements terminal release-chain completion,
-complete retained receipt/effect/target history, granted Findings-to-repair and
-changed-source review, repeated same-thread session history, and diagnostic
-operator release inspection. It also fixes record-lock lifetime across incidental
-forks and prevents storage errors from passing runtime ownership checks.
+The current increment implements authenticated historical released-parent
+dependency outcomes, ordinary one-attempt release completion, and historical
+Overview/Show inspection. Full unfiltered suite 9 passed **711 tests, zero
+failures and two explicitly ignored native qualifications across 39 groups**
+in 643.856 seconds wall. Its 209 library tests passed under normal parallelism.
+Strict all-target Clippy 9 and formatting 9 passed at the same unchanged 577 inputs:
+`sha256:6835a427059a7f8e51c2d43f5f7d88c358de81174b228ec01fae49e831a0627e`.
+Evaluation plan 9 passed with all 56 slots dispatch-disabled; contract inventory
+passed 363 blocks/136 named requirements. The final
+[machine-readable evidence](validation/released-inspection-checks.json) verifies
+20 retained invocations with no artifact-integrity mismatch. The local commit is
+pending; all repository source is held. The [current report](validation/LOCAL-RELEASED-INSPECTION.md) retains
+prior stack, compile and fixture failures. Actual accepted/check upstream state
+in release fixtures remains explicitly synthetic, so local passes do not qualify
+native execution, providers, actual-agent behavior or required human review.
 
-The current verified source has 572 inputs:
-`sha256:3bfec4117bfb7351341085b47a72a4210b2365a19bfbcdc406f17ddb989797c2`.
+The verified local checkpoint is `946a15f7274af3fdea26ddf09588b710e44b7071` —
+`feat(kegari-v0): retain release chains and active phase ownership`.
+It contains terminal release-chain completion and retained provenance, granted
+Findings repair and changed-source review, repeated same-thread resume history,
+operator release diagnostics, scoped record locks, and retained long-phase tasks
+with bounded provider observations and pinned active contracts.
+
 Full unfiltered suite 31 passed **705 tests, zero failures and two explicitly
 ignored native qualifications across 39 groups**, in 633.682 seconds wall time.
-All 205 library tests passed under normal parallelism. Strict all-target Clippy 31
-and formatting 31 passed on the same unchanged source. Inventory 32 and diff 31
-also passed. Evaluation plan 31 passed with 56 declared slots and dispatch
-disabled. The [machine-readable evidence](validation/terminal-grant-session-checks.json)
-verifies retained log hashes, before/after source inventories and complete test
-groups. Inventory 33 additionally binds the checker, coverage ledger and SPEC
-hashes. No Cargo command is active; the authorized local commit is next.
+Strict all-target Clippy, formatting, contract inventory, diff checks and the
+56-slot dispatch-disabled evaluation plan passed at 572 inputs:
+`sha256:3bfec4117bfb7351341085b47a72a4210b2365a19bfbcdc406f17ddb989797c2`.
+The [report](validation/LOCAL-TERMINAL-GRANT-SESSION.md) and
+[machine-readable evidence](validation/terminal-grant-session-checks.json) retain
+failed runs and provenance limitations. They verify the committed checkpoint,
+not later edits. Commit has human signoff and `Assisted-by: Codex`; no commits
+were consolidated or pushed. Post-commit verification found a clean tree and
+all validated inputs preserved. The existing origin/main remains 71e63e2.
 
-Full suite 30 at the preceding source passed 204/205 library tests, then stopped.
-The retention fixture used a random unattached lease, so the new owner preflight
-correctly rejected it before its intended worker_binding failure. The corrected
-fixture holds its actual attached owner, lease and runtime lock, with every error
-and Arc-retention assertion preserved. Focused retention 31 passed before the
-complete run. No production change followed full suite 30.
+Ownership: root owns runtime dependency cache, reconciliation/shared seams,
+progress, serial Cargo and local commits. Git agent owns ordinary completion,
+signed dependency bindings, typed release history production and its fixtures.
+Codex agent owns inspection-only resolution, Overview/Show and facade tests.
+Config agent independently reviews dependency semantics and tests. Root owns
+serial Cargo; every current-slice command is closed before the authorized local commit. No project branches/worktrees were created.
 
-Earlier focused evidence: all seven continuation tests 27 passed, including both
-source-sealing failures from full suite 23 and the stack-overflow case. All 27
-reconciliation tests 26 passed, including actual timeout invalidation/recovery.
-Their exact input hashes, failures and limitations are preserved in the
-[working report](validation/LOCAL-TERMINAL-GRANT-SESSION.md). These are focused
-results, not a complete current-suite pass. Strict checks 23 and the bounded
-84/84 delivery repetition precede later changes and remain historical.
+Next: complete the two bounded implementation paths, independently review them,
+run focused and full checks, and record actual evidence. Further engineering
+includes exact paired review-round ancestry/recurring Findings, validation retry
+lineage, cold/corrected/hook recovery, carried acceptance, concrete evaluation
+composition and verifiable native descendant containment.
 
-Full suite 18 exposed file-lock contention; a synchronized owned-fork test then
-proved an inherited record descriptor could retain the lock after parent drop.
-All 28 lexical record sections now explicitly unlock; ownership guards retain
-intentional descriptor/clone lifetime. Full suite 23 passed 192/194 library tests
-and exposed current provider-observation starvation during long phases. Retained
-progression tasks and concurrent bounded observation reads correct that path.
-Neither passing reruns nor fixture input are treated as native qualification.
-The complete current run establishes deterministic component evidence only.
+The operator remains **unattended**. Actual-agent and real-provider qualification,
+native containment and required human calibration remain incomplete. Arbitrary
+repository commands fail closed before unqualified execution. No live agents,
+remote mutations, installation, deployment, denied native probes or host security
+changes are authorized or performed. SPEC retains approved SHA-256
+`80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326`.
+This checkpoint does not establish readiness to coordinate the lasting build.
 
-Next: commit the verified increment. Further engineering includes authenticated released-parent
-dependency propagation, ordinary release completion seals,
-paired review-round ancestry/recurring Findings, validation retry lineage,
-cold/corrected/hook recovery, carried acceptance, historical Overview/Show and
-concrete native evaluation composition. Detailed designs and limits follow.
-
-The previous committed checkpoint is
-`71e63e261ea52ad640eff70f828eb43eff99b635` —
-`feat(kegari-v0): schedule bounded recovery and retain target history`.
-It passed 683 tests, zero failures and two explicitly ignored native qualifications
-across 38 groups, plus strict Clippy, formatting, contract inventory and diff
-checks, at 564 inputs
-`sha256:c438a22a3ea57152fcf48f92ae9023c1fb753cec9f18c621d875da9dac159c58`.
-Its [report](validation/LOCAL-NATIVE-RECOVERY-HISTORY.md) and
-[machine-readable evidence](validation/native-recovery-history-checks.json) are
-historical; they do not validate current edits. Its evaluation plan declares
-56 slots with dispatch disabled. The commit has human signoff and
-`Assisted-by: Codex`; no consolidation or push was performed.
-
-Earlier local checkpoints: `c6b4b4b8d1aacfc8a860c34851c57cb11b7f4e2d` —
-`feat(kegari-v0): enforce bounded worker and release recovery` (668 passes, two
-native ignores, then 122 affected repetitions); `63f4b1e39bc4dd08f3193c8556215a11bf973daa`
-— `feat(kegari-v0): bind retry preparation and owned evaluation` (638 passes);
-`bd2964319bdb6722d219fc97ace1ab0e91f04aa8` —
-`feat(kegari-v0): resume unfinished delivery with bounded proofs` (613 passes);
-`90ce6d4631dc605a43ba1aa4033c839832b9cf95` —
-`feat(kegari-v0): connect corrections and delivery recovery` (577 passes).
-
-Current branch is `main`; HEAD and the existing `origin/main` reference both name
-71e63e2, so it is treated as published. Index remains empty. No fetch, push, remote
-mutation, branch/worktree creation or history rewrite was performed. SPEC retains
-approved SHA-256 `80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326`.
-All current edits are task-owned and remain uncommitted until validation closes.
-
-The operator remains **unattended**. Native descendant containment, actual-agent
-and real-provider qualifications, and required human calibration remain incomplete.
-Arbitrary repository commands fail closed before unqualified execution. No live
-agents, remote mutations, installation, deployment, denied native probes or host
-security changes are authorized or performed. This increment does not establish
-readiness to coordinate the lasting build. Independent local work continues.
-
-## Active correction and ownership
+## Prior increment validation and ownership
 
 Full suite 23's source-sealing failures used current retained provider projections
 at each journaled Git spawn/completion. RuntimeDriver previously awaited a whole
@@ -167,6 +140,24 @@ Later focused results below identify the tested increment and do not establish a
 complete SC/V0-T scenario or real-provider qualification.
 
 ## Remaining engineering slices
+
+Temporary next-slice work is separate from registered/tested inputs. Config agent
+owns the actual deployment-free no-release seal/origin draft under
+`/private/tmp/kegari-no-release-history-draft`; Git agent owns its authentic
+Git/vector/publication fixture draft. Codex agent owns separate historical
+no-release inspection drafts under `/private/tmp/kegari-no-release-inspection-draft`.
+Its earlier review-round provenance draft and exact source hashes are under
+`/private/tmp/kegari-review-round-draft`. These are preparation artifacts, not
+compiled, integrated or verified capabilities. Root owns shared runtime/cache
+integration and will open their edit window only after the current checkpoint.
+Independent TEMP review found unresolved stale ephemeral no-release fallback,
+queue inventory-error persistence, and a new await/current-authority race. These
+are being corrected before integration. Known sealed identity must be distinct
+from pending/unsupported legacy history; authenticated retained display remains
+separate from currently valid completion. Origin-owner/approval ancestry is under
+a targeted contract audit; no stronger ancestry claim is made for the current
+publication-effect/vector boundary. Root TEMP cache/queue draft is under
+`/private/tmp/kegari-no-release-root-draft`; all such drafts remain uncompiled.
 
 - Native evaluation composition remains an implementation obligation. The
   checked-in binary exposes only Plan/Inspect/Compare; no concrete
@@ -1180,3 +1171,9 @@ These block only dependent validation, not local implementation. No missing prer
   processes are bounded local Cargo tests; no lasting service has been installed
   or started. Git fixtures are owned temporary repositories. No project branch,
   worktree, push, deployment or coordinator activation occurred.
+
+Local checkpoint boundary: this increment remains separate from 946a15f because
+it introduces new historical dependency and inspection consumers, whereas the
+previous checkpoint also contains independent worker/driver ownership changes.
+Keeping the validated consumer increment separate makes both changes reviewable;
+no published history is rewritten and no remote action is authorized.

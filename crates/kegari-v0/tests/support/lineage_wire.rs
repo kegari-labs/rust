@@ -21,6 +21,7 @@ pub(crate) struct RuntimeLineageWire {
     deployed: Revision,
     serving: Mutex<(Revision, u64, u64)>,
     merge: Mutex<Option<Revision>>,
+    auxiliary: Mutex<Option<(Revision, bool)>>,
 }
 impl RuntimeLineageWire {
     pub(crate) fn new(seed: &RuntimeSeedWire, deployed: Revision) -> Arc<Self> {
@@ -31,7 +32,23 @@ impl RuntimeLineageWire {
             serving: Mutex::new((deployed.clone(), 50, 91)),
             deployed,
             merge: Mutex::new(None),
+            auxiliary: Mutex::new(None),
         })
+    }
+    pub(crate) fn auxiliary_repository(pull: bool) -> Value {
+        json!({"id":84,"owner":{"id":7,"login":"fixture","type":"User"},"name":"aux","default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":pull,"push":true}})
+    }
+    pub(crate) fn add_auxiliary(&self, revision: Revision) {
+        assert!(
+            self.auxiliary
+                .lock()
+                .unwrap()
+                .replace((revision, true))
+                .is_none()
+        );
+    }
+    pub(crate) fn auxiliary_pull(&self, pull: bool) {
+        self.auxiliary.lock().unwrap().as_mut().unwrap().1 = pull;
     }
     pub(crate) fn configure(config: &mut Config) {
         for connection in config.connections.values_mut() {
@@ -636,6 +653,27 @@ impl HttpTransport for RuntimeLineageWire {
                 });
             }
             if request.url.host_str() == Some("api.github.com") {
+                if path.starts_with("/repos/fixture/aux") {
+                    assert_eq!(request.method, Method::Get);
+                    let (revision, pull) = self.auxiliary.lock().unwrap().clone().unwrap();
+                    let value = match path.as_str() {
+                        "/repos/fixture/aux" => Self::auxiliary_repository(pull),
+                        "/repos/fixture/aux/pulls" => json!([]),
+                        "/repos/fixture/aux/git/ref/heads/main" => {
+                            json!({"ref":"refs/heads/main","object":{"type":"commit","sha":revision.commit}})
+                        }
+                        "/repos/fixture/aux/git/ref/heads/staging" => {
+                            json!({"ref":"refs/heads/staging","object":{"type":"commit","sha":revision.commit}})
+                        }
+                        _ if path
+                            == format!("/repos/fixture/aux/git/commits/{}", revision.commit) =>
+                        {
+                            json!({"sha":revision.commit,"tree":{"sha":revision.tree},"parents":[]})
+                        }
+                        _ => panic!("unexpected auxiliary repository request: {path}"),
+                    };
+                    return Ok(response(value));
+                }
                 let (source, run, deployment) = self.serving.lock().unwrap().clone();
                 let deployment_value = json!({"id":deployment,"sha":source.commit,"environment":"production","production_environment":true,"transient_environment":false,"creator":{"id":99},"created_at":"2026-01-03T00:00:00Z","updated_at":"2026-01-03T00:00:00Z"});
                 if run > 50 {
@@ -716,6 +754,13 @@ impl HttpTransport for RuntimeLineageWire {
                 request.url.set_host(Some("github.invalid")).unwrap();
             }
             let mut result = Wire(self.base.clone()).send(request).await?;
+            if path == "/user/repos"
+                && let Some((_, pull)) = self.auxiliary.lock().unwrap().as_ref()
+            {
+                let mut repositories: Vec<Value> = serde_json::from_slice(&result.body).unwrap();
+                repositories.push(Self::auxiliary_repository(*pull));
+                result.body = serde_json::to_vec(&repositories).unwrap();
+            }
             if result.headers.get("content-type").is_none()
                 && let Ok(value) = std::str::from_utf8(&result.body)
             {

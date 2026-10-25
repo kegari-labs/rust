@@ -76,26 +76,9 @@ impl WorkflowControl for RuntimeWorkflow {
                 })??;
             self.progression.reconcile_for_inspection().await?;
             let mut view = self.runtime.inspection()?;
-            for (parent, details) in self.delivery.release_inspection()? {
-                let fields = details.as_object().ok_or_else(|| {
-                    Error::new(
-                        "record_corrupt",
-                        "release inspection is not a parent object",
-                    )
-                })?;
-                let current = view
-                    .release_details
-                    .entry(parent)
-                    .or_insert_with(|| json!({}));
-                let object = current.as_object_mut().ok_or_else(|| {
-                    Error::new("record_corrupt", "retained release inspection is malformed")
-                })?;
-                object.extend(
-                    fields
-                        .iter()
-                        .map(|(key, value)| (key.clone(), value.clone())),
-                );
-            }
+            view.release_history = self.delivery.release_inspection()?;
+            crate::inspection::validate_rows(view.projection.runtime_id, &view.release_history)?;
+            crate::inspection::sort_rows(&mut view.release_history);
             Ok(view)
         })
     }

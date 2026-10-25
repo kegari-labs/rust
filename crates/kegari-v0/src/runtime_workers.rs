@@ -816,7 +816,7 @@ impl Plan {
                         &request.phase.phase,
                         request.operation_id,
                         &workspace.repositories.keys().cloned().collect::<Vec<_>>(),
-                        scoped_evidence(runtime, &parent.key)?,
+                        scoped_evidence(runtime, workspace.id, &parent.key)?,
                     )?,
                     None,
                     canonical_digest(1, &gate.work().generation)?,
@@ -1858,6 +1858,7 @@ pub fn native_context(
 
 fn scoped_evidence(
     runtime: &RuntimeCoordinator,
+    workspace: Uuid,
     parent: &crate::authority::IssueKey,
 ) -> Result<Value> {
     let inspection = runtime.inspection()?;
@@ -1866,8 +1867,8 @@ fn scoped_evidence(
         "children":delivery.map(|delivery|delivery.verified_children().values().map(|child|child.evidence()).collect::<Vec<_>>()).unwrap_or_default(),
         "parent":delivery.and_then(|delivery|delivery.verified_parent()).map(|parent|parent.manifest()),
         "acceptance":delivery.and_then(|delivery|delivery.verified_acceptance()).map(|acceptance|acceptance.acceptance()),
-        "history":inspection.history.iter().filter(|row|&row.parent==parent).collect::<Vec<_>>(),
-        "release":inspection.release_details.get(parent),
+        "history":crate::inspection::history_for_parent(&inspection.history,workspace,parent),
+        "release":inspection.release_details.get(&(workspace,parent.clone())),
     }))
 }
 

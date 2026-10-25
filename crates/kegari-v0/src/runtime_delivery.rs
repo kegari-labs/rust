@@ -545,13 +545,18 @@ impl RuntimeDelivery {
     }
     async fn refresh_for_inspection(&self, projection: &RuntimeProjection) -> Result<()> {
         let _refresh = self.refresh_lock.lock().await;
+        self.sync_released_completions()?;
         let mut blockers = BTreeMap::new();
         let mut blocked_releases = 0;
-        for row in self.release_history()? {
+        for row in self.release_inspection_rows()? {
             // Historical observation errors on resolved records are not current
-            // prerequisites. Invalid owners/completions retain diagnostic holds.
-            if row.active_hold
-                && let Some(error) = row.completion_error
+            // prerequisites. A successful record still needs its exact sealed
+            // completion, even if it never had an ancestor hold. Missing removed
+            // workspace prerequisites remain visible without restoring authority.
+            if (row.active_hold
+                || row.attempt.completed()
+                || !projection.workspaces.contains_key(&row.workspace))
+                && let Some(error) = row.diagnostic
             {
                 blocked_releases += 1;
                 blockers
@@ -583,6 +588,10 @@ impl RuntimeDelivery {
         Ok(())
     }
     async fn refresh_current_delivery(&self, projection: &RuntimeProjection) -> Result<()> {
+        // Recover immutable dependency facts independently from strict queue
+        // reconstruction; one unavailable historical proof cannot erase an
+        // unrelated complete proof. This method owns no Control/release lock.
+        self.sync_released_completions()?;
         self.clear_no_release_observations()?;
         for observed in projection.workspaces.values() {
             let workspace = self.workspace(projection, observed.workspace_id);

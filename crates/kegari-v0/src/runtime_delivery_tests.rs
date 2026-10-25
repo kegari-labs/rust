@@ -125,6 +125,24 @@ pub(super) async fn fixture_authorization_with_configuration(
     Arc<std::sync::Mutex<wire::Fixture>>,
     FixtureOwner,
 ) {
+    Box::pin(fixture_authorization_with_provider_fixture(
+        authorized,
+        adjust,
+        |_, _| {},
+    ))
+    .await
+}
+pub(super) async fn fixture_authorization_with_provider_fixture(
+    authorized: bool,
+    adjust: impl FnOnce(&mut crate::config::Config),
+    adjust_wire: impl FnOnce(&crate::config::Config, &mut wire::Fixture),
+) -> (
+    tempfile::TempDir,
+    crate::runtime_fixture::RuntimeFixture,
+    Arc<RuntimeDelivery>,
+    Arc<std::sync::Mutex<wire::Fixture>>,
+    FixtureOwner,
+) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let executable = resolve_git().unwrap();
@@ -145,6 +163,7 @@ pub(super) async fn fixture_authorization_with_configuration(
     selected.repositories.get_mut("42").unwrap().source = source.to_str().unwrap().into();
     adjust(&mut configuration);
     let data = wire::Fixture::new();
+    adjust_wire(&configuration, &mut data.lock().unwrap());
     let targets = configuration.workspaces["example"]
         .repositories
         .values()

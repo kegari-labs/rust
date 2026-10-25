@@ -376,8 +376,23 @@ record, the original publication receipts and parent vector, and the immutable
 target proofs/challenges. The mutable current-target pointer is excluded. Only after persistence can queue reconstruction
 remove those exact ancestor holds. Ancestor failure outcomes remain unchanged;
 only the successful descendant supplies release-queue completion and spacing.
-Propagation into the runtime's generic released-parent dependency outcomes is
-still an implementation gap; inspection history does not fill it.
+Ordinary successful attempts use the same seal with a one-attempt chain and no
+ancestor hold removal. Schema-2 completion records retain the original configured
+Linear/GitHub accounts and endpoints, native workspace and every baseline
+repository. Legacy seals can still settle their original queue history, but their
+missing provider binding cannot be inferred for generic dependency credit.
+
+The runtime recovers these opaque completion capabilities independently of current
+delivery readiness. Every dependency use rechecks exact immutable references,
+current provider/configuration bindings, complete fresh observations, native
+prerequisite visibility and read access to all original repositories, including
+unchanged repositories without release steps. The dependent's authenticated
+generation pin selects the outcome. A later correction or production movement
+does not rewrite an earlier completion; an earlier completion cannot satisfy a
+pin requiring the correction. A missing reference invalidates its exact completion
+without erasing other verified completions. Unsafe storage or unauthenticated
+envelopes fail the inventory. Historical no-release-required runtime recovery
+still needs its separate durable producer; display history cannot supply credit.
 The same-parent predecessor selector excludes only ancestors covered by a valid
 completion. `release_history()` separates historical failures from `active_hold`
 and names `completed_by`; recovery cannot rewrite the completed terminal or its
@@ -402,7 +417,9 @@ records alone do not trigger this path. Cold inspection has the same behavior fo
 missing completion or owner references; unsafe storage or unauthenticated attempt
 records still fail explicitly.
 
-Local deterministic validation of this terminal completion path is recorded in
+The current ordinary completion/dependency/inspection increment is tracked in
+[its validation report](../validation/LOCAL-RELEASED-INSPECTION.md). Earlier local
+deterministic validation of terminal chain completion is recorded in
 [the terminal/session report](../validation/LOCAL-TERMINAL-GRANT-SESSION.md). The actual
 `chained_runtime_retains_merged_contribution_through_deployment_only_predecessor`
 fixture includes cached/cold inspection during an exact target-proof deletion,

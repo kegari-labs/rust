@@ -68,6 +68,58 @@ struct AttemptRecord {
     recovery_receipts: BTreeMap<Uuid, String>,
     local_retired: bool,
     pending_receipts: BTreeMap<Uuid, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display: Option<ReleaseDisplay>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseDisplay {
+    workspace_name: String,
+    identifier: String,
+    title: String,
+    url: String,
+}
+impl ReleaseDisplay {
+    fn capture(config: &Config, parent: &ParentProjection) -> Result<Self> {
+        let (name, workspace) = config
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == parent.workspace_id)
+            .ok_or_else(|| {
+                Error::new(
+                    "identity_mismatch",
+                    "release display workspace is unavailable",
+                )
+            })?;
+        let issue = parent.issue.as_ref().ok_or_else(|| {
+            Error::new(
+                "incomplete_snapshot",
+                "release display has no native parent observation",
+            )
+        })?;
+        if IssueKey::new(&issue.endpoint, issue.workspace_id, issue.id)? != parent.key
+            || workspace.linear_workspace_id != issue.workspace_id
+        {
+            return Err(Error::new(
+                "identity_mismatch",
+                "release display native parent identity differs",
+            ));
+        }
+        Ok(Self {
+            workspace_name: name.clone(),
+            identifier: issue.identifier.clone(),
+            title: issue.title.clone(),
+            url: issue.url.clone(),
+        })
+    }
+    fn inspection(&self) -> crate::inspection::ParentDisplay {
+        crate::inspection::ParentDisplay {
+            workspace_name: Some(self.workspace_name.clone()),
+            identifier: Some(self.identifier.clone()),
+            title: Some(self.title.clone()),
+            url: Some(self.url.clone()),
+        }
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -132,6 +184,7 @@ impl ReleaseState {
 /// Historical failure state is preserved separately from its current resource
 /// hold. A successful descendant consumes a hold without rewriting that state.
 #[derive(Clone, Serialize)]
+#[cfg(test)]
 pub struct ReleaseHistory {
     pub parent: IssueKey,
     pub attempt: ReleaseAttempt,
@@ -657,7 +710,21 @@ impl RuntimeDelivery {
             .map(|r| r.attempt.clone())
             .collect())
     }
+    #[cfg(test)]
     pub fn release_history(&self) -> Result<Vec<ReleaseHistory>> {
+        Ok(self
+            .release_inspection_rows()?
+            .into_iter()
+            .map(|row| ReleaseHistory {
+                parent: row.parent,
+                attempt: row.attempt,
+                active_hold: row.active_hold,
+                completed_by: row.completed_by,
+                completion_error: row.diagnostic,
+            })
+            .collect())
+    }
+    pub fn release_inspection_rows(&self) -> Result<Vec<crate::inspection::ReleaseInspectionRow>> {
         // Inspection authenticates the attempt inventory without requiring a
         // completion proof to grant authority or mutating restart recovery state.
         let mut attempts = self.read_release_attempts()?;
@@ -690,30 +757,93 @@ impl RuntimeDelivery {
                 }
             }
         }
-        attempts
+        let mut late_errors = BTreeMap::new();
+        let mut rows = attempts
             .values()
             .map(|record| {
                 let completed_by = diagnostics
                     .consumed
                     .get(&record.attempt.plan.operation_id)
                     .copied();
-                Ok(ReleaseHistory {
+                let mut diagnostic = diagnostics
+                    .errors
+                    .get(&record.attempt.plan.operation_id)
+                    .cloned();
+                let active_hold = ownership_errors.contains_key(&record.attempt.plan.operation_id)
+                    || (completed_by.is_none()
+                        && !record.attempt.resolved
+                        && (record.attempt.hold_reason.is_some()
+                            || !record.pending_receipts.is_empty()
+                            || (record.attempt.completed() && !record.local_retired)));
+                let completion = if diagnostic.is_none() && !active_hold {
+                    diagnostics
+                        .terminals
+                        .get(&record.attempt.plan.operation_id)
+                        .filter(|proof| {
+                            proof.workspace_id() == record.workspace && proof.work() == &record.work
+                        })
+                        .map(
+                            |proof| -> Result<crate::inspection::ReleaseCompletionInspection> {
+                                // Presentation accepts a valid legacy completion too;
+                                // it does not grant dependency credit to that record.
+                                proof.validate()?;
+                                let success =
+                                    ReleaseQueue::default().record_success(proof.terminal())?;
+                                Ok(crate::inspection::ReleaseCompletionInspection {
+                                    operation: success.operation_id,
+                                    work: proof.work().clone(),
+                                    completed_at: success.completed_at,
+                                })
+                            },
+                        )
+                        .transpose()
+                } else {
+                    Ok(None)
+                };
+                let completion = match completion {
+                    Ok(completion) => completion,
+                    Err(error) if error.code == "unsafe_storage" => return Err(error),
+                    Err(error) => {
+                        late_errors.insert(record.attempt.plan.operation_id, error.clone());
+                        diagnostic = Some(error);
+                        None
+                    }
+                };
+                Ok(crate::inspection::ReleaseInspectionRow {
+                    workspace: record.workspace,
+                    work: record.work.clone(),
                     parent: issue(record)?,
                     attempt: record.attempt.clone(),
                     completed_by,
-                    completion_error: diagnostics
-                        .errors
-                        .get(&record.attempt.plan.operation_id)
-                        .cloned(),
-                    active_hold: ownership_errors.contains_key(&record.attempt.plan.operation_id)
-                        || (completed_by.is_none()
-                            && !record.attempt.resolved
-                            && (record.attempt.hold_reason.is_some()
-                                || !record.pending_receipts.is_empty()
-                                || (record.attempt.completed() && !record.local_retired))),
+                    diagnostic,
+                    active_hold,
+                    completion,
+                    display: record
+                        .display
+                        .as_ref()
+                        .map(ReleaseDisplay::inspection)
+                        .unwrap_or_default(),
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        for row in &mut rows {
+            if let Some(error) = row
+                .completed_by
+                .and_then(|operation| late_errors.get(&operation))
+            {
+                let record = &attempts[&row.attempt.plan.operation_id];
+                row.completed_by = None;
+                row.completion = None;
+                row.diagnostic = Some(error.clone());
+                row.active_hold = ownership_errors.contains_key(&row.attempt.plan.operation_id)
+                    || (!record.attempt.resolved
+                        && (record.attempt.hold_reason.is_some()
+                            || !record.pending_receipts.is_empty()
+                            || (record.attempt.completed() && !record.local_retired)));
+            }
+        }
+        crate::inspection::sort_rows(&mut rows);
+        Ok(rows)
     }
 }
 impl RuntimeDelivery {
@@ -1540,6 +1670,7 @@ impl RuntimeDelivery {
                     recovery_receipts: BTreeMap::new(),
                     local_retired: false,
                     pending_receipts: BTreeMap::new(),
+                    display: Some(ReleaseDisplay::capture(&workspace.configuration, parent)?),
                 };
                 Self::check_release_publications(&self.runtime, &record, None)?;
                 let mut proposed = state.attempts.clone();
@@ -2487,6 +2618,7 @@ mod tests {
             admission_confirmed: true,
             local_retired: false,
             pending_receipts: BTreeMap::new(),
+            display: None,
         }
     }
 

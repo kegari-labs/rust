@@ -1381,15 +1381,8 @@ mod tests {
 mod successor;
 
 impl crate::delivery::RuntimeDeliveryDecisions for RuntimeDelivery {
-    fn release_inspection(&self) -> Result<BTreeMap<IssueKey, Value>> {
-        let mut grouped = BTreeMap::<IssueKey, Vec<super::ReleaseHistory>>::new();
-        for row in self.release_history()? {
-            grouped.entry(row.parent.clone()).or_default().push(row);
-        }
-        Ok(grouped
-            .into_iter()
-            .map(|(parent, rows)| (parent, json!({"attempts":rows})))
-            .collect())
+    fn release_inspection(&self) -> Result<Vec<crate::inspection::ReleaseInspectionRow>> {
+        self.release_inspection_rows()
     }
     fn release(&self, decision: AuthorizedDecision) -> crate::app::HostFuture<'_, Receipt> {
         Box::pin(self.queue_release(decision))

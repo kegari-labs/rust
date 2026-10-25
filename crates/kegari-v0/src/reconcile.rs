@@ -1421,23 +1421,27 @@ impl DependencyOutcomes {
             .push((work.generation.clone(), verified.digest().into(), false));
         Ok(())
     }
-    /// A terminal tracker state never enters this set. Recovered production
-    /// attempts must pass the release state machine's complete-success checks.
-    pub fn released(
+    /// Only a complete immutable runtime seal can insert historical release
+    /// credit. A raw attempt or terminal tracker state supplies no authority.
+    pub(crate) fn released(
         &mut self,
-        endpoint: &str,
-        attempt: &crate::release::ReleaseAttempt,
+        proof: &crate::runtime_delivery::VerifiedReleaseCompletion,
+        config: &crate::config::Config,
     ) -> Result<()> {
-        let mut queue = crate::release::ReleaseQueue::default();
-        let success = queue.record_success(attempt)?;
-        self.outcomes
+        let success = proof.validate_for_configuration(config)?;
+        let work = proof.work();
+        let entries = self
+            .outcomes
             .entry(IssueKey::new(
-                endpoint,
-                attempt.plan.linear_workspace,
+                &work.linear_endpoint,
+                work.linear_workspace,
                 success.parent_id,
             )?)
-            .or_default()
-            .push((success.generation, success.outcome_digest, true));
+            .or_default();
+        let outcome = (success.generation, success.outcome_digest, true);
+        if !entries.contains(&outcome) {
+            entries.push(outcome);
+        }
         Ok(())
     }
     pub fn no_release_required(
@@ -2513,6 +2517,7 @@ impl RuntimeProjection {
                 }
                 let released = input.history.iter().any(|h| {
                     h.parent == parent.key
+                        && h.parent_reference == parent.parent_reference
                         && parent.work.as_ref().is_some_and(|w| {
                             w.generation == h.generation
                                 && input
@@ -2613,7 +2618,12 @@ impl RuntimeProjection {
                 input
                     .history
                     .iter()
-                    .filter(|h| workspace.parents.values().any(|p| p.key == h.parent))
+                    .filter(|h| {
+                        workspace
+                            .parents
+                            .values()
+                            .any(|p| p.key == h.parent && p.parent_reference == h.parent_reference)
+                    })
                     .cloned(),
             );
         }

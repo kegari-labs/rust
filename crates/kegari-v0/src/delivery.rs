@@ -31,7 +31,7 @@ use uuid::Uuid;
 pub trait RuntimeDeliveryDecisions: Send + Sync {
     /// Read-only canonical parent history, including retained completion errors.
     /// This projection supplies no release eligibility or execution authority.
-    fn release_inspection(&self) -> Result<BTreeMap<crate::authority::IssueKey, Value>>;
+    fn release_inspection(&self) -> Result<Vec<crate::inspection::ReleaseInspectionRow>>;
     fn release(
         &self,
         decision: crate::decisions::AuthorizedDecision,

@@ -88,6 +88,16 @@ its current blockers visible. Next action prefers manual release, human review,
 then an actionable prerequisite root for an accepted blocked parent; an unknown
 dependency root is reported as unknown.
 
+Authenticated release inspection is separate from the current scheduling
+projection. Overview adds typed `release_history` rows and summarizes exact
+successful completions in history. Show includes attempts, completion/hold
+provenance and scoped diagnostics even when the parent or workspace is absent
+from current discovery. A consumed ancestor hold is not a successful release of
+that ancestor's generation. Display rows never mint dependency or readiness
+capabilities, and a later correction remains in its current active category.
+History and release details use both runtime workspace UUID and full native issue
+identity, so two workspace mappings cannot mix presentation records.
+
 ## Integration and validation limits
 
 The host still owns semantic preparation review (whether the prose actually states

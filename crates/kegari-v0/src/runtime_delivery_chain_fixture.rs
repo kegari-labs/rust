@@ -294,6 +294,30 @@ pub(super) async fn publish_origin(
     Signed<evidence::Acceptance>,
     Vec<PublicationRef>,
 ) {
+    Box::pin(publish_origin_with_slices(
+        delivery,
+        workspace,
+        gate,
+        lease,
+        manifest,
+        &[slice],
+        targets,
+    ))
+    .await
+}
+pub(super) async fn publish_origin_with_slices(
+    delivery: &RuntimeDelivery,
+    workspace: &WorkspaceDelivery,
+    gate: &FreshGate,
+    lease: &Lease,
+    manifest: evidence::ParentEvidence,
+    slices: &[&IsolatedSlice],
+    targets: &[evidence::ProductionTargetBaseline],
+) -> (
+    evidence::ParentEvidence,
+    Signed<evidence::Acceptance>,
+    Vec<PublicationRef>,
+) {
     let permit = delivery
         .runtime
         .control
@@ -328,7 +352,7 @@ pub(super) async fn publish_origin(
         .unwrap();
     let body = workspace
         .coordinator
-        .fixture_original_manifest_body(&manifest, slice, targets, lease.runtime_id)
+        .fixture_original_manifest_body_with_slices(&manifest, slices, targets, lease.runtime_id)
         .unwrap();
     let mut refs = Vec::new();
     for (id, body) in [
