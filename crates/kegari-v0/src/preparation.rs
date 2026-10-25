@@ -713,7 +713,7 @@ fn retryable_preparation(error: &Error) -> bool {
 fn attempt_id(runtime: Uuid, snapshot: &str, phase: &str, attempt: u32) -> Result<Uuid> {
     metadata_attempt_id("parent_authorization", runtime, snapshot, phase, attempt)
 }
-fn metadata_attempt_id(
+pub(crate) fn metadata_attempt_id(
     purpose: &str,
     runtime: Uuid,
     snapshot: &str,

@@ -17,6 +17,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
+#[path = "release_history_scope.rs"]
+mod history_scope;
+pub(crate) use history_scope::CompletionScope;
+
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResourceKey {
@@ -1984,12 +1988,145 @@ pub struct ReleaseQueue {
     holds: BTreeMap<Uuid, ResourceHold>,
     successes: Vec<SuccessfulRelease>,
     completions: BTreeMap<Uuid, crate::runtime_delivery::VerifiedReleaseCompletion>,
+    // Caching valid historical credit is separate from consuming its holds.
+    settled_completions: BTreeSet<Uuid>,
+    no_release_completions: BTreeMap<Uuid, crate::runtime_delivery::VerifiedNoReleaseCompletion>,
+    rebuild_error: Option<Error>,
+    completion_quarantines: BTreeMap<Uuid, (CompletionScope, Error)>,
 }
 
 impl ReleaseQueue {
-    fn validate_completions(&self) -> Result<()> {
+    /// Keep prior ownership/hold state while making an unsuccessful replacement
+    /// unusable. Only a complete rebuild produces a fresh unpoisoned queue.
+    pub(crate) fn invalidate_after_rebuild(&mut self, error: Error) {
+        self.rebuild_error = Some(error);
+    }
+    /// Quarantine only an authenticated immutable scope. No ownership/hold is
+    /// released, no success is inserted, and only a complete new rebuild can
+    /// replace this observation with a newly validated proof.
+    pub(crate) fn quarantine_completion(
+        &mut self,
+        scope: CompletionScope,
+        error: Error,
+    ) -> Result<()> {
+        scope.validate_queue_envelope()?;
+        let operation = scope.operation();
+        if let Some((prior, _)) = self.completion_quarantines.get(&operation)
+            && prior != &scope
+        {
+            return Err(Error::new(
+                "release_completion",
+                "quarantined immutable scope changed",
+            ));
+        }
+        if let Some(proof) = self.completions.get(&operation)
+            && CompletionScope::release(proof)? != scope
+        {
+            return Err(Error::new(
+                "release_completion",
+                "release quarantine differs from retained proof",
+            ));
+        }
+        if let Some(proof) = self.no_release_completions.get(&operation)
+            && CompletionScope::no_release(proof)? != scope
+        {
+            return Err(Error::new(
+                "no_release_completion",
+                "no-release quarantine differs from retained proof",
+            ));
+        }
+        if error.code == "unsafe_storage" {
+            self.invalidate_after_rebuild(error);
+            return Ok(());
+        }
+        self.successes
+            .retain(|successful| successful.operation_id != operation);
+        self.completion_quarantines
+            .insert(operation, (scope, error));
+        Ok(())
+    }
+    fn require_not_quarantined(&self, operation: Uuid) -> Result<()> {
+        if let Some(error) = &self.rebuild_error {
+            return Err(error.clone());
+        }
+        match self.completion_quarantines.get(&operation) {
+            Some((_, error)) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+    fn validate_completions_for(
+        &self,
+        runtime: Uuid,
+        resources: &BTreeSet<ResourceKey>,
+        dependencies: &[DependencyRequirement],
+    ) -> Result<()> {
+        if let Some(error) = &self.rebuild_error {
+            return Err(error.clone());
+        }
+        for (scope, _) in self.completion_quarantines.values() {
+            scope.validate_queue_envelope()?;
+        }
+        for (scope, error) in self.completion_quarantines.values() {
+            scope.require_unaffected(runtime, resources, dependencies, error)?;
+        }
+        // Revalidate before every decision, including before the next inventory
+        // sync. A cached successful outcome never bypasses a missing reference.
         for proof in self.completions.values() {
-            proof.validate()?;
+            proof.validate_queue_envelope()?;
+            if let Err(error) = proof.validate() {
+                CompletionScope::release(proof)?.require_unaffected(
+                    runtime,
+                    resources,
+                    dependencies,
+                    &error,
+                )?;
+            }
+        }
+        for proof in self.no_release_completions.values() {
+            proof.validate_queue_envelope()?;
+            if let Err(error) = proof.validate() {
+                CompletionScope::no_release(proof)?.require_unaffected(
+                    runtime,
+                    resources,
+                    dependencies,
+                    &error,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    fn validate_completion_consumption(
+        &self,
+        proof: &crate::runtime_delivery::VerifiedReleaseCompletion,
+    ) -> Result<()> {
+        if let Some(error) = &self.rebuild_error {
+            return Err(error.clone());
+        }
+        for (scope, _) in self.completion_quarantines.values() {
+            scope.validate_queue_envelope()?;
+        }
+        for (scope, error) in self.completion_quarantines.values() {
+            if error.code == "unsafe_storage" || scope.conflicts_consumption(proof)? {
+                return Err(error.clone());
+            }
+        }
+        for retained in self.completions.values() {
+            retained.validate_queue_envelope()?;
+            if let Err(error) = retained.validate()
+                && (error.code == "unsafe_storage"
+                    || CompletionScope::release(retained)?.conflicts_consumption(proof)?)
+            {
+                return Err(error);
+            }
+        }
+        for retained in self.no_release_completions.values() {
+            retained.validate_queue_envelope()?;
+            if let Err(error) = retained.validate()
+                && (error.code == "unsafe_storage"
+                    || CompletionScope::no_release(retained)?.conflicts_consumption(proof)?)
+            {
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -2001,13 +2138,20 @@ impl ReleaseQueue {
         &mut self,
         proof: &crate::runtime_delivery::VerifiedReleaseCompletion,
     ) -> Result<()> {
+        self.require_not_quarantined(proof.terminal().plan.operation_id)?;
         let expected = proof.validate()?;
         let terminal = proof.terminal();
+        self.validate_completion_consumption(proof)?;
         if let Some(prior) = self.completions.get(&terminal.plan.operation_id) {
             if prior.digest() != proof.digest() {
                 return Err(Error::new("release_hold", "terminal completion changed"));
             }
-            return Ok(());
+            if self
+                .settled_completions
+                .contains(&terminal.plan.operation_id)
+            {
+                return Ok(());
+            }
         }
         if expected.iter().any(|(operation, hold)| {
             self.holds.get(operation) != Some(hold)
@@ -2024,6 +2168,7 @@ impl ReleaseQueue {
         }
         self.completions
             .insert(terminal.plan.operation_id, proof.clone());
+        self.settled_completions.insert(terminal.plan.operation_id);
         Ok(())
     }
     pub fn restore_hold(&mut self, attempt: &ReleaseAttempt) -> Result<()> {
@@ -2043,6 +2188,12 @@ impl ReleaseQueue {
     }
 
     pub fn record_success(&mut self, attempt: &ReleaseAttempt) -> Result<SuccessfulRelease> {
+        self.require_not_quarantined(attempt.plan.operation_id)?;
+        self.validate_completions_for(
+            attempt.plan.runtime_id,
+            &attempt.plan.resources,
+            &attempt.plan.dependencies,
+        )?;
         if !attempt.completed() || attempt.has_unknown() || attempt.hold_reason.is_some() {
             return Err(Error::new(
                 "partial_release",
@@ -2089,6 +2240,84 @@ impl ReleaseQueue {
         Ok(record)
     }
 
+    /// Retain exact valid dependency/spacing history even when a later
+    /// overlapping quarantine prevents consuming any ancestor holds. This never
+    /// touches owners/holds; apply_completion is the separate bounded consumer.
+    pub(crate) fn record_release_completion_history(
+        &mut self,
+        proof: &crate::runtime_delivery::VerifiedReleaseCompletion,
+    ) -> Result<SuccessfulRelease> {
+        let operation = proof.terminal().plan.operation_id;
+        self.require_not_quarantined(operation)?;
+        proof.validate()?;
+        let record = Self::default().record_success(proof.terminal())?;
+        if let Some(prior) = self.completions.get(&operation)
+            && prior.digest() != proof.digest()
+        {
+            return Err(Error::new(
+                "operation_conflict",
+                "historical release seal changed",
+            ));
+        }
+        if let Some(previous) = self.successes.iter().find(|s| s.operation_id == operation) {
+            if previous != &record {
+                return Err(Error::new(
+                    "operation_conflict",
+                    "historical release outcome changed",
+                ));
+            }
+        } else {
+            self.successes.push(record.clone());
+        }
+        self.completions.insert(operation, proof.clone());
+        Ok(record)
+    }
+
+    /// An already observed immutable outcome can coexist with a later hold.
+    /// The original mint checked its resource state; history never clears current
+    /// owners/holds, grants dispatch, or consumes a spacing interval.
+    pub(crate) fn record_no_release_completion(
+        &mut self,
+        proof: &crate::runtime_delivery::VerifiedNoReleaseCompletion,
+    ) -> Result<SuccessfulRelease> {
+        self.require_not_quarantined(proof.operation())?;
+        let record = proof.successful_history()?;
+        if !record.no_release_required
+            || record.spacing_seconds != 0
+            || record.operation_id != proof.operation()
+        {
+            return Err(Error::new(
+                "no_release_completion",
+                "historical no-release identity differs",
+            ));
+        }
+        if let Some(prior) = self.no_release_completions.get(&record.operation_id)
+            && prior.digest() != proof.digest()
+        {
+            return Err(Error::new(
+                "operation_conflict",
+                "historical no-release seal changed",
+            ));
+        }
+        if let Some(previous) = self
+            .successes
+            .iter()
+            .find(|s| s.operation_id == record.operation_id)
+        {
+            if previous != &record {
+                return Err(Error::new(
+                    "operation_conflict",
+                    "historical no-release outcome changed",
+                ));
+            }
+        } else {
+            self.successes.push(record.clone());
+        }
+        self.no_release_completions
+            .insert(record.operation_id, proof.clone());
+        Ok(record)
+    }
+
     /// A verified accepted already-production outcome satisfies dependencies,
     /// but creates no merge/deployment activity or spacing event. Unknown
     /// overlapping effects still have to be reconciled first.
@@ -2097,6 +2326,7 @@ impl ReleaseQueue {
         verified: &VerifiedNoReleaseRequired,
     ) -> Result<SuccessfulRelease> {
         let proof = verified.record();
+        self.require_not_quarantined(proof.operation_id)?;
         self.check_no_release_resources(proof)?;
         let mut resources: BTreeSet<_> = proof
             .baselines
@@ -2140,7 +2370,6 @@ impl ReleaseQueue {
         &self,
         record: &crate::evidence::NoReleaseRequired,
     ) -> Result<()> {
-        self.validate_completions()?;
         let mut resources: BTreeSet<_> = record
             .baselines
             .iter()
@@ -2152,6 +2381,7 @@ impl ReleaseQueue {
             provider: t.provider.clone(),
             id: t.target.clone(),
         }));
+        self.validate_completions_for(record.runtime_id, &resources, &[])?;
         if self.owners.keys().any(|r| resources.contains(r))
             || self
                 .holds
@@ -2167,7 +2397,7 @@ impl ReleaseQueue {
     }
 
     pub fn earliest_start(&self, plan: &ReleasePlan, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
-        self.validate_completions()?;
+        self.validate_completions_for(plan.runtime_id, &plan.resources, &plan.dependencies)?;
         let mut earliest = now;
         for previous in &self.successes {
             if previous.no_release_required || previous.resources.is_disjoint(&plan.resources) {
@@ -2210,7 +2440,7 @@ impl ReleaseQueue {
     }
 
     pub fn eligible(&self, plan: &ReleasePlan, now: DateTime<Utc>) -> Result<()> {
-        self.validate_completions()?;
+        self.validate_completions_for(plan.runtime_id, &plan.resources, &plan.dependencies)?;
         plan.validate()?;
         for dependency in &plan.dependencies {
             if !self.successes.iter().any(|s| {
@@ -2268,7 +2498,8 @@ impl ReleaseQueue {
     }
 
     pub fn owns_all(&self, plan: &ReleasePlan) -> bool {
-        self.validate_completions().is_ok()
+        self.validate_completions_for(plan.runtime_id, &plan.resources, &plan.dependencies)
+            .is_ok()
             && !plan.resources.is_empty()
             && plan
                 .resources

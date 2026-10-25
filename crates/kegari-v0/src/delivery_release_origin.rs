@@ -518,4 +518,57 @@ impl DeliveryCoordinator {
         )?;
         record_body("parent_result", &parent)
     }
+    /// Synthetic upstream checks attached to an actually prepared and retained
+    /// candidate vector. This publishes no integrated execution capability.
+    pub(crate) fn fixture_parent_body_for_vector(
+        &self,
+        parent: &evidence::ParentEvidence,
+        vector: &ParentCandidateVector,
+        runtime: Uuid,
+    ) -> Result<String> {
+        self.key.verify("parent_candidate_vector", &vector.signed)?;
+        let v = &vector.signed.payload;
+        let leaf = format!("parent-vector-{}.json", &vector.digest()[7..]);
+        let retained: Signed<VectorRecord> = self.records.read(&leaf)?;
+        self.key.verify("parent_candidate_vector", &retained)?;
+        if v.schema_version != 1
+            || runtime != v.runtime_id
+            || parent.work != v.work
+            || parent.production_targets
+                != v.targets
+                    .iter()
+                    .map(|target| target.target.clone())
+                    .collect()
+            || parent.baselines != v.baselines
+            || parent.candidates != v.candidates
+            || parent.candidate_vector_digest()? != vector.digest()
+            || retained.digest()? != vector.signed.digest()?
+            || vector_digest(v)? != vector.digest()
+        {
+            return Err(Error::new(
+                "fixture_binding",
+                "synthetic upstream result differs from actual retained candidate vector",
+            ));
+        }
+        let result = self.key.sign(
+            "parent_result",
+            &ParentResultRecord {
+                schema_version: 1,
+                runtime_id: runtime,
+                contract_digest: v.contract_digest.clone(),
+                vector_digest: vector.digest().to_owned(),
+                integrated_digest: canonical_digest(
+                    1,
+                    &"explicit synthetic integrated validator facts",
+                )?,
+                child_records: vec![],
+                coordinator_claim_digest: canonical_digest(
+                    1,
+                    &"explicit synthetic completed coordination",
+                )?,
+                evidence: parent.clone(),
+            },
+        )?;
+        record_body("parent_result", &result)
+    }
 }

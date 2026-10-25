@@ -5,6 +5,9 @@ use crate::deployment::{ProductionObserver, TargetDeploymentChallenge, deploymen
 use crate::git::Revision;
 use std::path::Path;
 
+#[path = "owned_targets_wire.rs"]
+mod owned_targets;
+
 pub(crate) struct TargetReleaseFixture<'a> {
     pub coordinator: &'a DeliveryCoordinator,
     pub observer: &'a ProductionObserver,
@@ -22,6 +25,7 @@ pub(crate) struct RuntimeLineageWire {
     serving: Mutex<(Revision, u64, u64)>,
     merge: Mutex<Option<Revision>>,
     auxiliary: Mutex<Option<(Revision, bool)>>,
+    distinct_targets: Mutex<Option<owned_targets::Targets>>,
 }
 impl RuntimeLineageWire {
     pub(crate) fn new(seed: &RuntimeSeedWire, deployed: Revision) -> Arc<Self> {
@@ -33,7 +37,36 @@ impl RuntimeLineageWire {
             deployed,
             merge: Mutex::new(None),
             auxiliary: Mutex::new(None),
+            distinct_targets: Mutex::new(None),
         })
+    }
+    pub(crate) fn configure_distinct_targets(config: &mut Config) {
+        let repository = config
+            .workspaces
+            .get_mut("example")
+            .unwrap()
+            .repositories
+            .get_mut("42")
+            .unwrap();
+        let route = serde_json::to_value(&repository.no_change_validation).unwrap();
+        repository.deployment = serde_json::from_value(json!({"steps":[
+            {"id":"deploy","target_id":"service-production","environment_id":"88","workflow":route},
+            {"id":"deploy-secondary","target_id":"service-secondary","environment_id":"89","workflow":route}
+        ]})).unwrap();
+    }
+    pub(crate) fn enable_distinct_targets(&self) {
+        assert!(
+            self.distinct_targets
+                .lock()
+                .unwrap()
+                .replace(owned_targets::Targets::new(self.deployed.clone()))
+                .is_none()
+        );
+    }
+    /// Explicit external fixture state only; this does not produce a deployment
+    /// receipt or proof for the changed native target.
+    pub(crate) fn move_fixture_target(&self, source: Revision) {
+        *self.serving.lock().unwrap() = (source, 52, 93);
     }
     pub(crate) fn auxiliary_repository(pull: bool) -> Value {
         json!({"id":84,"owner":{"id":7,"login":"fixture","type":"User"},"name":"aux","default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":pull,"push":true}})
@@ -171,13 +204,38 @@ impl RuntimeLineageWire {
         observer: &ProductionObserver,
         admission: &DeliveryAdmission,
     ) {
+        self.seed_named_target(coordinator, observer, admission, "deploy")
+            .await;
+    }
+    pub(crate) async fn seed_all_targets(
+        &self,
+        coordinator: &DeliveryCoordinator,
+        observer: &ProductionObserver,
+        admission: &DeliveryAdmission,
+    ) {
+        let contract = coordinator.contract(admission).unwrap();
+        let crate::config::Deployment::Steps { steps } = &contract.configuration.deployment else {
+            panic!("target fixture needs configured steps")
+        };
+        for step in steps {
+            self.seed_named_target(coordinator, observer, admission, &step.id)
+                .await;
+        }
+    }
+    async fn seed_named_target(
+        &self,
+        coordinator: &DeliveryCoordinator,
+        observer: &ProductionObserver,
+        admission: &DeliveryAdmission,
+        step: &str,
+    ) {
         let contract = coordinator.contract(admission).unwrap();
         let challenge = observer
             .prepare_target(
                 contract,
                 admission,
                 &admission.permit,
-                "deploy",
+                step,
                 self.deployed.clone(),
             )
             .await
@@ -573,6 +631,10 @@ impl RuntimeLineageWire {
         observed
     }
     fn artifact(&self, contract: &RepositoryContract, challenge: &TargetDeploymentChallenge) {
+        if let Some(targets) = self.distinct_targets.lock().unwrap().as_mut() {
+            targets.artifact(contract, challenge);
+            return;
+        }
         let (source, run, deployment) = self.serving.lock().unwrap().clone();
         let check = run + 10;
         let crate::config::Deployment::Steps { steps } = &contract.configuration.deployment else {
@@ -620,6 +682,15 @@ impl HttpTransport for RuntimeLineageWire {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<HttpResponse>> + Send + '_>>
     {
         Box::pin(async move {
+            if let Some(response) = self
+                .distinct_targets
+                .lock()
+                .unwrap()
+                .as_mut()
+                .and_then(|targets| targets.send(&request, &self.base))
+            {
+                return response;
+            }
             let path = request.url.path().to_owned();
             let response = |value| HttpResponse {
                 status: 200,

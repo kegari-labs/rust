@@ -340,8 +340,16 @@ pub(super) fn complete_second(
             state
                 .attempts
                 .insert(record.attempt.plan.operation_id, record.clone());
-            state.queue =
-                rebuild_queue(&state.attempts, &state.no_release, &state.completions).unwrap();
+            state.queue = rebuild_queue(
+                &state.attempts,
+                &state.no_release,
+                &state.completions,
+                &state.completion_anchors,
+                &state.completion_errors,
+                state.completion_inventory_error.as_ref(),
+                &state.historical_no_release,
+            )
+            .unwrap();
         }
         f.delivery
             .record_release_observation(record.attempt.plan.operation_id, &observed)
@@ -379,6 +387,39 @@ pub(super) fn complete_second(
             Some(second_success.outcome_digest.as_str())
         );
         let _poll = f.observation_barrier.lock().await;
+        let mut disjoint = record.attempt.plan.clone();
+        disjoint.operation_id = Uuid::new_v4();
+        disjoint.parent_id = Uuid::new_v4();
+        disjoint.spacing_seconds = 0;
+        assert_eq!(disjoint.steps.len(), 1);
+        let domain::StepKind::Merge { repository, .. } = &mut disjoint.steps[0].kind else {
+            panic!("two genuine ordinary completions retain a single merge each")
+        };
+        repository.id = "9003".into();
+        disjoint.resources = BTreeSet::from([domain::ResourceKey::Repository {
+            repository: repository.clone(),
+        }]);
+        disjoint.deployment_free = BTreeSet::from([repository.clone()]);
+        disjoint.dependencies = vec![domain::DependencyRequirement {
+            parent_id: f.first.work.parent,
+            generation: f.first.work.generation.clone(),
+            outcome_digest: first_success.outcome_digest.clone(),
+        }];
+        disjoint.validate().unwrap();
+        let mut depends_on_damaged = disjoint.clone();
+        depends_on_damaged.operation_id = Uuid::new_v4();
+        depends_on_damaged.dependencies[0].generation = record.work.generation.clone();
+        depends_on_damaged.dependencies[0].outcome_digest = second_success.outcome_digest.clone();
+        depends_on_damaged.validate().unwrap();
+        assert_eq!(
+            f.first_proof.terminal().plan.resources,
+            second.terminal().plan.resources
+        );
+        assert!(
+            disjoint
+                .resources
+                .is_disjoint(&second.terminal().plan.resources)
+        );
         let completion: Signed<Value> = f
             .delivery
             .records
@@ -390,6 +431,29 @@ pub(super) fn complete_second(
         let leaf = completion.payload["effects"][0]["leaf"].as_str().unwrap();
         let bytes = workspace.records.read_bytes(leaf, 1024 * 1024).unwrap();
         std::fs::remove_file(workspace.records.path().join(leaf)).unwrap();
+        // Both successful generation capabilities are actual. A's exact credit
+        // remains usable by this disjoint domain query when only later B is
+        // damaged, even though A and B originally used the same resource set.
+        f.delivery
+            .releases
+            .state
+            .lock()
+            .unwrap()
+            .queue
+            .eligible(&disjoint, Utc::now())
+            .unwrap();
+        assert_eq!(
+            f.delivery
+                .releases
+                .state
+                .lock()
+                .unwrap()
+                .queue
+                .eligible(&depends_on_damaged, Utc::now())
+                .unwrap_err()
+                .code,
+            "release_completion"
+        );
         for delivery in [
             f.delivery.clone(),
             RuntimeDelivery::with_fixture(
@@ -412,19 +476,27 @@ pub(super) fn complete_second(
                     .parent_outcome(&key, &record.work.generation)
                     .is_none()
             );
-            let restored = delivery.releases.state.lock().unwrap().restored;
-            let error = if restored {
-                delivery
-                    .releases
-                    .state
-                    .lock()
-                    .unwrap()
+            if !delivery.releases.state.lock().unwrap().restored {
+                delivery.restore_releases().unwrap();
+            }
+            let error = delivery
+                .releases
+                .state
+                .lock()
+                .unwrap()
+                .queue
+                .eligible(&record.attempt.plan, Utc::now())
+                .unwrap_err();
+            {
+                let state = delivery.releases.state.lock().unwrap();
+                state.queue.eligible(&disjoint, Utc::now()).unwrap();
+                let dependent_error = state
                     .queue
-                    .eligible(&record.attempt.plan, Utc::now())
-                    .unwrap_err()
-            } else {
-                delivery.restore_releases().unwrap_err()
-            };
+                    .eligible(&depends_on_damaged, Utc::now())
+                    .unwrap_err();
+                assert_eq!(dependent_error.code, error.code);
+                assert_eq!(dependent_error.message, error.message);
+            }
             assert_eq!(error.code, "release_completion");
             assert_eq!(
                 error.message,

@@ -518,8 +518,20 @@ fn v0_t12_control_storage_rejects_symlinks_hardlinks_and_permissions() {
     let outside = temp.path().join("outside");
     fs::write(&outside, b"preserve").unwrap();
     symlink(&outside, dir.path().join("intent.json")).unwrap();
+    assert_eq!(
+        dir.read::<serde_json::Value>("intent.json")
+            .unwrap_err()
+            .code,
+        "unsafe_storage"
+    );
     assert!(dir.write("intent.json", &json!(1)).is_err());
     assert_eq!(fs::read(&outside).unwrap(), b"preserve");
+    let linked_directory = temp.path().join("linked-control");
+    symlink(dir.path(), &linked_directory).unwrap();
+    assert_eq!(
+        PrivateDir::open(&linked_directory).unwrap_err().code,
+        "unsafe_storage"
+    );
     fs::hard_link(&outside, dir.path().join("hard.json")).unwrap();
     assert!(dir.read::<serde_json::Value>("hard.json").is_err());
     assert!(dir.write("../escape.json", &json!(1)).is_err());

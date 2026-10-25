@@ -705,6 +705,30 @@ struct ParentResultRecord {
     coordinator_claim_digest: String,
     evidence: evidence::ParentEvidence,
 }
+impl DeliveryCoordinator {
+    /// Parse the exact producer schema for native publication selection. This
+    /// projection authenticates bytes and identity, not execution or readiness.
+    pub(crate) fn decode_parent_publication(
+        body: &str,
+        key: &AttestationKey,
+    ) -> Result<(Uuid, evidence::ParentEvidence)> {
+        let signed: Signed<ParentResultRecord> =
+            evidence::decode_signed_publication(body, "parent_result", key)?;
+        let record = signed.payload;
+        if record.schema_version != 1
+            || record.runtime_id.is_nil()
+            || record.evidence.schema_version != 1
+        {
+            return Err(Error::new(
+                "invalid_attestation",
+                "parent publication schema/runtime is invalid",
+            ));
+        }
+        record.evidence.work.validate()?;
+        Ok((record.runtime_id, record.evidence))
+    }
+}
+
 pub struct ParentReviewAssignment {
     contract_digest: String,
     vector: ParentCandidateVector,
@@ -1820,3 +1844,7 @@ mod target_equivalence_tests {
 #[path = "delivery_parent_history.rs"]
 mod history;
 pub use history::{HistoricalReleaseParent, RecoveredReleaseParent, VerifiedReleaseOrigin};
+
+#[path = "delivery_parent_origin.rs"]
+mod accepted_origin;
+pub(crate) use accepted_origin::{AcceptedOriginIdentity, AcceptedOriginRef};

@@ -6,64 +6,107 @@ use crate::reconcile::DependencyOutcomes;
 use crate::runtime_fixture::RuntimeFixture;
 use std::sync::{Arc, Mutex};
 
+#[path = "runtime_no_release_history_fixture.rs"]
+mod history_fixture;
+#[path = "runtime_no_release_owned_target_fixture.rs"]
+mod owned_target_fixture;
 #[path = "runtime_no_release_parent_fixture.rs"]
 mod parent_fixture;
+#[path = "runtime_no_release_quarantine_fixture.rs"]
+mod quarantine_fixture;
+#[path = "runtime_no_release_source_fixture.rs"]
+mod source_fixture;
 
 struct Harness {
     _root: tempfile::TempDir,
-    _git: tempfile::TempDir,
     _owner: crate::storage::ExclusiveLock,
     owner: super::super::super::tests::FixtureOwner,
     built: RuntimeFixture,
     delivery: Arc<RuntimeDelivery>,
     wire: Arc<Mutex<crate::corrections::wire_fixture::Fixture>>,
     parent: VerifiedParent,
+    vector: crate::delivery::ParentCandidateVector,
+    owned_target: Option<owned_target_fixture::OwnedTargetFixture>,
     child: VerifiedChild,
     acceptance: VerifiedAcceptance,
     lease: Lease,
 }
 impl Harness {
     async fn new() -> Self {
-        let (root, built, delivery, wire, owner) =
-            super::super::super::tests::fixture_authorization_with_wire(true).await;
-        let projection = built.runtime.observations.snapshot().unwrap();
-        let current = projection
-            .parent(Uuid::from_u128(2), Uuid::from_u128(100))
-            .unwrap();
-        let workspace = delivery.workspace(&projection, Uuid::from_u128(2)).unwrap();
-        let (git, parent, child) = parent_fixture::parent(
-            current.work.as_ref().unwrap(),
-            current.children[&Uuid::from_u128(101)]
-                .work
-                .as_ref()
-                .unwrap(),
-            &built.runtime.services.key,
-            &delivery.git_path().unwrap(),
-            workspace.contracts[0].repository.clone(),
+        Box::pin(Self::new_inner(false)).await
+    }
+    async fn new_inner(with_owned_target: bool) -> Self {
+        Box::pin(Self::new_targets(with_owned_target, false)).await
+    }
+    async fn new_targets(with_owned_target: bool, multiple_targets: bool) -> Self {
+        let (root, built, original, wire, owner) =
+            super::super::super::tests::fixture_authorization_with_configuration(true, |config| {
+                if with_owned_target {
+                    crate::delivery::RuntimeLineageWire::configure(config);
+                    if multiple_targets {
+                        crate::delivery::RuntimeLineageWire::configure_distinct_targets(config);
+                    }
+                }
+            })
+            .await;
+        let processes = Arc::new(
+            crate::process_records::ProcessJournal::with_probe(
+                built
+                    .runtime
+                    .registration
+                    .root()
+                    .child("no-release-git-processes")
+                    .unwrap(),
+                Uuid::from_u128(1),
+                Arc::new(crate::test_process_probe::FixtureBootProbe::new()),
+            )
+            .unwrap(),
         );
-        let revision = &parent.manifest().baselines[0].production;
-        {
-            let mut data = wire.lock().unwrap();
-            data.github_values.insert(
-                "/repos/fixture/repo/git/ref/heads/main".into(),
-                json!({"ref":"refs/heads/main","object":{"type":"commit","sha":revision.commit}}),
-            );
-            data.github_values.insert(
-                format!("/repos/fixture/repo/git/commits/{}", revision.commit),
-                json!({"sha":revision.commit,"tree":{"sha":revision.tree},"parents":[]}),
-            );
-        }
-        let signed_parent=built.runtime.services.key.sign("parent_result",&json!({"runtime_id":workspace.configuration.runtime.id,"evidence":parent.manifest()})).unwrap();
-        let parent_body =
-            evidence::encode_signed_publication("parent_result", &signed_parent).unwrap();
-        publish(
-            &delivery,
+        let delivery = RuntimeDelivery::with_fixture(
+            built.runtime.clone(),
+            processes,
+            original.git_path().unwrap(),
+        )
+        .unwrap();
+        let (lease, lock) = owner.start(&built.runtime);
+        let source_fixture::PreparedParent {
+            parent,
+            child,
+            vector,
+            body,
+            owned_target,
+        } = source_fixture::prepare(
             &built,
-            &parent,
-            parent.manifest().publication_operation,
-            parent_body,
+            &delivery,
+            &wire,
+            &lease,
+            with_owned_target,
+            multiple_targets,
         )
         .await;
+        assert_eq!(
+            parent.manifest().candidate_vector_digest().unwrap(),
+            vector.digest()
+        );
+        let projection = built.runtime.observations.refresh().await.unwrap();
+        let current = projection
+            .parent(Uuid::from_u128(2), parent.manifest().work.parent)
+            .unwrap();
+        let workspace = delivery.workspace(&projection, Uuid::from_u128(2)).unwrap();
+        let gate = current
+            .fresh_gate(
+                None,
+                GatePurpose::NewOperation,
+                &built.runtime.dependency_outcomes().unwrap(),
+                Utc::now(),
+                Duration::seconds(30),
+            )
+            .unwrap();
+        let parent_receipt = publish_parent(&delivery, &built, &lease, &gate, &parent, body).await;
+        assert_eq!(
+            parent_receipt.expected["admission_operation"],
+            parent.manifest().publication_operation.to_string()
+        );
         let allowed = BTreeSet::from([Uuid::from_u128(5).to_string()]);
         let actor = Uuid::from_u128(5).to_string();
         let accepted = evidence::prepare_acceptance(
@@ -116,16 +159,16 @@ impl Harness {
             &built.runtime.services.key,
         )
         .unwrap();
-        let (lease, lock) = owner.start(&built.runtime);
         let result = Self {
             _root: root,
-            _git: git,
             _owner: lock,
             owner,
             built,
             delivery,
             wire,
             parent,
+            vector,
+            owned_target,
             child,
             acceptance,
             lease,
@@ -202,6 +245,73 @@ impl Harness {
             .count()
     }
 }
+async fn publish_parent(
+    delivery: &RuntimeDelivery,
+    built: &RuntimeFixture,
+    lease: &Lease,
+    gate: &FreshGate,
+    parent: &VerifiedParent,
+    body: String,
+) -> Receipt {
+    let config = built.runtime.configuration.snapshot().unwrap();
+    let permit = built
+        .runtime
+        .control
+        .admit(
+            lease,
+            parent.manifest().publication_operation,
+            gate.work_key().unwrap(),
+            canonical_digest(
+                1,
+                &"explicit synthetic upstream no-change parent publication",
+            )
+            .unwrap(),
+            || (delivery.current_gate())(gate),
+        )
+        .unwrap();
+    let check = delivery.current_gate();
+    let expected = gate.clone();
+    let receipt = delivery
+        .provider_broker(&config, gate.workspace_id())
+        .unwrap()
+        .mutate(
+            built.runtime.control.clone(),
+            MutationRequest {
+                request_id: Uuid::new_v4(),
+                runtime_id: config.runtime.id,
+                actor: Actor {
+                    identity: format!("owner:{}", lease.owner_id),
+                    principal: None,
+                    roles: BTreeSet::new(),
+                },
+                kind: String::new(),
+                canonical_targets: vec![],
+                expected: BTreeMap::new(),
+                payload: Value::Null,
+            },
+            Some(permit.clone()),
+            None,
+            ProviderMutation::LinearComment {
+                issue: parent.manifest().work.parent,
+                body,
+            },
+            move || check(&expected),
+        )
+        .await
+        .unwrap();
+    built
+        .runtime
+        .control
+        .retire_local(
+            permit.operation_id,
+            json!({
+                "fixture_upstream":"synthetic check claims published under actual owner receipt"
+            }),
+        )
+        .unwrap();
+    receipt
+}
+
 async fn publish(
     delivery: &RuntimeDelivery,
     built: &RuntimeFixture,
@@ -244,6 +354,182 @@ async fn publish(
         )
         .await
         .unwrap()
+}
+
+// Exercise the actual full-schema producer through current native reads. The
+// substitutions below are explicit provider-fixture changes, not publications
+// authorized by a controller or new execution/readiness capabilities.
+async fn assert_typed_parent_publication_selection(h: &Harness) {
+    use super::super::{current_parent_publication, reject_superseding_parent};
+    let config = h.built.runtime.configuration.snapshot().unwrap();
+    let key = &h.built.runtime.services.key;
+    let issue = h.parent.manifest().work.parent;
+    let workspace_id = Uuid::from_u128(2);
+    let writer = Uuid::from_u128(5);
+    let writes = h.writes();
+    let receipts = canonical_digest(1, &h.built.runtime.control.operations().unwrap()).unwrap();
+    let original = h.wire.lock().unwrap().comments[&issue].clone();
+    let index = original
+        .iter()
+        .position(|comment| {
+            comment["body"]
+                .as_str()
+                .unwrap()
+                .starts_with("<!-- kegari:v0:parent_result -->")
+        })
+        .unwrap();
+    let body = original[index]["body"].as_str().unwrap();
+    let (runtime, evidence) = DeliveryCoordinator::decode_parent_publication(body, key).unwrap();
+    assert_eq!(runtime, config.runtime.id);
+    assert_eq!(&evidence, h.parent.manifest());
+    let projection = h.built.runtime.observations.refresh().await.unwrap();
+    let parent = projection.parent(workspace_id, issue).unwrap();
+    let (selected, _) = h
+        .delivery
+        .publication_refs(&config, parent, &h.parent, &h.acceptance)
+        .unwrap();
+    current_parent_publication(key, runtime, writer, parent, &h.parent).unwrap();
+    let comments = &parent.observations[&issue].comments;
+    let first = comments
+        .iter()
+        .find(|comment| comment.id == selected.id)
+        .unwrap();
+    reject_superseding_parent(key, runtime, comments, first).unwrap();
+    let first_time = first.created_at.unwrap();
+
+    // The old Value-only unit used this incomplete signed shape. It is not a
+    // legacy production schema and must not be accepted as a parent result.
+    let minimal = key
+        .sign(
+            "parent_result",
+            &json!({"runtime_id":runtime,"evidence":h.parent.manifest()}),
+        )
+        .unwrap();
+    let minimal = evidence::encode_signed_publication("parent_result", &minimal).unwrap();
+    let error = DeliveryCoordinator::decode_parent_publication(&minimal, key).unwrap_err();
+    assert_eq!(error.code, "invalid_attestation");
+    assert_eq!(error.message, "publication schema is invalid");
+    let duplicate_field = body.replacen(
+        "\"schema_version\":1",
+        "\"schema_version\":1,\"schema_version\":1",
+        1,
+    );
+    assert_ne!(duplicate_field, body);
+    assert_eq!(
+        DeliveryCoordinator::decode_parent_publication(&duplicate_field, key)
+            .unwrap_err()
+            .code,
+        "invalid_attestation"
+    );
+
+    let workspace = h.delivery.workspace(&projection, workspace_id).unwrap();
+    let mut changed = h.parent.manifest().clone();
+    changed.executive_summary = "Explicit fixture replacement parent summary".into();
+    let replacement = workspace
+        .coordinator
+        .fixture_parent_body_for_vector(&changed, &h.vector, runtime)
+        .unwrap();
+    assert_eq!(
+        DeliveryCoordinator::decode_parent_publication(&replacement, key)
+            .unwrap()
+            .1,
+        changed
+    );
+    let tampered = replacement.replace(
+        "Explicit fixture replacement parent summary",
+        "Unauthenticated fixture summary",
+    );
+    assert_eq!(
+        DeliveryCoordinator::decode_parent_publication(&tampered, key)
+            .unwrap_err()
+            .code,
+        "invalid_attestation"
+    );
+
+    let mut substituted = original.clone();
+    substituted[index]["body"] = json!(replacement);
+    h.wire.lock().unwrap().comments.insert(issue, substituted);
+    let projection = h.built.runtime.observations.refresh().await.unwrap();
+    let parent = projection.parent(workspace_id, issue).unwrap();
+    let error = h
+        .delivery
+        .publication_refs(&config, parent, &h.parent, &h.acceptance)
+        .unwrap_err();
+    assert_eq!(error.code, "stale_result");
+    assert_eq!(
+        error.message,
+        "release requires unique current native parent and acceptance publications"
+    );
+    assert_eq!(
+        current_parent_publication(key, runtime, writer, parent, &h.parent)
+            .unwrap_err()
+            .code,
+        "stale_result"
+    );
+
+    let mut duplicates = original.clone();
+    let mut second = original[index].clone();
+    let second_id = Uuid::new_v4();
+    second["id"] = json!(second_id);
+    duplicates.push(second.clone());
+    h.wire.lock().unwrap().comments.insert(issue, duplicates);
+    let projection = h.built.runtime.observations.refresh().await.unwrap();
+    let parent = projection.parent(workspace_id, issue).unwrap();
+    let error = h
+        .delivery
+        .publication_refs(&config, parent, &h.parent, &h.acceptance)
+        .unwrap_err();
+    assert_eq!(error.code, "stale_result");
+    assert_eq!(
+        error.message,
+        "release requires unique current native parent and acceptance publications"
+    );
+    assert_eq!(
+        current_parent_publication(key, runtime, writer, parent, &h.parent)
+            .unwrap_err()
+            .code,
+        "stale_result"
+    );
+
+    let mut superseding = original.clone();
+    second["body"] = json!(replacement);
+    let later = first_time + Duration::seconds(1);
+    second["createdAt"] = json!(later);
+    second["updatedAt"] = json!(later);
+    superseding.push(second);
+    h.wire.lock().unwrap().comments.insert(issue, superseding);
+    let projection = h.built.runtime.observations.refresh().await.unwrap();
+    let parent = projection.parent(workspace_id, issue).unwrap();
+    let comments = &parent.observations[&issue].comments;
+    let first = comments
+        .iter()
+        .find(|comment| comment.id == selected.id)
+        .unwrap();
+    let second = comments
+        .iter()
+        .find(|comment| comment.id == second_id)
+        .unwrap();
+    let error = reject_superseding_parent(key, runtime, comments, first).unwrap_err();
+    assert_eq!(error.code, "stale_result");
+    assert_eq!(
+        error.message,
+        "a newer or ambiguous parent result supersedes the selected publication"
+    );
+    reject_superseding_parent(key, runtime, comments, second).unwrap();
+    assert_eq!(
+        current_parent_publication(key, runtime, writer, parent, &h.parent)
+            .unwrap_err()
+            .code,
+        "stale_result"
+    );
+
+    h.wire.lock().unwrap().comments.insert(issue, original);
+    h.built.runtime.observations.refresh().await.unwrap();
+    assert_eq!(h.writes(), writes);
+    assert_eq!(
+        canonical_digest(1, &h.built.runtime.control.operations().unwrap()).unwrap(),
+        receipts
+    );
 }
 
 #[tokio::test]
@@ -396,6 +682,19 @@ async fn accepted_unchanged_parent_publishes_once_and_readback_supplies_stopped_
             .chain(&overview.ready_for_review)
             .any(|row| row.parent == current.key),
         "history alone cannot hide invalidated current work"
+    );
+    // Run unowned native-comment substitutions last. Real reconciliation must
+    // preserve those observed revisions as pending even after wire restoration.
+    Box::pin(assert_typed_parent_publication_selection(&h)).await;
+    let projection = h.built.runtime.observations.refresh().await.unwrap();
+    let current = projection
+        .parent(Uuid::from_u128(2), h.parent.manifest().work.parent)
+        .unwrap();
+    assert!(
+        current
+            .blockers
+            .iter()
+            .any(|blocker| blocker.code == "correction_classification_pending")
     );
 }
 
@@ -638,6 +937,20 @@ async fn lost_publication_reply_requires_actual_authorized_read_only_reconciliat
         original_intent,
         "admitted unknown intent cannot be rewritten"
     );
+    let retired_unknown = h.built.runtime.control.operation(admission).unwrap();
+    assert_eq!(retired_unknown.phase, ReceiptPhase::Reconciled);
+    assert_eq!(
+        retired_unknown.observed_result.as_ref().unwrap()["local_execution"],
+        "exited"
+    );
+    assert_eq!(
+        retired_unknown.observed_result.as_ref().unwrap()["unresolved_effects"],
+        json!([effect.operation_id])
+    );
+    let metadata = crate::control::MetadataReference::from_receipt(&retired_unknown)
+        .unwrap()
+        .unwrap();
+    assert_eq!(metadata.purpose, "no_release_required");
     h.stop();
     h.wire.lock().unwrap().comment_response_lost = false;
     reconcile(&h, effect.operation_id).await.unwrap();
@@ -650,7 +963,43 @@ async fn lost_publication_reply_requires_actual_authorized_read_only_reconciliat
             .phase,
         ReceiptPhase::Reconciled
     );
+    // Effect reconciliation cannot silently rewrite the already exited owner.
+    assert_eq!(
+        canonical_digest(1, &h.built.runtime.control.operation(admission).unwrap()).unwrap(),
+        canonical_digest(1, &retired_unknown).unwrap()
+    );
     reconcile(&h, admission).await.unwrap();
+    let recovered = h.built.runtime.control.operation(admission).unwrap();
+    assert_eq!(recovered.operation_id, admission);
+    assert_eq!(recovered.phase, ReceiptPhase::Reconciled);
+    assert_eq!(recovered.actor, retired_unknown.actor);
+    assert_eq!(recovered.expected, retired_unknown.expected);
+    assert_eq!(recovered.payload_digest, retired_unknown.payload_digest);
+    assert_eq!(
+        canonical_digest(
+            1,
+            &crate::control::MetadataReference::from_receipt(&recovered)
+                .unwrap()
+                .unwrap()
+        )
+        .unwrap(),
+        canonical_digest(1, &metadata).unwrap()
+    );
+    let observed = recovered.observed_result.as_ref().unwrap();
+    assert_eq!(observed["local_execution"], "exited");
+    assert_eq!(observed["unresolved_effects"], json!([]));
+    assert_eq!(
+        observed["observation"]["recovery"],
+        "original_metadata_task_verified"
+    );
+    assert_eq!(h.writes(), 3);
+    reconcile(&h, admission).await.unwrap();
+    let repeated = h.built.runtime.control.operation(admission).unwrap();
+    assert_eq!(
+        canonical_digest(1, &repeated).unwrap(),
+        canonical_digest(1, &recovered).unwrap(),
+        "known complete metadata retains its exact original receipt"
+    );
     let (projection, mut snapshot) = h.snapshot().await;
     let current = projection
         .parent(Uuid::from_u128(2), h.parent.manifest().work.parent)

@@ -128,6 +128,7 @@ pub struct RuntimeInspection {
     pub history: Vec<HistoryRow>,
     pub release_details: BTreeMap<(Uuid, IssueKey), Value>,
     pub release_history: Vec<crate::inspection::ReleaseInspectionRow>,
+    pub no_release_history: Vec<crate::inspection::NoReleaseInspectionRow>,
 }
 pub trait WorkflowControl: Send + Sync {
     /// Read-only refresh. May run while STOPPED; must never admit or publish work.
@@ -356,10 +357,15 @@ impl HostDispatcher {
                         "provider view belongs to another configuration revision",
                     ));
                 }
-                crate::inspection::validate_rows(self.runtime, &view.release_history)?;
-                let workspace = crate::inspection::resolve_workspace(
+                crate::inspection::validate_history(
+                    self.runtime,
+                    &view.release_history,
+                    &view.no_release_history,
+                )?;
+                let workspace = crate::inspection::resolve_history_workspace(
                     &config,
                     &view.release_history,
+                    &view.no_release_history,
                     request.args.get("workspace").and_then(Value::as_str),
                 )?;
                 let control = self.control().await?;
@@ -379,10 +385,11 @@ impl HostDispatcher {
                     )?)
                     .map_err(|_| Error::invalid("overview encoding failed"))?
                 } else {
-                    let selected = crate::inspection::resolve_parent(
+                    let selected = crate::inspection::resolve_history_parent(
                         &config,
                         &view.projection,
                         &view.release_history,
+                        &view.no_release_history,
                         text(&request.args, "parent")?,
                         workspace,
                     )?;
@@ -393,6 +400,10 @@ impl HostDispatcher {
                         .ok()
                         .filter(|parent| parent.key == *key);
                     let releases = crate::inspection::parent_rows(&view.release_history, &selected);
+                    let no_release = crate::inspection::no_release_parent_rows(
+                        &view.no_release_history,
+                        &selected,
+                    );
                     let proof = parent.and_then(|_| view.delivery.get(key));
                     let evidence =
                         proof
@@ -402,7 +413,11 @@ impl HostDispatcher {
                                     == parent.and_then(|parent| parent.work.as_ref())
                             });
                     if request.command == Open {
-                        let url = crate::inspection::observed_url(parent, &releases)?;
+                        let url = crate::inspection::observed_history_url(
+                            parent,
+                            &releases,
+                            &no_release,
+                        )?;
                         return self.result(&config,"observed",None,json!({"parent":selected.reference(),"url":url,"evidence_token":evidence.map(|p|p.token())}));
                     }
                     let children: BTreeMap<_, _> = proof
@@ -415,7 +430,7 @@ impl HostDispatcher {
                         .unwrap_or_default();
                     json!({"parent":parent,"inspection_identity":{"workspace":selected.workspace,"parent":key,"parent_reference":selected.reference()},"children_evidence":children,"evidence_manifest":evidence.map(|p|p.manifest()),
                         "evidence_token":evidence.map(|p|p.token()),"acceptance":proof.and_then(ParentDelivery::verified_acceptance).map(|a|a.acceptance()),
-                        "release":view.release_details.get(&(selected.workspace,key.clone())),"release_history":releases,"history":crate::inspection::history_for_parent(&view.history,selected.workspace,key)})
+                        "release":view.release_details.get(&(selected.workspace,key.clone())),"release_history":releases,"no_release_history":no_release,"history":crate::inspection::history_for_parent(&view.history,selected.workspace,key)})
                 };
                 self.result(
                     &config,

@@ -7,7 +7,7 @@ const MAX_RELEASE_LINKS: usize = 64;
 
 #[path = "runtime_delivery_completion.rs"]
 mod completion;
-pub(crate) use completion::VerifiedReleaseCompletion;
+pub(crate) use completion::{ReleaseCompletionAnchor, VerifiedReleaseCompletion};
 
 #[derive(Clone)]
 struct Link {

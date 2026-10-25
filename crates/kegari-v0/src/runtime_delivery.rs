@@ -545,7 +545,12 @@ impl RuntimeDelivery {
     }
     async fn refresh_for_inspection(&self, projection: &RuntimeProjection) -> Result<()> {
         let _refresh = self.refresh_lock.lock().await;
-        self.sync_released_completions()?;
+        self.refresh_current_delivery(projection).await
+    }
+    fn historical_delivery_blockers(
+        &self,
+        projection: &RuntimeProjection,
+    ) -> Result<BTreeMap<crate::authority::IssueKey, Error>> {
         let mut blockers = BTreeMap::new();
         let mut blocked_releases = 0;
         for row in self.release_inspection_rows()? {
@@ -564,38 +569,47 @@ impl RuntimeDelivery {
                     .or_insert((row.attempt.plan.operation_id, error));
             }
         }
-        let Some((first_parent, (first_operation, first_error))) = blockers.first_key_value()
-        else {
-            return self.refresh_current_delivery(projection).await;
-        };
-        // The strict queue is deliberately not rebuilt or modified here. Its
-        // unavailable prerequisites also prevent presenting previously cached
-        // delivery/no-release evidence as freshly verified product readiness.
-        for observed in projection.workspaces.values() {
-            for parent in observed.parents.values() {
-                let (blocked_parent, operation, root_error) = match blockers.get(&parent.key) {
-                    Some((operation, error)) => (&parent.key, operation, error),
-                    None => (first_parent, first_operation, first_error),
-                };
-                self.runtime.invalidate_delivery(&parent.key, Error::new(
-                    "release_gates_unavailable",
-                    "Current delivery gates are unavailable while retained release evidence is unverified",
-                ).detail(json!({"blocked_parent":blocked_parent,"blocked_operation":operation,
-                    "root_error":root_error,"blocked_release_count":blocked_releases}))
-                    .next("Inspect the per-parent release history and reconcile its exact unavailable references; do not repeat external effects."))?;
+        // Only an authenticated seal identity makes a no-release reference
+        // failure a strict queue blocker. Never-sealed deployed/legacy rows may
+        // remain diagnostic without weakening their existing current gates.
+        let no_release = self.no_release_completion_inventory()?;
+        let mut blocked_no_release = 0;
+        for row in no_release.rows {
+            if no_release.sealed_operations.contains(&row.admission)
+                && let Some(error) = row.diagnostic
+            {
+                blocked_no_release += 1;
+                blockers.entry(row.parent).or_insert((row.admission, error));
             }
         }
-        Ok(())
+        Ok(blockers.into_iter().map(|(parent, (operation, root_error))| {
+            let error = Error::new("release_gates_unavailable",
+                "Current delivery gates are unavailable while retained release evidence is unverified")
+                .detail(json!({"blocked_parent":parent,"blocked_operation":operation,
+                    "root_error":root_error,"blocked_release_count":blocked_releases,
+                    "blocked_no_release_count":blocked_no_release}))
+                .next("Inspect the per-parent release and no-release history and reconcile its exact unavailable references; do not repeat external effects.");
+            (parent, error)
+        }).collect())
     }
     async fn refresh_current_delivery(&self, projection: &RuntimeProjection) -> Result<()> {
         // Recover immutable dependency facts independently from strict queue
         // reconstruction; one unavailable historical proof cannot erase an
         // unrelated complete proof. This method owns no Control/release lock.
         self.sync_released_completions()?;
+        self.sync_no_release_completions()?;
+        let blockers = self.historical_delivery_blockers(projection)?;
         self.clear_no_release_observations()?;
         for observed in projection.workspaces.values() {
             let workspace = self.workspace(projection, observed.workspace_id);
             for parent in observed.parents.values() {
+                // A retained failed identity never starts another observation
+                // admission merely to rediscover its already known blocker.
+                if let Some(error) = blockers.get(&parent.key) {
+                    self.runtime
+                        .invalidate_delivery(&parent.key, error.clone())?;
+                    continue;
+                }
                 let result = match &workspace {
                     Ok(workspace) => self.refresh_parent(workspace, parent).await,
                     Err(error) => Err(error.clone()),
@@ -618,6 +632,8 @@ impl RuntimeDelivery {
                 }
             }
         }
+        // Hydration may have sealed an actual newly observed no-release fact.
+        self.sync_no_release_completions()?;
         Ok(())
     }
 }
@@ -963,7 +979,12 @@ pub use parent::ParentSources;
 mod release;
 
 pub use release::KnownPredecessorBaseline;
-pub(crate) use release::{VerifiedReleaseCompletion, VerifiedSuccessorHolds};
+pub(crate) use release::{
+    ReleaseCompletionAnchor, VerifiedNoReleaseCompletion, VerifiedReleaseCompletion,
+    VerifiedSuccessorHolds,
+};
+#[path = "runtime_delivery_completion_binding.rs"]
+mod completion_binding;
 
 #[cfg(test)]
 #[path = "runtime_delivery_worker_fixture.rs"]

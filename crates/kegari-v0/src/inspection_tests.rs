@@ -198,6 +198,7 @@ async fn historical_completion_does_not_hide_a_later_current_correction() {
         history: vec![],
         release_details: BTreeMap::new(),
         release_history: vec![historical],
+        no_release_history: vec![],
     };
     validate_rows(config.runtime.id, &view.release_history).unwrap();
     let control = built.runtime.control.snapshot().unwrap();
@@ -347,4 +348,332 @@ fn verify_shared_native_issue_workspace_filter(
     let output = overview(&scoped, None, control, Utc::now(), Duration::seconds(30)).unwrap();
     assert_eq!(output.current.history.len(), 2);
     assert!(scoped.outcomes.parent_outcome(&key, &generation).is_none());
+}
+
+// Synthetic presentation only; no signed seal, retained completion or current
+// already-in-production capability is manufactured by this helper.
+fn no_release_row(workspace: u128, operation: u128) -> NoReleaseInspectionRow {
+    let generation = Generation {
+        authorization: bytes_digest(b"no-release display authorization"),
+        definition: bytes_digest(b"no-release display definition"),
+        correction: bytes_digest(b"no-release display correction"),
+        scope: bytes_digest(b"no-release display scope"),
+    };
+    let parent = IssueKey::new(
+        "https://linear.invalid",
+        Uuid::from_u128(2),
+        Uuid::from_u128(3),
+    )
+    .unwrap();
+    let work = WorkIdentity {
+        linear_endpoint: parent.endpoint.clone(),
+        linear_workspace: parent.workspace,
+        parent: parent.issue,
+        child: None,
+        generation,
+    };
+    NoReleaseInspectionRow {
+        workspace: Uuid::from_u128(workspace),
+        parent,
+        work: work.clone(),
+        admission: Uuid::from_u128(operation),
+        publication: NoReleasePublicationInspection {
+            effect: Uuid::from_u128(operation + 10_000),
+            comment: None,
+            url: None,
+        },
+        record: crate::evidence::NoReleaseRequired {
+            schema_version: 1,
+            runtime_id: Uuid::from_u128(1),
+            operation_id: Uuid::from_u128(operation),
+            work,
+            evidence_token: bytes_digest(b"no-release display evidence"),
+            acceptance_digest: bytes_digest(b"no-release display acceptance"),
+            baselines: vec![],
+            targets: vec![],
+            recorded_at: Utc::now() - Duration::days(3),
+        },
+        record_digest: bytes_digest(b"synthetic original signed record digest"),
+        completion: None,
+        diagnostic: Some(Error::new(
+            "record_missing",
+            "synthetic display has no completion proof",
+        )),
+        display: ParentDisplay {
+            workspace_name: Some("removed-display-name".into()),
+            identifier: Some("OLD-3".into()),
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn combined_history_resolution_keeps_no_release_workspace_and_native_identity_exact() {
+    let config = config();
+    let projection = projection(&config);
+    let first = no_release_row(10, 30);
+    let rows = vec![first.clone(), no_release_row(11, 31)];
+    let release = vec![row(12, 32)];
+    validate_history(config.runtime.id, &release, &rows).unwrap();
+    let selected = Uuid::from_u128(10);
+    assert_eq!(
+        resolve_history_workspace(&config, &release, &rows, Some(&selected.to_string())).unwrap(),
+        Some(selected)
+    );
+    assert!(
+        resolve_history_workspace(&config, &release, &rows, Some("removed-display-name")).is_err()
+    );
+    assert!(crate::app::resolve_workspace(&config, Some(&selected.to_string())).is_err());
+    assert!(projection.resolve_parent("OLD-3").is_err());
+    assert_eq!(
+        resolve_history_parent(&config, &projection, &release, &rows, "OLD-3", None)
+            .unwrap_err()
+            .code,
+        "ambiguous_reference"
+    );
+    let exact = resolve_history_parent(
+        &config,
+        &projection,
+        &release,
+        &rows,
+        "OLD-3",
+        Some(selected),
+    )
+    .unwrap();
+    assert!(parent_rows(&release, &exact).is_empty());
+    assert_eq!(no_release_parent_rows(&rows, &exact).len(), 1);
+    assert!(
+        resolve_history_parent(
+            &config,
+            &projection,
+            &release,
+            &rows,
+            &format!("{}/OLD-3", Uuid::from_u128(11)),
+            Some(selected)
+        )
+        .is_err()
+    );
+    let mut other_endpoint = first.clone();
+    other_endpoint.admission = Uuid::from_u128(33);
+    other_endpoint.record.operation_id = other_endpoint.admission;
+    other_endpoint.work.linear_endpoint = "https://other-linear.invalid".into();
+    other_endpoint.parent = IssueKey::new(
+        &other_endpoint.work.linear_endpoint,
+        other_endpoint.work.linear_workspace,
+        other_endpoint.work.parent,
+    )
+    .unwrap();
+    other_endpoint.record.work = other_endpoint.work.clone();
+    assert_eq!(
+        resolve_history_parent(
+            &config,
+            &projection,
+            &[],
+            &[first, other_endpoint],
+            "OLD-3",
+            Some(selected)
+        )
+        .unwrap_err()
+        .code,
+        "ambiguous_reference"
+    );
+}
+
+#[test]
+fn no_release_history_shape_and_observed_urls_reject_identity_substitution() {
+    let config = config();
+    let mut original = no_release_row(10, 30);
+    assert_eq!(
+        observed_history_url(None, &[], &[&original])
+            .unwrap_err()
+            .code,
+        "unknown_resource"
+    );
+    for url in [
+        "file:///private/tmp/file",
+        "javascript:alert(1)",
+        "https://user:secret@linear.invalid/issue/3",
+    ] {
+        original.display.url = Some(url.into());
+        assert_eq!(
+            observed_history_url(None, &[], &[&original])
+                .unwrap_err()
+                .code,
+            "unsafe_url"
+        );
+    }
+    original.display.url = Some("https://linear.invalid/issue/3".into());
+    assert_eq!(
+        observed_history_url(None, &[], &[&original]).unwrap(),
+        "https://linear.invalid/issue/3"
+    );
+    let mut released = row(10, 20);
+    released.display.url = Some("https://linear.invalid/issue/different".into());
+    assert_eq!(
+        observed_history_url(None, &[&released], &[&original])
+            .unwrap_err()
+            .code,
+        "ambiguous_reference"
+    );
+    validate_history(config.runtime.id, &[], &[original.clone()]).unwrap();
+    let mut invalid = original.clone();
+    invalid.record.operation_id = Uuid::from_u128(31);
+    assert!(validate_history(config.runtime.id, &[], &[invalid]).is_err());
+    let mut invalid = original.clone();
+    invalid.record.work.generation.correction = bytes_digest(b"substituted work");
+    assert!(validate_history(config.runtime.id, &[], &[invalid]).is_err());
+    let mut invalid = original.clone();
+    invalid.publication.url = Some("https://linear.invalid/comment/1".into());
+    assert!(
+        validate_history(config.runtime.id, &[], &[invalid]).is_err(),
+        "URL alone is not an observed publication"
+    );
+    let mut invalid = original.clone();
+    invalid.completion = Some(NoReleaseCompletionInspection {
+        completed_at: original.record.recorded_at,
+    });
+    assert!(
+        validate_history(config.runtime.id, &[], &[invalid]).is_err(),
+        "a diagnostic-only row cannot claim completion"
+    );
+    original.diagnostic = None;
+    original.publication.comment = Some(Uuid::from_u128(50));
+    original.completion = Some(NoReleaseCompletionInspection {
+        completed_at: original.record.recorded_at,
+    });
+    validate_history(config.runtime.id, &[], &[original.clone()]).unwrap();
+    let mut invalid = original.clone();
+    invalid.completion.as_mut().unwrap().completed_at += Duration::seconds(1);
+    assert!(
+        validate_history(config.runtime.id, &[], &[invalid]).is_err(),
+        "recovery time cannot replace original record time"
+    );
+    assert!(validate_history(config.runtime.id, &[], &[original.clone(), original]).is_err());
+}
+
+#[tokio::test]
+async fn no_release_completion_display_preserves_current_correction_and_workspace_scope() {
+    let (_root, built, _delivery) =
+        crate::runtime_delivery::tests::fixture_authorization(true).await;
+    let config = built.runtime.configuration.snapshot().unwrap();
+    let projection = built.runtime.observations.snapshot().unwrap();
+    let parent = projection
+        .parent(Uuid::from_u128(2), Uuid::from_u128(100))
+        .unwrap();
+    let mut historical = no_release_row(2, 30);
+    historical.parent = parent.key.clone();
+    historical.work = parent.work.as_ref().unwrap().clone();
+    historical.work.generation.correction = bytes_digest(b"earlier no-release correction");
+    historical.record.runtime_id = config.runtime.id;
+    historical.record.work = historical.work.clone();
+    historical.diagnostic = None;
+    historical.publication.comment = Some(Uuid::from_u128(50));
+    historical.publication.url = Some("https://linear.invalid/comment/50".into());
+    historical.completion = Some(NoReleaseCompletionInspection {
+        completed_at: historical.record.recorded_at,
+    });
+    let mut view = RuntimeInspection {
+        projection,
+        delivery: BTreeMap::new(),
+        outcomes: Default::default(),
+        activities: vec![],
+        history: vec![],
+        release_details: BTreeMap::new(),
+        release_history: vec![],
+        no_release_history: vec![historical.clone()],
+    };
+    validate_history(
+        config.runtime.id,
+        &view.release_history,
+        &view.no_release_history,
+    )
+    .unwrap();
+    let control = built.runtime.control.snapshot().unwrap();
+    let output = overview(&view, None, &control, Utc::now(), Duration::seconds(30)).unwrap();
+    assert_eq!(output.current.history.len(), 1);
+    assert_eq!(output.current.history[0].outcome, "no-release-required");
+    assert_eq!(
+        output.current.history[0].completed_at,
+        historical.record.recorded_at
+    );
+    assert_eq!(
+        output.current.history[0].links,
+        vec!["https://linear.invalid/comment/50"]
+    );
+    assert!(output.current.ready_for_release.is_empty());
+    assert!(
+        output
+            .current
+            .blocked
+            .iter()
+            .chain(&output.current.running)
+            .any(|row| row.parent == historical.parent)
+    );
+    assert!(
+        view.outcomes
+            .parent_outcome(&historical.parent, &historical.work.generation)
+            .is_none()
+    );
+    view.history = output.current.history;
+    assert_eq!(
+        overview(&view, None, &control, Utc::now(), Duration::seconds(30))
+            .unwrap()
+            .current
+            .history
+            .len(),
+        1,
+        "current/historical copies of one display row deduplicate"
+    );
+    // Distinct runtime mappings sharing the native issue remain separate display
+    // identities. These copies do not represent two valid signed publications.
+    let mut other = historical.clone();
+    other.workspace = Uuid::from_u128(90);
+    other.admission = Uuid::from_u128(31);
+    other.record.operation_id = other.admission;
+    other.publication.effect = Uuid::from_u128(10_031);
+    view.no_release_history.push(other.clone());
+    view.projection.workspaces.clear();
+    for selected in [historical.workspace, other.workspace] {
+        let output = overview(
+            &view,
+            Some(selected),
+            &control,
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+        assert_eq!(output.current.history.len(), 1);
+        assert_eq!(
+            output.current.history[0].parent_reference,
+            format!("{selected}/{}", historical.parent.issue)
+        );
+        assert_eq!(output.no_release_history.len(), 1);
+        assert!(output.current.ready_for_release.is_empty());
+    }
+    let row = &mut view.no_release_history[0];
+    row.completion = None;
+    row.diagnostic = Some(Error::new(
+        "record_missing",
+        "original immutable reference missing",
+    ));
+    let output = overview(
+        &view,
+        Some(historical.workspace),
+        &control,
+        Utc::now(),
+        Duration::seconds(30),
+    )
+    .unwrap();
+    assert!(
+        output.current.history.is_empty(),
+        "a missing completion reference remains diagnostic-only"
+    );
+    assert_eq!(
+        output.no_release_history[0]
+            .diagnostic
+            .as_ref()
+            .unwrap()
+            .code,
+        "record_missing"
+    );
 }

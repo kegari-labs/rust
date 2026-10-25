@@ -52,8 +52,12 @@ impl RuntimeDelivery {
         }
         {
             let state = self.releases.state.lock().map_err(|_| unavailable())?;
-            let consumed = state.completed_ancestors()?;
-            if consumed.contains_key(&operation) || state.completions.contains_key(&operation) {
+            let consumed =
+                state.completed_ancestors(&record.work, &record.attempt.plan.resources)?;
+            if consumed.contains_key(&operation)
+                || state.completions.contains_key(&operation)
+                || state.completion_anchors.contains_key(&operation)
+            {
                 return Err(Error::new(
                     "release_completed",
                     "verified terminal completion and its consumed ancestor history are immutable",
@@ -394,7 +398,15 @@ impl RuntimeDelivery {
                     next.workflow_digest = gate.workflow_digest().into();
                     let mut proposed = state.attempts.clone();
                     proposed.insert(plan.operation_id, next.clone());
-                    let queue = rebuild_queue(&proposed, &state.no_release, &state.completions)?;
+                    let queue = rebuild_queue(
+                        &proposed,
+                        &state.no_release,
+                        &state.completions,
+                        &state.completion_anchors,
+                        &state.completion_errors,
+                        state.completion_inventory_error.as_ref(),
+                        &state.historical_no_release,
+                    )?;
                     self.save_release(&next)?;
                     state.attempts = proposed;
                     state.queue = queue;
@@ -655,7 +667,28 @@ impl RuntimeDelivery {
                     "requested original operation identity changed",
                 ));
             }
-            Ok((actual.phase == ReceiptPhase::Reconciled).then_some(actual))
+            // Local task retirement can precede a lost publication reply's
+            // recovery. Only this exact typed metadata owner may revisit its
+            // retained uncertainty through the native no-release readback path.
+            // A generic Reconciled release still returns its own receipt.
+            let metadata = if actual.kind == "admission" {
+                crate::control::MetadataReference::from_receipt(&actual)?
+            } else {
+                None
+            };
+            let unresolved_no_release = metadata
+                .as_ref()
+                .is_some_and(|reference| reference.purpose == "no_release_required")
+                && actual.observed_result.as_ref().is_some_and(|result| {
+                    result["local_execution"] == "exited"
+                        && result["unresolved_effects"]
+                            .as_array()
+                            .is_some_and(|effects| !effects.is_empty())
+                });
+            Ok(
+                (actual.phase == ReceiptPhase::Reconciled && !unresolved_no_release)
+                    .then_some(actual),
+            )
         })?;
         if let Some(receipt) = reconciled {
             return Ok(receipt);
@@ -899,7 +932,15 @@ impl RuntimeDelivery {
         record.attempt.validate_recovered()?;
         let mut proposed = state.attempts.clone();
         proposed.insert(operation, record.clone());
-        let queue = rebuild_queue(&proposed, &state.no_release, &state.completions)?;
+        let queue = rebuild_queue(
+            &proposed,
+            &state.no_release,
+            &state.completions,
+            &state.completion_anchors,
+            &state.completion_errors,
+            state.completion_inventory_error.as_ref(),
+            &state.historical_no_release,
+        )?;
         self.save_release(&record)?;
         let observed = json!({"release_operation":operation,"action":action,"attempt_digest":canonical_digest(1,&record)?,"resolved":record.attempt.resolved,"abandoned":record.attempt.abandoned,"hold":record.attempt.hold_reason,"unknown":record.attempt.has_unknown(),"released":false});
         state.attempts = proposed;
@@ -1381,6 +1422,9 @@ mod tests {
 mod successor;
 
 impl crate::delivery::RuntimeDeliveryDecisions for RuntimeDelivery {
+    fn no_release_inspection(&self) -> Result<Vec<crate::inspection::NoReleaseInspectionRow>> {
+        self.no_release_inspection_rows()
+    }
     fn release_inspection(&self) -> Result<Vec<crate::inspection::ReleaseInspectionRow>> {
         self.release_inspection_rows()
     }

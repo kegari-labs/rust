@@ -46,6 +46,7 @@ pub(crate) struct Fixture {
     pub(crate) github_values: BTreeMap<String, Value>,
     pub(crate) github_transport: Option<Arc<dyn HttpTransport>>,
     pub(crate) before_issue_read: Option<Arc<dyn Fn() -> Result<()> + Send + Sync>>,
+    pub(crate) before_identity_read: Option<Arc<dyn Fn() -> Result<()> + Send + Sync>>,
     relations: Vec<Value>,
     history: BTreeMap<Uuid, Vec<Value>>,
     selected: bool,
@@ -99,6 +100,7 @@ impl Fixture {
             github_values: BTreeMap::new(),
             github_transport: None,
             before_issue_read: None,
+            before_identity_read: None,
             relations: Vec::new(),
             history: BTreeMap::from([(
                 id(100),
@@ -173,6 +175,9 @@ impl HttpTransport for Wire {
                     .as_str()
                     .and_then(|s| Uuid::parse_str(s).ok());
                 let data = if query.contains("KegariIdentity") {
+                    if let Some(before) = f.before_identity_read.take() {
+                        before()?;
+                    }
                     json!({"viewer":{"id":id(5),"name":"fixture"},"organization":{"id":id(3)}})
                 } else if query.contains("mutation KegariComment") {
                     let issue: Uuid =

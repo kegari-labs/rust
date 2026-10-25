@@ -253,7 +253,7 @@ impl RuntimeDelivery {
             .collect::<BTreeSet<_>>();
         let candidates = {
             let state = self.releases.state.lock().map_err(|_| unavailable())?;
-            let consumed = state.completed_ancestors()?;
+            let consumed = state.completed_ancestors(gate.work(), &resources)?;
             state
                 .attempts
                 .values()

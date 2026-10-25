@@ -89,8 +89,10 @@ then an actionable prerequisite root for an accepted blocked parent; an unknown
 dependency root is reported as unknown.
 
 Authenticated release inspection is separate from the current scheduling
-projection. Overview adds typed `release_history` rows and summarizes exact
-successful completions in history. Show includes attempts, completion/hold
+projection. Overview adds typed `release_history` and `no_release_history` rows
+and summarizes exact successful completions in history. A no-release completion
+retains its original generation, digest and time; a missing immutable reference
+leaves a diagnostic row with no completion marker. Show includes attempts, completion/hold
 provenance and scoped diagnostics even when the parent or workspace is absent
 from current discovery. A consumed ancestor hold is not a successful release of
 that ancestor's generation. Display rows never mint dependency or readiness

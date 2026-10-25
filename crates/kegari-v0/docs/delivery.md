@@ -391,8 +391,63 @@ generation pin selects the outcome. A later correction or production movement
 does not rewrite an earlier completion; an earlier completion cannot satisfy a
 pin requiring the correction. A missing reference invalidates its exact completion
 without erasing other verified completions. Unsafe storage or unauthenticated
-envelopes fail the inventory. Historical no-release-required runtime recovery
-still needs its separate durable producer; display history cannot supply credit.
+envelopes fail the inventory.
+
+Deployment-free and authenticated owned-target `no-release-required` outcomes use
+a separate signed immutable completion. Initial sealing consumes the current parent/acceptance
+publications, complete candidate vector, exact retired metadata admission and
+publication ancestry, and fresh opaque production baselines for every repository.
+Recovery preserves the original outcome digest, generation and time. It validates
+all retained references without requiring that generation or production revision
+to remain current. Each dependency use still requires the same fresh provider and
+repository access checks as released history. Inserting this historical success
+never clears current owners or holds and never consumes release spacing.
+
+For deployed targets, the actual ordinary production observer retains each owned
+deployment proof. Completion seals bind its immutable proof and challenge,
+available immutable locators, exact closed original/resumed ownership ancestry,
+and dispatch receipt. Every configured target keeps its own artifact/source map;
+a common artifact is not required. Historical reads validate these original local
+references without consulting the mutable current-target index or requiring the
+old target to remain current. Missing any required target reference denies the
+whole completion. A target owner must have actually exited with reconciled effects
+before its observation can be retained as closed provenance.
+
+Known seals retain their authenticated identity and complete resource scope when
+an immutable reference disappears. Their failed outcome cannot supply dependency
+credit, clear a hold, or fall back to a mutable current observation. The queue
+quarantines overlapping resources and dependencies pinned to that exact outcome;
+disjoint work remains eligible under its normal gates. Valid earlier history
+remains usable when a later completion on the same resources fails. Only a valid
+completion may consume its exact ancestor IDs; another quarantine's protected
+operations cannot be cleared by shared resource identity.
+
+Quarantines retain their real protected envelope readers. Every queue decision
+checks those readers before filtering by scope: a present malformed or
+unauthenticated outer seal, unsafe storage, failed enumeration or unavailable
+unknown scope blocks the whole queue until a complete successful inventory.
+Unrelated rebuilds cannot erase that fatal status. A cold ordinary reader requires
+all signed scope-bearing attempts; a known opaque anchor may preserve that scope
+in the same runtime after references disappear. Runtime anchors also survive a
+new delivery facade, preserve the original digest and prevent reminting a removed
+known seal. First authenticated reads and initial seal writes remember identity inside the
+same Control boundary used by completion commits. Each authenticated prefix is
+remembered even if a later inventory entry fails. Complete queue/dependency sync
+also holds that boundary through installation, so an older scan cannot overwrite
+a newer failure. Shared failure status closes fresh facades, and newly learned
+no-release scopes are checked before a later parent can record current readiness.
+Ordinary and no-release inventory errors remain distinct; repairing one does not
+clear an independent failure in the other. These anchors are protective facts, never successful
+outcomes or execution permits.
+
+Inspection displays authenticated identity and its exact diagnostic without a
+completion marker. This display grants no authority.
+Native parent/acceptance publication effects and the signed vector are required;
+later approval-command completion and Linear closure are separate from acceptance.
+An externally deployed target without an authenticated owned proof still lacks a
+supported production-observation producer. The ordinary baseline reader reports
+that prerequisite; native source/status JSON alone cannot prove deployed artifact
+identity. No owned deployment dispatch or immutable baseline provenance is fabricated.
 The same-parent predecessor selector excludes only ancestors covered by a valid
 completion. `release_history()` separates historical failures from `active_hold`
 and names `completed_by`; recovery cannot rewrite the completed terminal or its
@@ -400,22 +455,21 @@ consumed ancestor records. The control inspection facade includes these rows and
 per-chain `completion_error` values.
 
 Later production changes do not invalidate an already observed completion.
-Restart recovery checks the immutable local references without requiring the
+Restart recovery checks immutable local references without requiring the
 descendant to remain the current deployed version. Missing, corrupt or changed
-references block queue authority; unrelated holds remain intact. Initial
-completion observations are checked independently, so one observation failure
-does not stop other chains from being checked. An invalid cached completion
-reference keeps the queue conservative until its exact evidence is restored or
-reconciled. Inspection still presents authenticated attempt history, marks the
-affected chain's diagnostic holds and errors, and preserves unrelated rows; this
-partial diagnostic view grants no queue, recovery, or baseline authority. The
-inspection-specific refresh still reads current provider observations, but active
-missing release prerequisites explicitly invalidate cached product readiness
-before historical rows are rendered. It does not rebuild or bypass the strict
-release queue; normal reconciliation retains its failure. Old errors on resolved
-records alone do not trigger this path. Cold inspection has the same behavior for
-missing completion or owner references; unsafe storage or unauthenticated attempt
-records still fail explicitly.
+inner references deny their authenticated scope while preserving unrelated holds
+and valid historical facts. Initial completion observations are checked
+independently, so one observation failure does not stop other chains from being
+checked. Only a complete new inventory clears an installed quarantine; merely
+inserting another success cannot do so.
+
+Normal and inspection refresh preserve each failed parent's diagnostic and skip
+new observation admissions for that known blocker. Other parents still require
+their original fresh-gate checks, with queue resource/dependency isolation enforced
+separately. Historical diagnostic rows do not grant queue, recovery or baseline
+authority. Errors on resolved records alone do not invalidate current readiness.
+Unsafe storage, unauthenticated attempts and unknown completion scope fail
+explicitly rather than being treated as an empty history.
 
 The current ordinary completion/dependency/inspection increment is tracked in
 [its validation report](../validation/LOCAL-RELEASED-INSPECTION.md). Earlier local

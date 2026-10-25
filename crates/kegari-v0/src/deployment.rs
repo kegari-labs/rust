@@ -28,6 +28,9 @@ use uuid::Uuid;
 #[path = "deployment_history.rs"]
 mod history;
 pub use history::{HistoricalTargetDeployment, TargetProofReference};
+#[path = "deployment_baseline_history.rs"]
+mod baseline_history;
+pub(crate) use baseline_history::OwnedTargetObservationRef;
 
 pub type CurrentAuthority = Arc<dyn Fn(&FreshGate) -> Result<()> + Send + Sync>;
 
@@ -41,6 +44,8 @@ pub struct ProductionObserver {
 }
 #[derive(Clone, Debug)]
 pub struct VerifiedProductionBaseline {
+    // Actual current owned target proofs; successor baselines cannot mint history.
+    owned_targets: Vec<VerifiedTargetDeployment>,
     baseline: ProductionBaseline,
     targets: Vec<ProductionTargetBaseline>,
     contract_digest: String,
@@ -434,6 +439,7 @@ impl ProductionObserver {
         };
         baseline.validate()?;
         Ok(VerifiedProductionBaseline {
+            owned_targets: vec![],
             baseline,
             targets: current.targets,
             contract_digest: current.contract_digest,
@@ -802,6 +808,7 @@ impl ProductionObserver {
         let production = self.main(contract).await?;
         let mut targets = Vec::new();
         let mut target_artifacts = BTreeMap::new();
+        let mut owned_targets = Vec::new();
         let deployment_free = match &contract.configuration.deployment {
             Deployment::None(value) if value == "none" => true,
             Deployment::Steps { steps } if !steps.is_empty() => {
@@ -825,6 +832,7 @@ impl ProductionObserver {
                     let mut target = observed.target().clone();
                     target.observed_at = observed.observed_at();
                     targets.push(target);
+                    owned_targets.push(observed);
                 }
                 false
             }
@@ -859,6 +867,7 @@ impl ProductionObserver {
         };
         baseline.validate()?;
         Ok(VerifiedProductionBaseline {
+            owned_targets,
             baseline,
             targets,
             contract_digest,

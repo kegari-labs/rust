@@ -77,8 +77,14 @@ impl WorkflowControl for RuntimeWorkflow {
             self.progression.reconcile_for_inspection().await?;
             let mut view = self.runtime.inspection()?;
             view.release_history = self.delivery.release_inspection()?;
-            crate::inspection::validate_rows(view.projection.runtime_id, &view.release_history)?;
+            view.no_release_history = self.delivery.no_release_inspection()?;
+            crate::inspection::validate_history(
+                view.projection.runtime_id,
+                &view.release_history,
+                &view.no_release_history,
+            )?;
             crate::inspection::sort_rows(&mut view.release_history);
+            crate::inspection::sort_no_release_rows(&mut view.no_release_history);
             Ok(view)
         })
     }

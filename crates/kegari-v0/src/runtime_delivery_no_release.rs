@@ -8,6 +8,14 @@ use crate::{
     providers::{Comment, ProviderMutation},
 };
 
+#[path = "runtime_delivery_no_release_history.rs"]
+pub(super) mod history;
+
+struct NoReleaseProductionObservation {
+    targets: Vec<ProductionTargetBaseline>,
+    baselines: Vec<crate::deployment::VerifiedProductionBaseline>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NoReleaseIntent {
@@ -147,7 +155,15 @@ impl RuntimeDelivery {
         self.restore_releases()?;
         let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
         state.no_release.clear();
-        state.queue = rebuild_queue(&state.attempts, &state.no_release, &state.completions)?;
+        state.queue = rebuild_queue(
+            &state.attempts,
+            &state.no_release,
+            &state.completions,
+            &state.completion_anchors,
+            &state.completion_errors,
+            state.completion_inventory_error.as_ref(),
+            &state.historical_no_release,
+        )?;
         Ok(())
     }
     async fn observe_no_release_targets(
@@ -155,7 +171,18 @@ impl RuntimeDelivery {
         workspace: &WorkspaceDelivery,
         parent: &VerifiedParent,
     ) -> Result<Vec<ProductionTargetBaseline>> {
+        Ok(self
+            .observe_no_release_production(workspace, parent)
+            .await?
+            .targets)
+    }
+    async fn observe_no_release_production(
+        &self,
+        workspace: &WorkspaceDelivery,
+        parent: &VerifiedParent,
+    ) -> Result<NoReleaseProductionObservation> {
         let mut targets = Vec::new();
+        let mut baselines = Vec::new();
         let mut seen = BTreeSet::new();
         for baseline in &parent.manifest().baselines {
             if !seen.insert(baseline.repository.clone()) {
@@ -185,8 +212,9 @@ impl RuntimeDelivery {
                 ));
             }
             targets.extend_from_slice(current.targets());
+            baselines.push(current);
         }
-        Ok(targets)
+        Ok(NoReleaseProductionObservation { targets, baselines })
     }
     fn persist_unadmitted_no_release_intent(
         &self,
@@ -566,8 +594,10 @@ impl RuntimeDelivery {
                 "already-production repository contracts changed",
             ));
         }
-        let current = self.observe_no_release_targets(workspace, parent).await?;
-        if !same_targets(&record.payload.targets, &current) {
+        let current = self
+            .observe_no_release_production(workspace, parent)
+            .await?;
+        if !same_targets(&record.payload.targets, &current.targets) {
             return Err(Error::new(
                 "stale_result",
                 "already-production target source/artifact/provider identity changed",
@@ -599,15 +629,56 @@ impl RuntimeDelivery {
             parent,
             acceptance,
         )?;
-        {
+        // Historical sealing is independent of current no-release readiness.
+        // A target provenance prerequisite remains visible without changing
+        // the existing, fully verified current outcome.
+        self.observe_no_release_history(history::NoReleaseSealInput {
+            workspace,
+            gate: snapshot.authority(),
+            parent,
+            acceptance,
+            intent: &intent,
+            proof: &proof,
+            observed: &current.baselines,
+        })
+        .await?;
+        // Historical collection performed native reads and may have reported a
+        // diagnostic instead of retaining a seal. Its completion never stands
+        // in for a fresh current-authority predicate. Commit current readiness
+        // only under the same gate that serializes correction/config changes.
+        let checked_parent = parent.clone();
+        let checked_acceptance = acceptance.clone();
+        let checked_gate = snapshot.authority().clone();
+        self.runtime.control.serialize_observation(|control| {
+            self.runtime.registration.verify_control_owner()?;
+            Self::check_no_release_intent(
+                &self.runtime,
+                &intent,
+                &checked_gate,
+                &checked_parent,
+                &checked_acceptance,
+            )?;
+            let work = checked_gate.work_key()?;
+            let runtime = intent.record.payload.runtime_id.to_string();
+            if control
+                .unresolved_operations
+                .values()
+                .any(|targets| targets.contains(&work) || targets.contains(&runtime))
+            {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "already-production work acquired unresolved effects during observation",
+                ));
+            }
+            self.runtime.require_released_inventory_available()?;
+            self.runtime.require_no_release_inventory_available()?;
+            self.validate_shared_no_release_resources(&intent.record.payload)?;
             let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
             state.queue.record_no_release_required(&proof)?;
-            state
-                .no_release
-                .insert(proof.record().operation_id, proof.clone());
-        }
-        snapshot.no_release_required(proof, publication.url)?;
-        Ok(())
+            snapshot.no_release_required(proof.clone(), publication.url)?;
+            state.no_release.insert(proof.record().operation_id, proof);
+            Ok(())
+        })
     }
 }
 

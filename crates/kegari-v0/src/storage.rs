@@ -89,10 +89,17 @@ fn open_directory(path: &Path) -> Result<File> {
                     )
                 };
                 if fd < 0 {
-                    return Err(Error::io(
-                        "open control directory without symlinks",
-                        std::io::Error::last_os_error(),
-                    ));
+                    let error = std::io::Error::last_os_error();
+                    return Err(
+                        if matches!(error.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) {
+                            Error::new(
+                                "unsafe_storage",
+                                "control directory path contains a link or non-directory",
+                            )
+                        } else {
+                            Error::io("open control directory without symlinks", error)
+                        },
+                    );
                 }
                 // SAFETY: successful openat returned a newly owned descriptor.
                 current = unsafe { File::from_raw_fd(fd) };
@@ -182,6 +189,11 @@ impl PrivateDir {
             let error = std::io::Error::last_os_error();
             return Err(if error.kind() == std::io::ErrorKind::NotFound {
                 Error::new("record_missing", "required control record is missing")
+            } else if error.raw_os_error() == Some(libc::ELOOP) {
+                Error::new(
+                    "unsafe_storage",
+                    "control record must not be a symbolic link",
+                )
             } else {
                 Error::io("open private record", error)
             });

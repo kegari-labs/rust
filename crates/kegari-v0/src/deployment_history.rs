@@ -102,6 +102,20 @@ pub(crate) struct TargetHistoryReferences {
 }
 
 impl ProductionObserver {
+    // Current opaque target proof comes only from actual native observation;
+    // retain its original owned event without pretending it is a new release.
+    pub(super) fn current_owned_references(
+        &self,
+        contract: &RepositoryContract,
+        current: &VerifiedTargetDeployment,
+    ) -> Result<TargetHistoryReferences> {
+        self.historical_references(
+            contract,
+            &HistoricalTargetDeployment {
+                record: current.record.clone(),
+            },
+        )
+    }
     /// Retain the exact immutable local inputs of an already observed historical
     /// target. The mutable current-target pointer is deliberately not a dependency.
     pub(crate) fn historical_references(

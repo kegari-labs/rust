@@ -175,11 +175,14 @@ not guesses made by the client. Exit codes follow SPEC §10.1; a durably accepte
 pending/draining mutation is distinct from a completed/failed/unknown operation.
 
 Read-only `overview`, `show` and `open` can resolve authenticated retained release
-history. A removed workspace is selectable by its UUID; a retained display name
+and no-release-required history. A removed workspace is selectable by its UUID; a retained display name
 is not a new configuration alias. Parent references are deduplicated by runtime
 workspace and complete native identity, with ambiguity reported explicitly.
 `show` retains historical attempts and exact completion/hold diagnostics when a
-current parent projection is absent. `open` requires an actual observed,
+current parent projection is absent. Separate `no_release_history` rows preserve
+the original generation, completion time and observed publication identity without
+inventing a release attempt. Missing required references remove the completion
+marker while retaining an authenticated diagnostic row. `open` requires an actual observed,
 credential-free HTTPS parent URL; missing or conflicting retained URLs return an
 error. Historical identity does not make a target eligible for mutation, recovery,
 acceptance or release.

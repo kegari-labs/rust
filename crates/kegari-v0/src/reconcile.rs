@@ -1444,6 +1444,27 @@ impl DependencyOutcomes {
         }
         Ok(())
     }
+    pub(crate) fn historical_no_release(
+        &mut self,
+        proof: &crate::runtime_delivery::VerifiedNoReleaseCompletion,
+        config: &crate::config::Config,
+    ) -> Result<()> {
+        let success = proof.validate_for_configuration(config)?;
+        let work = proof.work();
+        let entries = self
+            .outcomes
+            .entry(IssueKey::new(
+                &work.linear_endpoint,
+                work.linear_workspace,
+                success.parent_id,
+            )?)
+            .or_default();
+        let outcome = (success.generation, success.outcome_digest, true);
+        if !entries.contains(&outcome) {
+            entries.push(outcome);
+        }
+        Ok(())
+    }
     pub fn no_release_required(
         &mut self,
         verified: &crate::evidence::VerifiedNoReleaseRequired,

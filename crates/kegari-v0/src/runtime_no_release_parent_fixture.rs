@@ -1,68 +1,10 @@
 //! Synthetic provider/check facts passed through production evidence validators.
-//! Actual Git candidate bytes are created only in an owned disposable repository.
+//! Actual no-change candidate and baseline come from the separately admitted
+//! Git/vector fixture; this helper supplies no execution or joined capability.
 use crate::{digest::canonical_digest, evidence::*, git::*};
 use chrono::{Duration, Utc};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-};
-use tempfile::TempDir;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
-fn git_binary() -> PathBuf {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|p| p.join("git"))
-        .find(|p| p.is_file())
-        .expect("Git is required")
-}
-
-fn git_run(path: &Path, args: &[&str]) -> String {
-    let output = Command::new(git_binary())
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
-        .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
-        .current_dir(path)
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgSign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout)
-        .unwrap()
-        .trim_end()
-        .to_string()
-}
-
-fn commit(path: &Path, message: &str) -> String {
-    git_run(path, &["add", "-A"]);
-    git_run(path, &["commit", "--signoff", "-m", message]);
-    git_run(path, &["rev-parse", "HEAD"])
-}
-
-fn private_dir(path: &Path) {
-    fs::create_dir(path).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
-    }
-}
-
 fn d(value: &str) -> String {
     canonical_digest(1, &value).unwrap()
 }
@@ -248,42 +190,20 @@ pub fn parent(
     parent_work: &WorkIdentity,
     child_work: &WorkIdentity,
     key: &AttestationKey,
-    git_path: &Path,
-    repository: RepositoryId,
-) -> (TempDir, VerifiedParent, VerifiedChild) {
-    let tmp = TempDir::new().unwrap();
-    let source = tmp.path().join("source");
-    let runs = tmp.path().join("runs");
-    private_dir(&source);
-    private_dir(&runs);
-    git_run(&source, &["init", "-b", "main"]);
-    fs::write(source.join("behavior.txt"), "known production fixture\n").unwrap();
-    let production = commit(&source, "test: create owned production fixture");
-    let git = Git::new(git_path).unwrap();
-    let candidate = git
-        .assemble_candidate(
-            &source,
-            &runs,
-            CandidateRequest {
-                operation_id: Uuid::new_v4(),
-                runtime_id: Uuid::from_u128(1),
-                repository: repository.clone(),
-                parent_id: parent_work.parent,
-                work_generation: &parent_work.generation.definition,
-                correction_generation: &parent_work.generation.correction,
-                production_commit: &production,
-                deltas: &[],
-                child_dependencies: &BTreeMap::new(),
-                satisfied_children: &BTreeSet::new(),
-                production_integrations: &[],
-                identity: CommitIdentity {
-                    name: "Disposable Fixture Human".into(),
-                    email: "fixture@example.test".into(),
-                },
-            },
-        )
-        .unwrap();
-    let revision = candidate.manifest.production.clone();
+    candidate: CandidateManifest,
+    baselines: Vec<ProductionBaseline>,
+    dependency_snapshot_digest: String,
+) -> (VerifiedParent, VerifiedChild) {
+    assert!(candidate.ordered_delta_digests.is_empty());
+    assert_eq!(candidate.result.as_ref(), Some(&candidate.production));
+    assert_eq!(baselines.len(), 1);
+    assert_eq!(baselines[0].production, candidate.production);
+    let production_targets: BTreeSet<_> = baselines
+        .iter()
+        .flat_map(|baseline| baseline.target_artifacts.keys().cloned())
+        .collect();
+    let repository = candidate.repository.clone();
+    let revision = candidate.production.clone();
     let (child, _) = verified_child(
         child_work.clone(),
         RevisionBinding {
@@ -319,19 +239,10 @@ pub fn parent(
         fulfilled_criteria: BTreeSet::from(["prepared-outcome".into()]),
         caveats: vec!["Synthetic provider/check observations; no live qualification".into()],
         go: true,
-        baselines: vec![ProductionBaseline {
-            target_artifacts: BTreeMap::new(),
-            repository,
-            production: revision,
-            deployed_revision: None,
-            target_revisions: BTreeMap::new(),
-            deployed_artifact: None,
-            deployment_free: true,
-            successor_recovery_operation: None,
-        }],
-        candidates: vec![candidate.manifest],
-        dependency_snapshot_digest: d("fixture no dependencies"),
-        production_targets: BTreeSet::new(),
+        baselines,
+        candidates: vec![candidate],
+        dependency_snapshot_digest,
+        production_targets: production_targets.clone(),
         integrated_results: vec![],
         visual: false,
         video: None,
@@ -364,7 +275,7 @@ pub fn parent(
             criteria: &manifest.fulfilled_criteria,
             integrated_commands: &BTreeMap::from([("e2e".into(), vec!["/usr/bin/true".into()])]),
             test_resources: &BTreeSet::new(),
-            production_targets: &BTreeSet::new(),
+            production_targets: &production_targets,
             visual: false,
             required_contributions: &BTreeMap::new(),
             production_integrations: &[],
@@ -374,5 +285,5 @@ pub fn parent(
         "00000000-0000-0000-0000-000000000005",
     )
     .unwrap();
-    (tmp, verified, child)
+    (verified, child)
 }

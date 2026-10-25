@@ -3,6 +3,212 @@
 //! check or a fabricated joined worker completion.
 use super::*;
 
+#[path = "runtime_delivery_completion_race_fixture.rs"]
+mod first_reader_race;
+
+/// Genuine completed ordinary release; candidate plans are domain queries only.
+/// No disjoint source/admission/readiness capability is constructed here.
+async fn assert_scoped_ordinary_queue(
+    built: &crate::runtime_fixture::RuntimeFixture,
+    delivery: &Arc<RuntimeDelivery>,
+    barrier: &Arc<tokio::sync::Mutex<()>>,
+    proof: &crate::runtime_delivery::VerifiedReleaseCompletion,
+    record: &AttemptRecord,
+) {
+    let _poll = barrier.lock().await;
+    let projection = built.runtime.observations.refresh().await.unwrap();
+    let workspace = delivery.workspace(&projection, record.workspace).unwrap();
+    let scope = domain::CompletionScope::release(proof).unwrap();
+    let mut overlap = record.attempt.plan.clone();
+    overlap.operation_id = Uuid::new_v4();
+    overlap.parent_id = Uuid::new_v4();
+    overlap.dependencies.clear();
+    overlap.spacing_seconds = 0;
+    overlap.validate().unwrap();
+    let mut disjoint = overlap.clone();
+    disjoint.operation_id = Uuid::new_v4();
+    assert_eq!(disjoint.steps.len(), 1);
+    let domain::StepKind::Merge { repository, .. } = &mut disjoint.steps[0].kind else {
+        panic!("ordinary fixture has one actual merge")
+    };
+    repository.id = "9002".into();
+    disjoint.resources = BTreeSet::from([domain::ResourceKey::Repository {
+        repository: repository.clone(),
+    }]);
+    disjoint.deployment_free = BTreeSet::from([repository.clone()]);
+    disjoint.validate().unwrap();
+    assert!(scope.resources().is_disjoint(&disjoint.resources));
+    let success = proof
+        .validate_for_configuration(&workspace.configuration)
+        .unwrap();
+    let mut dependent = disjoint.clone();
+    dependent.operation_id = Uuid::new_v4();
+    dependent.dependencies = vec![domain::DependencyRequirement {
+        parent_id: record.work.parent,
+        generation: record.work.generation.clone(),
+        outcome_digest: success.outcome_digest.clone(),
+    }];
+    dependent.validate().unwrap();
+    // Query a time after the genuine prior spacing interval; no dispatch or
+    // observation timestamp is changed by this pure queue scheduling argument.
+    let at = success.completed_at
+        + Duration::seconds(i64::try_from(success.spacing_seconds).unwrap() + 1);
+    {
+        let state = delivery.releases.state.lock().unwrap();
+        for plan in [&overlap, &disjoint, &dependent] {
+            state.queue.eligible(plan, at).unwrap();
+        }
+    }
+    let mut owned = delivery.releases.state.lock().unwrap().queue.clone();
+    owned.reserve(&disjoint, at).unwrap();
+    let mut held = owned.clone();
+    let mut synthetic = super::super::tests::record(disjoint.clone(), record.work.clone());
+    synthetic.attempt.hold_reason = Some("explicit domain-only unrelated hold".into());
+    held.restore_hold(&synthetic.attempt).unwrap();
+    let receipts = canonical_digest(1, &built.runtime.control.operations().unwrap()).unwrap();
+    let signed: Signed<Value> = delivery
+        .records
+        .read(&format!(
+            "release-completion-{}.json",
+            proof.terminal().plan.operation_id
+        ))
+        .unwrap();
+    let leaf = signed.payload["effects"][0]["leaf"].as_str().unwrap();
+    let bytes = workspace.records.read_bytes(leaf, 1024 * 1024).unwrap();
+    std::fs::remove_file(workspace.records.path().join(leaf)).unwrap();
+    let missing = proof.validate().unwrap_err();
+    assert_eq!(missing.code, "release_completion");
+    assert_eq!(
+        missing.message,
+        "completed chain omitted a required prior step attempt"
+    );
+    let check = |queue: &domain::ReleaseQueue| {
+        for plan in [&overlap, &dependent] {
+            let denied = queue.eligible(plan, at).unwrap_err();
+            assert_eq!(denied.code, missing.code);
+            assert_eq!(denied.message, missing.message);
+        }
+        queue.eligible(&disjoint, at).unwrap();
+        assert_eq!(queue.earliest_start(&disjoint, at).unwrap(), at);
+    };
+    check(&delivery.releases.state.lock().unwrap().queue);
+    assert!(owned.owns_all(&disjoint));
+    owned
+        .quarantine_completion(scope.clone(), missing.clone())
+        .unwrap();
+    held.quarantine_completion(scope, missing.clone()).unwrap();
+    assert!(owned.owns_all(&disjoint));
+    assert_eq!(
+        held.eligible(&disjoint, at).unwrap_err().code,
+        "release_hold"
+    );
+    delivery.sync_released_completions().unwrap();
+    check(&delivery.releases.state.lock().unwrap().queue);
+    let cold = RuntimeDelivery::with_fixture(
+        built.runtime.clone(),
+        delivery.processes.clone(),
+        delivery.git_path().unwrap(),
+    )
+    .unwrap();
+    cold.sync_released_completions().unwrap();
+    cold.restore_releases().unwrap();
+    check(&cold.releases.state.lock().unwrap().queue);
+    // A has only protective quarantine after this scan, not a valid proof-map
+    // entry. Its actual outer seal must still be authenticated on a disjoint
+    // queue query before another scan; losing success credit is not a waiver.
+    for facade in [delivery.as_ref(), &cold] {
+        assert!(
+            !facade
+                .releases
+                .state
+                .lock()
+                .unwrap()
+                .completions
+                .contains_key(&proof.terminal().plan.operation_id)
+        );
+    }
+    let quarantined_seal = format!(
+        "release-completion-{}.json",
+        proof.terminal().plan.operation_id
+    );
+    let quarantined_bytes = delivery
+        .records
+        .read_bytes(&quarantined_seal, 1024 * 1024)
+        .unwrap();
+    for malformed in [false, true] {
+        let (code, message) = if malformed {
+            delivery
+                .records
+                .write(&quarantined_seal, &json!({"not_a_signed_seal":true}))
+                .unwrap();
+            (
+                "record_corrupt",
+                "control record is invalid JSON or has unknown fields",
+            )
+        } else {
+            let mut altered: Signed<Value> = delivery.records.read(&quarantined_seal).unwrap();
+            altered.signature = "00".repeat(32);
+            delivery.records.write(&quarantined_seal, &altered).unwrap();
+            (
+                "invalid_attestation",
+                "authentication tag verification failed",
+            )
+        };
+        for facade in [delivery.as_ref(), &cold] {
+            let denied = facade
+                .releases
+                .state
+                .lock()
+                .unwrap()
+                .queue
+                .eligible(&disjoint, at)
+                .unwrap_err();
+            assert_eq!(denied.code, code);
+            assert_eq!(denied.message, message);
+        }
+        delivery
+            .records
+            .write_bytes(&quarantined_seal, &quarantined_bytes)
+            .unwrap();
+        for facade in [delivery.as_ref(), &cold] {
+            check(&facade.releases.state.lock().unwrap().queue);
+        }
+    }
+    workspace.records.write_bytes(leaf, &bytes).unwrap();
+    delivery.sync_released_completions().unwrap();
+    delivery
+        .releases
+        .state
+        .lock()
+        .unwrap()
+        .queue
+        .eligible(&dependent, at)
+        .unwrap();
+
+    // A cold reader without any prior authenticated anchors cannot infer
+    // scope from a completion filename when a signed AttemptRecord is missing.
+    // This is the actual bounded reader, not a claim of restarting the runtime:
+    // a new facade sharing this runtime may now retain genuine cached anchors.
+    let attempt = attempt_leaf(record.attempt.plan.operation_id);
+    let attempt_bytes = delivery.records.read_bytes(&attempt, 1024 * 1024).unwrap();
+    std::fs::remove_file(delivery.records.path().join(&attempt)).unwrap();
+    let unavailable = match delivery.release_completion_queue_inventory(&BTreeMap::new()) {
+        Ok(_) => panic!("unknown cold scope requires every authenticated attempt"),
+        Err(error) => error,
+    };
+    assert_eq!(unavailable.code, "record_missing");
+    delivery
+        .records
+        .write_bytes(&attempt, &attempt_bytes)
+        .unwrap();
+    delivery.sync_released_completions().unwrap();
+    built.runtime.observations.refresh().await.unwrap();
+    assert_eq!(
+        canonical_digest(1, &built.runtime.control.operations().unwrap()).unwrap(),
+        receipts
+    );
+}
+
 pub(super) struct OrdinaryFixture<'a> {
     pub built: &'a crate::runtime_fixture::RuntimeFixture,
     pub delivery: &'a Arc<RuntimeDelivery>,
@@ -75,8 +281,16 @@ pub(super) fn complete_ordinary(
         {
             let mut state = delivery.releases.state.lock().unwrap();
             state.attempts.insert(operation, record);
-            state.queue =
-                rebuild_queue(&state.attempts, &state.no_release, &state.completions).unwrap();
+            state.queue = rebuild_queue(
+                &state.attempts,
+                &state.no_release,
+                &state.completions,
+                &state.completion_anchors,
+                &state.completion_errors,
+                state.completion_inventory_error.as_ref(),
+                &state.historical_no_release,
+            )
+            .unwrap();
         }
         delivery
             .record_release_observation(operation, &merged.1)
@@ -95,9 +309,60 @@ pub(super) fn complete_ordinary(
         );
         let record = delivery.releases.state.lock().unwrap().attempts[&operation].clone();
         delivery.retire_release(operation, &record).unwrap();
-        let projection = built.runtime.observations.refresh().await.unwrap();
-        delivery.complete_release_chains(&projection).await.unwrap();
-        let proof = delivery.releases.state.lock().unwrap().completions[&operation].clone();
+        // A genuinely new runtime restores only the actual retired attempt,
+        // before the first seal exists; no prior anchor/cache is transferred.
+        let cold_readers = first_reader_race::prepare(delivery, operation).await;
+        let proof = {
+            // Retain the actual fixture poll barrier from this first successful
+            // observation through the sequential missing-own-seal commit. No
+            // timestamp, signed payload or native receipt is manufactured.
+            let _poll = observation_barrier.lock().await;
+            let projection = built.runtime.observations.refresh().await.unwrap();
+            delivery.complete_release_chains(&projection).await.unwrap();
+            let proof = delivery.releases.state.lock().unwrap().completions[&operation].clone();
+            let provider_reads = data.lock().unwrap().requests.len();
+            let effects = github.release_effect_count();
+            first_reader_race::assert_serialized_first_reader(&cold_readers, &proof);
+            assert_eq!(data.lock().unwrap().requests.len(), provider_reads);
+            assert_eq!(github.release_effect_count(), effects);
+            let seal_leaf = format!("release-completion-{operation}.json");
+            let seal_bytes = delivery
+                .records
+                .read_bytes(&seal_leaf, 1024 * 1024)
+                .unwrap();
+            let commit = delivery
+                .prepare_fixture_completion_commit(operation)
+                .unwrap();
+            std::fs::remove_file(delivery.records.path().join(&seal_leaf)).unwrap();
+            let missing = proof.validate().unwrap_err();
+            assert_eq!(missing.code, "record_missing");
+            let refused = commit().unwrap_err();
+            assert_eq!(refused.code, missing.code);
+            assert_eq!(refused.message, missing.message);
+            assert_eq!(
+                delivery
+                    .records
+                    .read_bytes(&seal_leaf, 1024 * 1024)
+                    .unwrap_err()
+                    .code,
+                "record_missing"
+            );
+            let key = issue(&record).unwrap();
+            assert!(
+                built
+                    .runtime
+                    .dependency_outcomes()
+                    .unwrap()
+                    .parent_outcome(&key, &record.work.generation)
+                    .is_none()
+            );
+            delivery
+                .records
+                .write_bytes(&seal_leaf, &seal_bytes)
+                .unwrap();
+            proof.validate().unwrap();
+            proof
+        };
         assert!(
             proof.validate().unwrap().is_empty(),
             "ordinary success consumes no ancestor hold"
@@ -141,6 +406,14 @@ pub(super) fn complete_ordinary(
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].completion.as_ref().unwrap().work, record.work);
         assert!(rows[0].completed_by.is_none() && !rows[0].active_hold);
+        Box::pin(assert_scoped_ordinary_queue(
+            built,
+            delivery,
+            observation_barrier,
+            &proof,
+            &record,
+        ))
+        .await;
 
         // Identity remains pinned; unrelated configuration settings are not the
         // historical provider identity, nor is the current deployed pointer.
@@ -252,7 +525,18 @@ pub(super) fn complete_ordinary(
             delivery.git_path().unwrap(),
         )
         .unwrap();
-        assert!(cold.restore_releases().is_err());
+        cold.restore_releases().unwrap();
+        let unavailable = proof.validate().unwrap_err();
+        let denied = cold
+            .releases
+            .state
+            .lock()
+            .unwrap()
+            .queue
+            .eligible(&record.attempt.plan, Utc::now())
+            .unwrap_err();
+        assert_eq!(denied.code, unavailable.code);
+        assert_eq!(denied.message, unavailable.message);
         cold.sync_released_completions().unwrap();
         assert!(
             built
@@ -289,8 +573,37 @@ pub(super) fn complete_ordinary(
         )
         .unwrap();
         legacy_cold.restore_releases().unwrap();
-        let legacy_proof =
-            legacy_cold.releases.state.lock().unwrap().completions[&operation].clone();
+        // This facade retains the genuine original schema-2 identity. An
+        // authenticated schema rewrite cannot replace it or supply credit.
+        assert!(
+            !legacy_cold
+                .releases
+                .state
+                .lock()
+                .unwrap()
+                .completions
+                .contains_key(&operation)
+        );
+        assert_eq!(
+            legacy_cold
+                .releases
+                .state
+                .lock()
+                .unwrap()
+                .completion_anchors[&operation]
+                .digest(),
+            proof.digest()
+        );
+        // Independently exercise the cold legacy decoder with no prior anchor.
+        // This is a read-only component check, not a new process or cache reset.
+        let legacy_inventory = legacy_cold
+            .release_completion_queue_inventory(&BTreeMap::new())
+            .unwrap();
+        let legacy_proof = legacy_inventory.proofs[&operation].clone();
+        let legacy_history = domain::ReleaseQueue::default()
+            .record_release_completion_history(&legacy_proof)
+            .unwrap();
+        assert_eq!(legacy_history.outcome_digest, success.outcome_digest);
         assert_eq!(
             legacy_proof
                 .validate_for_configuration(&configuration)

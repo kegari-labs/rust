@@ -72,6 +72,7 @@ struct Workflow {
     reads: AtomicUsize,
     writes: AtomicUsize,
     release_history: Mutex<Vec<kegari_v0::inspection::ReleaseInspectionRow>>,
+    no_release_history: Mutex<Vec<kegari_v0::inspection::NoReleaseInspectionRow>>,
     history: Mutex<Vec<kegari_v0::reconcile::HistoryRow>>,
     release_details: Mutex<BTreeMap<(Uuid, kegari_v0::authority::IssueKey), Value>>,
 }
@@ -93,6 +94,7 @@ impl WorkflowControl for Workflow {
                 history: self.history.lock().unwrap().clone(),
                 release_details: self.release_details.lock().unwrap().clone(),
                 release_history: self.release_history.lock().unwrap().clone(),
+                no_release_history: self.no_release_history.lock().unwrap().clone(),
             })
         })
     }
@@ -231,6 +233,7 @@ impl Fixture {
             reads: AtomicUsize::new(0),
             writes: AtomicUsize::new(0),
             release_history: Mutex::new(vec![]),
+            no_release_history: Mutex::new(vec![]),
             history: Mutex::new(vec![]),
             release_details: Mutex::new(BTreeMap::new()),
         });
@@ -740,4 +743,213 @@ async fn known_role_reduction_blocks_dispatch_even_while_last_good_config_retain
             .await
             .is_ok()
     );
+}
+
+// Synthetic display fixture only. Actual signed publication/seal validation is
+// covered by the no-release producer; this helper supplies no capability.
+fn no_release_historical_display(
+    runtime: Uuid,
+    workspace: Uuid,
+    operation: Uuid,
+) -> kegari_v0::inspection::NoReleaseInspectionRow {
+    use kegari_v0::{
+        authority::IssueKey,
+        digest::bytes_digest,
+        evidence::{Generation, NoReleaseRequired, WorkIdentity},
+        inspection::{NoReleaseInspectionRow, NoReleasePublicationInspection, ParentDisplay},
+    };
+    let parent = IssueKey::new(
+        "https://linear.invalid",
+        Uuid::from_u128(40),
+        Uuid::from_u128(41),
+    )
+    .unwrap();
+    let work = WorkIdentity {
+        linear_endpoint: parent.endpoint.clone(),
+        linear_workspace: parent.workspace,
+        parent: parent.issue,
+        child: None,
+        generation: Generation {
+            authorization: bytes_digest(b"no-release display authorization"),
+            definition: bytes_digest(b"no-release display definition"),
+            correction: bytes_digest(b"no-release display correction"),
+            scope: bytes_digest(b"no-release display scope"),
+        },
+    };
+    NoReleaseInspectionRow {
+        workspace,
+        parent,
+        work: work.clone(),
+        admission: operation,
+        publication: NoReleasePublicationInspection {
+            effect: Uuid::new_v4(),
+            comment: None,
+            url: None,
+        },
+        record: NoReleaseRequired {
+            schema_version: 1,
+            runtime_id: runtime,
+            operation_id: operation,
+            work,
+            evidence_token: bytes_digest(b"no-release display evidence"),
+            acceptance_digest: bytes_digest(b"no-release display acceptance"),
+            baselines: vec![],
+            targets: vec![],
+            recorded_at: chrono::Utc::now() - chrono::Duration::days(3),
+        },
+        record_digest: bytes_digest(b"synthetic original signed no-release digest"),
+        completion: None,
+        diagnostic: Some(Error::new(
+            "record_missing",
+            "display fixture has no actual seal reference",
+        )),
+        display: ParentDisplay {
+            workspace_name: Some("removed-no-release-workspace".into()),
+            identifier: Some("OLD-41".into()),
+            title: Some("Previously no release required".into()),
+            url: None,
+        },
+    }
+}
+
+#[tokio::test]
+async fn no_release_history_facade_is_read_only_scoped_and_keeps_completion_separate() {
+    use kegari_v0::inspection::NoReleaseCompletionInspection;
+    let f = Fixture::new();
+    let runtime = f.config.snapshot().unwrap().runtime.id;
+    let workspace = Uuid::from_u128(30);
+    let other = Uuid::from_u128(31);
+    f.workflow
+        .no_release_history
+        .lock()
+        .unwrap()
+        .push(no_release_historical_display(
+            runtime,
+            workspace,
+            Uuid::from_u128(60),
+        ));
+    let before = f.control.operations().unwrap().len();
+    assert!(
+        resolve_workspace(&f.config.snapshot().unwrap(), Some(&workspace.to_string())).is_err()
+    );
+    let overview = page_data(
+        f.api(f.request(CommandName::Overview, json!({"workspace":workspace})))
+            .await,
+    );
+    assert_eq!(overview["no_release_history"].as_array().unwrap().len(), 1);
+    assert!(
+        overview["release_history"].as_array().unwrap().is_empty(),
+        "no release attempt is invented"
+    );
+    assert!(overview["history"].as_array().unwrap().is_empty());
+    assert!(overview["ready_for_release"].as_array().unwrap().is_empty());
+    let show = page_data(
+        f.api(f.request(
+            CommandName::Show,
+            json!({"workspace":workspace,"parent":"OLD-41"}),
+        ))
+        .await,
+    );
+    assert!(show["parent"].is_null());
+    assert!(show["evidence_token"].is_null());
+    assert_eq!(
+        show["no_release_history"][0]["diagnostic"]["code"],
+        "record_missing"
+    );
+    assert_eq!(
+        show["no_release_history"][0]["admission"],
+        json!(Uuid::from_u128(60))
+    );
+    assert!(show["no_release_history"][0]["completion"].is_null());
+    let missing = f
+        .api(f.request(
+            CommandName::Open,
+            json!({"workspace":workspace,"parent":"OLD-41"}),
+        ))
+        .await;
+    assert_eq!(missing.error.unwrap().code, "unknown_resource");
+    f.workflow.no_release_history.lock().unwrap()[0].display.url =
+        Some("https://user:secret@linear.invalid/issue/OLD-41".into());
+    let unsafe_url = f
+        .api(f.request(
+            CommandName::Open,
+            json!({"workspace":workspace,"parent":"OLD-41"}),
+        ))
+        .await;
+    assert_eq!(unsafe_url.error.unwrap().code, "unsafe_url");
+    let recorded_at = {
+        let mut rows = f.workflow.no_release_history.lock().unwrap();
+        let row = &mut rows[0];
+        row.display.url = Some("https://linear.invalid/issue/OLD-41".into());
+        row.publication.comment = Some(Uuid::from_u128(61));
+        row.publication.url = Some("https://linear.invalid/comment/61".into());
+        row.diagnostic = None;
+        row.completion = Some(NoReleaseCompletionInspection {
+            completed_at: row.record.recorded_at,
+        });
+        row.record.recorded_at
+    };
+    let overview = page_data(
+        f.api(f.request(CommandName::Overview, json!({"workspace":workspace})))
+            .await,
+    );
+    assert_eq!(overview["history"].as_array().unwrap().len(), 1);
+    assert_eq!(overview["history"][0]["outcome"], "no-release-required");
+    assert_eq!(overview["history"][0]["completed_at"], json!(recorded_at));
+    assert_eq!(
+        overview["history"][0]["links"],
+        json!(["https://linear.invalid/comment/61"])
+    );
+    assert!(overview["ready_for_release"].as_array().unwrap().is_empty());
+    let open = f
+        .api(f.request(
+            CommandName::Open,
+            json!({"workspace":workspace,"parent":"OLD-41"}),
+        ))
+        .await;
+    assert!(open.ok, "{:?}", open.error);
+    assert_eq!(open.data["url"], "https://linear.invalid/issue/OLD-41");
+    f.workflow
+        .no_release_history
+        .lock()
+        .unwrap()
+        .push(no_release_historical_display(
+            runtime,
+            other,
+            Uuid::from_u128(62),
+        ));
+    for row in f.workflow.no_release_history.lock().unwrap().iter() {
+        f.workflow.release_details.lock().unwrap().insert(
+            (row.workspace, row.parent.clone()),
+            json!({"fixture_origin_workspace":row.workspace}),
+        );
+    }
+    let ambiguous = f
+        .api(f.request(CommandName::Show, json!({"parent":"OLD-41"})))
+        .await;
+    assert_eq!(ambiguous.error.unwrap().code, "ambiguous_reference");
+    for selected in [workspace, other] {
+        let show = page_data(
+            f.api(f.request(
+                CommandName::Show,
+                json!({"workspace":selected,"parent":"OLD-41"}),
+            ))
+            .await,
+        );
+        assert_eq!(show["no_release_history"].as_array().unwrap().len(), 1);
+        assert_eq!(show["no_release_history"][0]["workspace"], json!(selected));
+        assert_eq!(show["release"]["fixture_origin_workspace"], json!(selected));
+        assert!(show["release_history"].as_array().unwrap().is_empty());
+    }
+    let overview = page_data(
+        f.api(f.request(CommandName::Overview, json!({"workspace":other})))
+            .await,
+    );
+    assert!(
+        overview["history"].as_array().unwrap().is_empty(),
+        "the completed first mapping cannot credit the second mapping"
+    );
+    assert_eq!(f.control.operations().unwrap().len(), before);
+    assert_eq!(f.workflow.writes.load(Ordering::SeqCst), 0);
+    assert_eq!(f.config.writes.load(Ordering::SeqCst), 0);
 }

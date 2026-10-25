@@ -20,76 +20,7 @@ struct OriginReference {
     receipts: BTreeSet<Uuid>,
     vector: ProofFile,
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProviderBinding {
-    account: String,
-    endpoint: String,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DependencyBinding {
-    linear: ProviderBinding,
-    github: ProviderBinding,
-    linear_workspace: Uuid,
-    repositories: BTreeSet<RepositoryId>,
-}
-impl DependencyBinding {
-    fn configured(
-        config: &Config,
-        workspace_id: Uuid,
-        repositories: BTreeSet<RepositoryId>,
-    ) -> Result<Self> {
-        let workspace = config
-            .workspaces
-            .values()
-            .find(|w| w.id == workspace_id)
-            .ok_or_else(|| invalid("completed release workspace is no longer configured"))?;
-        let provider = |name: &str, kind: crate::config::ProviderKind| -> Result<ProviderBinding> {
-            let connection = config
-                .connections
-                .get(name)
-                .filter(|connection| connection.kind == kind)
-                .ok_or_else(|| invalid("completed release provider connection is unavailable"))?;
-            let policy = crate::providers::HttpPolicy::new(
-                connection
-                    .endpoint
-                    .as_deref()
-                    .ok_or_else(|| invalid("provider endpoint is absent"))?,
-                connection.account_id.clone(),
-                std::time::Duration::from_secs(1),
-            )?;
-            Ok(ProviderBinding {
-                account: policy.account_id,
-                endpoint: policy.endpoint.to_string(),
-            })
-        };
-        if repositories.is_empty()
-            || repositories.iter().any(|repository| {
-                workspace
-                    .repositories
-                    .get(&repository.id.to_string())
-                    .is_none_or(|configured| configured.hostname != repository.hostname)
-            })
-        {
-            return Err(invalid(
-                "completed release repository inventory is no longer configured",
-            ));
-        }
-        Ok(Self {
-            linear: provider(
-                &workspace.linear_connection,
-                crate::config::ProviderKind::Linear,
-            )?,
-            github: provider(
-                &workspace.github_connection,
-                crate::config::ProviderKind::Github,
-            )?,
-            linear_workspace: workspace.linear_workspace_id,
-            repositories,
-        })
-    }
-}
+use super::super::completion_binding::DependencyBinding;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CompletionRecord {
@@ -295,59 +226,182 @@ fn closed_owner_references(
     Ok(unique.into_values().collect())
 }
 
-impl VerifiedReleaseCompletion {
-    fn recover(delivery: &RuntimeDelivery, signed: Signed<CompletionRecord>) -> Result<Self> {
-        delivery.runtime.services.key.verify(PURPOSE, &signed)?;
-        let record = &signed.payload;
-        if !matches!(
-            (record.schema_version, record.dependency_binding.is_some()),
-            (1, false) | (2, true)
-        ) || record.attempts.is_empty()
-            || record.attempts.len() > MAX_RELEASE_LINKS
-            || record.attempts.last().map(|(id, _)| *id) != Some(record.terminal)
-            || record.receipts.len() > MAX_REFERENCES
-            || record.effects.len() > MAX_REFERENCES
-            || record.target_proofs.len() > MAX_REFERENCES
-            || record.intents.len() + 1 != record.attempts.len()
-            || record.origins.keys().copied().collect::<BTreeSet<_>>()
-                != record.attempts.iter().map(|(id, _)| *id).collect()
-            || record.observed_at > Utc::now() + Duration::seconds(5)
+fn validate_completion_envelope(
+    records: &crate::storage::PrivateDir,
+    key: &evidence::AttestationKey,
+    expected: &CompletionRecord,
+) -> Result<()> {
+    let signed: Signed<CompletionRecord> = match records.read(&leaf(expected.terminal)) {
+        Ok(signed) => signed,
+        Err(error) if error.code == "record_missing" => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    key.verify(PURPOSE, &signed)?;
+    if signed.payload.terminal != expected.terminal
+        || signed.payload.runtime != expected.runtime
+        || signed.payload.workspace != expected.workspace
+    {
+        return Err(invalid("current completion envelope identity changed"));
+    }
+    Ok(())
+}
+
+/// Authenticate every signed scope-bearing attempt before deriving a protective
+/// anchor. Owner/effect/origin references are checked only by full proof recovery;
+/// an anchor can deny related work but never clear holds or supply credit.
+fn authenticated_completion_attempts(
+    delivery: &RuntimeDelivery,
+    signed: &Signed<CompletionRecord>,
+) -> Result<Vec<AttemptRecord>> {
+    delivery.runtime.services.key.verify(PURPOSE, signed)?;
+    let record = &signed.payload;
+    if record.runtime != delivery.runtime.configuration.snapshot()?.runtime.id
+        || record.runtime.is_nil()
+        || record.workspace.is_nil()
+        || record.terminal.is_nil()
+    {
+        return Err(invalid(
+            "completion scope belongs to another runtime or has no identity",
+        ));
+    }
+    if !matches!(
+        (record.schema_version, record.dependency_binding.is_some()),
+        (1, false) | (2, true)
+    ) || record.attempts.is_empty()
+        || record.attempts.len() > MAX_RELEASE_LINKS
+        || record.attempts.last().map(|(id, _)| *id) != Some(record.terminal)
+        || record.receipts.len() > MAX_REFERENCES
+        || record.effects.len() > MAX_REFERENCES
+        || record.target_proofs.len() > MAX_REFERENCES
+        || record.intents.len() + 1 != record.attempts.len()
+        || record.origins.keys().copied().collect::<BTreeSet<_>>()
+            != record.attempts.iter().map(|(id, _)| *id).collect()
+        || record.observed_at > Utc::now() + Duration::seconds(5)
+    {
+        return Err(invalid(
+            "completion reference has an invalid finite chain inventory",
+        ));
+    }
+    evidence::validate_digest(&record.inventory_digest)?;
+    evidence::validate_digest(&record.config_revision)?;
+    let mut seen = BTreeSet::new();
+    let mut attempts = Vec::new();
+    for (id, digest) in &record.attempts {
+        if id.is_nil() || !seen.insert(*id) {
+            return Err(invalid("completion chain is cyclic or repeats an attempt"));
+        }
+        let stored: Signed<AttemptRecord> = delivery.records.read(&attempt_leaf(*id))?;
+        delivery
+            .runtime
+            .services
+            .key
+            .verify("runtime_release_attempt", &stored)?;
+        if canonical_digest(1, &stored.payload)? != *digest
+            || stored.payload.schema_version != 1
+            || stored.payload.attempt.plan.operation_id != *id
+            || stored.payload.runtime != record.runtime
+            || stored.payload.workspace != record.workspace
+            || stored.payload.work.child.is_some()
+            || stored.payload.attempt.plan.runtime_id != record.runtime
+            || stored.payload.attempt.plan.parent_id != stored.payload.work.parent
+            || stored.payload.attempt.plan.linear_workspace != stored.payload.work.linear_workspace
+            || stored.payload.attempt.plan.generation != stored.payload.work.generation
         {
             return Err(invalid(
-                "completion reference has an invalid finite chain inventory",
+                "completion attempt reference changed or belongs to another runtime",
             ));
         }
-        evidence::validate_digest(&record.inventory_digest)?;
-        evidence::validate_digest(&record.config_revision)?;
-        let mut seen = BTreeSet::new();
-        let mut attempts = Vec::new();
-        for (id, digest) in &record.attempts {
-            if id.is_nil() || !seen.insert(*id) {
-                return Err(invalid("completion chain is cyclic or repeats an attempt"));
-            }
-            let stored: Signed<AttemptRecord> = delivery.records.read(&attempt_leaf(*id))?;
-            delivery
-                .runtime
-                .services
-                .key
-                .verify("runtime_release_attempt", &stored)?;
-            if canonical_digest(1, &stored.payload)? != *digest
-                || stored.payload.attempt.plan.operation_id != *id
-                || stored.payload.runtime != record.runtime
-                || stored.payload.workspace != record.workspace
-                || stored.payload.work.child.is_some()
-                || stored.payload.attempt.plan.runtime_id != record.runtime
-                || stored.payload.attempt.plan.parent_id != stored.payload.work.parent
-                || stored.payload.attempt.plan.linear_workspace
-                    != stored.payload.work.linear_workspace
-                || stored.payload.attempt.plan.generation != stored.payload.work.generation
-            {
-                return Err(invalid(
-                    "completion attempt reference changed or belongs to another runtime",
-                ));
-            }
-            attempts.push(stored.payload);
-        }
+        stored.payload.work.validate()?;
+        stored.payload.attempt.validate_recovered()?;
+        attempts.push(stored.payload);
+    }
+    Ok(attempts)
+}
+
+#[derive(Clone)]
+pub(crate) struct ReleaseCompletionAnchor {
+    record: CompletionRecord,
+    signed_digest: String,
+    terminal: ReleaseAttempt,
+    work: WorkIdentity,
+    resources: BTreeSet<domain::ResourceKey>,
+    records: Arc<crate::storage::PrivateDir>,
+    key: Arc<evidence::AttestationKey>,
+}
+impl std::fmt::Debug for ReleaseCompletionAnchor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReleaseCompletionAnchor")
+            .field("operation", &self.operation())
+            .field("digest", &self.digest())
+            .finish()
+    }
+}
+impl ReleaseCompletionAnchor {
+    fn from_signed(delivery: &RuntimeDelivery, signed: &Signed<CompletionRecord>) -> Result<Self> {
+        let attempts = authenticated_completion_attempts(delivery, signed)?;
+        let terminal = attempts
+            .last()
+            .expect("bounded nonempty authenticated chain");
+        // Union every original scope, even if a broken relation prevents full
+        // completion validation. Narrowing to the terminal could lose a hold.
+        let resources = attempts
+            .iter()
+            .flat_map(|attempt| attempt.attempt.plan.resources.iter().cloned())
+            .collect();
+        let result = Self {
+            record: signed.payload.clone(),
+            signed_digest: signed.digest()?,
+            terminal: terminal.attempt.clone(),
+            work: terminal.work.clone(),
+            resources,
+            records: delivery.records.clone(),
+            key: delivery.runtime.services.key.clone(),
+        };
+        result.queue_scope()?;
+        Ok(result)
+    }
+    pub(crate) fn validate_queue_envelope(&self) -> Result<()> {
+        validate_completion_envelope(&self.records, &self.key, &self.record)
+    }
+    pub(crate) fn operation(&self) -> Uuid {
+        self.record.terminal
+    }
+    pub(crate) fn digest(&self) -> &str {
+        &self.signed_digest
+    }
+    pub(crate) fn runtime_id(&self) -> Uuid {
+        self.record.runtime
+    }
+    pub(crate) fn workspace_id(&self) -> Uuid {
+        self.record.workspace
+    }
+    pub(crate) fn work(&self) -> &WorkIdentity {
+        &self.work
+    }
+    pub(crate) fn resources(&self) -> &BTreeSet<domain::ResourceKey> {
+        &self.resources
+    }
+    pub(crate) fn outcome_digest(&self) -> Result<String> {
+        canonical_digest(1, &self.terminal.steps)
+    }
+    pub(crate) fn covered_operations(&self) -> impl Iterator<Item = Uuid> + '_ {
+        self.record.attempts.iter().map(|(operation, _)| *operation)
+    }
+    pub(crate) fn queue_scope(&self) -> Result<domain::CompletionScope> {
+        domain::CompletionScope::release_anchor(self)
+    }
+}
+
+pub(in crate::runtime_delivery::release) struct ReleaseCompletionQueueInventory {
+    pub(in crate::runtime_delivery::release) proofs: BTreeMap<Uuid, VerifiedReleaseCompletion>,
+    pub(in crate::runtime_delivery::release) anchors: BTreeMap<Uuid, ReleaseCompletionAnchor>,
+    pub(in crate::runtime_delivery::release) errors: BTreeMap<Uuid, Error>,
+}
+
+impl VerifiedReleaseCompletion {
+    fn recover(delivery: &RuntimeDelivery, signed: Signed<CompletionRecord>) -> Result<Self> {
+        let attempts = authenticated_completion_attempts(delivery, &signed)?;
+        let record = &signed.payload;
         let terminal = attempts.last().expect("bounded nonempty chain");
         validate_completed_owner(&delivery.runtime.control, terminal)?;
         let mut holds = BTreeMap::new();
@@ -532,6 +586,13 @@ impl VerifiedReleaseCompletion {
         }
         Ok(())
     }
+    /// Separate the current outer storage/authentication boundary from missing
+    /// references inside a formerly authenticated scope. A missing known seal
+    /// is classified by full validate below; malformed/present unauthenticated
+    /// storage remains a global queue failure, including before inventory sync.
+    pub(crate) fn validate_queue_envelope(&self) -> Result<()> {
+        validate_completion_envelope(&self.records, &self.key, &self.record)
+    }
     pub(crate) fn validate(&self) -> Result<&BTreeMap<Uuid, domain::ResourceHold>> {
         let signed: Signed<CompletionRecord> = self.records.read(&leaf(self.record.terminal))?;
         self.key.verify(PURPOSE, &signed)?;
@@ -540,6 +601,31 @@ impl VerifiedReleaseCompletion {
         }
         self.validate_references()?;
         Ok(&self.holds)
+    }
+    pub(crate) fn queue_anchor(&self) -> Result<ReleaseCompletionAnchor> {
+        let resources = self
+            .terminal
+            .plan
+            .resources
+            .iter()
+            .cloned()
+            .chain(
+                self.holds
+                    .values()
+                    .flat_map(|hold| hold.resources.iter().cloned()),
+            )
+            .collect();
+        let result = ReleaseCompletionAnchor {
+            record: self.record.clone(),
+            signed_digest: self.signed_digest.clone(),
+            terminal: self.terminal.clone(),
+            work: self.work.clone(),
+            resources,
+            records: self.records.clone(),
+            key: self.key.clone(),
+        };
+        result.queue_scope()?;
+        Ok(result)
     }
     pub(crate) fn terminal(&self) -> &ReleaseAttempt {
         &self.terminal
@@ -805,15 +891,36 @@ impl RuntimeDelivery {
     /// Run outside both the Control callback and the release-state lock. Cold
     /// restoration of one broken historical fact must not hide unrelated facts.
     pub(in crate::runtime_delivery) fn sync_released_completions(&self) -> Result<()> {
-        let inventory = self.released_completion_inventory();
-        match inventory {
-            Ok((proofs, errors)) => self.runtime.replace_released_completions(proofs, errors),
-            Err(error) => {
+        // Authenticate protective scope, read dependencies and replace both
+        // projections under one gate. An older inventory cannot install after
+        // another facade has observed a newer fatal failure.
+        self.runtime.control.serialize_observation(|_| {
+            self.runtime.registration.verify_control_owner()?;
+            let result = (|| {
+                self.sync_release_completion_queue_in_observation()?;
+                let (proofs, errors) = self.released_completion_inventory()?;
                 self.runtime
-                    .replace_released_completions(Vec::new(), BTreeMap::new())?;
-                Err(error)
+                    .replace_released_completions_in_observation(proofs, errors)
+            })();
+            if let Err(error) = &result {
+                self.runtime.invalidate_released_inventory(error.clone())?;
+                self.runtime
+                    .replace_released_completions_in_observation(Vec::new(), BTreeMap::new())?;
+                let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
+                state.completion_inventory_error = Some(error.clone());
+                state.queue.invalidate_after_rebuild(error.clone());
             }
-        }
+            result
+        })
+    }
+    // Caller owns Control and no release/runtime state guard. Failure-only;
+    // a later complete successful inventory is required to restore availability.
+    fn latch_completion_inventory_error_in_observation(&self, error: &Error) -> Result<()> {
+        self.runtime.invalidate_released_inventory(error.clone())?;
+        let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
+        state.completion_inventory_error = Some(error.clone());
+        state.queue.invalidate_after_rebuild(error.clone());
+        Ok(())
     }
     fn released_completion_inventory(
         &self,
@@ -829,6 +936,12 @@ impl RuntimeDelivery {
         if names.len() > 65536 {
             return Err(invalid("completion storage enumeration exceeds bound"));
         }
+        let known: BTreeMap<_, _> = self
+            .runtime
+            .known_release_completion_anchors()?
+            .into_iter()
+            .map(|anchor| (anchor.operation(), anchor))
+            .collect();
         let cached = {
             let state = self.releases.state.lock().map_err(|_| unavailable())?;
             state.completions.clone()
@@ -866,6 +979,13 @@ impl RuntimeDelivery {
         let mut proofs = Vec::new();
         for (id, signed) in records {
             let result = (|| {
+                if let Some(prior) = known.get(&id)
+                    && prior.digest() != signed.digest()?
+                {
+                    return Err(invalid(
+                        "previously authenticated completion reference was replaced",
+                    ));
+                }
                 if let Some(prior) = cached.get(&id)
                     && prior.digest() != signed.digest()?
                 {
@@ -896,15 +1016,70 @@ impl RuntimeDelivery {
                 );
             }
         }
+        for id in known.keys() {
+            if !proofs
+                .iter()
+                .any(|proof| proof.terminal().plan.operation_id == *id)
+                && !errors.contains_key(id)
+            {
+                errors.insert(
+                    *id,
+                    Error::new(
+                        "record_missing",
+                        "known release completion is absent from recovered inventory",
+                    ),
+                );
+            }
+        }
         if proofs.len() + errors.len() > MAX_REFERENCES {
             return Err(invalid("completion inventory exceeds reference bound"));
         }
         Ok((proofs, errors))
     }
-    pub(in crate::runtime_delivery::release) fn restore_completions(
+    /// Queue restoration separates authenticated protective scope from usable
+    /// completion. No scope can be inferred from a filename, raw attempt, or
+    /// caller-supplied error. Unauthenticated/unknown inventory remains global.
+    #[cfg(test)]
+    pub(in crate::runtime_delivery::release) fn release_completion_queue_inventory(
         &self,
-    ) -> Result<BTreeMap<Uuid, VerifiedReleaseCompletion>> {
-        let mut result = BTreeMap::new();
+        known: &BTreeMap<Uuid, ReleaseCompletionAnchor>,
+    ) -> Result<ReleaseCompletionQueueInventory> {
+        self.read_release_completion_queue_inventory(known, |_| Ok(()))
+    }
+    /// The caller holds Control throughout this bounded local read. Remember
+    /// every complete authenticated scope immediately, even if a later entry
+    /// makes the complete inventory unavailable. This grants no outcome credit.
+    pub(in crate::runtime_delivery::release) fn learn_release_completion_queue_inventory(
+        &self,
+        known: &BTreeMap<Uuid, ReleaseCompletionAnchor>,
+    ) -> Result<ReleaseCompletionQueueInventory> {
+        self.read_release_completion_queue_inventory(known, |anchor| {
+            #[cfg(test)]
+            self.fixture_before_first_completion_anchor(anchor.operation())?;
+            self.runtime
+                .remember_release_completion_anchors(vec![anchor.clone()])
+        })
+    }
+    fn read_release_completion_queue_inventory(
+        &self,
+        known: &BTreeMap<Uuid, ReleaseCompletionAnchor>,
+        mut remember: impl FnMut(&ReleaseCompletionAnchor) -> Result<()>,
+    ) -> Result<ReleaseCompletionQueueInventory> {
+        if known.len() > MAX_REFERENCES {
+            return Err(invalid("known completion anchors exceed bound"));
+        }
+        let runtime = self.runtime.configuration.snapshot()?.runtime.id;
+        let mut anchors = known.clone();
+        for (operation, anchor) in known {
+            if *operation != anchor.operation() || anchor.runtime_id() != runtime {
+                return Err(invalid("known completion anchor identity differs"));
+            }
+            anchor.queue_scope()?;
+            remember(anchor)?;
+        }
+        let mut seen = BTreeSet::new();
+        let mut proofs = BTreeMap::new();
+        let mut errors = BTreeMap::new();
         for name in self.records.records_bounded(65536)? {
             let Some(id) = name
                 .strip_prefix("release-completion-")
@@ -912,15 +1087,79 @@ impl RuntimeDelivery {
             else {
                 continue;
             };
-            let signed: Signed<CompletionRecord> = self.records.read_bounded(&name, 1024 * 1024)?;
-            let proof = VerifiedReleaseCompletion::recover(self, signed)?;
-            if proof.record.terminal.to_string() != id || result.len() >= MAX_REFERENCES {
-                return Err(invalid("completion filename or retained count differs"));
+            let operation: Uuid = id
+                .parse()
+                .map_err(|_| invalid("completion filename identity is invalid"))?;
+            if leaf(operation) != name || !seen.insert(operation) || seen.len() > MAX_REFERENCES {
+                return Err(invalid("completion filename or count differs"));
             }
-            proof.validate()?;
-            result.insert(proof.record.terminal, proof);
+            let signed: Signed<CompletionRecord> = match self
+                .records
+                .read_bounded(&name, 1024 * 1024)
+            {
+                Ok(signed) => signed,
+                Err(error) if error.code == "record_missing" && known.contains_key(&operation) => {
+                    errors.insert(operation, error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            // A present unauthenticated seal is not downgraded to a scoped error.
+            self.runtime.services.key.verify(PURPOSE, &signed)?;
+            if signed.payload.terminal != operation || signed.payload.runtime != runtime {
+                return Err(invalid("completion filename/runtime identity differs"));
+            }
+            if let Some(prior) = known.get(&operation) {
+                if prior.digest() != signed.digest()? {
+                    errors.insert(
+                        operation,
+                        invalid("previously authenticated completion seal changed"),
+                    );
+                    continue;
+                }
+            } else {
+                // Cold restoration needs every signed scope-bearing attempt.
+                // Without any one of them there is no safe complete resource map.
+                let anchor = ReleaseCompletionAnchor::from_signed(self, &signed)?;
+                remember(&anchor)?;
+                anchors.insert(operation, anchor);
+            }
+            let recovered = VerifiedReleaseCompletion::recover(self, signed).and_then(|proof| {
+                proof.validate()?;
+                if proof.queue_anchor()?.queue_scope()? != anchors[&operation].queue_scope()? {
+                    return Err(invalid("completion scope changed during recovery"));
+                }
+                Ok(proof)
+            });
+            match recovered {
+                Ok(proof) => {
+                    proofs.insert(operation, proof);
+                }
+                Err(error) if error.code == "unsafe_storage" => return Err(error),
+                Err(error) => {
+                    errors.insert(operation, error);
+                }
+            }
         }
-        Ok(result)
+        for operation in known.keys() {
+            if !seen.contains(operation) {
+                errors.insert(
+                    *operation,
+                    Error::new(
+                        "record_missing",
+                        "previously authenticated completion seal is absent",
+                    ),
+                );
+            }
+        }
+        if anchors.len() > MAX_REFERENCES {
+            return Err(invalid("completion anchor inventory exceeds bound"));
+        }
+        Ok(ReleaseCompletionQueueInventory {
+            proofs,
+            anchors,
+            errors,
+        })
     }
     async fn observe_completion(
         &self,
@@ -1174,18 +1413,87 @@ impl RuntimeDelivery {
         projection: &RuntimeProjection,
         record: &AttemptRecord,
     ) -> Result<()> {
-        match self
-            .records
-            .read::<Signed<CompletionRecord>>(&leaf(record.attempt.plan.operation_id))
-        {
-            Ok(signed) => {
-                let proof = VerifiedReleaseCompletion::recover(self, signed)?;
-                proof.validate()?;
-                self.commit_completion(proof, None)?;
-                return Ok(());
+        let existing = self.runtime.control.serialize_observation(|_| {
+            self.runtime.registration.verify_control_owner()?;
+            let runtime_known = self
+                .runtime
+                .known_release_completion_anchors()?
+                .into_iter()
+                .find(|anchor| anchor.operation() == record.attempt.plan.operation_id);
+            let known = self
+                .releases
+                .state
+                .lock()
+                .map_err(|_| unavailable())?
+                .completion_anchors
+                .get(&record.attempt.plan.operation_id)
+                .cloned();
+            if let (Some(local), Some(runtime)) = (&known, &runtime_known)
+                && local.queue_scope()? != runtime.queue_scope()?
+            {
+                return Err(invalid("delivery/runtime completion anchors disagree"));
             }
-            Err(error) if error.code == "record_missing" => (),
-            Err(error) => return Err(error),
+            let known = known.or(runtime_known);
+            let signed = match self
+                .records
+                .read::<Signed<CompletionRecord>>(&leaf(record.attempt.plan.operation_id))
+            {
+                Ok(signed) => signed,
+                Err(error) if error.code == "record_missing" && known.is_none() => {
+                    return Ok(None);
+                }
+                Err(error) if error.code == "record_missing" => return Err(error),
+                Err(error) => {
+                    self.latch_completion_inventory_error_in_observation(&error)?;
+                    return Err(error);
+                }
+            };
+            let envelope = (|| {
+                self.runtime.services.key.verify(PURPOSE, &signed)?;
+                if signed.payload.terminal != record.attempt.plan.operation_id
+                    || signed.payload.runtime != record.attempt.plan.runtime_id
+                {
+                    return Err(invalid("completion filename/runtime identity differs"));
+                }
+                Ok(())
+            })();
+            if let Err(error) = envelope {
+                self.latch_completion_inventory_error_in_observation(&error)?;
+                return Err(error);
+            }
+            let anchor = match known {
+                Some(anchor) => {
+                    if anchor.digest() != signed.digest()? {
+                        return Err(invalid("previously authenticated completion seal changed"));
+                    }
+                    anchor
+                }
+                None => match ReleaseCompletionAnchor::from_signed(self, &signed) {
+                    Ok(anchor) => anchor,
+                    Err(error) => {
+                        // Without complete authenticated scope, this first
+                        // observed seal cannot be confined to one resource set.
+                        self.latch_completion_inventory_error_in_observation(&error)?;
+                        return Err(error);
+                    }
+                },
+            };
+            self.runtime
+                .remember_release_completion_anchors(vec![anchor])?;
+            let recovered = VerifiedReleaseCompletion::recover(self, signed).and_then(|proof| {
+                proof.validate()?;
+                Ok(proof)
+            });
+            if let Err(error) = &recovered
+                && error.code == "unsafe_storage"
+            {
+                self.latch_completion_inventory_error_in_observation(error)?;
+            }
+            recovered.map(Some)
+        })?;
+        if let Some(proof) = existing {
+            self.commit_completion(proof, None)?;
+            return Ok(());
         }
         let workspace = self.workspace(projection, record.workspace)?;
         let Some(completion) =
@@ -1217,13 +1525,55 @@ impl RuntimeDelivery {
         let proof = VerifiedReleaseCompletion::recover(self, signed.clone())?;
         self.commit_completion(proof, Some(signed))
     }
+    /// Test-only delayed call through the real producer. It captures only an
+    /// already authenticated, fully recovered seal; no raw claim can mint a cap.
+    #[cfg(test)]
+    pub(crate) fn prepare_fixture_completion_commit(
+        &self,
+        operation: Uuid,
+    ) -> Result<impl FnOnce() -> Result<()> + '_> {
+        let signed: Signed<CompletionRecord> = self.records.read(&leaf(operation))?;
+        if signed.payload.terminal != operation {
+            return Err(invalid("fixture completion identity differs"));
+        }
+        let proof = VerifiedReleaseCompletion::recover(self, signed.clone())?;
+        proof.validate()?;
+        Ok(move || self.commit_completion(proof, Some(signed)))
+    }
     fn commit_completion(
         &self,
         proof: VerifiedReleaseCompletion,
         fresh: Option<Signed<CompletionRecord>>,
     ) -> Result<()> {
+        let expected_anchor = proof.queue_anchor()?;
+        if let Some(known) = self
+            .runtime
+            .known_release_completion_anchors()?
+            .into_iter()
+            .find(|anchor| anchor.operation() == expected_anchor.operation())
+            && known.queue_scope()? != expected_anchor.queue_scope()?
+        {
+            return Err(invalid("known immutable completion anchor changed"));
+        }
+        #[cfg(test)]
+        self.fixture_before_completion_commit(proof.terminal().plan.operation_id)?;
         self.runtime.control.serialize_observation(|_| {
             self.runtime.registration.verify_control_owner()?;
+            // Recheck inside the serialized boundary, before any write or
+            // release-state lock. A different facade may have learned the same
+            // immutable identity after this operation's preflight read.
+            let runtime_known = self
+                .runtime
+                .known_release_completion_anchors()?
+                .into_iter()
+                .find(|anchor| anchor.operation() == expected_anchor.operation());
+            if let Some(known) = &runtime_known
+                && known.queue_scope()? != expected_anchor.queue_scope()?
+            {
+                return Err(invalid("known immutable completion anchor changed"));
+            }
+            self.runtime.require_released_inventory_available()?;
+            self.runtime.require_no_release_inventory_available()?;
             let record = &proof.record;
             if fresh.is_some()
                 && (Utc::now() - record.observed_at > Duration::seconds(30)
@@ -1239,47 +1589,254 @@ impl RuntimeDelivery {
                     .authority_fences()?
                     .check_workspace(record.workspace)?;
             }
-            proof.validate_references()?;
-            let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
-            for (operation, digest) in &record.attempts {
-                if state
-                    .attempts
-                    .get(operation)
-                    .map(|r| canonical_digest(1, r))
-                    .transpose()?
-                    .as_ref()
-                    != Some(digest)
-                {
-                    return Err(invalid(
-                        "completion attempt changed before serialized commit",
-                    ));
+            if let Err(error) = proof.validate_references() {
+                if error.code == "unsafe_storage" {
+                    self.latch_completion_inventory_error_in_observation(&error)?;
                 }
+                return Err(error);
             }
+            let check_attempts = |state: &ReleaseState| -> Result<()> {
+                for (operation, digest) in &record.attempts {
+                    if state
+                        .attempts
+                        .get(operation)
+                        .map(|r| canonical_digest(1, r))
+                        .transpose()?
+                        .as_ref()
+                        != Some(digest)
+                    {
+                        return Err(invalid(
+                            "completion attempt changed before serialized commit",
+                        ));
+                    }
+                }
+                Ok(())
+            };
+            let state = self.releases.state.lock().map_err(|_| unavailable())?;
+            if fresh.is_some() {
+                if let Some(error) = &state.completion_inventory_error {
+                    return Err(error.clone());
+                }
+                state.historical_no_release.require_available()?;
+            }
+            check_attempts(&state)?;
+            let local_known = state.completion_anchors.get(&record.terminal);
+            if let Some(known) = local_known
+                && known.queue_scope()? != expected_anchor.queue_scope()?
+            {
+                return Err(invalid("retained immutable completion anchor changed"));
+            }
+            let already_known = runtime_known.is_some() || local_known.is_some();
+            // Control remains held; release the facade guard before a failed
+            // protected read may latch shared RuntimeState and local queue state.
+            drop(state);
             if let Some(signed) = &fresh {
                 match self
                     .records
                     .read::<Signed<CompletionRecord>>(&leaf(record.terminal))
                 {
-                    Ok(prior) if prior.digest()? != signed.digest()? => {
-                        return Err(invalid("immutable completion already differs"));
+                    Ok(prior) => {
+                        let envelope = (|| {
+                            self.runtime.services.key.verify(PURPOSE, &prior)?;
+                            if prior.payload.terminal != record.terminal
+                                || prior.payload.runtime != record.runtime
+                                || prior.payload.workspace != record.workspace
+                            {
+                                return Err(invalid(
+                                    "current completion envelope identity changed",
+                                ));
+                            }
+                            Ok(())
+                        })();
+                        if let Err(error) = envelope {
+                            self.latch_completion_inventory_error_in_observation(&error)?;
+                            return Err(error);
+                        }
+                        if prior.digest()? != signed.digest()? {
+                            return Err(invalid("immutable completion already differs"));
+                        }
                     }
-                    Ok(_) => (),
-                    Err(error) if error.code == "record_missing" => {
-                        self.records.write(&leaf(record.terminal), signed)?
+                    Err(error) if error.code == "record_missing" && !already_known => {
+                        if let Err(error) = self.records.write(&leaf(record.terminal), signed) {
+                            if error.code == "unsafe_storage" {
+                                self.latch_completion_inventory_error_in_observation(&error)?;
+                            }
+                            return Err(error);
+                        }
                     }
-                    Err(error) => return Err(error),
+                    Err(error) if error.code == "record_missing" => return Err(error),
+                    Err(error) => {
+                        self.latch_completion_inventory_error_in_observation(&error)?;
+                        return Err(error);
+                    }
                 }
             } else {
-                proof.validate()?;
+                if let Err(error) = proof.validate_queue_envelope() {
+                    self.latch_completion_inventory_error_in_observation(&error)?;
+                    return Err(error);
+                }
+                if let Err(error) = proof.validate() {
+                    if error.code == "unsafe_storage" {
+                        self.latch_completion_inventory_error_in_observation(&error)?;
+                    }
+                    return Err(error);
+                }
             }
+            // The exact seal now exists or was reread successfully. Preserve
+            // its immutable identity before releasing Control. Remembering is
+            // not completion credit; repeat exact attempt checks after taking
+            // the facade guard again.
+            self.runtime
+                .remember_release_completion_anchors(vec![expected_anchor.clone()])?;
+            let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
+            check_attempts(&state)?;
+
             let mut completions = state.completions.clone();
             completions.insert(record.terminal, proof.clone());
-            let queue = rebuild_queue(&state.attempts, &state.no_release, &completions)?;
-            state.completion_errors.remove(&record.terminal);
+            let anchor = proof.queue_anchor()?;
+            if let Some(prior) = state.completion_anchors.get(&record.terminal)
+                && prior.queue_scope()? != anchor.queue_scope()?
+            {
+                return Err(invalid("retained immutable completion anchor changed"));
+            }
+            let mut anchors = state.completion_anchors.clone();
+            anchors.insert(record.terminal, anchor);
+            let mut errors = state.completion_errors.clone();
+            errors.remove(&record.terminal);
+            let queue = match rebuild_queue(
+                &state.attempts,
+                &state.no_release,
+                &completions,
+                &anchors,
+                &errors,
+                state.completion_inventory_error.as_ref(),
+                &state.historical_no_release,
+            ) {
+                Ok(queue) => queue,
+                Err(error) => {
+                    // This rebuild has already separated scoped reference loss
+                    // into quarantine. A remaining global failure must reach
+                    // every facade before this serialized commit returns.
+                    drop(state);
+                    self.latch_completion_inventory_error_in_observation(&error)?;
+                    return Err(error);
+                }
+            };
+            state.completion_anchors = anchors;
+            state.completion_errors = errors;
             state.completions = completions;
             state.queue = queue;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+impl RuntimeDelivery {
+    pub(in crate::runtime_delivery::release) fn fixture_pause_first_completion_anchor(
+        &self,
+        operation: Uuid,
+        observed: std::sync::mpsc::SyncSender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    ) -> Result<()> {
+        if self
+            .runtime
+            .known_release_completion_anchors()?
+            .iter()
+            .any(|a| a.operation() == operation)
+            || self
+                .releases
+                .state
+                .lock()
+                .map_err(|_| unavailable())?
+                .completion_anchors
+                .contains_key(&operation)
+        {
+            return Err(invalid(
+                "fixture reader must begin without the completion anchor",
+            ));
+        }
+        let mut hooks = self
+            .releases
+            .completion_fixture_hooks
+            .lock()
+            .map_err(|_| unavailable())?;
+        if hooks.first_anchor.is_some() {
+            return Err(invalid("fixture first-reader hook is already armed"));
+        }
+        hooks.first_anchor = Some(FixtureFirstCompletionAnchor {
+            operation,
+            observed,
+            resume,
+        });
+        Ok(())
+    }
+    pub(in crate::runtime_delivery::release) fn fixture_signal_completion_commit(
+        &self,
+        operation: Uuid,
+        entered: std::sync::mpsc::SyncSender<()>,
+    ) -> Result<()> {
+        let mut hooks = self
+            .releases
+            .completion_fixture_hooks
+            .lock()
+            .map_err(|_| unavailable())?;
+        if hooks.commit_gate.is_some() {
+            return Err(invalid("fixture commit hook is already armed"));
+        }
+        hooks.commit_gate = Some((operation, entered));
+        Ok(())
+    }
+    fn fixture_before_first_completion_anchor(&self, operation: Uuid) -> Result<()> {
+        let hook = {
+            let mut hooks = self
+                .releases
+                .completion_fixture_hooks
+                .lock()
+                .map_err(|_| unavailable())?;
+            if hooks
+                .first_anchor
+                .as_ref()
+                .is_some_and(|hook| hook.operation == operation)
+            {
+                hooks.first_anchor.take()
+            } else {
+                None
+            }
+        };
+        if let Some(hook) = hook {
+            hook.observed
+                .send(())
+                .map_err(|_| invalid("fixture first-reader observer disconnected"))?;
+            hook.resume
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|_| invalid("fixture first-reader release timed out or disconnected"))?;
+        }
+        Ok(())
+    }
+    fn fixture_before_completion_commit(&self, operation: Uuid) -> Result<()> {
+        let signal = {
+            let mut hooks = self
+                .releases
+                .completion_fixture_hooks
+                .lock()
+                .map_err(|_| unavailable())?;
+            if hooks
+                .commit_gate
+                .as_ref()
+                .is_some_and(|(expected, _)| *expected == operation)
+            {
+                hooks.commit_gate.take().map(|(_, signal)| signal)
+            } else {
+                None
+            }
+        };
+        if let Some(signal) = signal {
+            signal
+                .send(())
+                .map_err(|_| invalid("fixture commit observer disconnected"))?;
+        }
+        Ok(())
     }
 }
 

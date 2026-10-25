@@ -22,7 +22,7 @@ use crate::{
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
@@ -54,6 +54,14 @@ struct State {
     delivery_snapshots: BTreeMap<IssueKey, crate::delivery::VerifiedDeliverySnapshot>,
     released_completions: BTreeMap<Uuid, crate::runtime_delivery::VerifiedReleaseCompletion>,
     released_recovery_errors: BTreeMap<Uuid, Error>,
+    released_inventory_error: Option<Error>,
+    known_release_completion_anchors:
+        BTreeMap<Uuid, crate::runtime_delivery::ReleaseCompletionAnchor>,
+    no_release_completions: BTreeMap<Uuid, crate::runtime_delivery::VerifiedNoReleaseCompletion>,
+    no_release_recovery_errors: BTreeMap<Uuid, Error>,
+    known_no_release_seals: BTreeMap<Uuid, crate::runtime_delivery::VerifiedNoReleaseCompletion>,
+    no_release_sealed_operations: BTreeSet<Uuid>,
+    no_release_inventory_error: Option<Error>,
     archived_delivery: BTreeMap<(IssueKey, String), ParentDelivery>,
     explicit_corrections: BTreeMap<Uuid, crate::decisions::VerifiedExplicitCorrection>,
     retry_grants: BTreeMap<Uuid, crate::decisions::VerifiedRetryGrant>,
@@ -2114,6 +2122,7 @@ impl RuntimeCoordinator {
             history: state.history.clone(),
             release_details: state.release_details.clone(),
             release_history: Vec::new(),
+            no_release_history: Vec::new(),
         })
     }
     pub fn account_observations(&self) -> Result<Value> {
@@ -2124,10 +2133,13 @@ impl RuntimeCoordinator {
             .state
             .lock()
             .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
-        let (_, released_errors) = released::effective_outcomes(&state, &config, observed, &fences);
+        let (_, released_errors) =
+            released::effective_outcomes(&state, &config, observed.clone(), &fences);
+        let (_, no_release_errors) =
+            released::effective_no_release_outcomes(&state, &config, observed, &fences);
         let holds=state.provider_holds.iter().map(|(id,session)| json!({"operation_id":id,"account":session.binding.account_id,"work":session.binding.work_identity,"intervention":session.intervention,"input_required":session.input_required})).collect::<Vec<_>>();
         Ok(
-            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"session_recovery":state.session_recovery_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors,"released_dependencies":released_errors}),
+            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"session_recovery":state.session_recovery_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors,"released_dependencies":released_errors,"no_release_dependencies":no_release_errors,"no_release_inventory":state.no_release_inventory_error}),
         )
     }
     pub fn execution_registry(&self) -> Arc<ExecutionRegistry> {
@@ -2589,8 +2601,25 @@ fn effective_evidence(
 ) -> (BTreeMap<IssueKey, ParentDelivery>, DependencyOutcomes) {
     let mut delivery = BTreeMap::new();
     let mut outcomes = DependencyOutcomes::default();
+    let observed = observations.admission_snapshot();
+    let (released, _) = released::effective_outcomes(state, config, observed.clone(), fences);
+    let (no_release, no_release_errors) =
+        released::effective_no_release_outcomes(state, config, observed, fences);
     let now = Utc::now();
     for (parent, proof) in &state.delivery_snapshots {
+        if let Some(current) = proof.parent_delivery().no_release_required() {
+            let operation = current.record().operation_id;
+            // A current in-memory proof cannot substitute for a failed seal
+            // once that exact operation has actually entered durable history.
+            // Pending/unsupported never-sealed outcomes keep their existing
+            // current-publication semantics; they gain no historical credit.
+            if state.no_release_inventory_error.is_some()
+                || (state.no_release_sealed_operations.contains(&operation)
+                    && no_release_errors.contains_key(&operation))
+            {
+                continue;
+            }
+        }
         if evidence_projection_current(
             proof.authority(),
             proof.observed_at(),
@@ -2603,9 +2632,8 @@ fn effective_evidence(
             outcomes.merge(proof.outcomes());
         }
     }
-    let (released, _) =
-        released::effective_outcomes(state, config, observations.admission_snapshot(), fences);
     outcomes.merge(&released);
+    outcomes.merge(&no_release);
     (delivery, outcomes)
 }
 fn fresh_admission_authority(

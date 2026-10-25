@@ -23,6 +23,11 @@ use std::{collections::BTreeSet, sync::Mutex};
 
 #[path = "runtime_delivery_no_release.rs"]
 mod no_release;
+pub(crate) use no_release::history::VerifiedNoReleaseCompletion;
+#[path = "runtime_delivery_no_release_cache.rs"]
+mod no_release_cache;
+#[path = "runtime_delivery_release_cache.rs"]
+mod release_cache;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,28 +160,300 @@ struct LiveRelease {
     workspace: WorkspaceDelivery,
     _active: crate::observations::ActiveSnapshot,
 }
+/// Authenticated no-release history plus its last complete inventory status.
+/// Only a successful inventory can clear an error; unrelated queue rebuilds
+/// must preserve the refusal and must not fall back to ephemeral current facts.
+#[derive(Default)]
+struct NoReleaseQueueHistory {
+    proofs: BTreeMap<Uuid, VerifiedNoReleaseCompletion>,
+    anchors: BTreeMap<Uuid, VerifiedNoReleaseCompletion>,
+    unavailable_sealed: BTreeMap<Uuid, Error>,
+    fatal_error: Option<Error>,
+}
+impl NoReleaseQueueHistory {
+    fn is_sealed(&self, operation: &Uuid) -> bool {
+        self.anchors.contains_key(operation)
+            || self.proofs.contains_key(operation)
+            || self.unavailable_sealed.contains_key(operation)
+    }
+    fn require_available(&self) -> Result<()> {
+        if let Some(error) = &self.fatal_error {
+            return Err(error.clone());
+        }
+        for (operation, error) in &self.unavailable_sealed {
+            if error.code == "unsafe_storage" || !self.anchors.contains_key(operation) {
+                return Err(error.clone());
+            }
+        }
+        Ok(())
+    }
+    /// Import shared immutable identity as protective scope only. A new facade
+    /// cannot use an empty queue to forget a known seal before its first full
+    /// no-release inventory. Existing verified facts and diagnostics survive.
+    fn retain_shared_anchors(
+        &mut self,
+        runtime: Uuid,
+        shared: Vec<VerifiedNoReleaseCompletion>,
+    ) -> Result<bool> {
+        let mut anchors = self.anchors.clone();
+        let mut unavailable = self.unavailable_sealed.clone();
+        let mut learned = false;
+        for anchor in shared {
+            let operation = anchor.operation();
+            if anchor.runtime_id() != runtime {
+                return Err(Error::new(
+                    "identity_mismatch",
+                    "shared no-release anchor belongs to another runtime",
+                ));
+            }
+            domain::CompletionScope::no_release(&anchor)?;
+            if anchors
+                .get(&operation)
+                .is_some_and(|prior| prior.digest() != anchor.digest())
+                || self
+                    .proofs
+                    .get(&operation)
+                    .is_some_and(|prior| prior.digest() != anchor.digest())
+            {
+                return Err(Error::new(
+                    "no_release_completion",
+                    "shared no-release anchor changed its immutable identity",
+                ));
+            }
+            anchors.entry(operation).or_insert_with(|| {
+                learned = true;
+                anchor
+            });
+            if !self.proofs.contains_key(&operation) && !unavailable.contains_key(&operation) {
+                learned = true;
+                unavailable.insert(
+                    operation,
+                    Error::new(
+                        "record_missing",
+                        "shared no-release seal has not been verified in this queue inventory",
+                    ),
+                );
+            }
+        }
+        if anchors.len() > 4096 || unavailable.len() > 4096 {
+            return Err(Error::new(
+                "no_release_completion",
+                "shared no-release scope inventory exceeds bound",
+            ));
+        }
+        self.anchors = anchors;
+        self.unavailable_sealed = unavailable;
+        Ok(learned)
+    }
+    fn observed(
+        &self,
+        proofs: Vec<VerifiedNoReleaseCompletion>,
+        anchors: Vec<VerifiedNoReleaseCompletion>,
+        mut errors: BTreeMap<Uuid, Error>,
+        mut sealed_operations: BTreeSet<Uuid>,
+    ) -> Result<Self> {
+        sealed_operations.extend(self.anchors.keys().copied());
+        sealed_operations.extend(self.proofs.keys().copied());
+        sealed_operations.extend(self.unavailable_sealed.keys().copied());
+        if sealed_operations.len() > 4096
+            || proofs.len() > 4096
+            || anchors.len() > 4096
+            || errors.len() > 4096
+        {
+            return Err(Error::new(
+                "no_release_completion",
+                "no-release queue history exceeds its finite bound",
+            ));
+        }
+        let mut observed = Self {
+            anchors: self.anchors.clone(),
+            ..Self::default()
+        };
+        for anchor in anchors.into_iter().chain(self.proofs.values().cloned()) {
+            let operation = anchor.operation();
+            if !sealed_operations.contains(&operation) {
+                return Err(Error::new(
+                    "no_release_completion",
+                    "no-release anchor is absent from authenticated seal inventory",
+                ));
+            }
+            domain::CompletionScope::no_release(&anchor)?;
+            if observed
+                .anchors
+                .get(&operation)
+                .is_some_and(|prior| prior.digest() != anchor.digest())
+            {
+                errors.insert(
+                    operation,
+                    Error::new(
+                        "no_release_completion",
+                        "previously observed no-release seal changed",
+                    ),
+                );
+            } else {
+                observed.anchors.insert(operation, anchor);
+            }
+        }
+        for proof in proofs {
+            let operation = proof.operation();
+            let anchor = observed.anchors.get(&operation).ok_or_else(|| {
+                Error::new(
+                    "no_release_completion",
+                    "no-release proof has no authenticated anchor",
+                )
+            })?;
+            if anchor.digest() != proof.digest() {
+                errors.insert(
+                    operation,
+                    Error::new(
+                        "no_release_completion",
+                        "previously observed no-release seal changed",
+                    ),
+                );
+            } else if !errors.contains_key(&operation) {
+                observed.proofs.insert(operation, proof);
+            }
+        }
+        for operation in sealed_operations {
+            if !observed.anchors.contains_key(&operation) {
+                return Err(Error::new(
+                    "no_release_completion",
+                    "sealed no-release operation has no authenticated protective scope",
+                ));
+            }
+            if let Some(error) = errors.get(&operation) {
+                observed.unavailable_sealed.insert(operation, error.clone());
+            } else if !observed.proofs.contains_key(&operation) {
+                observed.unavailable_sealed.insert(
+                    operation,
+                    Error::new(
+                        "record_missing",
+                        "previously observed no-release completion is absent from inventory",
+                    ),
+                );
+            }
+        }
+        observed.require_available()?;
+        Ok(observed)
+    }
+}
+
 #[derive(Default)]
 struct ReleaseState {
     restored: bool,
     attempts: BTreeMap<Uuid, AttemptRecord>,
     no_release: BTreeMap<Uuid, evidence::VerifiedNoReleaseRequired>,
     completions: BTreeMap<Uuid, VerifiedReleaseCompletion>,
+    completion_anchors: BTreeMap<Uuid, ReleaseCompletionAnchor>,
+    completion_inventory_error: Option<Error>,
+    historical_no_release: NoReleaseQueueHistory,
     completion_errors: BTreeMap<Uuid, Error>,
     queue: ReleaseQueue,
 }
 impl ReleaseState {
-    fn completed_ancestors(&self) -> Result<BTreeMap<Uuid, Uuid>> {
+    // Replacement inside impl ReleaseState; root-owned runtime_delivery_release.rs.
+    fn completed_ancestors(
+        &self,
+        work: &WorkIdentity,
+        resources: &BTreeSet<domain::ResourceKey>,
+    ) -> Result<BTreeMap<Uuid, Uuid>> {
+        if let Some(error) = &self.completion_inventory_error {
+            return Err(error.clone());
+        }
+        work.validate()?;
+        let terminals: BTreeSet<_> = self
+            .completion_anchors
+            .keys()
+            .chain(self.completions.keys())
+            .copied()
+            .collect();
+        if terminals.len() > 4096 {
+            return Err(Error::new(
+                "release_completion",
+                "completion scope inventory exceeds bound",
+            ));
+        }
         let mut consumed = BTreeMap::new();
-        for (terminal, proof) in &self.completions {
-            for ancestor in proof.validate()?.keys() {
-                if consumed.insert(*ancestor, *terminal).is_some() {
-                    return Err(Error::new(
-                        "release_completion",
-                        "ancestor has multiple terminal completions",
-                    ));
+        for terminal in terminals {
+            let observed = self.completions.get(&terminal);
+            let anchor = match self.completion_anchors.get(&terminal) {
+                Some(anchor) => anchor.clone(),
+                None => observed
+                    .ok_or_else(|| {
+                        Error::new("release_completion", "completion scope is unavailable")
+                    })?
+                    .queue_anchor()?,
+            };
+            if anchor.operation() != terminal {
+                return Err(Error::new(
+                    "release_completion",
+                    "completion anchor identity changed",
+                ));
+            }
+            // A stored scoped error does not hide later corruption of its
+            // authenticated outer seal, including on a disjoint query.
+            anchor.validate_queue_envelope()?;
+            let scope = anchor.queue_scope()?;
+            let related = (scope.work().linear_endpoint == work.linear_endpoint
+                && scope.work().linear_workspace == work.linear_workspace
+                && scope.work().parent == work.parent)
+                || !scope.resources().is_disjoint(resources);
+            // A cached cap cannot erase an explicitly retained failed inventory
+            // observation merely because one local validation now succeeds.
+            if let Some(error) = self.completion_errors.get(&terminal) {
+                if error.code == "unsafe_storage" || related {
+                    return Err(error.clone());
                 }
+                continue;
+            }
+            let proof = match observed {
+                Some(proof) => {
+                    if proof.digest() != anchor.digest()
+                        || proof.queue_anchor()?.queue_scope()? != scope
+                    {
+                        return Err(Error::new(
+                            "release_completion",
+                            "completion differs from its authenticated scope",
+                        ));
+                    }
+                    proof
+                }
+                None => {
+                    let error = self
+                        .completion_errors
+                        .get(&terminal)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            Error::new(
+                                "record_missing",
+                                "authenticated completion lacks current verified references",
+                            )
+                        });
+                    if error.code == "unsafe_storage" || related {
+                        return Err(error);
+                    }
+                    continue;
+                }
+            };
+            proof.validate_queue_envelope()?;
+            match proof.validate() {
+                Ok(ancestors) if related => {
+                    for ancestor in ancestors.keys() {
+                        if consumed.insert(*ancestor, terminal).is_some() {
+                            return Err(Error::new(
+                                "release_completion",
+                                "ancestor has multiple terminal completions",
+                            ));
+                        }
+                    }
+                }
+                Ok(_) => (),
+                Err(error) if error.code == "unsafe_storage" || related => return Err(error),
+                Err(_) => (),
             }
         }
+        // Never-sealed producer errors are deliberately absent: they prove no
+        // consumed ancestry, and their actual attempt holds remain in the queue.
         Ok(consumed)
     }
 }
@@ -243,11 +520,29 @@ fn preparation_key(workspace: Uuid, work: &WorkIdentity, token: &str) -> Prepara
 type Preparations = BTreeMap<PreparationKey, Arc<tokio::sync::Mutex<Preparation>>>;
 #[derive(Default)]
 pub(super) struct Releases {
+    #[cfg(test)]
+    completion_fixture_hooks: Mutex<FixtureCompletionHooks>,
+    no_release_history: no_release::history::NoReleaseHistory,
     state: Arc<Mutex<ReleaseState>>,
     preparations: Mutex<Preparations>,
     live: Mutex<BTreeMap<Uuid, Arc<tokio::sync::Mutex<LiveRelease>>>>,
     progressing: tokio::sync::Mutex<()>,
 }
+// Per-facade, one-shot coordination only. These test hooks are reached by the
+// unchanged production reader/commit paths and cannot supply a proof or permit.
+#[cfg(test)]
+#[derive(Default)]
+struct FixtureCompletionHooks {
+    first_anchor: Option<FixtureFirstCompletionAnchor>,
+    commit_gate: Option<(Uuid, std::sync::mpsc::SyncSender<()>)>,
+}
+#[cfg(test)]
+struct FixtureFirstCompletionAnchor {
+    operation: Uuid,
+    observed: std::sync::mpsc::SyncSender<()>,
+    resume: std::sync::mpsc::Receiver<()>,
+}
+
 fn unavailable() -> Error {
     Error::new("runtime_unavailable", "release ownership lock failed")
 }
@@ -321,16 +616,138 @@ fn rebuild_queue(
     attempts: &BTreeMap<Uuid, AttemptRecord>,
     no_release: &BTreeMap<Uuid, evidence::VerifiedNoReleaseRequired>,
     completions: &BTreeMap<Uuid, VerifiedReleaseCompletion>,
+    completion_anchors: &BTreeMap<Uuid, ReleaseCompletionAnchor>,
+    completion_errors: &BTreeMap<Uuid, Error>,
+    completion_inventory_error: Option<&Error>,
+    historical_no_release: &NoReleaseQueueHistory,
 ) -> Result<ReleaseQueue> {
-    let mut queue = ReleaseQueue::default();
-    // These proofs were admitted against the then-current queue and reobserved
-    // from native publications. Reconstruct history before later owners/holds;
-    // recording history never releases a resource or consumes spacing.
-    for proof in no_release.values() {
-        queue.record_no_release_required(proof)?;
+    if let Some(error) = completion_inventory_error {
+        return Err(error.clone());
     }
-    // Resource locks and unresolved holds are reconstructed before eligibility
-    // is considered. A completed old release remains spacing/dependency history.
+    if let Some(error) = completion_errors
+        .values()
+        .find(|error| error.code == "unsafe_storage")
+    {
+        return Err(error.clone());
+    }
+    historical_no_release.require_available()?;
+    let mut queue = ReleaseQueue::default();
+    let mut quarantines = BTreeMap::new();
+    let mut valid_completions = BTreeMap::new();
+    let mut known_operations = BTreeSet::new();
+    for (operation, anchor) in completion_anchors {
+        if anchor.operation() != *operation {
+            return Err(Error::new(
+                "release_completion",
+                "completion anchor key differs",
+            ));
+        }
+        let scope = anchor.queue_scope()?;
+        known_operations.extend(anchor.covered_operations());
+        let error = completion_errors.get(operation).cloned().or_else(|| {
+            (!completions.contains_key(operation)).then(|| {
+                Error::new(
+                    "record_missing",
+                    "authenticated completion has no usable proof",
+                )
+            })
+        });
+        if let Some(error) = error {
+            quarantines.insert(*operation, (scope, error));
+        }
+    }
+    for (operation, proof) in completions {
+        let anchor = proof.queue_anchor()?;
+        let scope = anchor.queue_scope()?;
+        if anchor.operation() != *operation
+            || completion_anchors
+                .get(operation)
+                .map(|prior| prior.queue_scope())
+                .transpose()?
+                .as_ref()
+                .is_some_and(|prior| prior != &scope)
+        {
+            return Err(Error::new(
+                "release_completion",
+                "completion proof differs from authenticated scope",
+            ));
+        }
+        known_operations.extend(anchor.covered_operations());
+        if quarantines.contains_key(operation) {
+            continue;
+        }
+        proof.validate_queue_envelope()?;
+        match proof.validate() {
+            Ok(_) => {
+                valid_completions.insert(*operation, proof);
+            }
+            Err(error) => {
+                quarantines.insert(*operation, (scope, error));
+            }
+        }
+    }
+    let mut valid_no_release = Vec::new();
+    for (operation, error) in &historical_no_release.unavailable_sealed {
+        let anchor = historical_no_release
+            .anchors
+            .get(operation)
+            .ok_or_else(|| error.clone())?;
+        quarantines.insert(
+            *operation,
+            (domain::CompletionScope::no_release(anchor)?, error.clone()),
+        );
+    }
+    for (operation, proof) in &historical_no_release.proofs {
+        if quarantines.contains_key(operation) {
+            continue;
+        }
+        proof.validate_queue_envelope()?;
+        match proof.validate() {
+            Ok(()) => valid_no_release.push(proof),
+            Err(error) => {
+                quarantines.insert(
+                    *operation,
+                    (domain::CompletionScope::no_release(proof)?, error),
+                );
+            }
+        }
+    }
+    for (scope, error) in quarantines.values() {
+        if error.code == "unsafe_storage" {
+            return Err(error.clone());
+        }
+        queue.quarantine_completion(scope.clone(), error.clone())?;
+    }
+    let affected = |resources: &BTreeSet<domain::ResourceKey>,
+                    dependencies: &[domain::DependencyRequirement]| {
+        quarantines
+            .values()
+            .any(|(scope, _)| scope.affects(resources, dependencies))
+    };
+    // These were admitted against the then-current queue. Retain only unsealed,
+    // unaffected ephemeral facts, before reconstructing later owners/holds.
+    for (operation, proof) in no_release {
+        let record = proof.record();
+        let resources: BTreeSet<_> = record
+            .baselines
+            .iter()
+            .map(|b| domain::ResourceKey::Repository {
+                repository: b.repository.clone(),
+            })
+            .chain(record.targets.iter().map(|t| domain::ResourceKey::Target {
+                provider: t.provider.clone(),
+                id: t.target.clone(),
+            }))
+            .collect();
+        if !historical_no_release.is_sealed(operation) && !affected(&resources, &[]) {
+            queue.record_no_release_required(proof)?;
+        }
+    }
+    for proof in valid_no_release {
+        queue.record_no_release_completion(proof)?;
+    }
+    // Reconstruct actual retained owners and holds. Invalid completion evidence
+    // cannot remove them; an authenticated protective scope cannot grant credit.
     for record in attempts.values() {
         record.attempt.validate_recovered()?;
         let mut ownership = record.attempt.clone();
@@ -345,19 +762,33 @@ fn rebuild_queue(
         }
         queue.reconcile_attempt(&ownership)?;
     }
-    for proof in completions.values() {
-        queue.apply_completion(proof)?;
+    for proof in valid_completions.values() {
+        let mut conflicting = false;
+        for (scope, _) in quarantines.values() {
+            conflicting |= scope.conflicts_consumption(proof)?;
+        }
+        if !conflicting {
+            queue.apply_completion(proof)?;
+        }
+        // Valid historical A credit remains true if a later overlapping B is
+        // unavailable. This insertion does not clear any current owner or hold.
+        queue.record_release_completion_history(proof)?;
     }
     for record in attempts
         .values()
         .filter(|r| r.attempt.completed() && r.pending_receipts.is_empty() && r.local_retired)
     {
-        if record.attempt.hold_reason.is_none() {
+        let plan = &record.attempt.plan;
+        if !known_operations.contains(&plan.operation_id)
+            && record.attempt.hold_reason.is_none()
+            && !affected(&plan.resources, &plan.dependencies)
+        {
             queue.record_success(&record.attempt)?;
         }
     }
     Ok(queue)
 }
+
 impl RuntimeDelivery {
     fn save_release(&self, record: &AttemptRecord) -> Result<()> {
         self.records.write(
@@ -426,27 +857,182 @@ impl RuntimeDelivery {
         Ok(())
     }
     fn restore_releases(&self) -> Result<()> {
-        let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
-        if state.restored {
-            return Ok(());
-        }
-        let mut records = self.read_release_attempts()?;
-        for record in records.values_mut() {
-            self.validate_release_admission(record)?;
-            if !record.attempt.completed() && !record.attempt.resolved {
-                // Never adopt a prior host's live permit or assume its network
-                // tasks stopped. Metadata recovery may later establish outcomes.
-                record.attempt.hold_reason.get_or_insert_with(|| {
-                    "recovered release requires explicit known-outcome reconciliation".into()
-                });
+        // All callers enter before their own admission/observation callbacks.
+        // Local signed-record reads and first-anchor registration must be atomic
+        // relative to commit_completion's known-seal check and protected write.
+        self.runtime.control.serialize_observation(|_| {
+            self.runtime.registration.verify_control_owner()?;
+            #[derive(Clone, Copy)]
+            enum FailedInventory {
+                Release,
+                NoRelease,
             }
-        }
-        let completions = self.restore_completions()?;
-        state.queue = rebuild_queue(&records, &state.no_release, &completions)?;
-        state.completions = completions;
-        state.attempts = records;
-        state.restored = true;
-        Ok(())
+            let mut failed_inventory = FailedInventory::Release;
+            let mut full_inventory = false;
+            let restored = (|| {
+                let known = self.runtime.known_release_completion_anchors()?;
+                let known_no_release = self.runtime.known_no_release_completions()?;
+                let runtime = self.runtime.configuration.snapshot()?.runtime.id;
+                let no_release_status = self.runtime.require_no_release_inventory_available();
+                // A restored facade must not use its old queue after another
+                // facade detected an ordinary global inventory failure. A real
+                // cold/full read below may recover and clear that status.
+                let shared_status = self.runtime.require_released_inventory_available();
+                let known = {
+                    let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
+                    let mut learned_anchor = state
+                        .historical_no_release
+                        .retain_shared_anchors(runtime, known_no_release)
+                        .inspect_err(|_| failed_inventory = FailedInventory::NoRelease)?;
+                    if let Err(error) = no_release_status {
+                        // Shared fatal observation is never erased by this
+                        // identity-only merge or by ordinary queue restoration.
+                        state.historical_no_release.fatal_error = Some(error);
+                        learned_anchor = true;
+                    }
+                    // Refuse an unavailable no-release inventory in its own
+                    // category before the ordinary restore/rebuild. Successful
+                    // no-release synchronization must be able to repair this
+                    // refusal without clearing an independent release failure.
+                    state
+                        .historical_no_release
+                        .require_available()
+                        .inspect_err(|_| failed_inventory = FailedInventory::NoRelease)?;
+                    for anchor in known {
+                        let scope = anchor.queue_scope()?;
+                        if state
+                            .completion_anchors
+                            .get(&anchor.operation())
+                            .map(|prior| prior.queue_scope())
+                            .transpose()?
+                            .is_some_and(|prior| prior != scope)
+                        {
+                            return Err(Error::new(
+                                "release_completion",
+                                "known completion anchor changed",
+                            ));
+                        }
+                        learned_anchor |=
+                            !state.completion_anchors.contains_key(&anchor.operation());
+                        state.completion_anchors.insert(anchor.operation(), anchor);
+                    }
+                    if state.completion_anchors.len() > 4096 {
+                        return Err(Error::new(
+                            "release_completion",
+                            "completion anchor inventory exceeds finite bound",
+                        ));
+                    }
+                    if state.restored {
+                        shared_status?;
+                        if learned_anchor {
+                            // Another facade learned an immutable scope. Its
+                            // missing local proof must fence this queue now,
+                            // before any ordinary release eligibility read.
+                            // Use live attempt state; do not inject restart holds.
+                            state.queue = rebuild_queue(
+                                &state.attempts,
+                                &state.no_release,
+                                &state.completions,
+                                &state.completion_anchors,
+                                &state.completion_errors,
+                                state.completion_inventory_error.as_ref(),
+                                &state.historical_no_release,
+                            )?;
+                        }
+                        return Ok(());
+                    }
+                    state.completion_anchors.clone()
+                };
+                // These are bounded local file/receipt readers; operation(s)
+                // never lock Control.state. No state guard crosses the shared
+                // RuntimeState anchor-registration call below.
+                let mut records = self.read_release_attempts()?;
+                let mut inventory = self.learn_release_completion_queue_inventory(&known)?;
+                self.runtime.remember_release_completion_anchors(
+                    inventory.anchors.values().cloned().collect(),
+                )?;
+                for record in records.values_mut() {
+                    if let Err(error) = self.validate_release_admission(record) {
+                        if error.code == "unsafe_storage" {
+                            return Err(error);
+                        }
+                        let covering: Vec<_> = inventory
+                            .anchors
+                            .iter()
+                            .filter(|(_, anchor)| {
+                                anchor
+                                    .covered_operations()
+                                    .any(|id| id == record.attempt.plan.operation_id)
+                            })
+                            .map(|(operation, _)| *operation)
+                            .collect();
+                        if covering.is_empty() {
+                            return Err(error);
+                        }
+                        // The authenticated full scope still fences this record.
+                        // An unavailable owner cannot be adopted or used as credit.
+                        for operation in covering {
+                            inventory.proofs.remove(&operation);
+                            inventory.errors.insert(operation, error.clone());
+                        }
+                    }
+                    if !record.attempt.completed() && !record.attempt.resolved {
+                        record.attempt.hold_reason.get_or_insert_with(|| {
+                            "recovered release requires explicit known-outcome reconciliation"
+                                .into()
+                        });
+                    }
+                }
+                let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
+                // Keep authenticated identities even if unrelated history makes
+                // the queue unusable. They never confer completion by themselves.
+                state.completion_anchors = inventory.anchors.clone();
+                let queue = rebuild_queue(
+                    &records,
+                    &state.no_release,
+                    &inventory.proofs,
+                    &inventory.anchors,
+                    &inventory.errors,
+                    None,
+                    &state.historical_no_release,
+                )?;
+                state.queue = queue;
+                state.completions = inventory.proofs;
+                state.completion_anchors = inventory.anchors;
+                state.completion_errors = inventory.errors;
+                state.completion_inventory_error = None;
+                state.attempts = records;
+                state.restored = true;
+                full_inventory = true;
+                Ok(())
+            })();
+            if let Err(error) = &restored {
+                match failed_inventory {
+                    FailedInventory::Release => {
+                        self.runtime.invalidate_released_inventory(error.clone())?;
+                    }
+                    FailedInventory::NoRelease => {
+                        self.runtime
+                            .invalidate_no_release_inventory(error.clone())?;
+                    }
+                }
+                let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
+                state.queue.invalidate_after_rebuild(error.clone());
+                match failed_inventory {
+                    FailedInventory::Release => {
+                        state.completion_inventory_error = Some(error.clone());
+                    }
+                    FailedInventory::NoRelease => {
+                        state.historical_no_release.fatal_error = Some(error.clone());
+                    }
+                }
+            } else if full_inventory {
+                // Only an actual successful full read clears shared status;
+                // the already-restored quick path never fabricates recovery.
+                self.runtime.clear_released_inventory_error()?;
+            }
+            restored
+        })
     }
     fn update_release<T>(
         &self,
@@ -463,7 +1049,15 @@ impl RuntimeDelivery {
             record.attempt.validate_recovered()?;
             let mut proposed = state.attempts.clone();
             proposed.insert(operation, record.clone());
-            let queue = rebuild_queue(&proposed, &state.no_release, &state.completions)?;
+            let queue = rebuild_queue(
+                &proposed,
+                &state.no_release,
+                &state.completions,
+                &state.completion_anchors,
+                &state.completion_errors,
+                state.completion_inventory_error.as_ref(),
+                &state.historical_no_release,
+            )?;
             self.save_release(&record)?;
             state.attempts = proposed;
             state.queue = queue;
@@ -514,19 +1108,14 @@ impl RuntimeDelivery {
                 .body
                 .starts_with("<!-- kegari:v0:parent_result -->\n")
             {
-                let signed = match evidence::decode_signed_publication::<Value>(
+                let (runtime, evidence) = match DeliveryCoordinator::decode_parent_publication(
                     &comment.body,
-                    "parent_result",
                     &self.runtime.services.key,
                 ) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if signed.payload["runtime_id"] == json!(config.runtime.id)
-                    && signed.payload["evidence"]
-                        == serde_json::to_value(parent.manifest())
-                            .map_err(|_| Error::invalid("parent evidence encoding"))?
-                {
+                if runtime == config.runtime.id && &evidence == parent.manifest() {
                     parents.push(reference);
                 }
             } else if comment
@@ -1675,7 +2264,15 @@ impl RuntimeDelivery {
                 Self::check_release_publications(&self.runtime, &record, None)?;
                 let mut proposed = state.attempts.clone();
                 proposed.insert(operation, record.clone());
-                let queue = rebuild_queue(&proposed, &state.no_release, &state.completions)?;
+                let queue = rebuild_queue(
+                    &proposed,
+                    &state.no_release,
+                    &state.completions,
+                    &state.completion_anchors,
+                    &state.completion_errors,
+                    state.completion_inventory_error.as_ref(),
+                    &state.historical_no_release,
+                )?;
                 self.save_release(&record)?;
                 state.queue = queue;
                 state.attempts = proposed;
@@ -2490,8 +3087,6 @@ fn current_parent_publication(
         .get(&projection.key.issue)
         .ok_or_else(|| Error::new("incompletely_observed", "parent publication is not visible"))?
         .comments;
-    let expected = serde_json::to_value(parent.manifest())
-        .map_err(|_| Error::invalid("parent manifest encoding"))?;
     let matches = comments
         .iter()
         .filter(|comment| {
@@ -2501,11 +3096,11 @@ fn current_parent_publication(
                 && comment.issue_id == projection.key.issue
         })
         .filter(|comment| {
-            evidence::decode_signed_publication::<Value>(&comment.body, "parent_result", key)
-                .is_ok_and(|signed| {
-                    signed.payload["runtime_id"] == json!(runtime)
-                        && signed.payload["evidence"] == expected
-                })
+            DeliveryCoordinator::decode_parent_publication(&comment.body, key).is_ok_and(
+                |(observed_runtime, evidence)| {
+                    observed_runtime == runtime && &evidence == parent.manifest()
+                },
+            )
         })
         .collect::<Vec<_>>();
     if matches.len() != 1 {
@@ -2523,8 +3118,7 @@ fn reject_superseding_parent(
     comments: &[crate::providers::Comment],
     selected: &crate::providers::Comment,
 ) -> Result<()> {
-    let expected =
-        evidence::decode_signed_publication::<Value>(&selected.body, "parent_result", key)?;
+    let (_, expected) = DeliveryCoordinator::decode_parent_publication(&selected.body, key)?;
     let selected_time = selected.created_at.ok_or_else(|| {
         Error::new(
             "incompletely_observed",
@@ -2540,10 +3134,10 @@ fn reject_superseding_parent(
         {
             continue;
         }
-        if let Ok(signed) =
-            evidence::decode_signed_publication::<Value>(&other.body, "parent_result", key)
-            && signed.payload["runtime_id"] == json!(runtime)
-            && signed.payload["evidence"]["work"] == expected.payload["evidence"]["work"]
+        if let Ok((observed_runtime, evidence)) =
+            DeliveryCoordinator::decode_parent_publication(&other.body, key)
+            && observed_runtime == runtime
+            && evidence.work == expected.work
             && other.created_at.is_none_or(|time| time >= selected_time)
         {
             return Err(Error::new(
@@ -3008,58 +3602,6 @@ mod tests {
     }
 
     #[test]
-    fn later_native_signed_parent_publication_invalidates_same_generation_selection() {
-        let key = evidence::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap();
-        let now = Utc::now();
-        let payload = json!({"runtime_id":Uuid::from_u128(1),"evidence":{"work":{"parent":Uuid::from_u128(100),"generation":"same"},"content":"first"}});
-        let make = |id, value: Value, time| {
-            let signed = key.sign("parent_result", &value).unwrap();
-            let body = evidence::encode_signed_publication("parent_result", &signed).unwrap();
-            crate::providers::Comment {
-                id: Uuid::from_u128(id),
-                issue_id: Uuid::from_u128(100),
-                body_digest: crate::digest::bytes_digest(body.as_bytes()),
-                body,
-                user_id: Some(Uuid::from_u128(5)),
-                bot: false,
-                delegated: false,
-                created_at: Some(time),
-                updated_at: Some(time),
-                edited_at: None,
-                url: "https://linear.invalid/comment".into(),
-            }
-        };
-        let first = make(50, payload.clone(), now);
-        assert!(
-            reject_superseding_parent(
-                &key,
-                Uuid::from_u128(1),
-                std::slice::from_ref(&first),
-                &first
-            )
-            .is_ok()
-        );
-        let mut changed = payload;
-        changed["evidence"]["content"] = json!("replacement");
-        let second = make(51, changed, now + Duration::seconds(1));
-        assert_eq!(
-            reject_superseding_parent(
-                &key,
-                Uuid::from_u128(1),
-                &[first.clone(), second.clone()],
-                &first
-            )
-            .unwrap_err()
-            .code,
-            "stale_result"
-        );
-        assert!(
-            reject_superseding_parent(&key, Uuid::from_u128(1), &[first, second.clone()], &second)
-                .is_ok()
-        );
-    }
-
-    #[test]
     fn preparation_identity_selects_new_parent_result_and_keeps_old_generation() {
         let digest = |v| canonical_digest(1, &json!(v)).unwrap();
         let mut work = WorkIdentity {
@@ -3099,7 +3641,9 @@ pub use baseline::KnownPredecessorBaseline;
 
 #[path = "runtime_delivery_lineage.rs"]
 mod lineage;
-pub(crate) use lineage::{VerifiedReleaseCompletion, VerifiedSuccessorHolds};
+pub(crate) use lineage::{
+    ReleaseCompletionAnchor, VerifiedReleaseCompletion, VerifiedSuccessorHolds,
+};
 
 #[cfg(test)]
 #[path = "runtime_delivery_successor_fixture.rs"]

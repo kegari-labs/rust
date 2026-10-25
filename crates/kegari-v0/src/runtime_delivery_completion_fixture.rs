@@ -2,6 +2,9 @@
 //! runtime completion. This does not manufacture integrated execution evidence.
 use super::*;
 
+#[path = "runtime_owned_target_resume_fixture.rs"]
+mod owned_resume;
+
 struct TerminalFixture {
     built: crate::runtime_fixture::RuntimeFixture,
     data: Arc<std::sync::Mutex<wire::Fixture>>,
@@ -100,8 +103,16 @@ fn terminal_history(
             state
                 .attempts
                 .insert(c.attempt.plan.operation_id, c.clone());
-            state.queue =
-                rebuild_queue(&state.attempts, &state.no_release, &state.completions).unwrap();
+            state.queue = rebuild_queue(
+                &state.attempts,
+                &state.no_release,
+                &state.completions,
+                &state.completion_anchors,
+                &state.completion_errors,
+                state.completion_inventory_error.as_ref(),
+                &state.historical_no_release,
+            )
+            .unwrap();
         }
         // Same synthetic accepted C, two genuine refused broker attempts and
         // explicitly authorized fresh Control resume admissions. No Permit is read
@@ -238,11 +249,16 @@ fn terminal_history(
                 .eligible(&later, after_spacing)
                 .is_err()
         );
+        Box::pin(owned_resume::assert_unretired(workspace)).await;
         let current =
             delivery.releases.state.lock().unwrap().attempts[&c.attempt.plan.operation_id].clone();
         delivery
             .retire_release(c.attempt.plan.operation_id, &current)
             .unwrap();
+        Box::pin(owned_resume::assert_closed(
+            &f, delivery, workspace, &permit,
+        ))
+        .await;
         let current =
             delivery.releases.state.lock().unwrap().attempts[&c.attempt.plan.operation_id].clone();
         assert!(current.local_retired && current.attempt.completed());
@@ -315,7 +331,37 @@ fn terminal_history(
             .records
             .write(&completion_file, &json!({"invalid":"interrupted record"}))
             .unwrap();
-        assert!(delivery.complete_release_chains(&projection).await.is_err());
+        let corrupt = delivery
+            .complete_release_chains(&projection)
+            .await
+            .unwrap_err();
+        assert_eq!(corrupt.code, "record_corrupt");
+        let unavailable = delivery
+            .releases
+            .state
+            .lock()
+            .unwrap()
+            .queue
+            .eligible(&later, after_spacing)
+            .unwrap_err();
+        assert_eq!(unavailable.code, corrupt.code);
+        assert_eq!(unavailable.message, corrupt.message);
+        std::fs::remove_file(delivery.records.path().join(&completion_file)).unwrap();
+        // Removing an untrusted inventory entry does not clear its installed
+        // fatal status. A complete successful scan is required before new seals.
+        assert_eq!(
+            delivery
+                .releases
+                .state
+                .lock()
+                .unwrap()
+                .queue
+                .eligible(&later, after_spacing)
+                .unwrap_err()
+                .code,
+            "record_corrupt"
+        );
+        delivery.sync_released_completions().unwrap();
         assert_eq!(
             delivery
                 .releases
@@ -328,7 +374,6 @@ fn terminal_history(
                 .code,
             "release_hold"
         );
-        std::fs::remove_file(delivery.records.path().join(&completion_file)).unwrap();
         drop(tamper_window);
         let projection = f.built.runtime.observations.refresh().await.unwrap();
         delivery.complete_release_chains(&projection).await.unwrap();
@@ -620,8 +665,16 @@ fn terminal_history(
         {
             let mut state = restored.releases.state.lock().unwrap();
             state.completions.clear();
-            state.queue =
-                rebuild_queue(&state.attempts, &state.no_release, &state.completions).unwrap();
+            state.queue = rebuild_queue(
+                &state.attempts,
+                &state.no_release,
+                &state.completions,
+                &state.completion_anchors,
+                &state.completion_errors,
+                state.completion_inventory_error.as_ref(),
+                &state.historical_no_release,
+            )
+            .unwrap();
         }
         restored.complete_release_chains(&projection).await.unwrap();
         assert_eq!(
@@ -664,7 +717,7 @@ fn terminal_history(
                 .eligible(&later, after_spacing)
                 .unwrap_err()
                 .code,
-            "release_hold"
+            "record_missing"
         );
         delivery.records.write(&completion_file, &signed).unwrap();
         let intent_file = format!("release-successor-{}.json", c.attempt.plan.operation_id);
@@ -714,7 +767,18 @@ fn terminal_history(
             delivery.git_path().unwrap(),
         )
         .unwrap();
-        assert!(cold.restore_releases().is_err());
+        cold.restore_releases().unwrap();
+        assert_eq!(
+            cold.releases
+                .state
+                .lock()
+                .unwrap()
+                .queue
+                .eligible(&later, after_spacing)
+                .unwrap_err()
+                .code,
+            "record_missing"
+        );
         cold.sync_released_completions().unwrap();
         assert!(
             f.built
@@ -738,7 +802,7 @@ fn terminal_history(
         queue.eligible(&later, after_spacing).unwrap();
         drop(tamper_window);
         // A signed attempt can still be presented diagnostically if its actual
-        // owner reference disappears; strict restore and authority still refuse.
+        // owner reference disappears; scoped restoration preserves affected refusal.
         let owner_leaf = format!("{}.json", permit.operation_id);
         let owner_bytes = receipt_dir.read_bytes(&owner_leaf, 1024 * 1024).unwrap();
         let tamper_window = f.observation_barrier.lock().await;
@@ -751,7 +815,19 @@ fn terminal_history(
             delivery.git_path().unwrap(),
         )
         .unwrap();
-        assert!(owner_cold.restore_releases().is_err());
+        owner_cold.restore_releases().unwrap();
+        assert_eq!(
+            owner_cold
+                .releases
+                .state
+                .lock()
+                .unwrap()
+                .queue
+                .eligible(&later, after_spacing)
+                .unwrap_err()
+                .code,
+            "record_missing"
+        );
         assert_owner_history(&owner_cold, &c, &unrelated);
         receipt_dir.write_bytes(&owner_leaf, &owner_bytes).unwrap();
         queue.eligible(&later, after_spacing).unwrap();
@@ -807,8 +883,16 @@ fn retain_unrelated_history(
         state
             .attempts
             .insert(record.attempt.plan.operation_id, record.clone());
-        state.queue =
-            rebuild_queue(&state.attempts, &state.no_release, &state.completions).unwrap();
+        state.queue = rebuild_queue(
+            &state.attempts,
+            &state.no_release,
+            &state.completions,
+            &state.completion_anchors,
+            &state.completion_errors,
+            state.completion_inventory_error.as_ref(),
+            &state.historical_no_release,
+        )
+        .unwrap();
     }
     record
 }
@@ -846,9 +930,17 @@ async fn assert_diagnostic_inspection(
     unrelated: &AttemptRecord,
     stage: &str,
 ) {
-    let strict = crate::runtime_driver::RuntimeProgression::reconcile(delivery.as_ref())
+    crate::runtime_driver::RuntimeProgression::reconcile(delivery.as_ref())
         .await
-        .expect_err("normal reconciliation must retain the missing target-reference failure");
+        .unwrap_or_else(|error| panic!("{stage}: scoped refresh failed globally: {error:?}"));
+    let strict = delivery
+        .releases
+        .state
+        .lock()
+        .unwrap()
+        .queue
+        .eligible(&terminal.attempt.plan, Utc::now())
+        .unwrap_err();
     assert_eq!(strict.code, "record_missing", "{stage}");
     assert_eq!(
         strict.details["completion_stage"], "target_reference",
