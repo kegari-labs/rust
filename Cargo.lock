@@ -773,6 +773,7 @@ name = "kegari-v0"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "clap",
  "fs2",
@@ -780,6 +781,7 @@ dependencies = [
  "hmac",
  "libc",
  "reqwest",
+ "ring",
  "rustls",
  "rustls-pemfile",
  "serde",

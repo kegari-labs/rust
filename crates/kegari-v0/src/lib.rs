@@ -9,6 +9,7 @@ pub mod evidence;
 pub mod git;
 pub mod instructions;
 pub mod isolation;
+pub mod providers;
 pub mod release;
 pub mod scheduler;
 pub mod snapshot;
