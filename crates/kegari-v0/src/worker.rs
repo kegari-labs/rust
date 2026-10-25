@@ -724,7 +724,7 @@ struct Journal {
     next: Mutex<u64>,
 }
 impl Journal {
-    fn create(dir: PrivateDir, contract: &WorkerContract) -> Result<Self> {
+    fn verify_scope(dir: &PrivateDir, contract: &WorkerContract) -> Result<()> {
         let root = dir.path();
         for grant in std::iter::once(&contract.isolation.plan().repository)
             .chain(std::iter::once(&contract.isolation.plan().scratch))
@@ -749,6 +749,10 @@ impl Journal {
                 "worker journal requires an explicit forbidden root",
             ));
         }
+        Ok(())
+    }
+    fn create(dir: PrivateDir, contract: &WorkerContract) -> Result<Self> {
+        Self::verify_scope(&dir, contract)?;
         let lock = dir.lock("worker.lock")?;
         if dir.records()?.iter().any(|name| name != "worker.lock") {
             return Err(Error::new(
@@ -1104,6 +1108,17 @@ impl ScopedWorker {
             ));
         }
         Ok(state.clone())
+    }
+    pub(crate) fn record_after_hook(
+        &self,
+        observation: std::result::Result<&crate::worker_run::AfterHookObservation, &Error>,
+    ) -> Result<()> {
+        let record = match observation {
+            Ok(observed) => json!({"operation":self.permit.operation_id,"observed":observed}),
+            Err(error) => json!({"operation":self.permit.operation_id,"error":error}),
+        };
+        self.journal.append("after_hook", &record)?;
+        Ok(())
     }
     pub fn take_verified_checks(&mut self) -> Vec<VerifiedCheckExecution> {
         std::mem::take(&mut self.checks)
@@ -1934,6 +1949,24 @@ impl TrialHost for ScopedWorker {
         Ok(())
     }
     fn checkpoint(&mut self, state: &SessionState, pending_method: Option<&str>) -> Result<()> {
+        let admission = self.control.operation(self.permit.operation_id)?;
+        match (
+            crate::control::RunResumeReference::from_receipt(&admission)?,
+            &state.resume_origin,
+        ) {
+            (Some(reference), Some(origin))
+                if reference.predecessor() == origin.predecessor
+                    && reference.recovery_digest() == origin.recovery_digest
+                    && reference.instruction_compatibility_digest
+                        == origin.instruction_compatibility_digest => {}
+            (None, None) => {}
+            _ => {
+                return Err(Error::new(
+                    "worker_binding",
+                    "resumed session differs from its exact admitted recovery lineage",
+                ));
+            }
+        }
         if let Some(admitted) = crate::control::RunReference::from_receipt(
             &self.control.operation(self.permit.operation_id)?,
         )? && (state.max_turns > admitted.max_turns || state.turns_started > state.max_turns)
@@ -2190,6 +2223,62 @@ pub struct RecoveredWorkerSession {
     pub state: SessionState,
     pub pending_method: Option<String>,
     pub session_records: usize,
+    #[serde(skip)]
+    resume_origin: Option<ResumeOrigin>,
+}
+#[derive(Clone, Debug)]
+struct ResumeOrigin {
+    admission_digest: String,
+    reference: crate::control::RunReference,
+    journal_digest: String,
+    state_digest: String,
+    after_hook: Option<crate::worker_run::AfterHookObservation>,
+    after_hook_error: bool,
+    after_hook_is_latest: bool,
+    executable_role: bool,
+}
+impl RecoveredWorkerSession {
+    pub fn resume_candidate(&self) -> Result<crate::codex::RetainedResumeSession> {
+        let origin = self.resume_origin.as_ref().ok_or_else(|| {
+            Error::new(
+                "resume_incompatible",
+                "session has no protected recovery origin",
+            )
+        })?;
+        let current = canonical_digest(
+            1,
+            &json!({"state":self.state,"pending":self.pending_method,"records":self.session_records}),
+        )?;
+        let applicable = matches!(
+            (&origin.after_hook, origin.executable_role),
+            (
+                Some(crate::worker_run::AfterHookObservation::NotApplicable),
+                false
+            ) | (
+                Some(crate::worker_run::AfterHookObservation::Skipped {
+                    reason: crate::worker_run::AfterHookSkip::HookNotConfigured
+                }),
+                true
+            )
+        );
+        if self.pending_method.is_some()
+            || current != origin.state_digest
+            || !applicable
+            || origin.after_hook_error
+            || !origin.after_hook_is_latest
+        {
+            return Err(Error::new(
+                "resume_incompatible",
+                "recovery lacks an unchanged final session and actual inapplicable/absent after-hook observation",
+            ));
+        }
+        crate::codex::RetainedResumeSession::from_journal(
+            self.state.clone(),
+            origin.admission_digest.clone(),
+            origin.reference.clone(),
+            origin.journal_digest.clone(),
+        )
+    }
 }
 /// Read complete protected session history before recovery/retry. The supplied
 /// admission is an actual control receipt; model JSON is never an input here.
@@ -2268,6 +2357,14 @@ pub fn recover_session(
     let mut intervention = None;
     let mut input_required = false;
     let mut sessions = 0usize;
+    let admission_digest = canonical_digest(1, admission)?;
+    let mut journal_digest = canonical_digest(
+        1,
+        &json!({"admission":admission_digest,"contract":contract,"binding":binding}),
+    )?;
+    let mut after_hook = None;
+    let mut after_hook_error = false;
+    let mut after_hook_is_latest = false;
     for (index, file) in files
         .into_iter()
         .filter(|file| file != "binding.json")
@@ -2280,6 +2377,7 @@ pub fn recover_session(
             ));
         }
         let event: Value = journal.read(&file)?;
+        journal_digest = canonical_digest(1, &json!({"previous":journal_digest,"event":event}))?;
         total = total
             .checked_add(
                 serde_json::to_vec(&event)
@@ -2293,13 +2391,53 @@ pub fn recover_session(
                 "complete worker history exceeds the finite recovery byte bound",
             ));
         }
+        if event["kind"] == "after_hook" {
+            if after_hook.is_some()
+                || after_hook_error
+                || event["record"]["operation"].as_str()
+                    != Some(&admission.operation_id.to_string())
+            {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "after-hook observation has duplicate or unrelated operation identity",
+                ));
+            }
+            after_hook_error = !event["record"]["error"].is_null();
+            if !after_hook_error {
+                after_hook = Some(
+                    serde_json::from_value(event["record"]["observed"].clone()).map_err(|_| {
+                        Error::new("record_corrupt", "invalid typed after-hook observation")
+                    })?,
+                );
+            }
+            after_hook_is_latest = latest.is_some();
+            continue;
+        }
         if event["kind"] != "session" {
             continue;
         }
+        after_hook_is_latest = false;
         let state = SessionState::restore(
             &serde_json::to_vec(&event["record"]["state"])
                 .map_err(|_| Error::invalid("session encoding failed"))?,
         )?;
+        match (
+            crate::control::RunResumeReference::from_receipt(admission)?,
+            &state.resume_origin,
+        ) {
+            (Some(reference), Some(origin))
+                if reference.predecessor() == origin.predecessor
+                    && reference.recovery_digest() == origin.recovery_digest
+                    && reference.instruction_compatibility_digest
+                        == origin.instruction_compatibility_digest => {}
+            (None, None) => {}
+            _ => {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "session journal changed its admitted resume lineage",
+                ));
+            }
+        }
         let expected_profile = crate::codex::CodexProfile {
             model: manifest.profile.model.clone(),
             reasoning: manifest.profile.reasoning.clone(),
@@ -2333,6 +2471,16 @@ pub fn recover_session(
                 "worker journal switches provider thread identity",
             ));
         }
+        if let Some(prior) = latest
+            .as_ref()
+            .and_then(|prior| prior.state.submissions.as_ref())
+        {
+            state
+                .submissions
+                .as_ref()
+                .ok_or_else(|| Error::new("record_corrupt", "submission history disappeared"))?
+                .preserves(prior)?;
+        }
         if let Some(observed) = &state.intervention {
             if observed.account_id != run.account {
                 return Err(Error::new(
@@ -2362,6 +2510,7 @@ pub fn recover_session(
             state,
             pending_method,
             session_records: sessions,
+            resume_origin: None,
         });
     }
     if let Some(latest) = &mut latest {
@@ -2369,6 +2518,108 @@ pub fn recover_session(
             latest.state.intervention = intervention;
         }
         latest.state.input_required |= input_required;
+        latest.resume_origin = Some(ResumeOrigin {
+            admission_digest,
+            reference: run,
+            journal_digest,
+            state_digest: canonical_digest(
+                1,
+                &json!({"state":latest.state,"pending":latest.pending_method,"records":latest.session_records}),
+            )?,
+            after_hook,
+            after_hook_error,
+            after_hook_is_latest,
+            executable_role: manifest.permissions.repository_code_execution,
+        });
     }
     Ok(latest)
+}
+
+/// Exclusively owns the original protected journal during metadata readback.
+/// It cannot invoke tools or revive an old worker permit.
+pub(crate) struct RecoveryJournal {
+    journal: Journal,
+    candidate: crate::codex::RetainedResumeSession,
+    host: Arc<dyn WorkerHost>,
+    observed: bool,
+}
+impl RecoveryJournal {
+    pub(crate) fn open(
+        records: &PrivateDir,
+        admission: &crate::control::Receipt,
+        candidate: &crate::codex::RetainedResumeSession,
+        contract: &WorkerContract,
+        host: Arc<dyn WorkerHost>,
+    ) -> Result<Self> {
+        let dir = PrivateDir::open(&records.path().join("journal"))?;
+        Journal::verify_scope(&dir, contract)?;
+        let lock = dir.lock("worker.lock")?;
+        let actual = recover_session(records, admission)?
+            .ok_or_else(|| Error::new("resume_incompatible", "original session journal is absent"))?
+            .resume_candidate()?;
+        if actual.digest() != candidate.digest()
+            || contract.instructions().manifest_digest
+                != candidate.state().binding.instruction_digest
+            || contract.account_id() != candidate.state().binding.account_id
+            || contract.scope_digest()
+                != admission
+                    .expected
+                    .get("scope")
+                    .map(String::as_str)
+                    .unwrap_or_default()
+        {
+            return Err(Error::new(
+                "resume_incompatible",
+                "recovery journal differs from its retained contract and candidate",
+            ));
+        }
+        let count = dir
+            .records_bounded(65_537)?
+            .into_iter()
+            .filter(|name| name != "binding.json")
+            .count();
+        Ok(Self {
+            journal: Journal {
+                dir,
+                _lock: lock,
+                next: Mutex::new(count as u64),
+            },
+            candidate: actual,
+            host,
+            observed: false,
+        })
+    }
+    pub(crate) fn observed(&self) -> bool {
+        self.observed
+    }
+}
+impl ToolBroker for RecoveryJournal {
+    fn observe_session(&mut self, state: &SessionState) -> Result<()> {
+        if state.binding != self.candidate.state().binding
+            || state.max_turns != self.candidate.state().max_turns
+            || state.turns_started != self.candidate.state().turns_started
+        {
+            return Err(Error::new(
+                "resume_incompatible",
+                "metadata observation changed original session identity or budget",
+            ));
+        }
+        self.journal
+            .append("session", &json!({"state":state,"pending_method":null}))?;
+        self.observed = true;
+        let operation = Uuid::parse_str(&state.binding.operation_id)
+            .map_err(|_| Error::new("record_corrupt", "original session operation is invalid"))?;
+        self.host.observed_session(operation, state)
+    }
+    fn call<'a>(
+        &'a mut self,
+        _: &'a ToolCall,
+    ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+        Box::pin(async {
+            Err(Error::new(
+                "unsupported_tool",
+                "metadata recovery cannot invoke worker tools",
+            ))
+        })
+    }
 }

@@ -17,6 +17,12 @@ use tokio::time::{Instant, timeout_at};
 #[path = "codex_history.rs"]
 mod history;
 pub use history::RecordedThreadHistory;
+#[path = "codex_resume.rs"]
+mod resume;
+pub use resume::{
+    RetainedResumeSession, SessionResumeOrigin, SubmissionHistory, TransientTurnFailure,
+    VerifiedThreadRecovery,
+};
 
 pub const SUPPORTED_CODEX_VERSION: &str = "codex-cli 0.164.0-alpha.11.1";
 pub const PROTOCOL_PROFILE: &str = "kegari-codex-0.164.0-alpha.11.1-v1";
@@ -441,6 +447,28 @@ pub struct UsageLedger {
     pub observed_tokens: BTreeMap<String, u64>,
     pub earlier_usage_unknown: BTreeSet<String>,
     pub ended_operations: BTreeMap<String, u64>,
+    /// Cumulative increases without a qualified new-session boundary cannot be
+    /// charged to the new operation. Keys have the account/thread binding.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub prior_unattributed_usage: BTreeMap<String, PriorUnattributedUsage>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PriorUnattributedUsage {
+    /// Sum of observed increases only; never attributed to either operation.
+    pub known_increase: u64,
+    /// The first pre-turn counter had no retained baseline. Its preceding
+    /// amount remains unknown even when subsequent increases are measurable.
+    pub retained_baseline_missing: bool,
+    /// An unknown-turn update arrived after new work was submitted. Its
+    /// cumulative increase cannot be assigned to either operation by timing.
+    #[serde(default)]
+    pub timing_unknown: bool,
+    /// First monotone counter carrying an actual new-session turn identity.
+    /// Its increase is unqualified: retained history does not authenticate the
+    /// old operation's final token total. Only subsequent deltas are charged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_new_turn_boundary: Option<u64>,
 }
 impl UsageLedger {
     /// Start accounting for a new admitted session of the same provider thread.
@@ -458,6 +486,43 @@ impl UsageLedger {
             next.earlier_usage_unknown.insert(key);
         }
         next
+    }
+    fn observe_resume_baseline(
+        &mut self,
+        account: &str,
+        thread: &str,
+        total: u64,
+        timing_unknown: bool,
+    ) {
+        let key = format!("{account}\0{thread}");
+        let previous = self.cumulative_baselines.get(&key).copied();
+        if timing_unknown {
+            self.earlier_usage_unknown.insert(key.clone());
+            self.prior_unattributed_usage
+                .entry(key.clone())
+                .or_default()
+                .timing_unknown = true;
+        }
+        match previous {
+            None => {
+                self.earlier_usage_unknown.insert(key.clone());
+                self.prior_unattributed_usage
+                    .entry(key.clone())
+                    .or_default()
+                    .retained_baseline_missing = true;
+            }
+            Some(old) if total > old => {
+                let prior = self
+                    .prior_unattributed_usage
+                    .entry(key.clone())
+                    .or_default();
+                prior.known_increase = prior.known_increase.saturating_add(total - old);
+            }
+            Some(_) => (),
+        }
+        if previous.is_none_or(|old| total >= old) {
+            self.cumulative_baselines.insert(key, total);
+        }
     }
     pub fn observe(&mut self, account: &str, thread: &str, total: u64, fresh_thread: bool) -> u64 {
         let key = format!("{account}\0{thread}");
@@ -507,6 +572,12 @@ pub struct SessionState {
     pub last_completed_turn: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_history: Option<RecordedThreadHistory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submissions: Option<SubmissionHistory>,
+    /// Immutable predecessor provenance; historical turns and totals stay in
+    /// their original protected session rather than being relabelled here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_origin: Option<resume::SessionResumeOrigin>,
     pub provider_instruction_sources: Vec<String>,
     pub advertised_tools: BTreeSet<String>,
     pub reconciliation_digest: Option<String>,
@@ -534,6 +605,8 @@ impl SessionState {
             completed_turns: BTreeMap::new(),
             last_completed_turn: None,
             provider_history: Some(RecordedThreadHistory::default()),
+            submissions: Some(SubmissionHistory::default()),
+            resume_origin: None,
             provider_instruction_sources: Vec::new(),
             advertised_tools: BTreeSet::new(),
             reconciliation_digest: None,
@@ -566,6 +639,12 @@ impl SessionState {
         }
         if let Some(history) = &state.provider_history {
             history.validate(&state.completed_turns, state.last_completed_turn.as_deref())?;
+        }
+        if let Some(submissions) = &state.submissions {
+            submissions.validate(&state)?;
+        }
+        if let Some(origin) = &state.resume_origin {
+            origin.validate(&state)?;
         }
         Ok(state)
     }
@@ -654,6 +733,39 @@ impl SessionState {
             self.intervention=Some(ProviderIntervention{schema_version:1,account_id:self.binding.account_id.clone(),thread_id:thread.into(),turn_id:turn.into(),source_method:method.into(),reason_code:reason.into(),required_resolution:"Resolve through the provider's supported verification/policy process; record verified resolution before readmission. A new thread or account cannot bypass this hold.".into(),observed_at:chrono::Utc::now().to_rfc3339(),source_digest:canonical_digest(1,params)?});
         }
         self.terminal = Some("blocked".into());
+        Ok(())
+    }
+    fn require_new_turn_identity(&self, id: &str) -> Result<()> {
+        if self
+            .resume_origin
+            .as_ref()
+            .is_some_and(|origin| origin.historical_turns.contains(id))
+        {
+            return Err(Error::new(
+                "historical_turn_replay",
+                "provider reused a retained historical turn in the new session",
+            ));
+        }
+        Ok(())
+    }
+    fn observe_turn_policy(&mut self, method: &str, turn: &Value) -> Result<()> {
+        if let Some(error) = turn.get("error").filter(|v| !v.is_null()) {
+            let code = error
+                .get("codexErrorInfo")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if [
+                "cyberPolicy",
+                "misalignmentPolicyViolation",
+                "tooManyDenials",
+            ]
+            .contains(&code)
+                || error.get("misalignment").is_some_and(|v| !v.is_null())
+            {
+                let params = json!({"threadId":self.thread_id,"turnId":required_str(turn,"id")?,"error":error});
+                self.block_provider(method, &params, code)?;
+            }
+        }
         Ok(())
     }
     pub fn notification(&mut self, method: &str, params: &Value) -> Result<SessionEvent> {
@@ -750,6 +862,8 @@ impl SessionState {
                     .get("turn")
                     .ok_or_else(|| Error::new("protocol_error", "turn event lacks turn"))?;
                 let id = required_str(t, "id")?;
+                self.observe_turn_policy(method, t)?;
+                self.require_new_turn_identity(id)?;
                 if self.completed_turns.contains_key(id) {
                     return Ok(SessionEvent::new(
                         EventKind::Notification,
@@ -779,23 +893,8 @@ impl SessionState {
                 // Actual same-thread policy signals remain authoritative even
                 // when the surrounding turn is duplicate, late or malformed.
                 // Ordinary outcome/history validation must not erase this hold.
-                if let Some(error) = t.get("error").filter(|v| !v.is_null()) {
-                    let code = error
-                        .get("codexErrorInfo")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    if [
-                        "cyberPolicy",
-                        "misalignmentPolicyViolation",
-                        "tooManyDenials",
-                    ]
-                    .contains(&code)
-                        || error.get("misalignment").is_some_and(|v| !v.is_null())
-                    {
-                        let p = json!({"threadId":thread,"turnId":id,"error":error});
-                        self.block_provider(method, &p, code)?;
-                    }
-                }
+                self.observe_turn_policy(method, t)?;
+                self.require_new_turn_identity(id)?;
                 let status = required_str(t, "status")?;
                 if let Some(previous) = self.completed_turns.get(id) {
                     if previous != status {
@@ -857,17 +956,51 @@ impl SessionState {
             }
             "thread/tokenUsage/updated" => {
                 let t = required_str(params, "threadId")?;
-                required_str(params, "turnId")?;
+                let usage_turn = required_str(params, "turnId")?;
                 let total = params
                     .pointer("/tokenUsage/total/totalTokens")
                     .and_then(Value::as_u64)
                     .ok_or_else(|| {
                         Error::new("protocol_error", "invalid cumulative token counter")
                     })?;
-                let delta = self
-                    .usage
-                    .observe(&self.binding.account_id, t, total, false);
-                data = json!({"observed_delta":delta,"cumulative_total":total});
+                let known_turn = self.turn_id.as_deref() == Some(usage_turn)
+                    || self.unresolved_turn.as_deref() == Some(usage_turn)
+                    || self.completed_turns.contains_key(usage_turn);
+                let key = format!("{}\0{t}", self.binding.account_id);
+                let unqualified_boundary = self.resume_origin.is_some()
+                    && known_turn
+                    && self
+                        .usage
+                        .prior_unattributed_usage
+                        .get(&key)
+                        .is_none_or(|usage| usage.first_new_turn_boundary.is_none());
+                if self.resume_origin.is_some() && (!known_turn || unqualified_boundary) {
+                    let timing_unknown = self.turns_started != 0 || unqualified_boundary;
+                    let monotone = self
+                        .usage
+                        .cumulative_baselines
+                        .get(&key)
+                        .is_none_or(|previous| total >= *previous);
+                    self.usage.observe_resume_baseline(
+                        &self.binding.account_id,
+                        t,
+                        total,
+                        timing_unknown,
+                    );
+                    if unqualified_boundary && monotone {
+                        self.usage
+                            .prior_unattributed_usage
+                            .entry(key.clone())
+                            .or_default()
+                            .first_new_turn_boundary = Some(total);
+                    }
+                    data = json!({"turn_id":usage_turn,"observed_delta":0,"cumulative_total":total,"baseline_only":true,"timing_unknown":timing_unknown,"unqualified_resume_boundary":unqualified_boundary,"prior_unattributed_usage":self.usage.prior_unattributed_usage.get(&key)});
+                } else {
+                    let delta = self
+                        .usage
+                        .observe(&self.binding.account_id, t, total, false);
+                    data = json!({"turn_id":usage_turn,"observed_delta":delta,"cumulative_total":total,"baseline_only":false});
+                }
             }
             "model/rerouted" => {
                 self.input_required = true;
@@ -922,6 +1055,49 @@ fn checkpoint_notification(
     }
     result
 }
+fn checkpoint_response_policy(
+    state: &mut SessionState,
+    broker: &mut dyn ToolBroker,
+    method: &str,
+    request_thread: Option<&str>,
+    inline_review: bool,
+    response: &Value,
+) -> Result<()> {
+    if !matches!(method, "turn/start" | "review/start") {
+        return Ok(());
+    }
+    let thread = state
+        .thread_id
+        .as_deref()
+        .ok_or_else(|| Error::new("protocol_error", "turn response has no bound thread"))?;
+    if request_thread != Some(thread) {
+        return Err(Error::new(
+            "identity_mismatch",
+            "turn response request belongs to another thread",
+        ));
+    }
+    if method == "review/start"
+        && (!inline_review
+            || response.get("reviewThreadId").and_then(Value::as_str) != Some(thread))
+    {
+        return Err(Error::new(
+            "identity_mismatch",
+            "review response does not identify the bound inline thread",
+        ));
+    }
+    let turn = response
+        .get("turn")
+        .ok_or_else(|| Error::new("protocol_error", "turn response lacks its turn identity"))?;
+    required_str(turn, "id")?;
+    // The matched RPC and exact thread/turn identity are sufficient for a
+    // policy observation. Malformed ordinary Turn fields or later ownership
+    // bookkeeping must not erase an authenticated provider hold.
+    let result = state.observe_turn_policy(method, turn);
+    if state.intervention.is_some() {
+        broker.observe_session(state)?;
+    }
+    result
+}
 pub struct DenyTools;
 impl ToolBroker for DenyTools {
     fn call<'a>(
@@ -966,6 +1142,7 @@ pub struct RpcClient {
     messages: VecDeque<RpcMessage>,
     events: VecDeque<SessionEvent>,
     next_id: u64,
+    server_request_count: u64,
     request_timeout: Duration,
     child: Option<std::sync::Arc<OwnedProviderProcess>>,
     diagnostic_task: Option<tokio::task::JoinHandle<()>>,
@@ -998,6 +1175,7 @@ impl RpcClient {
             messages: VecDeque::new(),
             events: VecDeque::new(),
             next_id: 1,
+            server_request_count: 0,
             request_timeout,
             child: None,
             diagnostic_task: None,
@@ -1344,6 +1522,10 @@ impl RpcClient {
         mut state: Option<&mut SessionState>,
         broker: &mut dyn ToolBroker,
     ) -> Result<()> {
+        self.server_request_count = self
+            .server_request_count
+            .checked_add(1)
+            .ok_or_else(|| Error::new("protocol_error", "server request count overflow"))?;
         let thread = params
             .get("threadId")
             .and_then(Value::as_str)
@@ -1472,6 +1654,22 @@ impl RpcClient {
             .checked_add(1)
             .ok_or_else(|| Error::new("protocol_error", "request ID exhausted"))?;
         let deadline = Instant::now() + self.request_timeout;
+        let request_thread = params
+            .get("threadId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let inline_review = params.get("delivery").and_then(Value::as_str) == Some("inline");
+        let submitted = if let Some(current) = state.as_deref_mut()
+            && matches!(method, "turn/start" | "turn/steer" | "review/start")
+            && let Some(submissions) = &mut current.submissions
+        {
+            submissions.prepare(id, method, &params)?;
+            // Persist the exact input/frame provenance before any pipe write.
+            broker.observe_session(current)?;
+            true
+        } else {
+            false
+        };
         let result = timeout_at(deadline, async {
             self.dispatch_request(id, method, params).await?;
             loop {
@@ -1518,6 +1716,17 @@ impl RpcClient {
             }
         })
         .await;
+        let response_policy = match (&result, state.as_deref_mut()) {
+            (Ok(Ok(response)), Some(current)) => checkpoint_response_policy(
+                current,
+                broker,
+                method,
+                request_thread.as_deref(),
+                inline_review,
+                response,
+            ),
+            _ => Ok(()),
+        };
         let gate = self
             .request_gate
             .clone()
@@ -1535,8 +1744,36 @@ impl RpcClient {
                 _ => gate.uncertain(id, method)?,
             }
         }
+        if let Err(error) = response_policy {
+            self.uncertain_request = Some(id);
+            return Err(error);
+        }
         match result {
             Ok(result) => {
+                if submitted && let Some(current) = state {
+                    if let Ok(response) = &result {
+                        let acknowledged = if method == "turn/steer" {
+                            response.get("turnId").and_then(Value::as_str)
+                        } else {
+                            response.pointer("/turn/id").and_then(Value::as_str)
+                        };
+                        if let Some(turn) = acknowledged
+                            && let Err(error) = current.require_new_turn_identity(turn)
+                        {
+                            self.uncertain_request = Some(id);
+                            broker.observe_session(current)?;
+                            return Err(error);
+                        }
+                    }
+                    current
+                        .submissions
+                        .as_mut()
+                        .ok_or_else(|| {
+                            Error::new("protocol_error", "submission inventory disappeared")
+                        })?
+                        .observe_response(id, &result)?;
+                    broker.observe_session(current)?;
+                }
                 if result
                     .as_ref()
                     .is_err_and(|e| e.code != "provider_response")
@@ -1689,6 +1926,13 @@ impl RpcClient {
                 &mut DenyTools,
             )
             .await?;
+        self.validate_execution_configuration(permissions, &response)
+    }
+    fn validate_execution_configuration(
+        &mut self,
+        permissions: &PermissionConfiguration,
+        response: &Value,
+    ) -> Result<()> {
         let config = response.get("config").ok_or_else(|| {
             Error::new(
                 "provider_response",
@@ -2081,6 +2325,7 @@ impl RpcClient {
             "id",
         )?
         .to_owned();
+        state.require_new_turn_identity(&turn)?;
         if state.turn_id.as_ref().is_some_and(|id| id != &turn) {
             return Err(Error::new(
                 "protocol_error",

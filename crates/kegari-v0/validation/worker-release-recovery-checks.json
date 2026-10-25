@@ -1,0 +1,512 @@
+{
+  "schema_version": 1,
+  "evidence_class": "deterministic",
+  "verified_at": "2026-10-25T11:37:58.596191+00:00",
+  "full_suite": {
+    "source_digest": "sha256:49b29e829fa6b366f7661222929201d139a6bd211aee55f748fea64cb0099dc4",
+    "file_count": 561,
+    "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0",
+    "exit_code": 0,
+    "log_path": "/private/tmp/kegari-v0-worker-release-recovery-full.log",
+    "log_sha256": "430eaeee0b66d27b7c5639b961c87369593da6c733e677b5bc6aac20a85a5a81",
+    "groups": [
+      {
+        "group": "unittests src/lib.rs",
+        "passed": 184,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 246.61
+      },
+      {
+        "group": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "unittests src/bin/kegari-v0-evaluation.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "tests/api.rs",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.13
+      },
+      {
+        "group": "tests/app.rs",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.22
+      },
+      {
+        "group": "tests/authority_scheduler.rs",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "tests/cli.rs",
+        "passed": 24,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.46
+      },
+      {
+        "group": "tests/codex_protocol.rs",
+        "passed": 31,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 1.16
+      },
+      {
+        "group": "tests/config_harness.rs",
+        "passed": 31,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.06
+      },
+      {
+        "group": "tests/configuration.rs",
+        "passed": 19,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 10.79
+      },
+      {
+        "group": "tests/connections.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "tests/control_preparation.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.15
+      },
+      {
+        "group": "tests/control_storage.rs",
+        "passed": 24,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 1.44
+      },
+      {
+        "group": "tests/decisions.rs",
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 10.23
+      },
+      {
+        "group": "tests/delivery.rs",
+        "passed": 21,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 16.98
+      },
+      {
+        "group": "tests/deployment.rs",
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 2.84
+      },
+      {
+        "group": "tests/evaluation.rs",
+        "passed": 25,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 2.57
+      },
+      {
+        "group": "tests/evaluation_reports.rs",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 1.42
+      },
+      {
+        "group": "tests/execution.rs",
+        "passed": 18,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 12.65
+      },
+      {
+        "group": "tests/git_delivery.rs",
+        "passed": 36,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 79.57
+      },
+      {
+        "group": "tests/host_process.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 36.8
+      },
+      {
+        "group": "tests/housekeeping.rs",
+        "passed": 22,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 24.65
+      },
+      {
+        "group": "tests/instruction_resume.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.04
+      },
+      {
+        "group": "tests/local_cli.rs",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 2.04
+      },
+      {
+        "group": "tests/main.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 1.22
+      },
+      {
+        "group": "tests/orchestration.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.03
+      },
+      {
+        "group": "tests/platform.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "seconds": 2.97
+      },
+      {
+        "group": "tests/process_group.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.51
+      },
+      {
+        "group": "tests/process_records.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.37
+      },
+      {
+        "group": "tests/providers.rs",
+        "passed": 28,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 1.76
+      },
+      {
+        "group": "tests/reconcile.rs",
+        "passed": 25,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 1.94
+      },
+      {
+        "group": "tests/runtime_schedule.rs",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "group": "tests/secrets.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.02
+      },
+      {
+        "group": "tests/snapshots.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.11
+      },
+      {
+        "group": "tests/supervisor.rs",
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.57
+      },
+      {
+        "group": "tests/transport.rs",
+        "passed": 13,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.14
+      },
+      {
+        "group": "tests/worker.rs",
+        "passed": 37,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 11.57
+      },
+      {
+        "group": "Doc-tests kegari_v0",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      }
+    ],
+    "totals": {
+      "passed": 668,
+      "failed": 0,
+      "ignored": 2
+    },
+    "ignored": [
+      "test child_signal_uses_owned_unreaped_handle_and_never_adopts_pid_metadata ... ignored, native process-group qualification requires the blocked OS boot identity probe",
+      "test native_host_and_birth_identity_are_observed_without_environment_trust ... ignored, native qualification blocked: outer sandbox denies kern.bootsessionuuid; do not weaken production checks"
+    ]
+  },
+  "post_review_validation": {
+    "source_digest": "sha256:4a2cae298403517bb107b5d80584b7fd4b090bd8143a3e69f91028628b35c631",
+    "changed_code_inputs": [
+      {
+        "path": "crates/kegari-v0/src/codex.rs",
+        "full_suite_sha256": "2f0b744b6e60204ce174259ffdcfeb6e445e296182c81997aa4e997fd80e0682",
+        "final_sha256": "f9432ef753464fd401842ea4cf3e2879babe810bdb301d94cb4f02290e749218"
+      },
+      {
+        "path": "crates/kegari-v0/src/codex_resume.rs",
+        "full_suite_sha256": "835a3af77a07b22ff5b627c9062ba39ccf1a71f84c355fc12cb93c0ef6fc2899",
+        "final_sha256": "9c30b06ddd58f943e38803aaae0c288ccdf67f954d29596654d36c0d03a1a203"
+      }
+    ],
+    "test_sets": [
+      {
+        "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --lib codex::resume::tests",
+        "exit_code": 0,
+        "log_sha256": "4a528d534882f1e42fa1bb50251b4fdfd9221fa1f7196a7892fc3f4325ba2d84",
+        "groups": [
+          {
+            "group": "unittests src/lib.rs",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered_out": 182,
+            "seconds": 0.05
+          }
+        ]
+      },
+      {
+        "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --lib worker_run::protocol_tests",
+        "exit_code": 0,
+        "log_sha256": "7ee680be6f745e5fdd0b4844ab586daf1d71dcf03fb474cc2165be8085bcf482",
+        "groups": [
+          {
+            "group": "unittests src/lib.rs",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "filtered_out": 183,
+            "seconds": 1.24
+          }
+        ]
+      },
+      {
+        "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --lib evaluation::",
+        "exit_code": 0,
+        "log_sha256": "25afd4a704dc6bcb017a15bcecdebac2b51ca13046ea2fb544333b1ecc7e888a",
+        "groups": [
+          {
+            "group": "unittests src/lib.rs",
+            "passed": 17,
+            "failed": 0,
+            "ignored": 0,
+            "filtered_out": 167,
+            "seconds": 0.74
+          }
+        ]
+      },
+      {
+        "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --test codex_protocol --test worker --test evaluation --test evaluation_reports",
+        "exit_code": 0,
+        "log_sha256": "0cdfde5d7946ff705f6f60bb54c80375e91fc243ef4f0b41518f86e6903d4bcf",
+        "groups": [
+          {
+            "group": "tests/codex_protocol.rs",
+            "passed": 31,
+            "failed": 0,
+            "ignored": 0,
+            "filtered_out": 0,
+            "seconds": 1.17
+          },
+          {
+            "group": "tests/evaluation.rs",
+            "passed": 25,
+            "failed": 0,
+            "ignored": 0,
+            "filtered_out": 0,
+            "seconds": 2.56
+          },
+          {
+            "group": "tests/evaluation_reports.rs",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0,
+            "filtered_out": 0,
+            "seconds": 1.41
+          },
+          {
+            "group": "tests/worker.rs",
+            "passed": 37,
+            "failed": 0,
+            "ignored": 0,
+            "filtered_out": 0,
+            "seconds": 11.58
+          }
+        ]
+      }
+    ],
+    "totals": {
+      "passed": 122,
+      "failed": 0,
+      "ignored": 0
+    },
+    "interpretation": "Affected checks on final source; do not add these repetitions to the complete base suite as unique tests. Full suite was not rerun after this two-code-file correction."
+  },
+  "scope": "Bounded worker metadata/native resume consumer, exact directory-family/source preservation, initial granted child-review retry, and authenticated chained release recovery. Automatic selection and mandatory native/live/human qualification remain incomplete.",
+  "source_inputs": {
+    "digest": "sha256:4a2cae298403517bb107b5d80584b7fd4b090bd8143a3e69f91028628b35c631",
+    "file_count": 561,
+    "algorithm": "SHA-256 of sorted compact JSON mapping workspace-relative paths to SHA-256 file hashes",
+    "directories": [
+      "src",
+      "tests",
+      "instructions",
+      "protocol",
+      "examples",
+      "evaluations"
+    ],
+    "additional_files": [
+      "crates/kegari-v0/Cargo.toml",
+      "crates/kegari-v0/build.rs",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain.toml"
+    ]
+  },
+  "lint": {
+    "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy --locked -p kegari-v0 --all-targets -- -D warnings",
+    "exit_code": 0,
+    "log_sha256": "382fb3a9bef6ae4f3581b40d29d67d284c36ee090b7caebec5794124161fcb69"
+  },
+  "other_checks": [
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo fmt --check -p kegari-v0",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "python3 crates/kegari-v0/tools/contract_inventory.py --check",
+      "exit_code": 0,
+      "log_sha256": "648d558ba9272d861212e4210848cb21ed5fd8cac8eec005719d33c42589f7c4",
+      "contract_blocks": 363,
+      "named_requirements": 136,
+      "implicit_passes": false
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "spec_sha256": "80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326",
+  "evaluation_plan": {
+    "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo run --locked -p kegari-v0 --bin kegari-v0-evaluation -- plan crates/kegari-v0/evaluations/manifest.json",
+    "exit_code": 0,
+    "log_sha256": "199688288763a403415927b32c8ad85771c5d616a6943fed76b40145c079639e",
+    "suite_digest": "sha256:v1:e59fa4a3e35486210374a57511a54033e6a1a334a7a728be78453d83b57647d5",
+    "trial_slots": 56,
+    "dispatch_authorized": false,
+    "profile_bindings": [
+      {
+        "binding": null,
+        "name": "operator_evaluated",
+        "unresolved": "Operator must explicitly select an allowed evaluated model/reasoning/speed, verified ChatGPT account and bounded live authority. No selection or spend is inferred from builder settings."
+      }
+    ]
+  },
+  "independent_review": {
+    "resolved": [
+      "Serialized source/family guard at thread resume and first turn dispatch",
+      "Concurrent process/retention registration updates and legacy final cleanup fence",
+      "Canonical current hook history and interrupted attachment ordering",
+      "Enrollment replay retains unchanged-source verification",
+      "Complete unchanged repository baseline inventory in release recovery",
+      "Historical import provenance separated from fresh current admission",
+      "Historical turn-ID replay rejected without losing policy",
+      "Actual usage turn identity retained; prior/unknown-turn increases unattributed",
+      "First resumed known-turn usage boundary remains explicitly uncertain",
+      "Same-thread policy acknowledged before mutation bookkeeping can fail",
+      "Evaluator refuses an admitted resume its trial protocol cannot faithfully execute"
+    ],
+    "limitations": "Bounded code reviews and deterministic actual-wire/Git/control fixtures; full conformance review, native qualification and required human calibration remain incomplete."
+  },
+  "retained_failed_checks": [
+    {
+      "command": "RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --locked -p kegari-v0 --lib codex::resume::tests",
+      "source_digest": "sha256:069b48cc37d2b8e63fa15d8388881b2dbd5eb1a4ed6a392344b84d8b23a094a1",
+      "exit_code": 101,
+      "groups": [
+        {
+          "group": "unittests src/lib.rs",
+          "passed": 1,
+          "failed": 1,
+          "ignored": 0,
+          "filtered_out": 182,
+          "seconds": 0.03
+        }
+      ],
+      "log_sha256": "dd5d1ce6b904077bca29bbbc9f32b9cb4306c6439526b9c492a148cfbdbad642",
+      "reason": "New guarded-dispatch fixture used the default single-thread Tokio runtime. The production prerequisite rejected before transmission; fixture was corrected to multithread and uncertainty diagnostics retained."
+    }
+  ],
+  "not_run": [
+    "Actual-agent repetitions",
+    "Required human evaluation calibration",
+    "Native descendant containment and boot-dependent lifecycle qualifications",
+    "Real provider mutation and compatibility qualification",
+    "Background/remote HTTPS and Tailscale qualification",
+    "Media qualification",
+    "Deployment or lasting coordinator activation"
+  ],
+  "remaining_engineering": [
+    "Automatic native recovery selection and opaque successful metadata caching",
+    "Cold/corrected/repeated/configured-hook session recovery",
+    "Further granted review attempts, findings-to-repair and validation grant lineage",
+    "Immutable historical target proofs after replacement and terminal transitive hold completion",
+    "Carried acceptance",
+    "Native evaluation fixture migration and complete runtime/CLI/result composition",
+    "Native descendant containment"
+  ],
+  "qualification_complete": false
+}

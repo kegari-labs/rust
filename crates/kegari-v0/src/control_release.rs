@@ -108,6 +108,8 @@ impl ReleaseResumeReference {
                 "continuation",
                 "source_advanced",
                 "worker_preparation",
+                "session_resume",
+                "session_recovery_preparation",
             ]
             .iter()
             .any(|key| receipt.expected.contains_key(*key))
@@ -155,6 +157,8 @@ impl VerifiedReleaseResume {
                 "continuation",
                 "source_advanced",
                 "worker_preparation",
+                "session_resume",
+                "session_recovery_preparation",
             ]
             .iter()
             .any(|key| original.expected.contains_key(*key))
@@ -312,6 +316,8 @@ impl ControlHost {
             "continuation",
             "source_advanced",
             "worker_preparation",
+            "session_resume",
+            "session_recovery_preparation",
         ]
         .iter()
         .any(|key| original.expected.contains_key(*key))
@@ -422,6 +428,8 @@ impl ControlHost {
                 "continuation",
                 "source_advanced",
                 "worker_preparation",
+                "session_resume",
+                "session_recovery_preparation",
             ]
             .iter()
             .any(|key| original.expected.contains_key(*key))
@@ -841,6 +849,8 @@ mod tests {
             "continuation",
             "source_advanced",
             "worker_preparation",
+            "session_resume",
+            "session_recovery_preparation",
         ] {
             let mut mixed = receipt.clone();
             mixed.expected.insert(key.into(), "{}".into());

@@ -186,6 +186,8 @@ fn admission_scope(receipt: &crate::control::Receipt, plan: &ReleasePlan) -> Res
             "continuation",
             "source_advanced",
             "worker_preparation",
+            "session_resume",
+            "session_recovery_preparation",
             "release_resume",
         ]
         .iter()
@@ -1254,6 +1256,18 @@ impl RuntimeDelivery {
                     == workspace.configuration.revision().unwrap_or_default()
         });
         let successor = self.successor_intent(&plan, gate.work(), &acceptance)?;
+        let successor_holds = if successor.is_some() {
+            let baseline = predecessor.clone().ok_or_else(|| {
+                Error::new(
+                    "release_hold",
+                    "successor admission lacks verified predecessor lineage",
+                )
+            })?;
+            Some(self.successor_holds(&plan, gate.work(), baseline)?)
+        } else {
+            None
+        };
+
         if let Some(manual) = &manual {
             crate::app::verify_current_actor(
                 &workspace.configuration,
@@ -1298,11 +1312,15 @@ impl RuntimeDelivery {
         };
         let eligibility = {
             let state = self.releases.state.lock().map_err(|_| unavailable())?;
+            let queue = successor_holds
+                .as_ref()
+                .map(|proof| state.queue.successor_view(&plan, proof))
+                .transpose()?;
             domain::verify_release_eligibility(
                 &plan,
                 evidence(),
                 facts(&snapshot),
-                &state.queue,
+                queue.as_ref().unwrap_or(&state.queue),
                 Utc::now(),
             )?
         };
@@ -1372,7 +1390,14 @@ impl RuntimeDelivery {
                     ));
                 }
                 let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
-                state.queue.eligible(&plan, Utc::now())?;
+                if let Some(proof) = &successor_holds {
+                    state
+                        .queue
+                        .successor_view(&plan, proof)?
+                        .eligible(&plan, Utc::now())?;
+                } else {
+                    state.queue.eligible(&plan, Utc::now())?;
+                }
                 let attempt = ReleaseAttempt::admit(
                     plan.clone(),
                     evidence(),
@@ -2738,6 +2763,10 @@ mod recovery;
 #[path = "runtime_delivery_baseline.rs"]
 mod baseline;
 pub use baseline::KnownPredecessorBaseline;
+
+#[path = "runtime_delivery_lineage.rs"]
+mod lineage;
+pub(crate) use lineage::VerifiedSuccessorHolds;
 
 #[cfg(test)]
 #[path = "runtime_delivery_successor_fixture.rs"]

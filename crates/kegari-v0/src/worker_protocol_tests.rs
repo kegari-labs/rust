@@ -92,6 +92,7 @@ async fn protocol_ack_records_exact_sent_request_when_native_generation_changes(
         permit: permit.clone(),
         host: host.clone(),
         authority,
+        resume_source: None,
         pending: Mutex::new(BTreeMap::new()),
     };
     let mut sent = 0;
@@ -120,10 +121,15 @@ async fn protocol_ack_records_exact_sent_request_when_native_generation_changes(
         true
     );
     assert_eq!(
-        gate.dispatch(8, "turn/start", &json!({"id":8}), &mut || {
-            sent += 1;
-            Ok(())
-        })
+        gate.dispatch(
+            8,
+            "turn/start",
+            &json!({"id":8,"method":"turn/start"}),
+            &mut || {
+                sent += 1;
+                Ok(())
+            }
+        )
         .unwrap_err()
         .code,
         "correction_classification_pending"

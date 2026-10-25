@@ -29,6 +29,24 @@ runtime. Replacement adapters are rejected. At directory creation, call
 and actual hook ledgers as their lifecycle changes. These records contain small
 identity, path and digest references, not issue descriptions or prompts.
 
+New execution registrations belong to a protected directory family. Its original
+marker, root/repository device and inode, workflow, work, source revision and
+complete member inventory are retained. A second ordinary registration cannot
+alias that directory. A resumed operation may join only through an actual typed
+resume admission plus opaque source and family proofs; an interrupted two-record
+enrollment cannot return a launch capability. Legacy single-operation records
+remain readable for cleanup and cannot be inferred to authorize reuse.
+
+`register_hook_ledger_location` binds the actual protected worker ledger directory
+and fixed `hooks.json` file to the registration and family. Cleanup rereads that
+ledger after later before-run, session and after-run transitions. A missing
+reference/file, replaced directory or changed binding fails closed; it cannot fall
+back to an earlier copied ledger. Exact attachment can finish an interrupted write,
+but a changed attachment is rejected before altering the retained reference.
+Process/retention read-modify-write operations serialize with cleanup admission
+and each other. The current cleanup's one before-remove record is excluded from
+its own plan hash; other historical hook facts remain bound.
+
 Before offering cleanup, retain a complete separate owner-protected copy of the
 self-contained clone, including its Git object database, and register that
 `RetentionLocation` plus exact provider reference identities. The helper does not
@@ -41,7 +59,10 @@ or unknown hook state prevents an eligible plan. Linked/special files, unsafe
 ownership and inventories above 100,000 entries or 1 GiB also require preservation.
 
 The returned `CleanupPlan` contains exact paths, file/directory identities and
-digests, retained location, receipt/workflow references and a token. Applying it
+digests, retained location, receipt/workflow references, family identity and a token.
+Every member must have closed receipts, observed processes and known hook state.
+Final gates compare registration, family and receipt/hook observations again; a
+legacy record also retains its unconditional registration-digest fence. Applying it
 requires the unchanged token and a callback that checks the current authenticated
 operator's `recover` mapping and unchanged configuration revision. A short serialized
 admission records Sent and a runtime-wide hold, then releases the control mutex.
@@ -62,7 +83,9 @@ or spawning the hook. The supported no-hook cleanup path is exercised with real
 owned Git subprocesses in a disposable fixture.
 
 After repeating preservation checks, cleanup writes a retained-copy tombstone
-before descriptor-relative, no-follow deletion. Each regular file is hashed again
+for every family member before descriptor-relative, no-follow deletion. All members
+resolve to the same completely verified retained snapshot; original receipts and
+family lineage remain intact. Each regular file is hashed again
 through its opened descriptor and must match the retained bytes and mode. Hashing
 runs outside the control mutex; the unlink gate then compares descriptor and path
 identity, size, mode, link count, owner and modification/change timestamps. Edits
@@ -147,3 +170,24 @@ bytes and file modes after inventory and after the final hash; each change preve
 unlink and preserves both the edited source and the original retained bytes.
 These fixtures do not qualify native descendant containment, live credentials,
 launchd installation or real provider mutations.
+
+## Current session-reuse scope
+
+`Git::verify_reusable_execution` uses a fresh scoped host metadata permit to check
+actual original clone preparation, HEAD/tree, status and raw source blob identities.
+This catches index flags hiding changed bytes. A bounded snapshot includes Git
+administration, markers, content, modes and filesystem identities; symlinks,
+hardlinks and special files are excluded from this initial reuse profile. Its
+filesystem revalidation grants no process authority. Housekeeping also binds the
+complete execution-root inventory, all closed member observations and the exact
+predecessor receipt. Existing enrollment and launch capabilities reject subsequent
+source changes.
+
+The native `prepare_resumed` consumer now assembles current instructions, consumes
+actual joined completion and provider recovery, admits a new bounded run and enrolls
+the directory before building its services. Creation history is inherited explicitly;
+no new after-create event is invented and the original marker stays unchanged.
+Automatic scheduler selection, broader/cold session recovery and live native
+qualification remain incomplete. Component fixtures use real Git/control/family
+operations with explicitly synthetic terminal metadata; they do not qualify native
+provider execution or create a joined-runtime cache entry.

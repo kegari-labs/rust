@@ -1816,6 +1816,7 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
         unfinished: None,
         source_advanced: None,
         retried_unfinished: None,
+        review_retry: None,
         max_seconds: 60,
         max_turns: 2,
     };

@@ -1967,7 +1967,7 @@ pub struct SuccessfulRelease {
     pub no_release_required: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceHold {
     pub operation_id: Uuid,
     pub parent_id: Uuid,
@@ -2144,6 +2144,30 @@ impl ReleaseQueue {
             earliest = earliest.max(end);
         }
         Ok(earliest)
+    }
+
+    /// Ephemeral eligibility projection for one exact, authenticated chain.
+    /// The caller's queue and every durable ancestor hold remain unchanged.
+    pub(crate) fn successor_view(
+        &self,
+        plan: &ReleasePlan,
+        proof: &crate::runtime_delivery::VerifiedSuccessorHolds,
+    ) -> Result<Self> {
+        let expected = proof.validate(plan)?;
+        let mut view = self.clone();
+        for (operation, hold) in expected {
+            if self.holds.get(operation) != Some(hold) {
+                return Err(Error::new(
+                    "release_hold",
+                    "queue hold differs from verified successor lineage",
+                ));
+            }
+            view.holds
+                .get_mut(operation)
+                .expect("checked hold")
+                .assigned_successor = Some(plan.operation_id);
+        }
+        Ok(view)
     }
 
     pub fn eligible(&self, plan: &ReleasePlan, now: DateTime<Utc>) -> Result<()> {

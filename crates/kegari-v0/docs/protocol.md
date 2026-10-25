@@ -203,6 +203,65 @@ restart cannot turn it into a clean idle session. An exact late terminal event
 can resolve that identity but is not itself permission to retry or success of the
 work. The usage ledger exposes a new-session constructor that retains only the
 same account/thread cumulative baseline and unknown-history marker, leaving old
-token totals and elapsed time on the original session. These primitives are
-tested offline; the sealed recovery/readmission bridge that will consume them
-is not yet implemented.
+token totals and elapsed time on the original session. Production resumed
+sessions consume the sealed recovery/readmission bridge described below; raw
+prior-state JSON cannot select the resumed launch mode.
+
+A separate narrow terminal-failure profile now produces
+`VerifiedThreadRecovery`. Every actual `turn/start`, `turn/steer` and
+`review/start` records its exact frame/input fingerprint before transmission and
+an acknowledged native turn identity after the response. The recovery profile
+accepts only a complete one-to-one inventory of acknowledged `turn/start` text
+inputs and full user/agent/reasoning items, with completed earlier turns and one
+final `serverOverloaded` or `internalServerError` turn. Steering, review starts,
+unknown responses, effectful/unknown items, corrections, input requirements and
+legacy missing provenance remain incompatible. Full native input bytes must match
+the actual submitted input fingerprint; summaries or unchanged IDs are
+insufficient.
+
+The guarded metadata wrapper uses a new owned transport and only
+initialize/account/config/thread-read operations. It retains intervention
+notifications even during initialization, refuses unsolicited server requests,
+and never exposes a general RPC client. Deterministic duplex scenarios exercise
+exact input/full-history match, changed input/history, nontransient failure,
+policy retention before mismatch, summary views, unsolicited tools, wrong
+account, and the entire metadata handshake. Separate actual-control/protected
+journal fixtures exercise finite admission and fencing before any spawn. These
+are component evidence, not native account access or completed provider resume.
+
+`AdmittedSessionResume` binds the actual typed run admission, verified original
+and current complete assemblies, metadata recovery and enrolled directory family.
+The adapter rereads full history immediately before `thread/resume`, transmits
+the actual current assembled prompt, and records that readback on the new
+session. Its new turn counter, submitted inputs, history and usage totals remain
+separate from the original operation. Cumulative usage arriving before the new
+session's first turn advances its baseline without charging the new operation.
+The same applies later when the notification's actual `turnId` is not an active,
+completed or unresolved turn of the new session. Its timing remains explicitly
+unknown; the normalized event preserves the actual turn identity.
+The first monotone counter for a known new-session turn also establishes only an
+unqualified boundary: retained terminal history does not authenticate the old
+session's final token total. Its increase is left unattributed, with the observed
+counter retained as `first_new_turn_boundary`; only subsequent known-turn
+increments are charged. A lower counter cannot establish or lower this boundary.
+Known increases are retained as `prior_unattributed_usage.known_increase`; an
+absent original baseline remains explicitly marked unknown alongside any later
+measurable increase. Thus new-operation totals can be incomplete; neither the
+ambiguous first increase nor `tokenUsage.last` is guessed to belong to a turn.
+Duplex tests cover the absence of a final old-turn update, delayed old-turn
+updates before and after the new boundary, repeated/lower counters, and later
+new-turn increments, as well as changed history
+and policy signals arriving between metadata preparation and resume. This first
+profile excludes corrected, cold, active, effectful, review and previously
+resumed histories. Runtime selection and native qualification remain incomplete.
+The sealed origin retains the bounded actual historical turn-ID inventory.
+Replayed historical IDs in a new start acknowledgement, start notification or
+completion are rejected without copying old results into the new session;
+same-thread policy observations are retained before that rejection.
+Matched turn acknowledgements persist policy signals before owner/fence
+bookkeeping can fail. The original request thread and a nonempty returned turn
+ID establish identity even when ordinary turn fields are malformed; inline
+review additionally requires its exact returned review-thread ID. Foreign
+review replies and replies lacking enough identity cannot create a hold on the
+original session. Duplex regressions verify this ordering with deliberately
+failing acknowledgement bookkeeping; they do not qualify native ownership.

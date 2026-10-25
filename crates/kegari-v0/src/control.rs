@@ -23,6 +23,12 @@ mod decisions;
 mod preparation;
 pub(crate) use preparation::preparation_operation;
 pub use preparation::{PreparationAdmission, PreparationReference};
+#[path = "control_resume.rs"]
+mod session_resume;
+pub use session_resume::RunResumeReference;
+#[path = "control_recovery_preparation.rs"]
+mod recovery_preparation;
+pub use recovery_preparation::SessionRecoveryPreparationReference;
 #[path = "control_release.rs"]
 mod release_recovery;
 pub use release_recovery::ReleaseResumeReference;
@@ -165,6 +171,9 @@ impl RunReference {
             .map(|encoded| {
                 if receipt.kind != "admission"
                     || receipt.expected.contains_key("worker_preparation")
+                    || receipt
+                        .expected
+                        .contains_key("session_recovery_preparation")
                 {
                     return Err(Error::new(
                         "record_corrupt",
@@ -245,6 +254,10 @@ impl MetadataReference {
                 if receipt.kind != "admission"
                     || receipt.expected.contains_key("run")
                     || receipt.expected.contains_key("worker_preparation")
+                    || receipt
+                        .expected
+                        .contains_key("session_recovery_preparation")
+                    || receipt.expected.contains_key("session_resume")
                 {
                     return Err(Error::new(
                         "record_corrupt",
@@ -282,9 +295,11 @@ pub struct MetadataAdmission {
 }
 enum AdmissionReference {
     Preparation(PreparationReference),
+    SessionRecovery(SessionRecoveryPreparationReference),
     Run(RunReference),
     ContinuedRun(RunReference, RunContinuationReference),
     SourceAdvancedRun(RunReference, SourceAdvancedReference),
+    ResumedRun(RunReference, RunResumeReference),
     Metadata(MetadataReference),
     ReleaseResume(ReleaseResumeReference),
 }
@@ -1037,7 +1052,8 @@ impl ControlHost {
         if let Some(
             AdmissionReference::Run(run)
             | AdmissionReference::ContinuedRun(run, _)
-            | AdmissionReference::SourceAdvancedRun(run, _),
+            | AdmissionReference::SourceAdvancedRun(run, _)
+            | AdmissionReference::ResumedRun(run, _),
         ) = &reference
         {
             let mut prior = BTreeMap::new();
@@ -1075,6 +1091,12 @@ impl ControlHost {
             if let Some(AdmissionReference::SourceAdvancedRun(_, source)) = &reference {
                 self.verify_source_advanced(&s.snapshot(), run, source, &prior)?;
             }
+            if let Some(AdmissionReference::ResumedRun(_, resume)) = &reference {
+                self.verify_run_resume(&s.snapshot(), run, resume, &prior)?;
+            }
+        }
+        if let Some(AdmissionReference::SessionRecovery(reference)) = &reference {
+            self.verify_session_recovery_preparation(&s.snapshot(), reference)?;
         }
         if let Some(AdmissionReference::Metadata(reference)) = &reference {
             let mut prior = BTreeMap::new();
@@ -1127,7 +1149,8 @@ impl ControlHost {
         if let Some(
             AdmissionReference::Run(reference)
             | AdmissionReference::ContinuedRun(reference, _)
-            | AdmissionReference::SourceAdvancedRun(reference, _),
+            | AdmissionReference::SourceAdvancedRun(reference, _)
+            | AdmissionReference::ResumedRun(reference, _),
         ) = &reference
         {
             expected.insert(
@@ -1150,11 +1173,25 @@ impl ControlHost {
                     .map_err(|_| Error::invalid("source-advanced reference encoding"))?,
             );
         }
+        if let Some(AdmissionReference::ResumedRun(_, resume)) = &reference {
+            expected.insert(
+                "session_resume".into(),
+                serde_json::to_string(resume)
+                    .map_err(|_| Error::invalid("session resume reference encoding"))?,
+            );
+        }
         if let Some(AdmissionReference::Preparation(reference)) = &reference {
             expected.insert(
                 "worker_preparation".into(),
                 serde_json::to_string(reference)
                     .map_err(|_| Error::invalid("worker preparation reference encoding"))?,
+            );
+        }
+        if let Some(AdmissionReference::SessionRecovery(reference)) = &reference {
+            expected.insert(
+                "session_recovery_preparation".into(),
+                serde_json::to_string(reference)
+                    .map_err(|_| Error::invalid("recovery preparation encoding"))?,
             );
         }
         if let Some(AdmissionReference::Metadata(reference)) = reference {

@@ -3253,3 +3253,7 @@ async fn original_release_reader_requires_actual_native_publications_and_immutab
         "carried-acceptance history remains an explicit unsupported prerequisite, never silently direct acceptance"
     );
 }
+
+#[path = "lineage_wire.rs"]
+mod lineage_wire;
+pub(crate) use lineage_wire::RuntimeLineageWire;

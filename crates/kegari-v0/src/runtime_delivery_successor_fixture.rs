@@ -7,6 +7,16 @@ use crate::runtime_delivery::worker_fixture::git;
 use crate::test_process_probe::FixtureBootProbe;
 
 struct ObservationPoll(tokio::task::JoinHandle<()>);
+impl ObservationPoll {
+    async fn stop(mut self) {
+        self.0.abort();
+        match (&mut self.0).await {
+            Ok(()) => (),
+            Err(error) if error.is_cancelled() => (),
+            Err(error) => panic!("fixture observation poll failed: {error}"),
+        }
+    }
+}
 impl Drop for ObservationPoll {
     fn drop(&mut self) {
         self.0.abort();
@@ -15,8 +25,20 @@ impl Drop for ObservationPoll {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integrated_evidence() {
+    run_successor_fixture(false).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chained_runtime_retains_merged_contribution_through_deployment_only_predecessor() {
+    run_successor_fixture(true).await;
+}
+async fn run_successor_fixture(chained: bool) {
     let (root, built, original, data, owner) =
-        super::super::tests::fixture_authorization_with_wire(true).await;
+        super::super::tests::fixture_authorization_with_configuration(true, |configuration| {
+            if chained {
+                RuntimeLineageWire::configure(configuration);
+            }
+        })
+        .await;
     let binary = original.git_path().unwrap();
     let source = root.path().canonicalize().unwrap().join("source");
     git(&binary, &source, &["init", "-b", "main"]);
@@ -35,7 +57,13 @@ async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integ
     let tool = Git::new(&binary).unwrap();
     let production = tool.revision(&source, "HEAD").unwrap();
     let github = RuntimeSeedWire::new(&production);
-    data.lock().unwrap().github_transport = Some(github.transport());
+    let native = chained.then(|| RuntimeLineageWire::new(&github, production.clone()));
+    data.lock().unwrap().github_transport = Some(
+        native
+            .as_ref()
+            .map(|wire| wire.clone() as Arc<dyn crate::providers::HttpTransport>)
+            .unwrap_or_else(|| github.transport()),
+    );
     let processes = Arc::new(
         ProcessJournal::with_probe(
             built
@@ -67,12 +95,41 @@ async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integ
     // fresh provider observations, just as an active runtime poller does.
     let observations = built.runtime.observations.clone();
     let _poll = ObservationPoll(tokio::spawn(async move {
-        for _ in 0..600 {
+        for _ in 0..1800 {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            observations.refresh().await.unwrap();
+            match observations.refresh().await {
+                Ok(_) => (),
+                // Signed publication can change between the two strict read
+                // passes. Keep the failed observation unavailable and poll
+                // again; operation gates still require a complete fresh view.
+                Err(error) if error.code == "unstable_observation" => (),
+                Err(error) => panic!("fixture observation poll failed: {error}"),
+            }
         }
     }));
     let repository = &workspace.contracts[0];
+    if let Some(native) = &native {
+        native.capture_objects(
+            &delivery.git_path().unwrap(),
+            &source,
+            std::slice::from_ref(&production),
+        );
+        let setup = fixture_phase(
+            &delivery,
+            &workspace,
+            &gate,
+            &lease,
+            &production,
+            DeliveryPhase::Release,
+        )
+        .await;
+        native
+            .seed_target(&setup.coordinator, &workspace.observer, &setup.admission)
+            .await;
+        delivery
+            .retire_delivery_phase(&setup, json!({"fixture":"authenticated initial target"}))
+            .unwrap();
+    }
     let phase = delivery
         .admit_delivery_phase(
             &workspace,
@@ -167,97 +224,120 @@ async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integ
     // Establish actual native publication/receipt lineage for a retained,
     // accepted predecessor. Its upstream review/check observations are the
     // explicitly synthetic seed above, not a newly completed runtime parent.
-    let publication = built
-        .runtime
-        .control
-        .admit(
+    let (manifest, accepted, references) = if chained {
+        let mut manifest = seed.parent.manifest().clone();
+        manifest.baselines = vec![baseline.baseline().clone()];
+        manifest.production_targets = baseline
+            .targets()
+            .iter()
+            .map(|target| target.target.clone())
+            .collect();
+        manifest.integrated_results[0].candidate_vector_digest =
+            manifest.candidate_vector_digest().unwrap();
+        publish_origin(
+            &delivery,
+            &workspace,
+            &gate,
             &lease,
-            seed.parent.manifest().publication_operation,
-            gate.work_key().unwrap(),
-            crate::digest::canonical_digest(1, &"fixture prior publication").unwrap(),
-            || (delivery.current_gate())(&gate),
+            manifest,
+            &seed.slice,
+            baseline.targets(),
+        )
+        .await
+    } else {
+        let publication = built
+            .runtime
+            .control
+            .admit(
+                &lease,
+                seed.parent.manifest().publication_operation,
+                gate.work_key().unwrap(),
+                crate::digest::canonical_digest(1, &"fixture prior publication").unwrap(),
+                || (delivery.current_gate())(&gate),
+            )
+            .unwrap();
+        let writer = wire::id(5).to_string();
+        let actor = format!("owner:{}", lease.owner_id);
+        let accepted = evidence::prepare_acceptance(
+            &seed.parent,
+            evidence::AcceptanceRequest {
+                supplied_token: seed.parent.token(),
+                current_work: gate.work(),
+                pending_correction: false,
+                actor: evidence::AcceptanceActor {
+                    control_actor: &actor,
+                    linear_actor: &writer,
+                    provider_writer: &writer,
+                    has_accept_role: true,
+                    permitted_acceptors: &BTreeSet::from([writer.clone()]),
+                },
+                runtime_id: lease.runtime_id,
+                operation_id: Uuid::new_v4(),
+                now: Utc::now(),
+            },
+            &built.runtime.services.key,
         )
         .unwrap();
-    let writer = wire::id(5).to_string();
-    let actor = format!("owner:{}", lease.owner_id);
-    let accepted = evidence::prepare_acceptance(
-        &seed.parent,
-        evidence::AcceptanceRequest {
-            supplied_token: seed.parent.token(),
-            current_work: gate.work(),
-            pending_correction: false,
-            actor: evidence::AcceptanceActor {
-                control_actor: &actor,
-                linear_actor: &writer,
-                provider_writer: &writer,
-                has_accept_role: true,
-                permitted_acceptors: &BTreeSet::from([writer.clone()]),
-            },
-            runtime_id: lease.runtime_id,
-            operation_id: Uuid::new_v4(),
-            now: Utc::now(),
-        },
-        &built.runtime.services.key,
-    )
-    .unwrap();
-    let mut references = Vec::new();
-    for (request, body) in [
-        (
-            Uuid::new_v4(),
-            seed.original_parent_body(&workspace.coordinator),
-        ),
-        (
-            accepted.payload.operation_id,
-            evidence::encode_signed_publication("human_acceptance", &accepted).unwrap(),
-        ),
-    ] {
-        let receipt = delivery
-            .provider_broker(&workspace.configuration, wire::id(2))
-            .unwrap()
-            .mutate(
-                built.runtime.control.clone(),
-                crate::control::MutationRequest {
-                    request_id: request,
-                    runtime_id: lease.runtime_id,
-                    actor: crate::control::Actor {
-                        identity: actor.clone(),
-                        principal: None,
-                        roles: BTreeSet::new(),
+        let mut references = Vec::new();
+        for (request, body) in [
+            (
+                Uuid::new_v4(),
+                seed.original_parent_body(&workspace.coordinator),
+            ),
+            (
+                accepted.payload.operation_id,
+                evidence::encode_signed_publication("human_acceptance", &accepted).unwrap(),
+            ),
+        ] {
+            let receipt = delivery
+                .provider_broker(&workspace.configuration, wire::id(2))
+                .unwrap()
+                .mutate(
+                    built.runtime.control.clone(),
+                    crate::control::MutationRequest {
+                        request_id: request,
+                        runtime_id: lease.runtime_id,
+                        actor: crate::control::Actor {
+                            identity: actor.clone(),
+                            principal: None,
+                            roles: BTreeSet::new(),
+                        },
+                        kind: String::new(),
+                        canonical_targets: vec![],
+                        expected: BTreeMap::new(),
+                        payload: Value::Null,
                     },
-                    kind: String::new(),
-                    canonical_targets: vec![],
-                    expected: BTreeMap::new(),
-                    payload: Value::Null,
-                },
-                Some(publication.clone()),
-                None,
-                crate::providers::ProviderMutation::LinearComment {
-                    issue: gate.work().parent,
-                    body: body.clone(),
-                },
-                || Ok(()),
-            )
-            .await
+                    Some(publication.clone()),
+                    None,
+                    crate::providers::ProviderMutation::LinearComment {
+                        issue: gate.work().parent,
+                        body: body.clone(),
+                    },
+                    || Ok(()),
+                )
+                .await
+                .unwrap();
+            references.push(PublicationRef {
+                id: receipt.remote_ids["comment_id"].parse().unwrap(),
+                body_digest: crate::digest::bytes_digest(body.as_bytes()),
+                writer: wire::id(5),
+            });
+        }
+        built
+            .runtime
+            .control
+            .retire_local(publication.operation_id, json!({"published":true}))
             .unwrap();
-        references.push(PublicationRef {
-            id: receipt.remote_ids["comment_id"].parse().unwrap(),
-            body_digest: crate::digest::bytes_digest(body.as_bytes()),
-            writer: wire::id(5),
-        });
-    }
-    built
-        .runtime
-        .control
-        .retire_local(publication.operation_id, json!({"published":true}))
-        .unwrap();
-    let plan = ReleasePlan {
+        (seed.parent.manifest().clone(), accepted, references)
+    };
+    let mut plan = ReleasePlan {
         schema_version: 1,
         runtime_id: lease.runtime_id,
         operation_id: Uuid::new_v4(),
         parent_id: gate.work().parent,
         linear_workspace: gate.work().linear_workspace,
         generation: gate.work().generation.clone(),
-        evidence_token: seed.parent.token().into(),
+        evidence_token: manifest.token().unwrap(),
         acceptance_digest: accepted.digest().unwrap(),
         carried_acceptance: None,
         resources: BTreeSet::from([domain::ResourceKey::Repository {
@@ -278,6 +358,49 @@ async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integ
             },
         }],
     };
+    if chained {
+        plan.deployment_free.clear();
+        plan.resources.insert(domain::ResourceKey::Target {
+            provider: "github".into(),
+            id: "service-production".into(),
+        });
+        plan.steps.push(domain::ReleaseStep {
+            id: "deploy".into(),
+            depends_on: BTreeSet::from(["merge".into()]),
+            kind: domain::StepKind::Deploy {
+                repository: repository.repository.clone(),
+                target: domain::ResourceKey::Target {
+                    provider: "github".into(),
+                    id: "service-production".into(),
+                },
+                workflow_id: 3,
+                workflow_revision: "1".repeat(40),
+                dispatch_ref: "trusted".into(),
+                source_input: "source_sha".into(),
+                source_merge_step: "merge".into(),
+                expected_tree: seed.slice.manifest().result.as_ref().unwrap().tree.clone(),
+                expected_artifact: None,
+            },
+        });
+    }
+    if chained {
+        plan.steps.push(domain::ReleaseStep {
+            id: "verify".into(),
+            depends_on: ["deploy".into()].into(),
+            kind: domain::StepKind::Verify {
+                repository: repository.repository.clone(),
+                target: domain::ResourceKey::Target {
+                    provider: "github".into(),
+                    id: "service-production".into(),
+                },
+                source_merge_step: "merge".into(),
+                deployment_step: "deploy".into(),
+                expected_tree: seed.slice.manifest().result.as_ref().unwrap().tree.clone(),
+                expected_artifact: None,
+            },
+        });
+    }
+    plan.validate().unwrap();
     let plan_permit = built
         .runtime
         .control
@@ -289,6 +412,45 @@ async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integ
             || (delivery.current_gate())(&gate),
         )
         .unwrap();
+    let merged = if let Some(native) = &native {
+        let merged = native.prepare_merge(&delivery.git_path().unwrap(), &source, &seed.slice);
+        let mut scope = phase.admission.scope().clone();
+        scope.phase = DeliveryPhase::Release;
+        scope.revision = evidence::RevisionBinding {
+            repository: repository.repository.clone(),
+            head: seed
+                .slice
+                .manifest()
+                .result
+                .as_ref()
+                .unwrap()
+                .commit
+                .clone(),
+            base: production.commit.clone(),
+            tested_commit: seed
+                .slice
+                .manifest()
+                .result
+                .as_ref()
+                .unwrap()
+                .commit
+                .clone(),
+            tested_tree: seed.slice.manifest().result.as_ref().unwrap().tree.clone(),
+        };
+        scope.candidate_vector_digest = Some(vector.digest().into());
+        native
+            .send_merge(&workspace.coordinator, scope, &plan_permit, &plan, &gate)
+            .await;
+        let observed = workspace
+            .coordinator
+            .recover_owned_release_step(&plan, "merge", 1, &workspace.observer)
+            .await
+            .unwrap();
+        assert!(matches!(observed.outcome(), ReleaseStepOutcome::Succeeded));
+        Some((merged, observed))
+    } else {
+        None
+    };
     built.runtime.control.fence(plan.operation_id).unwrap();
     built
         .runtime
@@ -300,11 +462,28 @@ async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integ
         .unwrap();
     let mut held = super::tests::record(plan.clone(), gate.work().clone());
     let admission = built.runtime.control.operation(plan.operation_id).unwrap();
+    held.attempt.steps = plan
+        .steps
+        .iter()
+        .map(|step| (step.id.clone(), StepState::NotStarted))
+        .collect();
     held.attempt.owner_generation = admission.owner_generation;
     held.attempt.control_generation = plan_permit.control_generation;
     held.attempt
         .steps
         .insert("merge".into(), StepState::NotStarted);
+    if let Some((_, observed)) = &merged {
+        held.attempt.steps.insert(
+            "merge".into(),
+            StepState::Succeeded {
+                effect: Box::new(observed.effect().unwrap().clone()),
+                observed_at: Utc::now(),
+            },
+        );
+        held.attempt
+            .steps
+            .insert("deploy".into(), StepState::NotStarted);
+    }
     held.attempt.hold_reason = Some("Corrected work requires an explicit successor".into());
     held.config_revision = gate.config_revision().into();
     held.workflow_digest = gate.workflow_digest().into();
@@ -330,6 +509,24 @@ async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integ
         .unwrap()
         .unwrap();
     assert_eq!(predecessor.predecessor(), plan.operation_id);
+    if let Some((merged, _)) = &merged {
+        chained_after_merge(ChainFixture {
+            delivery: &delivery,
+            built: &built,
+            data: &data,
+            lease: &lease,
+            source: &source,
+            github: &github,
+            native: native.as_ref().unwrap(),
+            seed: &seed,
+            held: &held,
+            gate: &corrected,
+            merged,
+        })
+        .await;
+        _poll.stop().await;
+        return;
+    }
     assert_eq!(predecessor.effects().count(), 0);
     assert_eq!(predecessor.origin().manifest(), seed.parent.manifest());
     predecessor.revalidate().unwrap();
@@ -541,6 +738,7 @@ async fn corrected_runtime_assembly_retains_known_predecessor_and_requires_integ
     delivery.save_release(&changed_record).unwrap();
     assert_eq!(predecessor.revalidate().err().unwrap().code, "stale_result");
     delivery.save_release(&held).unwrap();
+    _poll.stop().await;
 }
 
 async fn correct_parent(
@@ -548,7 +746,7 @@ async fn correct_parent(
     data: &Arc<std::sync::Mutex<wire::Fixture>>,
     lease: &Lease,
 ) -> FreshGate {
-    let comment = wire::id(960);
+    let comment = Uuid::new_v4();
     let body = "Validate the already-present behavior and keep this correction within the existing test responsibility.";
     data.lock().unwrap().comments.entry(wire::id(100)).or_default().push(json!({"id":comment,"issue":{"id":wire::id(100)},
         "body":body,"createdAt":Utc::now(),"updatedAt":Utc::now(),"editedAt":null,"user":{"id":wire::id(5)},
@@ -569,8 +767,12 @@ async fn correct_parent(
         "rationale":"The native request changes validation expectations within existing scope",
         "routes":[{"child":wire::id(101),"instructions":"Validate existing behavior without adding an unrelated source change.",
             "validation_expectations":["Run configured local and exact revision checks; report actual evidence"]}]}]});
-    let (_claim_root, completed) =
-        crate::runtime_claims::test_coordination_fixture(gate, claim, "codex-fixture");
+    let (_claim_root, completed) = crate::runtime_claims::test_coordination_fixture_with_proposal(
+        gate,
+        claim,
+        "codex-fixture",
+        Uuid::new_v4(),
+    );
     let owner = built.runtime.registration.clone();
     let control_owner = owner.clone();
     let services = &built.runtime.services;
@@ -606,3 +808,7 @@ async fn correct_parent(
         )
         .unwrap()
 }
+
+#[path = "runtime_delivery_chain_fixture.rs"]
+mod chain;
+use chain::*;

@@ -33,6 +33,119 @@ fn leaf(operation: Uuid) -> String {
     format!("release-successor-{operation}.json")
 }
 impl RuntimeDelivery {
+    /// Historical lineage only. Current actor configuration is checked by the
+    /// current gate; an old decision remains provenance, never fresh authority.
+    pub(in crate::runtime_delivery::release) fn recorded_predecessor(
+        &self,
+        child: &AttemptRecord,
+    ) -> Result<Option<(AttemptRecord, Vec<Receipt>, String)>> {
+        self.recorded_plan_predecessor(&child.attempt.plan, &child.work, child.workspace)
+    }
+    pub(in crate::runtime_delivery::release) fn recorded_plan_predecessor(
+        &self,
+        plan: &ReleasePlan,
+        work: &WorkIdentity,
+        workspace: Uuid,
+    ) -> Result<Option<(AttemptRecord, Vec<Receipt>, String)>> {
+        let signed: Signed<SuccessorIntent> = match self.records.read(&leaf(plan.operation_id)) {
+            Ok(value) => value,
+            Err(error) if error.code == "record_missing" => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        self.runtime
+            .services
+            .key
+            .verify("release_successor_intent", &signed)?;
+        let intent = &signed.payload;
+        let stored: Signed<AttemptRecord> = self.records.read(&attempt_leaf(intent.predecessor))?;
+        self.runtime
+            .services
+            .key
+            .verify("runtime_release_attempt", &stored)?;
+        let predecessor = stored.payload;
+        let original = self.runtime.control.operation(intent.predecessor)?;
+        let transition = self.runtime.control.operation(intent.transition_id)?;
+        let command = self.runtime.control.operation(intent.parent_command)?;
+        let authorization_id = transition
+            .expected
+            .get("authorization_id")
+            .and_then(|id| id.parse().ok())
+            .ok_or_else(|| {
+                Error::new(
+                    "ownership_conflict",
+                    "historical successor has no authorization identity",
+                )
+            })?;
+        let authorization = self.runtime.control.operation(authorization_id)?;
+        let terminal = |r: &Receipt| {
+            matches!(
+                r.phase,
+                ReceiptPhase::Acknowledged | ReceiptPhase::Reconciled
+            )
+        };
+        if intent.schema_version != 1
+            || &intent.plan != plan
+            || &intent.work != work
+            || intent.workspace != workspace
+            || intent.acceptance_digest != plan.acceptance_digest
+            || intent.predecessor == plan.operation_id
+            || predecessor.attempt.plan.digest()? != intent.predecessor_plan_digest
+            || predecessor.attempt.assigned_successor != Some(plan.operation_id)
+            || predecessor.workspace != workspace
+            || predecessor.runtime != plan.runtime_id
+            || issue(&predecessor)?
+                != IssueKey::new(&work.linear_endpoint, work.linear_workspace, work.parent)?
+            || predecessor.work.generation.scope != work.generation.scope
+            || predecessor.work.generation == work.generation
+            || predecessor.attempt.plan.resources != plan.resources
+            || original.kind != "admission"
+            || original.runtime_id != plan.runtime_id
+            || original.payload_digest != intent.predecessor_admission_digest
+            || original.expected.get("scope") != Some(&intent.predecessor_plan_digest)
+            || transition.kind != "release_recovery_transition"
+            || transition.runtime_id != plan.runtime_id
+            || !terminal(&transition)
+            || transition.payload_digest != intent.transition_digest
+            || transition.actor != intent.actor.identity
+            || transition
+                .expected
+                .get("recovery_action")
+                .map(String::as_str)
+                != Some("supersede")
+            || transition.expected.get("plan_operation_id") != Some(&intent.predecessor.to_string())
+            || transition.expected.get("parent_command_id")
+                != Some(&intent.parent_command.to_string())
+            || transition.expected.get("parent_payload_digest")
+                != Some(&intent.parent_command_digest)
+            || predecessor.recovery_receipts.get(&intent.transition_id)
+                != Some(&intent.transition_digest)
+            || command.kind != "command/ReleaseRecover"
+            || command.runtime_id != plan.runtime_id
+            || command.actor != intent.actor.identity
+            || command.payload_digest != intent.parent_command_digest
+            || !terminal(&command)
+            || authorization.kind != "decision/ReleaseRecover"
+            || authorization.runtime_id != plan.runtime_id
+            || authorization.actor != intent.actor.identity
+            || !terminal(&authorization)
+            || transition.expected.get("authorization_digest")
+                != Some(&authorization.payload_digest)
+            || authorization.expected.get("parent_command_id")
+                != Some(&command.operation_id.to_string())
+            || authorization.expected.get("parent_payload_digest") != Some(&command.payload_digest)
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "historical successor differs from its exact admitted plan and acknowledged authorization",
+            ));
+        }
+        Ok(Some((
+            predecessor,
+            vec![original, transition, command, authorization],
+            signed.digest()?,
+        )))
+    }
+
     /// Assign a known predecessor hold to an exact, freshly accepted corrected
     /// result. Dispatch still waits for the driver's fresh actual admission.
     pub async fn supersede_release(&self, decision: AuthorizedDecision) -> Result<Receipt> {
@@ -428,5 +541,62 @@ impl RuntimeDelivery {
         }
         self.require_retired_successor_predecessor(predecessor)?;
         Ok(Some(intent))
+    }
+}
+
+#[cfg(test)]
+impl RuntimeDelivery {
+    /// Retained upstream intent fixture only: actual operator authorization and
+    /// closed transition journal are required, but this does not assert that a
+    /// synthetic upstream parent passed the production supersede predicate.
+    pub(in crate::runtime_delivery::release) fn fixture_successor_transition(
+        &self,
+        decision: &AuthorizedDecision,
+        original: &AttemptRecord,
+        child: &AttemptRecord,
+        accepted_at: DateTime<Utc>,
+    ) -> Result<Receipt> {
+        self.restore_releases()?;
+        let admission = self
+            .runtime
+            .control
+            .operation(original.attempt.plan.operation_id)?;
+        self.runtime.control.record_release_recovery_transition(
+            decision,
+            &admission,
+            &original.attempt.plan.digest()?,
+            |snapshot| self.recovery_gate(decision, snapshot),
+            |receipt| {
+                let intent = SuccessorIntent {
+                    schema_version: 1,
+                    predecessor: original.attempt.plan.operation_id,
+                    predecessor_plan_digest: original.attempt.plan.digest()?,
+                    predecessor_admission_digest: admission.payload_digest.clone(),
+                    workspace: child.workspace,
+                    work: child.work.clone(),
+                    plan: child.attempt.plan.clone(),
+                    acceptance_digest: child.attempt.plan.acceptance_digest.clone(),
+                    accepted_at,
+                    config_revision: child.config_revision.clone(),
+                    actor: decision.actor().clone(),
+                    transition_id: receipt.operation_id,
+                    transition_digest: receipt.payload_digest.clone(),
+                    parent_command: decision.parent_command().operation_id,
+                    parent_command_digest: decision.parent_command().payload_digest.clone(),
+                };
+                self.records.write(
+                    &leaf(child.attempt.plan.operation_id),
+                    &self
+                        .runtime
+                        .services
+                        .key
+                        .sign("release_successor_intent", &intent)?,
+                )?;
+                self.persist_recovery_transition(original, receipt, "supersede", |record| {
+                    record.attempt.assigned_successor = Some(child.attempt.plan.operation_id);
+                    Ok(())
+                })
+            },
+        )
     }
 }

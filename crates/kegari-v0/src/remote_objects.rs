@@ -42,6 +42,13 @@ enum Origin {
         parent: String,
         receipt: Uuid,
     },
+    LineageMerge {
+        number: u64,
+        parent: String,
+        receipt: Uuid,
+        receipt_digest: String,
+        current_main: Revision,
+    },
     Candidate {
         reference: String,
         staged: Vec<(u64, crate::git::DeltaManifest)>,
@@ -223,7 +230,7 @@ impl AuthorizedObjectRequest {
         }
         let mut request = Self::for_release_merge(contract, permit, admission, observed)?;
         let candidate = predecessor
-            .origin()
+            .integration_origin(observed)?
             .manifest()
             .candidates
             .iter()
@@ -235,16 +242,39 @@ impl AuthorizedObjectRequest {
                 "predecessor candidate is incomplete",
             )
         })?;
-        if result.tree != request.revision.tree
-            || predecessor.baseline(&contract.repository)?.production() != &request.revision
-        {
+        if result.tree != request.revision.tree {
             return Err(Error::new(
                 "production_provenance",
                 "observed predecessor merge is not exact current accepted product tree",
             ));
         }
+        let current_main = predecessor
+            .baseline(&contract.repository)?
+            .production()
+            .clone();
+        let Origin::Merge {
+            number,
+            parent,
+            receipt,
+        } = request.origin
+        else {
+            unreachable!()
+        };
+        request.origin = Origin::LineageMerge {
+            number,
+            parent,
+            receipt,
+            receipt_digest: canonical_digest(
+                1,
+                observed.receipt().ok_or_else(|| {
+                    Error::new("missing_evidence", "lineage merge receipt missing")
+                })?,
+            )?,
+            current_main: current_main.clone(),
+        };
         insert_revision(&mut request.required_revisions, result)?;
         insert_revision(&mut request.required_revisions, &candidate.production)?;
+        insert_revision(&mut request.required_revisions, &current_main)?;
         Ok(request)
     }
     /// The squash and the reviewed head are distinct roots after squash merge.
@@ -575,7 +605,7 @@ impl ObjectAcquisition {
             .control
             .validate_permit(&request.permit, || (self.services.current)(request))
     }
-    async fn observe_origin(&self, request: &AuthorizedObjectRequest) -> Result<()> {
+    pub(crate) async fn observe_origin(&self, request: &AuthorizedObjectRequest) -> Result<()> {
         self.current(request)?;
         let github = &self.services.github;
         let repo = &request.contract.provider;
@@ -606,6 +636,37 @@ impl ObjectAcquisition {
                     return Err(Error::new(
                         "stale_result",
                         "retained merge lineage is not currently substantiated",
+                    ));
+                }
+            }
+            Origin::LineageMerge {
+                number,
+                receipt,
+                receipt_digest,
+                current_main,
+                ..
+            } => {
+                let retained = self.services.control.operation(*receipt)?;
+                let current = github.pull_request(repo, *number).await?;
+                if canonical_digest(1, &retained)? != *receipt_digest
+                    || !matches!(
+                        retained.phase,
+                        ReceiptPhase::Acknowledged | ReceiptPhase::Reconciled
+                    )
+                    || current.merged != Some(true)
+                    || current.merge_commit_sha.as_deref() != Some(request.revision.commit.as_str())
+                    || current.base_ref != request.contract.configuration.main
+                    || github
+                        .reference(
+                            repo,
+                            &format!("heads/{}", request.contract.configuration.main),
+                        )
+                        .await?
+                        != current_main.commit
+                {
+                    return Err(Error::new(
+                        "stale_result",
+                        "historical merge receipt or exact current production ref changed",
                     ));
                 }
             }
@@ -707,7 +768,9 @@ impl ObjectAcquisition {
                 "provider source tree changed during acquisition",
             ));
         }
-        if let Origin::Merge { parent, .. } | Origin::StagingMerge { parent, .. } = &request.origin
+        if let Origin::Merge { parent, .. }
+        | Origin::StagingMerge { parent, .. }
+        | Origin::LineageMerge { parent, .. } = &request.origin
         {
             let parents = commit
                 .get("parents")

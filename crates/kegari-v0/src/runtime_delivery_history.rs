@@ -30,10 +30,23 @@ impl RuntimeDelivery {
                 )?,
             );
         }
-        let (coordinator, authority) = self.readonly_coordinator(workspace, gate).await?;
+        let predecessor = self.known_record_baseline(workspace, gate, record).await?;
+        let (coordinator, authority) = self
+            .readonly_coordinator_with_successor(workspace, gate, Some(&predecessor))
+            .await?;
         let result = async {
             let contract =
                 coordinator.parent_contract(gate.clone(), parent, &workspace.workflow)?;
+            let mut integrations = Vec::new();
+            for candidate in &predecessor.origin().manifest().candidates {
+                let observation = coordinator.observation(
+                    gate.clone(),
+                    release_revision(&record.attempt.plan, &candidate.repository)?,
+                )?;
+                integrations.extend(
+                    coordinator.retained_historical_integrations(&observation, &predecessor)?,
+                );
+            }
             let historical = coordinator
                 .hydrate_historical_release_parent(
                     ParentHydrationInputs {
@@ -41,7 +54,7 @@ impl RuntimeDelivery {
                         observer: &workspace.observer,
                         child_gates: &children,
                         workflow: &workspace.workflow,
-                        production_integrations: &[],
+                        production_integrations: &integrations,
                     },
                     record.parent_publication.id,
                     &record.attempt.plan.evidence_token,
@@ -152,7 +165,7 @@ impl RuntimeDelivery {
                     children: parts.children,
                     baselines: current_baseline,
                     vector_digest: parts.vector_digest,
-                    integrations: vec![],
+                    integrations,
                 }),
                 baselines: parts.baselines,
             })

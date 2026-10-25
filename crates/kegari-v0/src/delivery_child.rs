@@ -909,6 +909,17 @@ impl DeliveryCoordinator {
         outcome: &VerifiedAuthorizedOutcome,
         completion: &Arc<RunCompletion>,
     ) -> Result<PublishedReview> {
+        self.publish_completed_review_guarded(admission, assignment, outcome, completion, None)
+            .await
+    }
+    pub(super) async fn publish_completed_review_guarded(
+        &self,
+        admission: &DeliveryAdmission,
+        assignment: &ChildReviewAssignment,
+        outcome: &VerifiedAuthorizedOutcome,
+        completion: &Arc<RunCompletion>,
+        extra: Option<GateCheck>,
+    ) -> Result<PublishedReview> {
         self.current(
             admission,
             &[DeliveryPhase::ReviewPublication, DeliveryPhase::NoChange],
@@ -941,7 +952,7 @@ impl DeliveryCoordinator {
         self.records.write(&format!("completed-review-{}.json",admission.operation_id()),
             &self.key.sign("completed_review_provenance",&json!({"claim":outcome.digest(),"review":signed,
                 "context_digest":worker.instructions.context_digest,"completed_turn":worker.completed_turn}))?)?;
-        self.publish_review(admission, &signed).await
+        self.publish_review_guarded(admission, &signed, extra).await
     }
 }
 

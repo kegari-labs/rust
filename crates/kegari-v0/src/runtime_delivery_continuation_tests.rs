@@ -12,15 +12,19 @@ use serde_json::Value;
 use std::fs;
 #[tokio::test]
 async fn exact_review_findings_produce_repair_from_real_owned_source_and_contracts() {
-    repair_cycle(false).await;
+    repair_cycle(false, false).await;
 }
 #[tokio::test]
 async fn exhausted_completed_work_uses_actual_operator_retry_budget_and_bound_repair_source() {
-    repair_cycle(true).await;
+    repair_cycle(true, false).await;
 }
 #[path = "runtime_delivery_retry_fixture.rs"]
 mod retry_fixture;
-async fn repair_cycle(explicit_retry: bool) {
+#[tokio::test]
+async fn failed_review_uses_exact_source_and_actual_native_grant_before_clean_review() {
+    repair_cycle(false, true).await;
+}
+async fn repair_cycle(explicit_retry: bool, review_retry: bool) {
     let (root, built, old_service, wire, owner) =
         super::super::tests::fixture_authorization_with_wire(true).await;
     let binary = old_service.git_path().unwrap();
@@ -247,6 +251,31 @@ async fn repair_cycle(explicit_retry: bool) {
         assignment: Some(&review_worker),
         account: &account,
     });
+    if review_retry {
+        review_retry_fixture::run(ReviewFixture {
+            service: &service,
+            built: &built,
+            wire: &wire,
+            workspace: &workspace,
+            gate: &gate,
+            lease: &lease,
+            reviewer: &reviewer,
+            original_claim: claim.clone(),
+            original_completion: completion.clone(),
+            assignment: &review_worker,
+            review: &review,
+            root: &root,
+            source: &source,
+            binary: &binary,
+            tool: tool.clone(),
+            revision: &revision,
+            repository: &repository,
+            account: &account,
+            scope: scope(DeliveryPhase::NoChange),
+        })
+        .await;
+        return;
+    }
     let (_review_records, review_outcome, review_completion) = complete(
         &built.runtime.control,
         &lease,
@@ -521,6 +550,7 @@ async fn repair_cycle(explicit_retry: bool) {
             Some(proof.clone())
         },
         retried_unfinished: retried.clone(),
+        review_retry: None,
         source_advanced: None,
         max_seconds: 60,
         max_turns: 20,
@@ -830,3 +860,7 @@ async fn repair_cycle(explicit_retry: bool) {
             .is_err()
     );
 }
+
+#[path = "runtime_delivery_review_retry_tests.rs"]
+mod review_retry_fixture;
+use review_retry_fixture::ReviewFixture;

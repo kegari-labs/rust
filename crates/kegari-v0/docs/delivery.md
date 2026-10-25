@@ -286,3 +286,50 @@ new bounded repair/source-validation admission path. It also rejects deleted
 and edited grants. It does not manufacture native joined-process evidence.
 Corrected phase generations, mixed validation/review grant histories and cold
 reconstruction of these private triggers remain explicit recovery prerequisites.
+
+A known failed child review can consume a current operator retry grant while
+preserving its original exact source and sealed review assignment. The private
+`ReviewRetryWork` binds the actual failed completion, terminal receipt, complete
+review admission inventory, account/profile and unambiguous native grant chain.
+The new review gets its own bounded admission and fresh session. Old receipts,
+limits and pipeline review identities remain immutable history. Unknown exits,
+pending provider turns, grant deletion/edits/forks, source movement and unrelated
+new review admissions block this path. Preparation and final model admission
+recheck the grant; the result's publication checks its exact new completed
+admission and current grant again inside the provider mutation gate.
+
+This slice covers the first granted review followed by a clean result. Further
+failed attempts inside that granted budget and repair after new findings require
+additional lineage integration; they are not authorized by reusing the consumed
+first-session capability. Cross-correction and cold recovery remain unavailable.
+The deterministic review fixture uses a real in-process RPC failure notification,
+real Control receipts, owned Git objects and actual synthetic provider publication.
+It deliberately cannot populate the native runtime joined-run cache or establish
+native confinement/live-model qualification.
+
+### Chained retained integrations
+
+Corrected assembly can recover an earlier merged contribution through a finite
+chain of known, locally retired release attempts. Every link must retain its
+signed original accepted publications, exact actual admission, acknowledged
+supersede authorization and command receipts, and matching successor intent.
+The chain is capped at 64 attempts and rejects cycles, omitted contributions,
+changed receipts, uncertain effects and mismatched repository/target inventories.
+The importer acquires the original candidate, squash and current main objects;
+actual Git ancestry and patch identity establish that the original contribution
+is retained once. Historical proof does not populate generic current readiness.
+
+For admission, an opaque verified lineage can project ancestor hold assignments
+onto one exact successor plan in a temporary queue view. The durable holds and
+receipts are unchanged; unrelated holds, resource owners, dependencies and spacing
+still block. Terminal completion accounting for transitive ancestor holds remains
+a separate incomplete path: an older ancestor can conservatively keep later
+unrelated work blocked after the final descendant succeeds.
+
+Historical successful target actions still require the ordinary current-target
+proof. If a later deployment replaces that proof or advances main, recovery is
+blocked until a separate immutable, receipt-bound historical target observation
+path is available. Carried-acceptance release history is also still blocked.
+Deterministic historical accepted-input fixtures are synthetic upstream evidence;
+actual journal, provider wire and Git recovery do not replace genuine integrated
+checks, live deployment qualification or human acceptance review.

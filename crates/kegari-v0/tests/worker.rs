@@ -1321,6 +1321,31 @@ async fn nonexecuting_hooks_reject_execution_role_and_revoked_owner() {
     );
 }
 
+#[tokio::test]
+async fn fenced_nonexecuting_after_hook_records_inapplicability_without_new_authority() {
+    use kegari_v0::worker_run::{AfterHookObservation, NonExecutingRunHooks, RunHooks};
+    let f = Fixture::new(AgentRole::Coordination);
+    let hooks =
+        NonExecutingRunHooks::new(f.contract.clone(), f.control.clone(), f.host.clone()).unwrap();
+    hooks.before(&f.permit).await.unwrap();
+    hooks.launched(&f.permit).await.unwrap();
+    f.control.fence(f.permit.operation_id).unwrap();
+    f.host.owner.store(false, Ordering::SeqCst);
+    let receipts = f.control.operations().unwrap().len();
+    assert_eq!(
+        hooks.after(&f.permit, &f.state).await.unwrap(),
+        AfterHookObservation::NotApplicable
+    );
+    assert_eq!(f.control.operations().unwrap().len(), receipts);
+    assert!(f.control.validate_permit(&f.permit, || Ok(())).is_err());
+    let mut other = f.state.clone();
+    other.binding.operation_id = Uuid::new_v4().to_string();
+    assert_eq!(
+        hooks.after(&f.permit, &other).await.unwrap_err().code,
+        "worker_binding"
+    );
+}
+
 async fn initialized_hook_records(f: &Fixture) -> PrivateDir {
     let dir = PrivateDir::open(&f._temp.path().canonicalize().unwrap().join("control"))
         .unwrap()
@@ -1418,6 +1443,49 @@ async fn failed_worker_before_hook_never_records_launched_session() {
     let ledger: HookLedger = PrivateDir::open(&path).unwrap().read("hooks.json").unwrap();
     assert!(ledger.sessions.is_empty());
     assert!(!ledger.records.keys().any(|key| key.starts_with("AfterRun")));
+}
+
+#[tokio::test]
+async fn fenced_after_hook_preserves_absent_and_configured_distinctions() {
+    use kegari_v0::worker_run::{AfterHookObservation, AfterHookSkip, RunHooks};
+    for configured in [false, true] {
+        let f = Fixture::with_hooks(
+            AgentRole::Implementation,
+            if configured {
+                "hooks:\n  after_run: 'true'\n"
+            } else {
+                ""
+            },
+        );
+        let records = initialized_hook_records(&f).await;
+        let path = records.path().to_owned();
+        let hooks = executor_hooks(&f, records);
+        hooks.before(&f.permit).await.unwrap();
+        hooks.launched(&f.permit).await.unwrap();
+        f.control.fence(f.permit.operation_id).unwrap();
+        let receipts = f.control.operations().unwrap().len();
+        let outcome = hooks.after(&f.permit, &f.state).await;
+        let ledger: HookLedger = PrivateDir::open(&path).unwrap().read("hooks.json").unwrap();
+        assert_eq!(ledger.sessions[&id(99)], SessionLifecycle::Ended);
+        let key = format!("AfterRun:{}", id(99));
+        if configured {
+            assert_eq!(outcome.unwrap_err().code, "hook_not_run_fenced");
+            assert!(!ledger.records.contains_key(&key));
+        } else {
+            assert_eq!(
+                outcome.unwrap(),
+                AfterHookObservation::Skipped {
+                    reason: AfterHookSkip::HookNotConfigured
+                }
+            );
+            assert_eq!(ledger.records[&key].state, HookState::Skipped);
+            assert!(ledger.records[&key].script_digest.is_none());
+            assert!(ledger.records[&key].exit_code.is_none());
+        }
+        assert_eq!(f.control.operations().unwrap().len(), receipts);
+        assert!(f.control.validate_permit(&f.permit, || Ok(())).is_err());
+        assert!(f.executions.active_operations().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -1896,6 +1964,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
             unfinished: None,
             source_advanced: None,
             retried_unfinished: None,
+            review_retry: None,
             lease: f.permit.lease.clone(),
             operation_id: id(810),
             authority,
@@ -2460,4 +2529,175 @@ async fn pending_classification_defers_actual_completed_proposal_and_closes_sour
     fixture.host.waiting.store(false, Ordering::SeqCst);
     fixture.worker.checkpoint(&fixture.state, None).unwrap();
     assert_eq!(fixture.sink.0.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn protected_recovery_candidate_requires_actual_input_and_after_hook_and_fences_metadata_spawn()
+ {
+    use kegari_v0::worker_run::{RecoveryPreparation, RecoveryProviderLaunch};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    for scenario in ["fenced", "timeout"] {
+        let f = Fixture::new(AgentRole::Coordination);
+        let (prepared, permit, mut services, marker) = native_fixture_run(&f);
+        let contract = prepared.contract().clone();
+        let base = f._temp.path().canonicalize().unwrap();
+        let records = PrivateDir::open(&base.join("control"))
+            .unwrap()
+            .child("protected-recovery")
+            .unwrap();
+        records.write("contract.json",&json!({"scope":contract.scope_digest(),"instructions":contract.instructions().manifest,"tool_contract":contract.tools().digest(),"isolation":prepared.isolation().plan()})).unwrap();
+        services.worker.journal = records.child("journal").unwrap();
+        let journal = PrivateDir::open(services.worker.journal.path()).unwrap();
+        let processes = services.processes.clone();
+        let hooks = services.hooks.clone();
+        let mut broker =
+            ScopedWorker::new(contract.clone(), permit.clone(), services.worker).unwrap();
+        let m = &contract.instructions().manifest;
+        let mut state = SessionState::new(
+            SessionBinding {
+                schema_version: 1,
+                account_id: contract.account_id().into(),
+                work_identity: contract.work_key().unwrap(),
+                operation_id: permit.operation_id.to_string(),
+                generation: m.work_generation.clone(),
+                instruction_digest: contract.instructions().manifest_digest.clone(),
+                isolation_digest: prepared.isolation().digest().into(),
+                profile: CodexProfile {
+                    model: m.profile.model.clone(),
+                    reasoning: m.profile.reasoning.clone(),
+                    speed: "standard".into(),
+                },
+                cwd: m.cwd.clone(),
+            },
+            1,
+        )
+        .unwrap();
+        state.thread_id = Some("fixture-original-thread".into());
+        state.turns_started = 1;
+        let (client, server) = tokio::io::duplex(32_768);
+        let (reader, writer) = tokio::io::split(client);
+        let (sr, mut sw) = tokio::io::split(server);
+        let mut sr = BufReader::new(sr);
+        let wire = tokio::spawn(async move {
+            let mut line = String::new();
+            sr.read_line(&mut line).await.unwrap();
+            let init: Value = serde_json::from_str(&line).unwrap();
+            sw.write_all(format!("{}\n",json!({"id":init["id"],"result":{"userAgent":"fixture","platformFamily":"unix","platformOs":"macos","codexHome":"/private/tmp/fixture"}})).as_bytes()).await.unwrap();
+            line.clear();
+            sr.read_line(&mut line).await.unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["method"],
+                "initialized"
+            );
+            line.clear();
+            sr.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "turn/start");
+            let turn = json!({"id":"actual-failed-turn","status":"failed","items":[{"id":"user-one","type":"userMessage","content":request["params"]["input"]}],"error":{"message":"synthetic wire overload","codexErrorInfo":"serverOverloaded"}});
+            for frame in [
+                json!({"method":"turn/started","params":{"threadId":"fixture-original-thread","turn":{"id":"actual-failed-turn","status":"inProgress"}}}),
+                json!({"method":"turn/completed","params":{"threadId":"fixture-original-thread","turn":turn}}),
+                json!({"id":request["id"],"result":{"turn":turn}}),
+            ] {
+                sw.write_all(format!("{frame}\n").as_bytes()).await.unwrap();
+            }
+        });
+        let mut rpc = RpcClient::from_transport(reader, writer, StdDuration::from_secs(2)).unwrap();
+        rpc.initialize().await.unwrap();
+        rpc.request("turn/start",json!({"threadId":"fixture-original-thread","input":[{"type":"text","text":"actual bounded fixture input"}]}),Some(&mut state),&mut broker).await.unwrap();
+        broker.checkpoint(&state, None).unwrap();
+        wire.await.unwrap();
+        let admission = f.control.operation(permit.operation_id).unwrap();
+        assert!(
+            kegari_v0::worker::recover_session(&records, &admission)
+                .unwrap()
+                .unwrap()
+                .resume_candidate()
+                .is_err()
+        );
+        let observed = hooks.after(&permit, &state).await.unwrap();
+        drop(broker);
+        // Actual pure nonexecuting lifecycle observation, written in the protected
+        // journal's production event shape. No native process or completion is invented.
+        let seq = journal
+            .records()
+            .unwrap()
+            .into_iter()
+            .filter(|name| name != "binding.json")
+            .count();
+        journal.write(&format!("event-{seq:08}.json"),&json!({"kind":"after_hook","record":{"operation":permit.operation_id,"observed":observed},"observed_at":Utc::now()})).unwrap();
+        let receipt=f.control.retire_local(permit.operation_id,json!({"outcome":"failed","local_exit_confirmed":true,"hook_error":null,"session":state})).unwrap();
+        let recovered = kegari_v0::worker::recover_session(&records, &receipt)
+            .unwrap()
+            .unwrap();
+        let candidate = recovered.resume_candidate().unwrap();
+        let mut tampered = recovered.clone();
+        tampered.state.turns_started = 0;
+        assert!(tampered.resume_candidate().is_err());
+        let mut config = run_preparation(&f).config;
+        Arc::make_mut(&mut config)
+            .connections
+            .get_mut("codex")
+            .unwrap()
+            .argv[0] = base
+            .join("deterministic-app-server")
+            .to_string_lossy()
+            .into_owned();
+        tokio::time::sleep(StdDuration::from_millis(1050)).await;
+        let make_input = |max_attempts, timeout| RecoveryPreparation {
+            config: config.clone(),
+            contract: contract.clone(),
+            candidate: candidate.clone(),
+            records: PrivateDir::open(records.path()).unwrap(),
+            lease: permit.lease.clone(),
+            control: f.control.clone(),
+            host: f.host.clone(),
+            processes: processes.clone(),
+            executions: f.executions.clone(),
+            timeout,
+            attempt: 1,
+            max_attempts,
+        };
+        let before = f.control.operations().unwrap().len();
+        assert_eq!(
+            RecoveryProviderLaunch::admit(make_input(999, StdDuration::from_secs(1)))
+                .err()
+                .unwrap()
+                .code,
+            "resume_incompatible"
+        );
+        assert_eq!(
+            RecoveryProviderLaunch::admit(make_input(1, StdDuration::from_secs(301)))
+                .err()
+                .unwrap()
+                .code,
+            "resume_incompatible"
+        );
+        assert_eq!(f.control.operations().unwrap().len(), before);
+        let recovery =
+            RecoveryProviderLaunch::admit(make_input(1, StdDuration::from_secs(1))).unwrap();
+        let id = recovery.operation_id();
+        let metadata = f.control.operation(id).unwrap();
+        assert!(
+            SessionRecoveryPreparationReference::from_receipt(&metadata)
+                .unwrap()
+                .is_some()
+        );
+        assert!(RunReference::from_receipt(&metadata).unwrap().is_none());
+        if scenario == "fenced" {
+            f.control.fence(id).unwrap();
+            assert_eq!(recovery.recover().await.unwrap_err().code, "access_denied");
+            assert!(!marker.exists());
+        } else {
+            assert_eq!(recovery.recover().await.unwrap_err().code, "timeout");
+            assert!(marker.exists());
+            let observed = f.control.operation(id).unwrap();
+            assert_eq!(observed.phase, ReceiptPhase::Reconciled);
+            assert_eq!(
+                observed.observed_result.unwrap()["observation"]["retryable"],
+                false
+            );
+        }
+        assert!(f.executions.active_operations().unwrap().is_empty());
+    }
 }

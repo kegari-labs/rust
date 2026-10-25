@@ -35,6 +35,8 @@ impl PreparationReference {
                 "continuation",
                 "source_advanced",
                 "release_resume",
+                "session_resume",
+                "session_recovery_preparation",
             ]
             .iter()
             .any(|key| receipt.expected.contains_key(*key))

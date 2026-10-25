@@ -220,3 +220,33 @@ boundary does not remove this native production prerequisite.
 `prepare_effective_check` retains that capability through process start and completion. Corrected check records use schema 2 and include the original binding digest, exact transition digest, processed watermark and correction input digest. Earlier check records retain their original generation. The enclosing worker compares the current correction epoch under the serialized start and completion gates; a changed epoch cannot publish stale passing evidence. Integrated validation continues to require a separately prepared exact candidate vector.
 
 The regression `native_correction_check_keeps_original_marker_and_historical_evidence` uses the real signed native correction-publication fixture and actual disposable Git clone, with an explicitly deterministic command boundary. It verifies unchanged ownership bytes, historical earlier checks, exact corrected provenance, rejected raw work/revision rebinding and continued rejection as production evidence. Native repository execution remains subject to the documented process-containment prerequisite.
+
+## Unchanged source for directory reuse
+
+`Git::verify_reusable_execution` issues an opaque `VerifiedReusableSource` only
+under fresh host metadata authority for the same runtime and canonical work. An
+expired worker permit, unscoped Git handle, or serialized record cannot issue it.
+The verifier checks the original prepared clone, actual HEAD and tree, clean Git
+state, and independently hashes every source file against the tree. Index flags
+such as `assume-unchanged` therefore cannot hide changes.
+
+The bounded inventory includes Git administration, source files, directory
+identities, the original ownership marker, and the prepared-clone marker. It
+checks file bytes, modes, owner, device/inode and timestamps before and after
+Git observation. Final filesystem revalidation runs without a subprocess or
+Control reentry. This initial route accepts SHA-1 clones with ordinary owned
+files and directories, and rejects symlinks, hardlinks, external write modes,
+untracked or ignored files, and extra empty source directories. Its inventory
+limits are 100,000 entries, 256 MiB of file content including `.git`, and depth
+128. These are source-preservation checks, not process-exit or sandbox proof.
+
+The family component fixtures use actual disposable Git objects, host metadata
+process guards, Control admissions and directory enrollment. Their terminal
+session metadata is explicitly synthetic; they create no provider recovery
+capability or native runtime completion. They check typed resume enrollment,
+ordinary-permit refusal, unchanged original creation history, stale/unknown hook
+refusal, and changed-source rejection. The cleanup fixture rejects the old
+cleanup token after enrollment, preserves an exact retained clone, and records
+removal tombstones for both family operations through guarded metadata reads.
+Native end-to-end session resumption
+requires the independently verified provider and joined-execution path.

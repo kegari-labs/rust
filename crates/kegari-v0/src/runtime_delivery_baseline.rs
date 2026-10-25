@@ -12,9 +12,10 @@ pub struct KnownPredecessorBaseline {
     origin: VerifiedReleaseOrigin,
     baselines: Vec<VerifiedRecoveryBaseline>,
     effects: BTreeMap<String, Arc<ObservedReleaseStep>>,
-    records: Arc<crate::storage::PrivateDir>,
-    control: Arc<crate::control::ControlHost>,
-    key: Arc<evidence::AttestationKey>,
+    lineage: super::lineage::VerifiedReleaseLineage,
+    pub(super) records: Arc<crate::storage::PrivateDir>,
+    pub(super) control: Arc<crate::control::ControlHost>,
+    pub(super) key: Arc<evidence::AttestationKey>,
     observed_at: chrono::DateTime<Utc>,
 }
 impl KnownPredecessorBaseline {
@@ -39,6 +40,27 @@ impl KnownPredecessorBaseline {
     pub fn effects(&self) -> impl Iterator<Item = &ObservedReleaseStep> {
         self.effects.values().map(Arc::as_ref)
     }
+    pub(super) fn lineage(&self) -> &super::lineage::VerifiedReleaseLineage {
+        &self.lineage
+    }
+    pub(super) fn record_digest(&self) -> &str {
+        &self.record_digest
+    }
+    pub(crate) fn integration_sources(
+        &self,
+    ) -> impl Iterator<Item = (&VerifiedReleaseOrigin, &ObservedReleaseStep)> {
+        self.lineage.merges()
+    }
+    pub(crate) fn integration_origin(
+        &self,
+        effect: &ObservedReleaseStep,
+    ) -> Result<&VerifiedReleaseOrigin> {
+        self.lineage.origin(effect)
+    }
+    pub(crate) fn require_origin(&self, origin: &VerifiedReleaseOrigin) -> Result<()> {
+        self.revalidate_lineage()?;
+        self.lineage.require_origin(origin)
+    }
     pub fn baseline(&self, repository: &RepositoryId) -> Result<&VerifiedRecoveryBaseline> {
         self.baselines
             .iter()
@@ -62,6 +84,12 @@ impl KnownPredecessorBaseline {
                 "known predecessor baseline observation expired",
             ));
         }
+        self.revalidate_lineage()
+    }
+    /// Immutable historical provenance for an already admitted finite read.
+    /// Callers must separately retain the actual permit/current authority and
+    /// reobserve exact provider source identities before returning an import.
+    pub(crate) fn revalidate_lineage(&self) -> Result<()> {
         let stored: Signed<AttemptRecord> = self.records.read(&attempt_leaf(self.predecessor()))?;
         self.key.verify("runtime_release_attempt", &stored)?;
         if canonical_digest(1, &stored.payload)? != self.record_digest {
@@ -71,6 +99,37 @@ impl KnownPredecessorBaseline {
             ));
         }
         validate_known_owner(&self.control, &self.record)?;
+        self.lineage
+            .revalidate(&self.records, &self.control, &self.key)?;
+        Ok(())
+    }
+    /// Scope match for historical reads after the caller has checked the
+    /// admitted gate against current observations. This grants no freshness.
+    pub(crate) fn require_historical_gate(&self, gate: &FreshGate) -> Result<()> {
+        self.revalidate_lineage()?;
+        let original = &self.gate;
+        if gate.workspace_id() != original.workspace_id()
+            || gate.work() != original.work()
+            || gate.config_revision() != original.config_revision()
+            || gate.workflow_digest() != original.workflow_digest()
+            || gate.correction_watermark() != original.correction_watermark()
+            || gate.profile() != original.profile()
+            || gate.child_scope_digest() != original.child_scope_digest()
+            || gate.required_children() != original.required_children()
+            || gate.dependency_digest() != original.dependency_digest()
+            || gate.purpose() != original.purpose()
+            || gate.purpose() == GatePurpose::Coordination
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "historical read differs from observed successor authority",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn require_historical_effect(&self, effect: &ObservedReleaseStep) -> Result<()> {
+        self.revalidate_lineage()?;
+        self.lineage.origin(effect)?;
         Ok(())
     }
     pub(crate) fn require_effect(
@@ -79,32 +138,15 @@ impl KnownPredecessorBaseline {
         gate: &FreshGate,
     ) -> Result<()> {
         self.revalidate()?;
-        self.gate
-            .compare_current(gate, Utc::now(), Duration::seconds(30))?;
-        let actual = self
-            .effects
-            .get(effect.step_id())
-            .ok_or_else(|| Error::new("scope_violation", "effect is outside known predecessor"))?;
-        if actual.plan_digest() != effect.plan_digest()
-            || actual.attempt() != effect.attempt()
-            || actual.effect() != effect.effect()
-            || actual.outcome() != effect.outcome()
-            || actual
-                .receipt()
-                .map(|r| (&r.operation_id, &r.payload_digest))
-                != effect
-                    .receipt()
-                    .map(|r| (&r.operation_id, &r.payload_digest))
-        {
-            return Err(Error::new(
-                "scope_violation",
-                "effect differs from authenticated predecessor observation",
-            ));
-        }
+        // `gate` belongs to the immutable admitted operation. Freshness is
+        // supplied by this newly observed capability, never by renewing that
+        // operation's historical timestamp.
+        gate.compare_current(&self.gate, Utc::now(), Duration::seconds(30))?;
+        self.lineage.origin(effect)?;
         Ok(())
     }
 }
-fn validate_known_owner(
+pub(super) fn validate_known_owner(
     control: &crate::control::ControlHost,
     record: &AttemptRecord,
 ) -> Result<()> {
@@ -230,6 +272,24 @@ impl RuntimeDelivery {
                 "recovery cannot widen or replace held repository/target scope",
             ));
         }
+        self.known_record_baseline(&workspace, gate, record)
+            .await
+            .map(Some)
+    }
+    pub(super) async fn known_record_baseline(
+        &self,
+        workspace: &WorkspaceDelivery,
+        gate: &FreshGate,
+        record: &AttemptRecord,
+    ) -> Result<Arc<KnownPredecessorBaseline>> {
+        if record.workspace != gate.workspace_id()
+            || issue(record)?.identity()? != gate.work_key()?
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "historical baseline belongs to another current work item",
+            ));
+        }
         validate_known_owner(&self.runtime.control, record)?;
         let origin = workspace
             .coordinator
@@ -239,56 +299,48 @@ impl RuntimeDelivery {
                 record.acceptance_publication.id,
             )
             .await?;
-        let mut effects = BTreeMap::new();
-        for (id, state) in &record.attempt.steps {
-            if matches!(state, StepState::NotStarted | StepState::Retired { .. }) {
-                continue;
-            }
-            let effect = workspace
-                .coordinator
-                .recover_owned_release_step(
-                    &record.attempt.plan,
-                    id,
-                    record.attempt.step_attempt(id)?,
-                    &workspace.observer,
-                )
-                .await?;
-            match (state, effect.outcome()) {
-                (
-                    StepState::Succeeded {
-                        effect: expected, ..
-                    },
-                    ReleaseStepOutcome::Succeeded,
-                ) if effect.effect() == Some(expected) => (),
-                (
-                    StepState::Failed { .. } | StepState::Cancelled { .. },
-                    ReleaseStepOutcome::Failed(_),
-                ) => (),
-                _ => {
-                    return Err(Error::new(
-                        "reconciliation_required",
-                        "predecessor step outcomes need exact current reconciliation",
-                    ));
-                }
-            }
-            effects.insert(id.clone(), Arc::new(effect));
-        }
+        let effects = self.observe_lineage_effects(workspace, record).await?;
+        let lineage = self
+            .release_lineage(workspace, record, origin.clone(), effects.clone())
+            .await?;
         let mut baselines = Vec::new();
-        for contract in workspace
-            .contracts
-            .iter()
-            .filter(|repository| contract.repositories().contains(&repository.repository))
-        {
+        // The accepted manifest contains the complete parent repository vector.
+        // Unchanged deployment-free repositories intentionally have no release
+        // resource, but their baseline remains part of historical provenance.
+        let repositories = recovery_repositories(&origin.manifest().baselines)?;
+        for repository in repositories {
+            let contract = workspace
+                .contracts
+                .iter()
+                .find(|contract| contract.repository == repository)
+                .ok_or_else(|| {
+                    Error::new(
+                        "scope_violation",
+                        "historical baseline repository is no longer configured",
+                    )
+                })?;
             baselines.push(workspace.observer.observe_recovery(contract).await?);
         }
         verify_known_baseline(&origin, &baselines, &effects)?;
+        let current = self.runtime.observations.admission_snapshot()?;
+        let observed_gate = current
+            .parent(gate.workspace_id(), gate.work().parent)?
+            .fresh_gate(
+                gate.work().child,
+                gate.purpose(),
+                &self.runtime.dependency_outcomes()?,
+                Utc::now(),
+                Duration::seconds(30),
+            )?;
+        gate.compare_current(&observed_gate, Utc::now(), Duration::seconds(30))?;
         let cap = Arc::new(KnownPredecessorBaseline {
             record: record.clone(),
             record_digest: canonical_digest(1, record)?,
-            gate: gate.clone(),
+            gate: observed_gate,
             origin,
             baselines,
             effects,
+            lineage,
             records: self.records.clone(),
             control: self.runtime.control.clone(),
             key: self.runtime.services.key.clone(),
@@ -309,14 +361,13 @@ impl RuntimeDelivery {
             }
             cap.revalidate()
         })?;
-        Ok(Some(cap))
+        Ok(cap)
     }
 }
-fn verify_known_baseline(
+pub(super) fn known_effect_state(
     origin: &VerifiedReleaseOrigin,
-    baselines: &[VerifiedRecoveryBaseline],
     effects: &BTreeMap<String, Arc<ObservedReleaseStep>>,
-) -> Result<()> {
+) -> Result<KnownState> {
     let now = Utc::now();
     if now - origin.observed_at() > Duration::seconds(30)
         || origin.observed_at() > now + Duration::seconds(5)
@@ -396,6 +447,19 @@ fn verify_known_baseline(
             }
         }
     }
+    Ok((mains, targets))
+}
+type KnownState = (
+    BTreeMap<RepositoryId, crate::git::Revision>,
+    BTreeMap<(RepositoryId, String), (crate::git::Revision, String)>,
+);
+fn verify_known_baseline(
+    origin: &VerifiedReleaseOrigin,
+    baselines: &[VerifiedRecoveryBaseline],
+    effects: &BTreeMap<String, Arc<ObservedReleaseStep>>,
+) -> Result<()> {
+    let now = Utc::now();
+    let (mains, targets) = known_effect_state(origin, effects)?;
     if baselines.len() != mains.len()
         || baselines
             .iter()
@@ -540,5 +604,61 @@ mod tests {
         assert!(validate_known_owner(control, &changed).is_err());
         record.local_retired = false;
         assert!(validate_known_owner(control, &record).is_err());
+    }
+}
+
+fn recovery_repositories(
+    baselines: &[evidence::ProductionBaseline],
+) -> Result<BTreeSet<RepositoryId>> {
+    let repositories = baselines
+        .iter()
+        .map(|baseline| baseline.repository.clone())
+        .collect::<BTreeSet<_>>();
+    if repositories.is_empty() || repositories.len() != baselines.len() {
+        return Err(Error::new(
+            "scope_violation",
+            "historical repository baseline inventory is empty or duplicated",
+        ));
+    }
+    Ok(repositories)
+}
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+    #[test]
+    fn recovery_keeps_unchanged_deployment_free_repository_outside_release_resources() {
+        let make = |id: &str| evidence::ProductionBaseline {
+            repository: RepositoryId {
+                hostname: "github.com".into(),
+                id: id.into(),
+            },
+            production: crate::git::Revision {
+                commit: "1".repeat(40),
+                tree: "2".repeat(40),
+            },
+            deployed_revision: None,
+            deployed_artifact: None,
+            target_revisions: BTreeMap::new(),
+            target_artifacts: BTreeMap::new(),
+            deployment_free: true,
+            successor_recovery_operation: None,
+        };
+        let changed = make("42");
+        let unchanged = make("43");
+        let effect_resources = BTreeSet::from([domain::ResourceKey::Repository {
+            repository: changed.repository.clone(),
+        }]);
+        let complete = recovery_repositories(&[changed.clone(), unchanged.clone()]).unwrap();
+        assert_eq!(
+            complete,
+            [changed.repository.clone(), unchanged.repository.clone()].into()
+        );
+        assert!(
+            !effect_resources.contains(&domain::ResourceKey::Repository {
+                repository: unchanged.repository.clone()
+            })
+        );
+        assert!(recovery_repositories(&[changed.clone(), changed]).is_err());
+        assert!(recovery_repositories(&[]).is_err());
     }
 }

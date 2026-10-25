@@ -61,6 +61,8 @@ impl DeliveryCoordinator {
                 "continuation",
                 "source_advanced",
                 "worker_preparation",
+                "session_resume",
+                "session_recovery_preparation",
                 "release_resume",
             ]
             .iter()
@@ -303,6 +305,7 @@ impl DeliveryCoordinator {
         &self,
         admission: &DeliveryObservation,
         predecessor: &crate::runtime_delivery::KnownPredecessorBaseline,
+        origin: &VerifiedReleaseOrigin,
     ) -> Result<IsolatedSlice> {
         self.current(
             admission,
@@ -312,6 +315,7 @@ impl DeliveryCoordinator {
             admission.fresh_gate(),
             &admission.scope.repository,
             predecessor,
+            origin,
         )?;
         let candidate = self.git.inspect_candidate(
             &record.payload.intent.execution_root,
@@ -323,7 +327,7 @@ impl DeliveryCoordinator {
                 "retained predecessor objects changed",
             ));
         }
-        predecessor.revalidate()?;
+        predecessor.revalidate_lineage()?;
         self.current(
             admission,
             &[DeliveryPhase::CandidateAssembly, DeliveryPhase::Recovery],
@@ -336,20 +340,30 @@ impl DeliveryCoordinator {
         predecessor: &crate::runtime_delivery::KnownPredecessorBaseline,
     ) -> Result<Vec<crate::git::VerifiedHostReadRoot>> {
         let mut roots = Vec::new();
-        for candidate in &predecessor.origin().manifest().candidates {
-            let record = self.successor_slice_record(gate, &candidate.repository, predecessor)?;
-            let operation = record.payload.intent.operation_id;
-            roots.push(crate::git::retained_candidate_read_root(
-                candidate.repository.clone(),
-                &record
-                    .payload
-                    .intent
-                    .execution_root
-                    .join(format!("candidate-{operation}")),
-                gate.config_revision().into(),
-                record.digest()?,
-                candidate,
-            )?);
+        let mut origins = BTreeMap::from([(
+            predecessor.origin().plan().operation_id,
+            predecessor.origin(),
+        )]);
+        for (origin, _) in predecessor.integration_sources() {
+            origins.insert(origin.plan().operation_id, origin);
+        }
+        for origin in origins.values() {
+            for candidate in &origin.manifest().candidates {
+                let record =
+                    self.successor_slice_record(gate, &candidate.repository, predecessor, origin)?;
+                let operation = record.payload.intent.operation_id;
+                roots.push(crate::git::retained_candidate_read_root(
+                    candidate.repository.clone(),
+                    &record
+                        .payload
+                        .intent
+                        .execution_root
+                        .join(format!("candidate-{operation}")),
+                    gate.config_revision().into(),
+                    record.digest()?,
+                    candidate,
+                )?);
+            }
         }
         Ok(roots)
     }
@@ -358,13 +372,11 @@ impl DeliveryCoordinator {
         gate: &FreshGate,
         repository: &RepositoryId,
         predecessor: &crate::runtime_delivery::KnownPredecessorBaseline,
+        origin: &VerifiedReleaseOrigin,
     ) -> Result<Signed<SliceRecord>> {
         (self.current_gate)(gate)?;
-        predecessor.revalidate()?;
-        predecessor
-            .gate()
-            .compare_current(gate, Utc::now(), chrono::Duration::seconds(30))?;
-        let origin = predecessor.origin();
+        predecessor.require_historical_gate(gate)?;
+        predecessor.require_origin(origin)?;
         let operation = origin.slice_operation(repository)?;
         let contract = self.contracts.get(repository).ok_or_else(|| {
             Error::new(
@@ -426,16 +438,25 @@ impl DeliveryCoordinator {
         slice: &IsolatedSlice,
         runtime: Uuid,
     ) -> Result<String> {
+        self.fixture_original_manifest_body(parent.manifest(), slice, &[], runtime)
+    }
+    pub(crate) fn fixture_original_manifest_body(
+        &self,
+        parent: &evidence::ParentEvidence,
+        slice: &IsolatedSlice,
+        targets: &[ProductionTargetBaseline],
+        runtime: Uuid,
+    ) -> Result<String> {
         let contract_digest = canonical_digest(1, &"explicit synthetic parent contract")?;
         let vector = VectorRecord {
             schema_version: 1,
             runtime_id: runtime,
-            work: parent.manifest().work.clone(),
+            work: parent.work.clone(),
             contract_digest: contract_digest.clone(),
             slices: vec![(slice.manifest().repository.clone(), slice.operation_id())],
-            baselines: parent.manifest().baselines.clone(),
-            candidates: parent.manifest().candidates.clone(),
-            targets: vec![],
+            baselines: parent.baselines.clone(),
+            candidates: parent.candidates.clone(),
+            targets: targets.to_vec(),
             prepared_at: Utc::now(),
         };
         let digest = vector_digest(&vector)?;
@@ -459,7 +480,7 @@ impl DeliveryCoordinator {
                     1,
                     &"explicit synthetic completed coordination",
                 )?,
-                evidence: parent.manifest().clone(),
+                evidence: parent.clone(),
             },
         )?;
         record_body("parent_result", &parent)

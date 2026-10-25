@@ -84,7 +84,7 @@ pub(super) fn assert_preparation_denied(
 }
 struct Evidence {
     runtime: Arc<RuntimeCoordinator>,
-    proof: Arc<UnfinishedChildWork>,
+    proof: Option<Arc<UnfinishedChildWork>>,
     grants: Mutex<Vec<VerifiedRetryGrant>>,
 }
 impl Evidence {
@@ -112,7 +112,7 @@ impl Evidence {
             work,
             &receipts,
             &grants,
-            std::slice::from_ref(&self.proof),
+            &self.proof.iter().cloned().collect::<Vec<_>>(),
             &config.runtime,
         )
     }
@@ -169,6 +169,15 @@ impl DecisionEvidence for Evidence {
 pub(super) async fn publish(
     runtime: Arc<RuntimeCoordinator>,
     proof: Arc<UnfinishedChildWork>,
+) -> VerifiedRetryGrant {
+    publish_inner(runtime, Some(proof)).await
+}
+pub(super) async fn publish_failed_review(runtime: Arc<RuntimeCoordinator>) -> VerifiedRetryGrant {
+    publish_inner(runtime, None).await
+}
+async fn publish_inner(
+    runtime: Arc<RuntimeCoordinator>,
+    proof: Option<Arc<UnfinishedChildWork>>,
 ) -> VerifiedRetryGrant {
     let evidence = Arc::new(Evidence {
         runtime: runtime.clone(),

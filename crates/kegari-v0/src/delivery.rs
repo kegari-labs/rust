@@ -380,6 +380,18 @@ impl DeliveryCoordinator {
         action: &str,
         command: ProviderMutation,
     ) -> Result<Receipt> {
+        self.effect_guarded(admission, action, command, None).await
+    }
+    async fn effect_guarded(
+        &self,
+        admission: &DeliveryAdmission,
+        action: &str,
+        command: ProviderMutation,
+        extra: Option<GateCheck>,
+    ) -> Result<Receipt> {
+        if let Some(check) = &extra {
+            check(admission.fresh_gate())?;
+        }
         if action.is_empty() || action.len() > 128 || action.chars().any(char::is_control) {
             return Err(Error::invalid("invalid bounded delivery action identity"));
         }
@@ -458,7 +470,13 @@ impl DeliveryCoordinator {
                 Some(admission.permit.clone()),
                 None,
                 command,
-                move || check(&gate),
+                move || {
+                    check(&gate)?;
+                    if let Some(extra) = &extra {
+                        extra(&gate)?;
+                    }
+                    Ok(())
+                },
             )
             .await?;
         record.receipt = Some(receipt.clone());
@@ -1693,6 +1711,17 @@ impl DeliveryCoordinator {
         admission: &DeliveryAdmission,
         signed: &Signed<evidence::ReviewAttestation>,
     ) -> Result<PublishedReview> {
+        self.publish_review_guarded(admission, signed, None).await
+    }
+    async fn publish_review_guarded(
+        &self,
+        admission: &DeliveryAdmission,
+        signed: &Signed<evidence::ReviewAttestation>,
+        extra: Option<GateCheck>,
+    ) -> Result<PublishedReview> {
+        if let Some(check) = &extra {
+            check(admission.fresh_gate())?;
+        }
         self.current(
             admission,
             &[
@@ -1717,7 +1746,7 @@ impl DeliveryCoordinator {
         let contract = self.contract(admission)?;
         let (publication, status) = if let Some(pr) = a.pull_request {
             let receipt = self
-                .effect(
+                .effect_guarded(
                     admission,
                     "publish-review",
                     ProviderMutation::GithubComment {
@@ -1726,6 +1755,7 @@ impl DeliveryCoordinator {
                         expected_head: a.revision.head.clone(),
                         body: record_body("codex_review", signed)?,
                     },
+                    extra.clone(),
                 )
                 .await?;
             let publication = self
@@ -1739,7 +1769,7 @@ impl DeliveryCoordinator {
                 .await?;
             let passed = a.verdict == evidence::Verdict::Pass && a.unresolved_findings.is_empty();
             let status_receipt = self
-                .effect(
+                .effect_guarded(
                     admission,
                     "publish-review-status",
                     ProviderMutation::GithubStatus {
@@ -1762,6 +1792,7 @@ impl DeliveryCoordinator {
                         .into(),
                         target_url: publication.url.clone(),
                     },
+                    extra.clone(),
                 )
                 .await?;
             let statuses = self
@@ -1810,13 +1841,14 @@ impl DeliveryCoordinator {
                 Error::new("review_gate", "no-change review requires a real child")
             })?;
             let receipt = self
-                .effect(
+                .effect_guarded(
                     admission,
                     "publish-no-change-review",
                     ProviderMutation::LinearComment {
                         issue,
                         body: record_body("codex_review", signed)?,
                     },
+                    extra.clone(),
                 )
                 .await?;
             (
@@ -1832,6 +1864,9 @@ impl DeliveryCoordinator {
             )
         };
         self.current(admission, &[admission.scope.phase])?;
+        if let Some(check) = &extra {
+            check(admission.fresh_gate())?;
+        }
         let verified = evidence::verify_review(
             signed,
             &publication,
@@ -4564,7 +4599,9 @@ pub use assignment::*;
 #[cfg(test)]
 pub(crate) use production_release::tests::observed_merge_for_runtime;
 #[cfg(test)]
-pub(crate) use production_release::tests::{RuntimeSeedWire, runtime_candidate_seed};
+pub(crate) use production_release::tests::{
+    RuntimeCandidateSeed, RuntimeLineageWire, RuntimeSeedWire, runtime_candidate_seed,
+};
 
 #[path = "delivery_objects.rs"]
 mod objects;
@@ -4572,3 +4609,7 @@ mod objects;
 #[path = "delivery_continuation.rs"]
 mod continuation;
 pub use continuation::*;
+
+#[path = "delivery_review_retry.rs"]
+mod review_retry;
+pub use review_retry::{ReviewRetryRequest, ReviewRetryWork};

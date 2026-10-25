@@ -24,6 +24,12 @@ mod acquired_clone;
 #[path = "git_object_import.rs"]
 mod object_import;
 pub(crate) use object_import::retained_object_read_root;
+#[path = "git_reuse.rs"]
+mod reuse;
+pub use reuse::VerifiedReusableSource;
+#[cfg(all(test, target_os = "macos"))]
+#[path = "git_reuse_family_tests.rs"]
+mod reuse_family_tests;
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

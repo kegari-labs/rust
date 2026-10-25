@@ -113,6 +113,18 @@ pub(super) async fn fixture_authorization_with_wire(
     Arc<std::sync::Mutex<wire::Fixture>>,
     FixtureOwner,
 ) {
+    fixture_authorization_with_configuration(authorized, |_| {}).await
+}
+pub(super) async fn fixture_authorization_with_configuration(
+    authorized: bool,
+    adjust: impl FnOnce(&mut crate::config::Config),
+) -> (
+    tempfile::TempDir,
+    crate::runtime_fixture::RuntimeFixture,
+    Arc<RuntimeDelivery>,
+    Arc<std::sync::Mutex<wire::Fixture>>,
+    FixtureOwner,
+) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let executable = resolve_git().unwrap();
@@ -131,7 +143,20 @@ pub(super) async fn fixture_authorization_with_wire(
     let selected = configuration.workspaces.get_mut("example").unwrap();
     selected.workflow = workflow.to_str().unwrap().into();
     selected.repositories.get_mut("42").unwrap().source = source.to_str().unwrap().into();
+    adjust(&mut configuration);
     let data = wire::Fixture::new();
+    let targets = configuration.workspaces["example"]
+        .repositories
+        .values()
+        .flat_map(|repository| match &repository.deployment {
+            crate::config::Deployment::Steps { steps } => steps
+                .iter()
+                .map(|step| step.target_id.clone())
+                .collect::<Vec<_>>(),
+            _ => vec![],
+        })
+        .collect();
+    data.lock().unwrap().set_production_targets(&targets);
     let identity = ProcessIdentity {
         pid: std::process::id(),
         parent_pid: unsafe { libc::getppid() } as u32,

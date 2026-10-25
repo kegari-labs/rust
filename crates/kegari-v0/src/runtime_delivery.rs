@@ -303,14 +303,6 @@ impl RuntimeDelivery {
             executions: self.runtime.executions.clone(),
         }
     }
-    async fn readonly_coordinator(
-        &self,
-        workspace: &WorkspaceDelivery,
-        gate: &FreshGate,
-    ) -> Result<(Arc<DeliveryCoordinator>, Arc<LocalProcessPermit>)> {
-        self.readonly_coordinator_with_successor(workspace, gate, None)
-            .await
-    }
     async fn readonly_coordinator_with_successor(
         &self,
         workspace: &WorkspaceDelivery,
@@ -340,11 +332,12 @@ impl RuntimeDelivery {
                 .retained_successor_host_roots(gate, predecessor)?
             {
                 if let Some(existing) = roots.get(root.root()) {
-                    let _ = existing;
-                    return Err(Error::new(
-                        "ownership_conflict",
-                        "predecessor read root overlaps another source",
-                    ));
+                    if existing.digest()? != root.digest()? {
+                        return Err(Error::new(
+                            "ownership_conflict",
+                            "predecessor read root overlaps another source",
+                        ));
+                    }
                 } else {
                     roots.insert(root.root().to_owned(), root);
                 }
@@ -892,6 +885,7 @@ pub use parent::ParentSources;
 mod release;
 
 pub use release::KnownPredecessorBaseline;
+pub(crate) use release::VerifiedSuccessorHolds;
 
 #[cfg(test)]
 #[path = "runtime_delivery_worker_fixture.rs"]

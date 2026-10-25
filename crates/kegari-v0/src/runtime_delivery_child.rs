@@ -67,6 +67,8 @@ enum Stage {
     Complete,
     RepairLaunch,
     RepairWaiting,
+    RetryReview,
+    LaunchReviewRetry,
     Blocked,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -88,6 +90,12 @@ struct ChildReference {
     unfinished_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_advanced_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_retry_operation: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_retry_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    review_history: Vec<Uuid>,
     observed_at: chrono::DateTime<Utc>,
     error: Option<Error>,
 }
@@ -110,6 +118,8 @@ struct ChildPipeline {
     phase: Option<ActivePhase>,
     unfinished: Option<Arc<UnfinishedChildWork>>,
     source_advanced: Option<Arc<VerifiedSourceAdvanced>>,
+    review_worker_assignment: Option<DeliveryWorkerAssignment>,
+    review_retry: Option<Arc<ReviewRetryWork>>,
 }
 pub(super) struct CandidateChild {
     pub(super) child: Uuid,
@@ -283,6 +293,9 @@ impl RuntimeDelivery {
                         repair_operation: None,
                         unfinished_digest: None,
                         source_advanced_digest: None,
+                        review_retry_operation: None,
+                        review_retry_digest: None,
+                        review_history: vec![],
                         observed_at: Utc::now(),
                         error: None,
                     },
@@ -303,6 +316,8 @@ impl RuntimeDelivery {
                     phase: None,
                     unfinished: None,
                     source_advanced: None,
+                    review_worker_assignment: None,
+                    review_retry: None,
                 };
                 self.persist_child(&pipeline)?;
                 self.children
@@ -582,6 +597,92 @@ impl RuntimeDelivery {
             Err(error) => Err(error),
         }
     }
+    fn current_review_grants(
+        &self,
+        work: &crate::evidence::WorkIdentity,
+    ) -> Result<Vec<crate::decisions::VerifiedRetryGrant>> {
+        crate::runtime_workflow::current_retry_grants(
+            &self.runtime.configuration.snapshot()?,
+            &self.runtime.observations.admission_snapshot()?,
+            work,
+            &self.runtime.control.operations()?,
+            &self.runtime.services.key,
+        )
+    }
+    async fn launch_review_retry(&self, lease: &Lease, child: &mut ChildPipeline) -> Result<()> {
+        let proof = child
+            .review_retry
+            .as_ref()
+            .ok_or_else(|| Error::new("reconciliation_required", "review retry proof unavailable"))?
+            .clone();
+        let operation = child
+            .reference
+            .review_retry_operation
+            .unwrap_or_else(Uuid::new_v4);
+        let model_admitted = match self.runtime.control.operation(operation) {
+            Ok(receipt) => {
+                let run = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+                    Error::new(
+                        "record_corrupt",
+                        "review retry operation is not a model admission",
+                    )
+                })?;
+                if run.phase != *proof.phase() || run.instruction_digest.is_empty() {
+                    return Err(Error::new(
+                        "worker_binding",
+                        "review retry receipt changed phase",
+                    ));
+                }
+                self.worker_launch_admitted(operation)?
+            }
+            Err(error) if error.code == "record_missing" => false,
+            Err(error) => return Err(error),
+        };
+        if !model_admitted {
+            if self.worker_launch_admitted(operation)? {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "review preparation exists without a known model admission; preserve its original identity",
+                ));
+            }
+            let schedule = self.runtime.next_attempt_for_review_retry(&proof)?;
+            if schedule.not_before > Utc::now() {
+                return Err(Error::new(
+                    "operation_pending",
+                    "review retry spacing has not elapsed",
+                ));
+            }
+            child.reference.review_retry_operation = Some(operation);
+            self.persist_child(child)?;
+            crate::runtime_workers::launch(
+                self.runtime.clone(),
+                crate::runtime_workers::LaunchRequest {
+                    lease: lease.clone(),
+                    operation_id: operation,
+                    authority: WorkerAuthority::Authorized(proof.authority().clone()),
+                    phase: proof.phase().clone(),
+                    source: None,
+                    delivery: Some(proof.assignment().clone()),
+                    unfinished: None,
+                    source_advanced: None,
+                    retried_unfinished: None,
+                    review_retry: Some(proof.clone()),
+                    max_seconds: 3600,
+                    max_turns: schedule.max_turns,
+                },
+            )
+            .await?;
+        }
+        // The old run, receipt and assignment remain immutable history. A new
+        // operation is selected only after actual preparation/model admission.
+        if child.reference.review != Some(operation) {
+            child.reference.review_history.push(proof.predecessor());
+            child.reference.review = Some(operation);
+        }
+        child.reference.review_retry_operation = None;
+        child.reference.stage = Stage::Review;
+        self.persist_child(child)
+    }
     pub(super) async fn launch_assignment(
         &self,
         lease: &Lease,
@@ -639,6 +740,7 @@ impl RuntimeDelivery {
                 delivery: Some(assignment),
                 unfinished: None,
                 retried_unfinished: None,
+                review_retry: None,
                 source_advanced,
                 max_seconds: 3600,
                 max_turns: schedule.max_turns,
@@ -805,6 +907,7 @@ impl RuntimeDelivery {
                 delivery: Some(assignment),
                 unfinished,
                 retried_unfinished,
+                review_retry: None,
                 source_advanced: None,
                 max_seconds: 3600,
                 max_turns: schedule.max_turns,
@@ -1078,6 +1181,9 @@ impl RuntimeDelivery {
                 .compare_current(&gate, Utc::now(), Duration::seconds(30))?;
             return self.launch_child_repair(lease, child).await;
         }
+        if child.reference.stage == Stage::LaunchReviewRetry {
+            return self.launch_review_retry(lease, child).await;
+        }
         let workspace = match &child.phase {
             Some(phase) => (*phase.workspace).clone(),
             None => self.workspace(projection, workspace_id)?,
@@ -1097,7 +1203,7 @@ impl RuntimeDelivery {
                     DeliveryPhase::NoChange
                 }
             }
-            Stage::LaunchReview | Stage::Review => {
+            Stage::LaunchReview | Stage::Review | Stage::RetryReview => {
                 if changed {
                     DeliveryPhase::ReviewPublication
                 } else {
@@ -1111,7 +1217,11 @@ impl RuntimeDelivery {
                     DeliveryPhase::NoChange
                 }
             }
-            Stage::Complete | Stage::Blocked | Stage::RepairLaunch | Stage::RepairWaiting => {
+            Stage::Complete
+            | Stage::Blocked
+            | Stage::RepairLaunch
+            | Stage::RepairWaiting
+            | Stage::LaunchReviewRetry => {
                 return Ok(());
             }
         };
@@ -1127,6 +1237,13 @@ impl RuntimeDelivery {
                     "worker phase lacks its persisted launch identity",
                 )
             })?;
+            if child.reference.stage == Stage::Review
+                && let Some(completion) = self.runtime.retained_completion(operation)?
+                && matches!(completion.outcome, crate::worker_run::RunOutcome::Failed)
+            {
+                self.finish_child_phase(child, Stage::RetryReview)?;
+                return self.persist_child(child);
+            }
             if self.completed_claim(operation)?.is_none() {
                 return Ok(());
             }
@@ -1155,6 +1272,38 @@ impl RuntimeDelivery {
         {
             return Ok(());
         }
+        let review_grant = if child.reference.stage == Stage::RetryReview {
+            let operation = child
+                .reference
+                .review
+                .ok_or_else(|| Error::new("record_corrupt", "failed review identity missing"))?;
+            let receipt = self.runtime.control.operation(operation)?;
+            let run = RunReference::from_receipt(&receipt)?
+                .ok_or_else(|| Error::new("worker_binding", "failed review admission missing"))?;
+            let grants = self.current_review_grants(&child.reference.work)?;
+            let matching: Vec<_> = grants
+                .iter()
+                .filter(|g| g.phase() == &run.phase)
+                .cloned()
+                .collect();
+            match matching.as_slice() {
+                [] => {
+                    return Err(Error::new(
+                        "retry_required",
+                        "known failed review awaits an explicit operator grant",
+                    ));
+                }
+                [grant] => Some((grant.clone(), grants)),
+                _ => {
+                    return Err(Error::new(
+                        "stale_result",
+                        "review budget has competing retry grants",
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         self.phase(&workspace, &gate, lease, child, phase).await?;
         let current = child
             .phase
@@ -1440,6 +1589,7 @@ impl RuntimeDelivery {
                 child.reference.source_advanced_digest =
                     advanced.as_ref().map(|p| p.digest().to_owned());
                 child.source_advanced = advanced;
+                child.review_worker_assignment = Some(assignment.clone());
                 self.finish_child_phase(child, Stage::LaunchReview)?;
                 let operation = child.reference.review.unwrap_or_else(Uuid::new_v4);
                 child.reference.review = Some(operation);
@@ -1454,18 +1604,74 @@ impl RuntimeDelivery {
                 child.reference.stage = Stage::Review;
                 self.persist_child(child)?;
             }
+            Stage::RetryReview => {
+                let (grant, grants) = review_grant
+                    .ok_or_else(|| Error::new("stale_result", "review grant missing"))?;
+                let completion = self
+                    .runtime
+                    .retained_completion(child.reference.review.unwrap())?
+                    .ok_or_else(|| {
+                        Error::new(
+                            "reconciliation_required",
+                            "actual failed review completion missing",
+                        )
+                    })?;
+                let proof = coordinator
+                    .retry_failed_review(ReviewRetryRequest {
+                        admission: &admission,
+                        assignment: required(
+                            &child.review_worker_assignment,
+                            "original review worker assignment",
+                        )?,
+                        failed: completion,
+                        grant,
+                        current_grants: &grants,
+                    })
+                    .await?;
+                child.reference.review_retry_digest = Some(proof.digest().into());
+                child.review_retry = Some(Arc::new(proof));
+                self.finish_child_phase(child, Stage::LaunchReviewRetry)?;
+                self.persist_child(child)?;
+            }
             Stage::Review => {
                 let (outcome, completion) = self
                     .completed_claim(child.reference.review.unwrap())?
                     .ok_or_else(|| Error::new("operation_pending", "Codex review remains owned"))?;
-                let published = coordinator
-                    .publish_completed_review(
-                        &admission,
-                        required(&child.assignment, "review assignment")?,
-                        &outcome,
-                        &completion,
-                    )
-                    .await;
+                let published = if let Some(proof) = &child.review_retry {
+                    let checked = proof.clone();
+                    let runtime = self.runtime.clone();
+                    let operation = completion.operation_id;
+                    let current: GateCheck = Arc::new(move |_| {
+                        let receipts = runtime.control.operations()?;
+                        let grants = crate::runtime_workflow::current_retry_grants(
+                            &runtime.configuration.snapshot()?,
+                            &runtime.observations.admission_snapshot()?,
+                            checked.authority().work(),
+                            &receipts,
+                            &runtime.services.key,
+                        )?;
+                        checked.verify_completed_inventory(&receipts, &grants, operation)
+                    });
+                    coordinator
+                        .publish_retried_review(
+                            &admission,
+                            required(&child.assignment, "review assignment")?,
+                            &outcome,
+                            &completion,
+                            proof,
+                            current,
+                        )
+                        .await
+                } else {
+                    coordinator
+                        .publish_completed_review(
+                            &admission,
+                            required(&child.assignment, "review assignment")?,
+                            &outcome,
+                            &completion,
+                        )
+                        .await
+                };
                 child.review = Some(match published {
                     Ok(review) => review,
                     Err(error) if terminal_gate_failure(&error) => {
@@ -1587,7 +1793,11 @@ impl RuntimeDelivery {
                     .await?;
                 self.finish_child_phase(child, Stage::Complete)?;
             }
-            Stage::Complete | Stage::Blocked | Stage::RepairLaunch | Stage::RepairWaiting => {}
+            Stage::Complete
+            | Stage::Blocked
+            | Stage::RepairLaunch
+            | Stage::RepairWaiting
+            | Stage::LaunchReviewRetry => {}
         }
         Ok(())
     }
@@ -1847,6 +2057,9 @@ mod retention_tests {
                 repair_operation: None,
                 unfinished_digest: None,
                 source_advanced_digest: None,
+                review_retry_operation: None,
+                review_retry_digest: None,
+                review_history: vec![],
                 observed_at: Utc::now(),
                 error: None,
             },
@@ -1867,6 +2080,8 @@ mod retention_tests {
             phase: None,
             unfinished: None,
             source_advanced: None,
+            review_worker_assignment: None,
+            review_retry: None,
         }));
         service
             .children

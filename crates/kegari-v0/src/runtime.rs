@@ -28,6 +28,8 @@ use std::{
 use uuid::Uuid;
 #[path = "runtime_corrections.rs"]
 mod correction_transitions;
+#[path = "runtime_resume.rs"]
+mod session_resume;
 
 #[derive(Clone)]
 struct RegisteredRun {
@@ -427,11 +429,13 @@ impl RuntimeCoordinator {
             &request.unfinished,
             &request.source_advanced,
             &request.retried_unfinished,
+            &request.review_retry,
         ) {
-            (Some(proof), None, None) => Some(WorkerReadmission::Unfinished(proof)),
-            (None, Some(proof), None) => Some(WorkerReadmission::SourceAdvanced(proof)),
-            (None, None, Some(proof)) => Some(WorkerReadmission::Retried(proof)),
-            (None, None, None) => None,
+            (Some(proof), None, None, None) => Some(WorkerReadmission::Unfinished(proof)),
+            (None, Some(proof), None, None) => Some(WorkerReadmission::SourceAdvanced(proof)),
+            (None, None, Some(proof), None) => Some(WorkerReadmission::Retried(proof)),
+            (None, None, None, Some(proof)) => Some(WorkerReadmission::ReviewRetry(proof)),
+            (None, None, None, None) => None,
             _ => {
                 return Err(Error::new(
                     "worker_binding",
@@ -458,6 +462,12 @@ impl RuntimeCoordinator {
         proof: &crate::delivery::RetriedUnfinishedWork,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
         self.next_attempt_for_readmission(WorkerReadmission::Retried(proof))
+    }
+    pub fn next_attempt_for_review_retry(
+        &self,
+        proof: &crate::delivery::ReviewRetryWork,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        self.next_attempt_for_readmission(WorkerReadmission::ReviewRetry(proof))
     }
     fn next_attempt_for_readmission(
         &self,
@@ -561,6 +571,14 @@ impl RuntimeCoordinator {
                 &self.services.key,
             )?;
             crate::runtime_workflow::require_current_grant(&grant, &observed)?;
+            if phase.phase == "child_codex_review"
+                && !matches!(readmission, Some(WorkerReadmission::ReviewRetry(_)))
+            {
+                return Err(Error::new(
+                    "review_retry_required",
+                    "granted review requires its exact retained failed-session and source assignment",
+                ));
+            }
             if crate::runtime_schedule::grant_requires_unfinished(grant.phase(), phase, &receipts)?
                 && !matches!(readmission, Some(WorkerReadmission::Retried(_)))
             {
@@ -623,6 +641,9 @@ impl RuntimeCoordinator {
             if let WorkerReadmission::Retried(proof) = proof {
                 self.verify_unfinished_target(proof.original(), &receipts)?;
             }
+            if let WorkerReadmission::ReviewRetry(proof) = proof {
+                proof.verify_current(&receipts, &current_grants)?;
+            }
             if proof.phase() != phase
                 || proof.authority().workspace_id() != workspace
                 || proof.authority().work_key()? != phase.work
@@ -677,7 +698,10 @@ impl RuntimeCoordinator {
                         "readmission lost its actual joined completion",
                     )
                 })?;
-            require_joined_readmission(&completed)?;
+            match proof {
+                WorkerReadmission::ReviewRetry(proof) => proof.verify_completion(&completed)?,
+                _ => require_joined_readmission(&completed)?,
+            }
             match proof {
                 WorkerReadmission::Unfinished(proof) => crate::runtime_schedule::plan_unfinished(
                     &limits,
@@ -697,9 +721,30 @@ impl RuntimeCoordinator {
                         Utc::now(),
                     )
                 }
-                WorkerReadmission::Retried(_) => {
+                WorkerReadmission::Retried(_) | WorkerReadmission::ReviewRetry(_) => {
                     let now = Utc::now();
-                    let not_before = readmission_spacing(predecessor, failure, now)?;
+                    let mut not_before = readmission_spacing(predecessor, failure, now)?;
+                    if matches!(proof, WorkerReadmission::ReviewRetry(_)) {
+                        not_before = not_before.max(crate::scheduler::retry_at(
+                            failure.updated_at,
+                            1,
+                            limits.retry_cap_ms,
+                            failure
+                                .observed_result
+                                .as_ref()
+                                .and_then(|v| {
+                                    v.pointer("/observation/error/details/retry_after_ms")
+                                })
+                                .and_then(Value::as_u64),
+                        )?);
+                        if not_before > now {
+                            return Err(Error::new(
+                                "retry_wait",
+                                "failed review waits for bounded failure spacing",
+                            )
+                            .detail(json!({"not_before":not_before})));
+                        }
+                    }
                     let mut schedule =
                         crate::runtime_schedule::plan(&limits, phase, workspace, &receipts, now)?;
                     schedule.not_before = schedule.not_before.max(not_before);
@@ -1322,7 +1367,7 @@ impl RuntimeCoordinator {
         input: crate::control::RunAdmission,
         contract: &WorkerContract,
     ) -> Result<Permit> {
-        self.admit_worker_inner(lease, input, contract, None)
+        self.admit_worker_inner(lease, input, contract, None, None)
     }
     pub(crate) fn admit_unfinished_worker(
         &self,
@@ -1336,6 +1381,7 @@ impl RuntimeCoordinator {
             input,
             contract,
             Some(WorkerReadmission::Unfinished(proof)),
+            None,
         )
     }
     pub(crate) fn admit_source_advanced_worker(
@@ -1350,6 +1396,7 @@ impl RuntimeCoordinator {
             input,
             contract,
             Some(WorkerReadmission::SourceAdvanced(proof)),
+            None,
         )
     }
     pub(crate) fn admit_retried_unfinished_worker(
@@ -1364,6 +1411,22 @@ impl RuntimeCoordinator {
             input,
             contract,
             Some(WorkerReadmission::Retried(proof)),
+            None,
+        )
+    }
+    pub(crate) fn admit_review_retry_worker(
+        &self,
+        lease: &Lease,
+        input: crate::control::RunAdmission,
+        contract: &WorkerContract,
+        proof: &crate::delivery::ReviewRetryWork,
+    ) -> Result<Permit> {
+        self.admit_worker_inner(
+            lease,
+            input,
+            contract,
+            Some(WorkerReadmission::ReviewRetry(proof)),
+            None,
         )
     }
     fn admit_worker_inner(
@@ -1372,8 +1435,21 @@ impl RuntimeCoordinator {
         input: crate::control::RunAdmission,
         contract: &WorkerContract,
         readmission: Option<WorkerReadmission<'_>>,
+        session_resume: Option<(
+            &crate::worker_run::VerifiedSessionResume,
+            &crate::housekeeping::VerifiedDirectoryReuse,
+        )>,
     ) -> Result<Permit> {
+        if readmission.is_some() && session_resume.is_some() {
+            return Err(Error::new(
+                "worker_binding",
+                "conflicting session admission causes",
+            ));
+        }
         let reference = input.reference.clone();
+        let resume_reference = session_resume
+            .map(|(proof, directory)| self.session_resume_reference(proof, directory))
+            .transpose()?;
         if input.work_key != contract.work_key()?
             || input.scope_digest != contract.scope_digest()
             || reference.phase.work != input.work_key
@@ -1422,7 +1498,21 @@ impl RuntimeCoordinator {
                     ));
                 }
             }
-            if readmission.is_none() {
+            if let Some((proof, directory)) = session_resume {
+                let schedule = self.plan_session_resume(contract, proof, directory, snapshot)?;
+                if reference.phase != proof.recovery().observation().retained().reference().phase
+                    || reference.attempt != schedule.attempt
+                    || reference.max_attempts > schedule.max_attempts
+                    || reference.max_turns > schedule.max_turns
+                    || reference.max_review_rounds > schedule.max_review_rounds
+                {
+                    return Err(Error::new(
+                        "admission_budget",
+                        "session resume exceeds its exact original finite phase",
+                    ));
+                }
+            }
+            if readmission.is_none() && session_resume.is_none() {
                 let schedule = self.plan_attempt(
                     &reference.phase,
                     reference.workspace,
@@ -1552,25 +1642,30 @@ impl RuntimeCoordinator {
                 .cloned();
             crate::runtime_schedule::ensure_capacity(&config, &active, &reference, quota.as_ref())
         };
-        let permit = match readmission {
-            Some(WorkerReadmission::Unfinished(proof)) => {
-                self.control.admit_run_continued_observed(
-                    lease,
-                    input,
-                    continuation_reference(proof),
-                    final_gate,
-                )?
-            }
-            Some(WorkerReadmission::SourceAdvanced(proof)) => {
-                self.control.admit_run_source_advanced_observed(
-                    lease,
-                    input,
-                    source_advanced_reference(proof),
-                    final_gate,
-                )?
-            }
-            Some(WorkerReadmission::Retried(_)) | None => {
-                self.control.admit_run_observed(lease, input, final_gate)?
+        let permit = if let Some(resume) = resume_reference {
+            self.control
+                .admit_run_resumed_observed(lease, input, resume, final_gate)?
+        } else {
+            match readmission {
+                Some(WorkerReadmission::Unfinished(proof)) => {
+                    self.control.admit_run_continued_observed(
+                        lease,
+                        input,
+                        continuation_reference(proof),
+                        final_gate,
+                    )?
+                }
+                Some(WorkerReadmission::SourceAdvanced(proof)) => {
+                    self.control.admit_run_source_advanced_observed(
+                        lease,
+                        input,
+                        source_advanced_reference(proof),
+                        final_gate,
+                    )?
+                }
+                Some(WorkerReadmission::Retried(_))
+                | Some(WorkerReadmission::ReviewRetry(_))
+                | None => self.control.admit_run_observed(lease, input, final_gate)?,
             }
         };
         self.state
@@ -2632,6 +2727,7 @@ enum WorkerReadmission<'a> {
     Unfinished(&'a crate::delivery::UnfinishedChildWork),
     SourceAdvanced(&'a crate::delivery::VerifiedSourceAdvanced),
     Retried(&'a crate::delivery::RetriedUnfinishedWork),
+    ReviewRetry(&'a crate::delivery::ReviewRetryWork),
 }
 impl<'a> WorkerReadmission<'a> {
     fn authority(self) -> &'a crate::reconcile::FreshGate {
@@ -2639,6 +2735,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::Unfinished(p) => p.authority(),
             Self::SourceAdvanced(p) => p.authority(),
             Self::Retried(p) => p.authority(),
+            Self::ReviewRetry(p) => p.authority(),
         }
     }
     fn phase(self) -> &'a crate::scheduler::PhaseKey {
@@ -2646,6 +2743,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::Unfinished(p) => p.phase(),
             Self::SourceAdvanced(p) => p.phase(),
             Self::Retried(p) => p.phase(),
+            Self::ReviewRetry(p) => p.phase(),
         }
     }
     fn predecessor(self) -> Uuid {
@@ -2653,6 +2751,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::Unfinished(p) => p.predecessor(),
             Self::SourceAdvanced(p) => p.predecessor(),
             Self::Retried(p) => p.original().predecessor(),
+            Self::ReviewRetry(p) => p.predecessor(),
         }
     }
     fn cause_operation(self) -> Uuid {
@@ -2660,6 +2759,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::Unfinished(p) => p.failure_operation(),
             Self::SourceAdvanced(p) => p.source_operation(),
             Self::Retried(p) => p.original().failure_operation(),
+            Self::ReviewRetry(p) => p.predecessor(),
         }
     }
     fn cause_receipt_digest(self) -> &'a str {
@@ -2667,6 +2767,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::Unfinished(p) => p.failure_receipt_digest(),
             Self::SourceAdvanced(p) => p.source_receipt_digest(),
             Self::Retried(p) => p.original().failure_receipt_digest(),
+            Self::ReviewRetry(p) => p.predecessor_receipt_digest(),
         }
     }
     fn completed_operation(self) -> Uuid {
@@ -2674,6 +2775,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::Unfinished(p) => p.predecessor(),
             Self::SourceAdvanced(p) => p.source_operation(),
             Self::Retried(p) => p.original().predecessor(),
+            Self::ReviewRetry(p) => p.predecessor(),
         }
     }
     fn source(self) -> &'a crate::delivery::DeliverySource {
@@ -2681,6 +2783,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::Unfinished(p) => p.source(),
             Self::SourceAdvanced(p) => p.source(),
             Self::Retried(p) => p.source(),
+            Self::ReviewRetry(p) => p.source(),
         }
     }
     fn verify_contract(self, contract: &WorkerContract) -> Result<()> {
@@ -2688,6 +2791,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::Unfinished(p) => p.verify_contract(contract),
             Self::SourceAdvanced(p) => p.verify_contract(contract),
             Self::Retried(p) => p.verify_contract(contract),
+            Self::ReviewRetry(p) => p.verify_contract(contract),
         }
     }
     fn verify_inventory(self, receipts: &[crate::control::Receipt]) -> Result<()> {
@@ -2695,6 +2799,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::Unfinished(proof) => proof.verify_failure_inventory(receipts),
             Self::SourceAdvanced(proof) => proof.verify_predecessor_inventory(receipts),
             Self::Retried(proof) => proof.original().verify_failure_inventory(receipts),
+            Self::ReviewRetry(proof) => proof.verify_inventory(receipts),
         }
     }
 }

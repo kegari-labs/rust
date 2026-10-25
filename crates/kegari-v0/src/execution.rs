@@ -1222,17 +1222,83 @@ pub enum SessionLifecycle {
 pub struct HookLedger {
     pub binding_digest: String,
     pub initialized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited_creation: Option<InheritedHookCreation>,
     pub sessions: BTreeMap<Uuid, SessionLifecycle>,
     pub records: BTreeMap<String, HookRecord>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InheritedHookCreation {
+    original_operation: Uuid,
+    original_binding_digest: String,
+    original_ledger_digest: String,
+    enrollment_digest: String,
 }
 impl HookLedger {
     pub fn new(binding: &ExecutionBinding) -> Result<Self> {
         Ok(Self {
             binding_digest: canonical_digest(1, binding)?,
             initialized: false,
+            inherited_creation: None,
             sessions: BTreeMap::new(),
             records: BTreeMap::new(),
         })
+    }
+    /// Only an actual resumed family enrollment can carry directory creation.
+    /// This records no new AfterCreate attempt and does not copy session results.
+    pub(crate) fn for_reused_execution(
+        enrollment: &crate::housekeeping::EnrolledDirectoryReuse,
+        workflow: &Workflow,
+    ) -> Result<Self> {
+        enrollment.revalidate()?;
+        let (original_operation, original) = enrollment.creation_ledger()?;
+        let creation = original
+            .records
+            .get("AfterCreate:directory")
+            .ok_or_else(|| {
+                Error::new("hook_gate", "original creation hook provenance is absent")
+            })?;
+        if !original.initialized
+            || creation.phase != HookPhase::AfterCreate
+            || creation.session.is_some()
+            || creation.workflow_digest != workflow.digest
+            || creation.timed_out
+            || creation.error_code.is_some()
+            || creation.script_digest
+                != workflow
+                    .front_matter
+                    .hooks
+                    .after_create
+                    .as_ref()
+                    .map(|script| bytes_digest(script.as_bytes()))
+            || !matches!(creation.state, HookState::Succeeded | HookState::Skipped)
+            || creation.state == HookState::Succeeded
+                && creation.evidence_class != ExecutionEvidenceClass::ConfinedExecution
+            || creation.state == HookState::Skipped && creation.script_digest.is_some()
+            || original
+                .records
+                .values()
+                .any(|record| record.state == HookState::StartedUnknown)
+            || original
+                .sessions
+                .values()
+                .any(|phase| *phase == SessionLifecycle::Launched)
+        {
+            return Err(Error::new(
+                "hook_gate",
+                "original directory creation is failed, unqualified, live or unknown",
+            ));
+        }
+        let mut successor = Self::new(enrollment.binding())?;
+        successor.initialized = true;
+        successor.inherited_creation = Some(InheritedHookCreation {
+            original_operation,
+            original_binding_digest: original.binding_digest.clone(),
+            original_ledger_digest: canonical_digest(1, &original)?,
+            enrollment_digest: enrollment.digest().into(),
+        });
+        Ok(successor)
     }
     fn save(&mut self, next: Self, persist: &mut impl FnMut(&Self) -> Result<()>) -> Result<()> {
         persist(&next)?;

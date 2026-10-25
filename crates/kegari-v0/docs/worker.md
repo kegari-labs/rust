@@ -121,3 +121,51 @@ notifications, unknown recovery, independent PR identity, correction scope,
 failed-artifact retention, fixture-vs-production evidence and status/force-stop
 responsiveness while an owned command waits. Native command confinement remains
 a separate blocked qualification described in `protocol.md`.
+
+Terminal hook observations are now typed and journaled. Nonexecuting roles record
+`not_applicable` against the original admitted identity even after fencing. An
+actually absent after-run hook records `skipped: hook_not_configured` without a
+new effect; a configured hook whose permit is fenced records an error. Failed,
+unknown, or unlaunched hooks are never converted to successful execution. The
+original fence remains in force in every case.
+
+`recover_session(...).resume_candidate()` exposes an opaque candidate only from
+the complete protected journal, exact actual run admission, final session and
+actual applicable hook observation. `RecoveryProviderLaunch::admit` reacquires
+that journal's exclusive lock and rereads it, then uses the distinct durable
+`session_recovery_preparation` admission. Its finite budget is bound to the exact
+closed predecessor, cannot reset by changing the candidate, requires remaining
+original model budget and one-second spacing, and refuses unresolved metadata
+effects. It grants no checkout preparation, hook, source tool, or model turn.
+
+The consuming metadata method launches/registers through the shared process
+journal and serialized owner gate, verifies account and permission metadata,
+reads only the retained thread, and joins its actual process before producing
+`VerifiedProviderRecovery`. Dropping/cancelling the future fences before owned
+process cancellation. Original journal observations immediately preserve policy
+and input-required holds. The proof is observational: the runtime's actual joined
+completion, current authority, instruction-compatibility and directory-family
+proofs are still required for a new model admission.
+
+The native `prepare_resumed` consumer obtains the actual joined predecessor,
+assembles the new operation independently, and binds `VerifiedSessionResume` to
+the exact original source/cwd, unchanged instructions and permissions. Common
+runtime admission retains historical caps, current authority and failure
+spacing. Directory-family enrollment preserves the original marker. The new
+hook ledger carries verified creation provenance without repeating `after_create`
+or copying old session results, and cleanup reads the actual current protected
+hook ledger. `RunOptions.resume` accepts only the resulting
+`AdmittedSessionResume`; raw prior observations are insufficient.
+The enrolled source verifier remains attached to the actual outbound protocol
+gate: it checks exact source and family state before `thread/resume` and the
+first `turn/start` under the serialized Control gate. After that first frame is
+successfully sent, ordinary scoped source writes are permitted; startup equality
+does not freeze the worker's legitimate later changes.
+The evaluator rejects resumed admissions before binding a trial; it cannot
+replace the sealed resumed state with its fresh-thread trial protocol.
+
+Selection of eligible recovery work is not yet wired. This first consumer also
+excludes configured before/after-run hooks, corrected or previously resumed
+sessions, review sessions and cold reconstruction of owned execution. Offline
+protocol, control, source/family and hook tests establish component behavior;
+no native resume/model call or complete runtime recovery qualification was run.

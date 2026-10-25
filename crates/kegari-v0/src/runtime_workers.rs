@@ -42,6 +42,9 @@ use std::{
     sync::Arc,
 };
 use uuid::Uuid;
+#[path = "runtime_workers_resume.rs"]
+mod session_resume;
+pub use session_resume::prepare_resumed;
 
 /// Selected by the host from the actual configured repository/provider phase.
 /// The exact commit/tree is checked against local Git objects before cloning.
@@ -223,6 +226,7 @@ pub struct LaunchRequest {
     pub source_advanced: Option<Arc<crate::delivery::VerifiedSourceAdvanced>>,
     /// A current native operator grant for the retained exact unfinished task.
     pub retried_unfinished: Option<Arc<crate::delivery::RetriedUnfinishedWork>>,
+    pub review_retry: Option<Arc<crate::delivery::ReviewRetryWork>>,
     pub max_seconds: u64,
     pub max_turns: u32,
 }
@@ -244,6 +248,7 @@ impl LaunchRequest {
                 self.unfinished.is_some(),
                 self.source_advanced.is_some(),
                 self.retried_unfinished.is_some(),
+                self.review_retry.is_some(),
             ]
             .into_iter()
             .filter(|present| *present)
@@ -308,6 +313,19 @@ impl LaunchRequest {
                 return Err(Error::new(
                     "worker_binding",
                     "explicit retry differs from its actual granted phase",
+                ));
+            }
+            proof.verify_assignment(assignment)?;
+            WorkerAuthority::Authorized(proof.authority().clone()).compare(&self.authority)?;
+        }
+        if let Some(proof) = &self.review_retry {
+            let assignment = self.delivery.as_ref().ok_or_else(|| {
+                Error::new("worker_binding", "review retry requires exact assignment")
+            })?;
+            if proof.phase() != &self.phase || proof.predecessor() == self.operation_id {
+                return Err(Error::new(
+                    "worker_binding",
+                    "review retry differs from actual granted phase",
                 ));
             }
             proof.verify_assignment(assignment)?;
@@ -490,23 +508,29 @@ pub async fn prepare_admitted(
         &plan.request.unfinished,
         &plan.request.source_advanced,
         &plan.request.retried_unfinished,
+        &plan.request.review_retry,
     ) {
-        (Some(proof), None, None) => {
+        (Some(proof), None, None, None) => {
             runtime.admit_unfinished_worker(&plan.request.lease, admission, &contract, proof)?
         }
-        (None, Some(proof), None) => runtime.admit_source_advanced_worker(
+        (None, Some(proof), None, None) => runtime.admit_source_advanced_worker(
             &plan.request.lease,
             admission,
             &contract,
             proof,
         )?,
-        (None, None, Some(proof)) => runtime.admit_retried_unfinished_worker(
+        (None, None, Some(proof), None) => runtime.admit_retried_unfinished_worker(
             &plan.request.lease,
             admission,
             &contract,
             proof,
         )?,
-        (None, None, None) => runtime.admit_worker(&plan.request.lease, admission, &contract)?,
+        (None, None, None, Some(proof)) => {
+            runtime.admit_review_retry_worker(&plan.request.lease, admission, &contract, proof)?
+        }
+        (None, None, None, None) => {
+            runtime.admit_worker(&plan.request.lease, admission, &contract)?
+        }
         _ => {
             return Err(Error::new(
                 "worker_binding",
@@ -730,11 +754,13 @@ impl Plan {
             &self.request.unfinished,
             &self.request.source_advanced,
             &self.request.retried_unfinished,
+            &self.request.review_retry,
         ) {
-            (Some(proof), None, None) => runtime.next_attempt_for_unfinished(proof),
-            (None, Some(proof), None) => runtime.next_attempt_for_source_advanced(proof),
-            (None, None, Some(proof)) => runtime.next_attempt_for_retried_unfinished(proof),
-            (None, None, None) => {
+            (Some(proof), None, None, None) => runtime.next_attempt_for_unfinished(proof),
+            (None, Some(proof), None, None) => runtime.next_attempt_for_source_advanced(proof),
+            (None, None, Some(proof), None) => runtime.next_attempt_for_retried_unfinished(proof),
+            (None, None, None, Some(proof)) => runtime.next_attempt_for_review_retry(proof),
+            (None, None, None, None) => {
                 runtime.next_attempt(&self.request.phase, self.workspace.id, &self.account)
             }
             _ => Err(Error::new(
@@ -1531,7 +1557,7 @@ async fn after_create(
     runtime
         .services
         .housekeeping
-        .record_hook_ledger(execution.binding.operation_id, &ledger)?;
+        .register_hook_ledger_location(execution.binding.operation_id, records)?;
     if cancellation
         .as_ref()
         .map(|handle| handle.exited())

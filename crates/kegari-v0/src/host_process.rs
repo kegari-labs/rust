@@ -589,6 +589,18 @@ pub(crate) fn validate_metadata_argv(argv: &[String]) -> Result<bool> {
         ["ls-tree", "-r", "-z", head] => oid(head),
         ["cat-file", "commit" | "blob", object] => oid(object),
         ["config", "--local", "--get", "user.name" | "user.email"] => true,
+        ["config", "--local", "--null", "--list"]
+        | [
+            "rev-parse",
+            "--path-format=absolute",
+            "--absolute-git-dir" | "--git-common-dir",
+        ]
+        | [
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored=matching",
+        ] => true,
         ["check-ref-format", branch] => {
             branch.starts_with("refs/heads/")
                 && branch.len() <= 4096

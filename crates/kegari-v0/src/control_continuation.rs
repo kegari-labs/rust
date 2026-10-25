@@ -33,6 +33,10 @@ impl RunContinuationReference {
             || receipt.expected.contains_key("metadata")
             || receipt.expected.contains_key("release_resume")
             || receipt.expected.contains_key("source_advanced")
+            || receipt.expected.contains_key("session_resume")
+            || receipt
+                .expected
+                .contains_key("session_recovery_preparation")
             || value.review_rounds_consumed > run.max_review_rounds
         {
             return Err(Error::new(
@@ -115,9 +119,15 @@ impl SourceAdvancedReference {
             || receipt.operation_id == value.predecessor
             || receipt.operation_id == value.source_operation
             || value.review_rounds_consumed > run.max_review_rounds
-            || ["metadata", "release_resume", "continuation"]
-                .iter()
-                .any(|key| receipt.expected.contains_key(*key))
+            || [
+                "metadata",
+                "release_resume",
+                "continuation",
+                "session_resume",
+                "session_recovery_preparation",
+            ]
+            .iter()
+            .any(|key| receipt.expected.contains_key(*key))
         {
             return Err(Error::new(
                 "record_corrupt",
@@ -291,6 +301,15 @@ impl ControlHost {
                     ));
                 }
                 prior_review_rounds = consumed.review_rounds_consumed;
+            }
+            if let Some(resumed) = RunResumeReference::from_receipt(receipt)? {
+                if resumed.review_rounds_consumed < prior_review_rounds {
+                    return Err(Error::new(
+                        "record_corrupt",
+                        "resumed review history regresses",
+                    ));
+                }
+                prior_review_rounds = resumed.review_rounds_consumed;
             }
         }
         if run.max_attempts > max_attempts

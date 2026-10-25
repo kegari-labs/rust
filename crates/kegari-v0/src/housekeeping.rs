@@ -41,6 +41,12 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "housekeeping_families.rs"]
+mod families;
+pub use families::{EnrolledDirectoryReuse, VerifiedDirectoryReuse};
+#[path = "housekeeping_hooks.rs"]
+mod hook_locations;
+
 const LOG_BYTES: u64 = 10 * 1024 * 1024;
 const LOG_FILES: usize = 10;
 const MAX_FILES: usize = 100_000;
@@ -326,6 +332,10 @@ pub struct RetentionLocation {
 #[serde(deny_unknown_fields)]
 struct ExecutionRegistration {
     schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    family_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hook_location_digest: Option<String>,
     binding: ExecutionBinding,
     isolation: IsolationPlan,
     marker: PathBuf,
@@ -354,6 +364,8 @@ pub struct CleanupPlan {
     pub source: PathBuf,
     pub retained: PathBuf,
     pub registration_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory_family_digest: Option<String>,
     pub inventory_digest: String,
     pub receipt_digest: String,
     pub workflow_digest: String,
@@ -378,6 +390,7 @@ pub struct VerifiedCleanupExecution {
     generation: u64,
     parent_command: Option<Uuid>,
     directory: PrivateDir,
+    housekeeping: Arc<Housekeeping>,
 }
 impl VerifiedCleanupExecution {
     pub fn plan(&self) -> &CleanupPlan {
@@ -438,7 +451,28 @@ impl VerifiedCleanupExecution {
                 "cleanup authority or command lineage changed",
             ));
         }
-        cleanup_control_clear(state, Some(self.receipt.operation_id), self.parent_command)
+        cleanup_control_clear(state, Some(self.receipt.operation_id), self.parent_command)?;
+        let registration = self.housekeeping.registration(self.plan.operation_id)?;
+        let family = self.housekeeping.directory_family(&registration)?;
+        let members = family
+            .as_ref()
+            .map(|f| f.registrations.clone())
+            .unwrap_or_else(|| {
+                BTreeMap::from([(registration.binding.operation_id, registration.clone())])
+            });
+        if canonical_digest(1, &registration)? != self.plan.registration_digest
+            || family.as_ref().map(|f| &f.digest) != self.plan.directory_family_digest.as_ref()
+            || self
+                .housekeeping
+                .cleanup_observations(&registration, &members, Some(self))?
+                != self.plan.receipt_digest
+        {
+            return Err(Error::new(
+                "stale_cleanup_plan",
+                "directory family changed after cleanup authorization",
+            ));
+        }
+        Ok(())
     }
     fn apply_effect(&self, effect: impl FnOnce() -> Result<()>) -> Result<()> {
         self.control
@@ -557,6 +591,7 @@ pub struct CleanupHook<'a> {
     pub ownership: &'a OwnedDirectory,
     pub workflow: &'a Workflow,
     pub directory: PrivateDir,
+    pub ledger_name: String,
 }
 #[derive(Clone)]
 pub struct Housekeeping {
@@ -649,10 +684,19 @@ impl Housekeeping {
         }
         OwnedDirectory::reopen(directory.marker(), directory.digest(), isolation)?;
         let storage = self.root.child("cleanup")?;
+        let _registration_lock = storage.lock("families.lock")?;
         let name = format!("{}.json", binding.operation_id);
         match storage.read::<ExecutionRegistration>(&name) {
             Ok(old) => {
-                if old.binding == *binding && old.directory_digest == directory.digest() {
+                if old.binding == *binding
+                    && old.directory_digest == directory.digest()
+                    && old.marker == directory.marker()
+                    && old.workflow_path == workflow.path
+                    && old.workflow_digest == workflow.digest
+                    && canonical_digest(1, &old.isolation)?
+                        == canonical_digest(1, isolation.plan())?
+                {
+                    self.directory_family(&old)?;
                     return Ok(());
                 }
                 return Err(Error::new(
@@ -663,66 +707,121 @@ impl Housekeeping {
             Err(e) if e.code == "record_missing" => {}
             Err(e) => return Err(e),
         }
-        storage.write(
-            &name,
-            &ExecutionRegistration {
-                schema_version: 1,
-                binding: binding.clone(),
-                isolation: isolation.plan().clone(),
-                marker: directory.marker().into(),
-                directory_digest: directory.digest().into(),
-                workflow_path: workflow.path.clone(),
-                workflow_digest: workflow.digest.clone(),
-                processes: vec![],
-                retention: None,
-            },
-        )
+        let registration = ExecutionRegistration {
+            schema_version: 2,
+            family_id: Some(identity.directory_id),
+            hook_location_digest: None,
+            binding: binding.clone(),
+            isolation: isolation.plan().clone(),
+            marker: directory.marker().into(),
+            directory_digest: directory.digest().into(),
+            workflow_path: workflow.path.clone(),
+            workflow_digest: workflow.digest.clone(),
+            processes: vec![],
+            retention: None,
+        };
+        self.reject_registration_alias(&registration)?;
+        // An interrupted two-record write cannot produce a complete family.
+        // Its exact creation can retry, while cleanup rejects missing members.
+        self.create_directory_family(&registration, directory)?;
+        storage.write(&name, &registration)
     }
+
     pub fn record_process(&self, operation: Uuid, process: ProcessIdentity) -> Result<()> {
-        let mut registration = self.registration(operation)?;
-        if self.probe.observe(&process)? != ProcessObservation::Running {
-            return Err(Error::new(
-                "ownership_conflict",
-                "cleanup process registration requires actual live owned process identity",
-            ));
-        }
-        if !registration.processes.contains(&process) {
-            registration.processes.push(process);
-        }
-        self.save(&registration)
+        self.update_registration(operation, |registration| {
+            if self.probe.observe(&process)? != ProcessObservation::Running {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "cleanup process registration requires actual live owned process identity",
+                ));
+            }
+            if !registration.processes.contains(&process) {
+                registration.processes.push(process);
+            }
+            Ok(())
+        })
     }
     /// Records only preservation references. Inspection still verifies every byte,
     /// process, receipt and provider reference; this method grants no eligibility.
     pub fn retain(&self, operation: Uuid, location: RetentionLocation) -> Result<()> {
-        let mut registration = self.registration(operation)?;
-        validate_retained_path(&registration, &location.directory)?;
-        if registration.binding.repository.id != location.repository.id.to_string() {
-            return Err(Error::new(
-                "identity_mismatch",
-                "retention repository differs",
-            ));
+        self.update_registration(operation, |registration| {
+            validate_retained_path(registration, &location.directory)?;
+            if registration.binding.repository.id != location.repository.id.to_string() {
+                return Err(Error::new(
+                    "identity_mismatch",
+                    "retention repository differs",
+                ));
+            }
+            registration.retention = Some(location);
+            Ok(())
+        })
+    }
+    // Serialize the entire read-modify-write with cleanup admission and other
+    // registration updates. Callers must not already hold Control's mutex.
+    fn update_registration(
+        &self,
+        operation: Uuid,
+        update: impl FnOnce(&mut ExecutionRegistration) -> Result<()>,
+    ) -> Result<()> {
+        self.control.serialize_observation(|state| {
+            self.registration_updates_allowed(state)?;
+            let storage = self.root.child("cleanup")?;
+            let _guard = storage.lock("families.lock")?;
+            let mut registration = self.registration(operation)?;
+            update(&mut registration)?;
+            self.save(&registration)
+        })
+    }
+    fn registration_updates_allowed(&self, state: &ControlSnapshot) -> Result<()> {
+        for operation in state
+            .pending_local_processes
+            .iter()
+            .chain(state.unresolved_operations.keys())
+        {
+            if self.control.operation(*operation)?.kind == "cleanup" {
+                return Err(Error::new(
+                    "cleanup_blocked",
+                    "registration changes must wait for explicit cleanup reconciliation",
+                ));
+            }
         }
-        registration.retention = Some(location);
-        self.save(&registration)
+        Ok(())
     }
     pub fn record_hook_ledger(&self, operation: Uuid, ledger: &HookLedger) -> Result<()> {
-        let registration = self.registration(operation)?;
-        if ledger.binding_digest != canonical_digest(1, &registration.binding)? {
-            return Err(Error::new(
-                "execution_identity",
-                "cleanup hook ledger differs from execution",
-            ));
-        }
-        self.root
-            .child("cleanup")?
-            .write(&format!("hooks-{operation}.json"), ledger)
+        self.control.serialize_observation(|state| {
+            self.registration_updates_allowed(state)?;
+            let storage = self.root.child("cleanup")?;
+            let _guard = storage.lock("families.lock")?;
+            let registration = self.registration(operation)?;
+            if ledger.binding_digest != canonical_digest(1, &registration.binding)? {
+                return Err(Error::new(
+                    "execution_identity",
+                    "cleanup hook ledger differs from execution",
+                ));
+            }
+            if self.hook_location(&registration)?.is_some() {
+                if canonical_digest(1, ledger)?
+                    != canonical_digest(1, &self.current_hook_ledger(&registration)?)?
+                {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "copied ledger cannot replace actual worker hook history",
+                    ));
+                }
+                return Ok(());
+            }
+            storage.write(&format!("hooks-{operation}.json"), ledger)
+        })
     }
     fn registration(&self, operation: Uuid) -> Result<ExecutionRegistration> {
         let value: ExecutionRegistration = self
             .root
             .child("cleanup")?
             .read(&format!("{operation}.json"))?;
-        if value.schema_version != 1 || value.binding.operation_id != operation {
+        if !matches!(value.schema_version, 1 | 2)
+            || value.binding.operation_id != operation
+            || (value.schema_version == 2) != value.family_id.is_some()
+        {
             return Err(Error::new(
                 "record_corrupt",
                 "cleanup registration identity differs",
@@ -751,6 +850,11 @@ impl Housekeeping {
         cleanup: Option<Arc<VerifiedCleanupExecution>>,
     ) -> Result<CleanupPlan> {
         let registration = self.registration(operation)?;
+        let family = self.directory_family(&registration)?;
+        let members: Vec<_> = family
+            .as_ref()
+            .map(|f| f.registrations.values().collect())
+            .unwrap_or_else(|| vec![&registration]);
         if control.intent.runtime_id != registration.binding.runtime_id {
             return Err(Error::new(
                 "identity_mismatch",
@@ -758,7 +862,7 @@ impl Housekeeping {
             ));
         }
         cleanup_control_clear(control, cleanup_request, parent_command)?;
-        for process in &registration.processes {
+        for process in members.iter().flat_map(|member| &member.processes) {
             if self.probe.observe(process)? == ProcessObservation::Running {
                 return Err(Error::new(
                     "cleanup_blocked",
@@ -792,6 +896,12 @@ impl Housekeeping {
                 "execution receipt runtime differs",
             ));
         }
+        let member_map = members
+            .iter()
+            .map(|m| (m.binding.operation_id, (*m).clone()))
+            .collect();
+        let receipt_digest =
+            self.cleanup_observations(&registration, &member_map, cleanup.as_deref())?;
         let isolation = registration.isolation.clone().validate()?;
         OwnedDirectory::reopen(
             &registration.marker,
@@ -804,27 +914,6 @@ impl Housekeeping {
                 "stale_config",
                 "cleanup requires the exact recorded workflow, including its removal hook",
             ));
-        }
-        if workflow.front_matter.hooks.before_remove.is_some() {
-            let ledger: HookLedger = self
-                .root
-                .child("cleanup")?
-                .read(&format!("hooks-{operation}.json"))?;
-            if ledger.binding_digest != canonical_digest(1, &registration.binding)?
-                || ledger
-                    .sessions
-                    .values()
-                    .any(|s| *s == crate::execution::SessionLifecycle::Launched)
-                || ledger
-                    .records
-                    .values()
-                    .any(|r| r.state == crate::execution::HookState::StartedUnknown)
-            {
-                return Err(Error::new(
-                    "cleanup_blocked",
-                    "hook/session state remains active or uncertain",
-                ));
-            }
         }
         let retained = registration.retention.as_ref().ok_or_else(|| {
             Error::new(
@@ -937,8 +1026,9 @@ impl Housekeeping {
             source: source.clone(),
             retained: retained.directory.clone(),
             registration_digest: canonical_digest(1, &registration)?,
+            directory_family_digest: family.as_ref().map(|f| f.digest.clone()),
             inventory_digest: canonical_digest(1, &files)?,
-            receipt_digest: canonical_digest(1, receipt)?,
+            receipt_digest,
             workflow_digest: workflow.digest,
             files,
             published_refs: retained.published_refs.clone(),
@@ -1125,8 +1215,15 @@ impl Housekeeping {
             }
             cleanup_control_clear(state, None, parent_command)?;
             let current = self.registration(operation)?;
+            let family = self.directory_family(&current)?;
+            let members = family
+                .as_ref()
+                .map(|f| f.registrations.clone())
+                .unwrap_or_else(|| BTreeMap::from([(operation, current.clone())]));
             if canonical_digest(1, &current)? != initial.registration_digest
                 || Workflow::load(&current.workflow_path)?.digest != initial.workflow_digest
+                || family.as_ref().map(|f| &f.digest) != initial.directory_family_digest.as_ref()
+                || self.cleanup_observations(&current, &members, None)? != initial.receipt_digest
             {
                 return Err(Error::new(
                     "stale_cleanup_plan",
@@ -1145,6 +1242,7 @@ impl Housekeeping {
             generation,
             parent_command,
             directory: self.root.child("cleanup")?,
+            housekeeping: self.clone(),
         });
         proof.validate_current()?;
         let registration = self.registration(operation)?;
@@ -1173,15 +1271,23 @@ impl Housekeeping {
         proof.validate_current()?;
         let cleanup = self.clone();
         let action = proof.clone();
-        let observation=tokio::task::spawn_blocking(move|| {
+        let observation = tokio::task::spawn_blocking(move || {
             action.validate_current()?;
-            let tombstone=CleanupTombstone{schema_version:1,runtime_id:fresh.runtime_id,operation_id:operation,cleanup_request:action.receipt.operation_id,plan_token:token.clone(),retained:fresh.retained.clone(),content_digest:canonical_digest(1,&content_inventory(&fresh.files))?,removed:false};
-            let directory=cleanup.root.child("cleanup")?;
-            directory.write(&format!("retained-{operation}.json"),&tombstone)?;
-            remove_checked_tree(&fresh.source,&fresh.files,&action)?;
-            directory.write(&format!("retained-{operation}.json"),&CleanupTombstone{removed:true,..tombstone})?;
-            Ok::<_,Error>(json!({"cleanup_plan":token,"source_operation":operation,"removed_path":fresh.source,"retained_recovery":fresh.retained}))
-        }).await.map_err(|_|Error::new("operation_uncertain","cleanup task ended without a verified completion"))??;
+            let registration = cleanup.registration(operation)?;
+            let members: Vec<_> = cleanup.directory_family(&registration)?.map(|family| family.registrations.into_keys().collect()).unwrap_or_else(|| vec![operation]);
+            let directory = cleanup.root.child("cleanup")?;
+            let content_digest = canonical_digest(1, &content_inventory(&fresh.files))?;
+            for member in &members {
+                let tombstone = CleanupTombstone { schema_version: 1, runtime_id: fresh.runtime_id, operation_id: *member, cleanup_request: action.receipt.operation_id, plan_token: token.clone(), retained: fresh.retained.clone(), content_digest: content_digest.clone(), removed: false };
+                directory.write(&format!("retained-{member}.json"), &tombstone)?;
+            }
+            remove_checked_tree(&fresh.source, &fresh.files, &action)?;
+            for member in &members {
+                let tombstone = CleanupTombstone { schema_version: 1, runtime_id: fresh.runtime_id, operation_id: *member, cleanup_request: action.receipt.operation_id, plan_token: token.clone(), retained: fresh.retained.clone(), content_digest: content_digest.clone(), removed: true };
+                directory.write(&format!("retained-{member}.json"), &tombstone)?;
+            }
+            Ok::<_, Error>(json!({"cleanup_plan":token,"source_operation":operation,"family_operations":members,"removed_path":fresh.source,"retained_recovery":fresh.retained}))
+        }).await.map_err(|_| Error::new("operation_uncertain", "cleanup task ended without a verified completion"))??;
         self.control
             .complete_host_process(&proof.token, || Ok(()), observation)
     }
@@ -1198,6 +1304,7 @@ impl Housekeeping {
             &registration.directory_digest,
             &boundary,
         )?;
+        let (hook_directory, ledger_name) = self.hook_storage(registration)?;
         self.processes
             .get()
             .ok_or_else(|| {
@@ -1213,7 +1320,8 @@ impl Housekeeping {
                 isolation: &boundary,
                 ownership: &ownership,
                 workflow,
-                directory: self.root.child("cleanup")?,
+                directory: hook_directory,
+                ledger_name,
             })
             .await
     }
@@ -1373,8 +1481,8 @@ impl CleanupProcesses for NativeCleanupProcesses {
                 },
                 ownership: request.ownership,
             };
-            let name = format!("hooks-{}.json", request.binding.operation_id);
-            let mut ledger: HookLedger = request.directory.read(&name)?;
+            let name = &request.ledger_name;
+            let mut ledger: HookLedger = request.directory.read(name)?;
             let outcome = executor
                 .run_hook(
                     &mut ledger,
@@ -1385,7 +1493,7 @@ impl CleanupProcesses for NativeCleanupProcesses {
                         session: None,
                         eligible_cleanup_plan: Some(request.proof.plan().digest()),
                     },
-                    |next| request.directory.write(&name, next),
+                    |next| request.directory.write(name, next),
                 )
                 .await;
             authority.finish(json!({"before_remove_observed":outcome.is_ok()}))?;

@@ -4,7 +4,7 @@ use chrono::Utc;
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -60,6 +60,16 @@ pub(crate) struct Fixture {
     pub(crate) edit_route_on_read: bool,
 }
 impl Fixture {
+    pub(crate) fn set_production_targets(&mut self, targets: &BTreeSet<String>) {
+        let issue = self.issues.get_mut(&id(100)).unwrap();
+        issue["description"] = json!(issue["description"].as_str().unwrap().replace(
+            "\"production_targets\":[]",
+            &format!(
+                "\"production_targets\":{}",
+                serde_json::to_string(targets).unwrap()
+            )
+        ));
+    }
     pub(crate) fn new() -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
             issues: BTreeMap::from([
@@ -97,7 +107,10 @@ impl HttpTransport for Wire {
         request: HttpRequest,
     ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
         Box::pin(async move {
-            if request.url.host_str() == Some("github.invalid") {
+            if matches!(
+                request.url.host_str(),
+                Some("github.invalid" | "api.github.com" | "github.com" | "fixture.blob.invalid")
+            ) {
                 let delegated = self.0.lock().unwrap().github_transport.clone();
                 if let Some(transport) = delegated {
                     return transport.send(request).await;
@@ -110,7 +123,10 @@ impl HttpTransport for Wire {
                 serde_json::from_slice(&request.body).unwrap()
             };
             f.requests.push((request.url.to_string(), body.clone()));
-            let value = if request.url.host_str() == Some("github.invalid") {
+            let value = if matches!(
+                request.url.host_str(),
+                Some("github.invalid" | "api.github.com" | "github.com")
+            ) {
                 if let Some(value) = f.github_values.get(request.url.path()) {
                     value.clone()
                 } else {
@@ -131,7 +147,9 @@ impl HttpTransport for Wire {
                     }
                 }
             } else {
-                let query = body["query"].as_str().unwrap();
+                let query = body["query"].as_str().unwrap_or_else(|| {
+                    panic!("unexpected fixture non-GraphQL request {}", request.url)
+                });
                 let input_id = body["variables"]["id"]
                     .as_str()
                     .and_then(|s| Uuid::parse_str(s).ok());

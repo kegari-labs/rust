@@ -1,6 +1,8 @@
 #![cfg(target_os = "macos")]
 //! Actual owned Git children with an explicitly synthetic boot identity; no
 //! native host qualification, credential access or model/provider invocation.
+#[path = "support/git_reuse.rs"]
+mod git_reuse;
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
 #[path = "support/process_probe.rs"]

@@ -1,0 +1,458 @@
+//! Component evidence: real Git/Control/provider wire, synthetic model protocol.
+//! No runtime joined-cache or native confinement capability is manufactured.
+use super::*;
+use crate::evidence::Signed;
+use crate::runtime_delivery::worker_fixture::{
+    WorkerFixture, complete_review_retry, failed_review,
+};
+use std::{path::Path, sync::Mutex};
+pub(super) struct ReviewFixture<'a> {
+    pub service: &'a RuntimeDelivery,
+    pub built: &'a crate::runtime_fixture::RuntimeFixture,
+    pub wire: &'a Arc<Mutex<crate::corrections::wire_fixture::Fixture>>,
+    pub workspace: &'a WorkspaceDelivery,
+    pub gate: &'a FreshGate,
+    pub lease: &'a crate::control::Lease,
+    pub reviewer: &'a WorkerFixture,
+    pub original_claim: Arc<CompletedChildClaim>,
+    pub original_completion: Arc<crate::worker_run::RunCompletion>,
+    pub assignment: &'a DeliveryWorkerAssignment,
+    pub review: &'a ChildReviewAssignment,
+    pub root: &'a Path,
+    pub source: &'a Path,
+    pub binary: &'a Path,
+    pub tool: Arc<Git>,
+    pub revision: &'a crate::git::Revision,
+    pub repository: &'a crate::git::RepositoryId,
+    pub account: &'a str,
+    pub scope: DeliveryScope,
+}
+pub(super) async fn run(f: ReviewFixture<'_>) {
+    let mut failed = failed_review(&f.built.runtime.control, f.lease, f.reviewer).await;
+    let original = f
+        .built
+        .runtime
+        .control
+        .operation(failed.operation_id)
+        .unwrap();
+    let original_digest = canonical_digest(1, &original).unwrap();
+    f.built.runtime.observations.refresh().await.unwrap();
+    let grant = retry_fixture::publish_failed_review(f.built.runtime.clone()).await;
+    f.built.runtime.observations.refresh().await.unwrap();
+    let config = f.built.runtime.configuration.snapshot().unwrap();
+    let current = || {
+        crate::runtime_workflow::current_retry_grants(
+            &config,
+            &f.built.runtime.observations.admission_snapshot().unwrap(),
+            f.gate.work(),
+            &f.built.runtime.control.operations().unwrap(),
+            &f.built.runtime.services.key,
+        )
+    };
+    let grants = current().unwrap();
+    let phase = f
+        .service
+        .admit_delivery_phase(
+            f.workspace,
+            f.gate,
+            f.lease,
+            PhaseRequest {
+                operation: Uuid::new_v4(),
+                scope: f.scope.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let make = |completion| ReviewRetryRequest {
+        admission: &phase.admission,
+        assignment: f.assignment,
+        failed: completion,
+        grant: grant.clone(),
+        current_grants: &grants,
+    };
+    Arc::get_mut(&mut failed).unwrap().local_exit_confirmed = false;
+    assert!(
+        phase
+            .coordinator
+            .retry_failed_review(make(failed.clone()))
+            .await
+            .is_err()
+    );
+    Arc::get_mut(&mut failed).unwrap().local_exit_confirmed = true;
+    Arc::get_mut(&mut failed).unwrap().state.unresolved_turn = Some("unknown-provider-turn".into());
+    assert!(
+        phase
+            .coordinator
+            .retry_failed_review(make(failed.clone()))
+            .await
+            .is_err()
+    );
+    Arc::get_mut(&mut failed).unwrap().state.unresolved_turn = None;
+    let original_profile = failed.state.binding.profile.model.clone();
+    Arc::get_mut(&mut failed)
+        .unwrap()
+        .state
+        .binding
+        .profile
+        .model = "unadmitted-model".into();
+    assert!(
+        phase
+            .coordinator
+            .retry_failed_review(make(failed.clone()))
+            .await
+            .is_err()
+    );
+    Arc::get_mut(&mut failed)
+        .unwrap()
+        .state
+        .binding
+        .profile
+        .model = original_profile;
+    let original_generation = failed.state.binding.generation.clone();
+    Arc::get_mut(&mut failed).unwrap().state.binding.generation =
+        crate::digest::bytes_digest(b"unadmitted correction");
+    assert!(
+        phase
+            .coordinator
+            .retry_failed_review(make(failed.clone()))
+            .await
+            .is_err()
+    );
+    Arc::get_mut(&mut failed).unwrap().state.binding.generation = original_generation;
+    let proof = Arc::new(
+        phase
+            .coordinator
+            .retry_failed_review(make(failed.clone()))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(proof.source().revision(), f.revision);
+    let mut forked = grants.clone();
+    forked.push(grant.clone());
+    assert!(
+        proof
+            .verify_current(&f.built.runtime.control.operations().unwrap(), &forked)
+            .is_err()
+    );
+    assert_eq!(
+        proof.assignment().digest().unwrap(),
+        f.assignment.digest().unwrap()
+    );
+    assert_eq!(proof.phase().retry_grant, Some(grant.record().operation_id));
+    // The same actual source must still match Git objects; a dirty byte is not
+    // a harmless new session, even when the grant and head string are unchanged.
+    let file = proof.source().root().join("tests/main.txt");
+    let bytes = fs::read(&file).unwrap();
+    fs::write(&file, "changed after grant\n").unwrap();
+    assert!(
+        phase
+            .coordinator
+            .retry_failed_review(make(failed.clone()))
+            .await
+            .is_err()
+    );
+    fs::write(&file, &bytes).unwrap();
+    f.service
+        .retire_delivery_phase(&phase, json!({"retry_bound":proof.digest()}))
+        .unwrap();
+    // The genuinely parsed native publication can be removed/edited. Neither
+    // path may authorize preparation, even with the original private token.
+    let child = f.gate.work().child.unwrap();
+    let saved = f.wire.lock().unwrap().comments[&child].clone();
+    f.wire
+        .lock()
+        .unwrap()
+        .comments
+        .get_mut(&child)
+        .unwrap()
+        .retain(|v| v["id"] != grant.provenance().record_id);
+    f.built.runtime.observations.refresh().await.unwrap();
+    assert!(
+        proof
+            .verify_current(
+                &f.built.runtime.control.operations().unwrap(),
+                &current().unwrap()
+            )
+            .is_err()
+    );
+    f.wire.lock().unwrap().comments.insert(child, saved.clone());
+    f.built.runtime.observations.refresh().await.unwrap();
+    proof
+        .verify_current(
+            &f.built.runtime.control.operations().unwrap(),
+            &current().unwrap(),
+        )
+        .unwrap();
+    {
+        let mut wire = f.wire.lock().unwrap();
+        let comment = wire
+            .comments
+            .get_mut(&child)
+            .unwrap()
+            .iter_mut()
+            .find(|v| v["id"] == grant.provenance().record_id)
+            .unwrap();
+        comment["body"] = json!(comment["body"].as_str().unwrap().replace(
+            "The exact finding is understood",
+            "Changed unsigned instruction"
+        ));
+    }
+    f.built.runtime.observations.refresh().await.unwrap();
+    assert!(current().is_err());
+    f.wire.lock().unwrap().comments.insert(child, saved);
+    f.built.runtime.observations.refresh().await.unwrap();
+    // The complete inventory also rejects an unrelated/new same-source result.
+    let mut changed = f.built.runtime.control.operations().unwrap();
+    let mut later = original.clone();
+    later.operation_id = Uuid::new_v4();
+    changed.push(later);
+    assert!(proof.verify_inventory(&changed).is_err());
+    // Synthetic fixture completion is intentionally absent from the actual
+    // runtime joined cache: the full runtime launch remains unavailable here.
+    f.built.runtime.retain_retry_grant(grant.clone()).unwrap();
+    assert_eq!(
+        f.built
+            .runtime
+            .next_attempt_for_review_retry(&proof)
+            .unwrap_err()
+            .code,
+        "reconciliation_required"
+    );
+    let next = worker(WorkerInput {
+        root: &f.root.join("retried-review"),
+        source: f.source,
+        binary: f.binary,
+        git: f.tool,
+        gate: f.gate,
+        workflow: &f.workspace.workflow,
+        revision: f.revision,
+        repository: f.repository,
+        runtime: f.lease.runtime_id,
+        operation: Uuid::new_v4(),
+        role: AgentRole::Review,
+        phase: "child_codex_review",
+        context: Value::Null,
+        assignment: Some(proof.assignment()),
+        account: f.account,
+    });
+    proof.verify_contract(&next.contract).unwrap();
+    let wrong_role = worker(WorkerInput {
+        root: &f.root.join("wrong-review-role"),
+        source: f.source,
+        binary: f.binary,
+        git: Arc::new(Git::new(f.binary).unwrap()),
+        gate: f.gate,
+        workflow: &f.workspace.workflow,
+        revision: f.revision,
+        repository: f.repository,
+        runtime: f.lease.runtime_id,
+        operation: Uuid::new_v4(),
+        role: AgentRole::Validation,
+        phase: "child_codex_review",
+        context: Value::Null,
+        assignment: Some(proof.assignment()),
+        account: f.account,
+    });
+    assert!(proof.verify_contract(&wrong_role.contract).is_err());
+    let request = crate::runtime_workers::LaunchRequest {
+        lease: f.lease.clone(),
+        operation_id: next.contract.instructions().manifest.operation_id,
+        authority: crate::worker::WorkerAuthority::Authorized(f.gate.clone()),
+        phase: proof.phase().clone(),
+        source: None,
+        delivery: Some(proof.assignment().clone()),
+        unfinished: None,
+        source_advanced: None,
+        retried_unfinished: None,
+        review_retry: Some(proof.clone()),
+        max_seconds: 60,
+        max_turns: grant.new_budget().max_turns,
+    };
+    request.validate_binding().unwrap();
+    let mut wrong = request.clone();
+    wrong.phase.retry_grant = None;
+    assert!(wrong.validate_binding().is_err());
+    let mut wrong_generation = request.clone();
+    wrong_generation.phase.generation = crate::digest::bytes_digest(b"different correction");
+    assert!(wrong_generation.validate_binding().is_err());
+    let (_records, outcome, completion) =
+        complete_review_retry(&f.built.runtime.control, f.lease, &next, &proof);
+    assert!(
+        proof
+            .verify_current(
+                &f.built.runtime.control.operations().unwrap(),
+                &current().unwrap()
+            )
+            .is_err()
+    );
+    f.built.runtime.observations.refresh().await.unwrap();
+    let publication = f
+        .service
+        .admit_delivery_phase(
+            f.workspace,
+            f.gate,
+            f.lease,
+            PhaseRequest {
+                operation: Uuid::new_v4(),
+                scope: f.scope,
+            },
+        )
+        .await
+        .unwrap();
+    let runtime = f.built.runtime.clone();
+    let checked = proof.clone();
+    let completed = completion.operation_id;
+    let check: GateCheck = Arc::new(move |_| {
+        let receipts = runtime.control.operations()?;
+        let grants = crate::runtime_workflow::current_retry_grants(
+            &runtime.configuration.snapshot()?,
+            &runtime.observations.admission_snapshot()?,
+            checked.authority().work(),
+            &receipts,
+            &runtime.services.key,
+        )?;
+        checked.verify_completed_inventory(&receipts, &grants, completed)
+    });
+    let saved = f.wire.lock().unwrap().comments[&child].clone();
+    f.wire
+        .lock()
+        .unwrap()
+        .comments
+        .get_mut(&child)
+        .unwrap()
+        .retain(|v| v["id"] != grant.provenance().record_id);
+    f.built.runtime.observations.refresh().await.unwrap();
+    assert!(check(f.gate).is_err());
+    f.wire.lock().unwrap().comments.insert(child, saved);
+    f.built.runtime.observations.refresh().await.unwrap();
+    let result = publication
+        .coordinator
+        .publish_retried_review(
+            &publication.admission,
+            f.review,
+            &outcome,
+            &completion,
+            &proof,
+            check,
+        )
+        .await
+        .unwrap();
+    assert!(!result.publication().record_id.is_empty());
+    assert_eq!(
+        result.verified().attestation().verdict,
+        crate::evidence::Verdict::Pass
+    );
+    assert_eq!(
+        result.verified().attestation().revision.head,
+        f.revision.commit
+    );
+    f.service
+        .retire_delivery_phase(&publication, json!({"review_passed":true}))
+        .unwrap();
+    assert_eq!(
+        canonical_digest(
+            1,
+            &f.built
+                .runtime
+                .control
+                .operation(failed.operation_id)
+                .unwrap()
+        )
+        .unwrap(),
+        original_digest
+    );
+    let prior = crate::control::RunReference::from_receipt(&original)
+        .unwrap()
+        .unwrap();
+    let new = crate::control::RunReference::from_receipt(
+        &f.built
+            .runtime
+            .control
+            .operation(completion.operation_id)
+            .unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    // A protected completed receipt alone cannot advance the runtime pipeline
+    // after losing its actual live/joined worker. The bookkeeping retains the
+    // old review identity and the new pending launch identity for recovery.
+    let mut child = super::super::ChildPipeline {
+        reference: super::super::ChildReference {
+            schema_version: 1,
+            runtime: f.lease.runtime_id,
+            operation: f.original_claim.operation_id(),
+            proposal: Uuid::new_v4(),
+            claim_digest: f.original_claim.digest().into(),
+            work: f.gate.work().clone(),
+            stage: super::super::Stage::LaunchReviewRetry,
+            phase_operation: None,
+            validation: None,
+            review: Some(failed.operation_id),
+            repair_operation: None,
+            unfinished_digest: None,
+            source_advanced_digest: None,
+            review_retry_operation: Some(completion.operation_id),
+            review_retry_digest: Some(proof.digest().into()),
+            review_history: vec![],
+            observed_at: Utc::now(),
+            error: None,
+        },
+        claim: f.original_claim,
+        completion: f.original_completion,
+        source: None,
+        local: None,
+        branch: None,
+        pr: None,
+        hosted: None,
+        exact_pending: None,
+        exact: None,
+        assignment: Some(f.review.clone()),
+        review: None,
+        pending: None,
+        staged: None,
+        published: None,
+        phase: None,
+        unfinished: None,
+        source_advanced: None,
+        review_worker_assignment: Some(f.assignment.clone()),
+        review_retry: Some(proof.clone()),
+    };
+    f.service.persist_child(&child).unwrap();
+    assert_eq!(
+        f.service
+            .launch_review_retry(f.lease, &mut child)
+            .await
+            .unwrap_err()
+            .code,
+        "reconciliation_required"
+    );
+    assert_eq!(
+        child.reference.stage,
+        super::super::Stage::LaunchReviewRetry
+    );
+    assert_eq!(child.reference.review, Some(failed.operation_id));
+    assert_eq!(
+        child.reference.review_retry_operation,
+        Some(completion.operation_id)
+    );
+    let retained: Signed<super::super::ChildReference> = f
+        .service
+        .records
+        .read(&format!(
+            "child-pipeline-{}.json",
+            child.reference.operation
+        ))
+        .unwrap();
+    f.built
+        .runtime
+        .services
+        .key
+        .verify("runtime_child_pipeline", &retained)
+        .unwrap();
+    assert_eq!(retained.payload.review, Some(failed.operation_id));
+    assert_eq!(prior.max_attempts, 1);
+    assert_eq!(prior.max_review_rounds, 1);
+    assert_eq!(new.attempt, 1);
+    assert_eq!(new.max_attempts, grant.new_budget().max_attempts);
+    assert_eq!(new.phase, grant.phase_key());
+}

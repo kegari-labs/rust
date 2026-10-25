@@ -9,7 +9,10 @@ use kegari_v0::{
     digest::bytes_digest,
     error::{Error, Result},
     evidence::{Generation, WorkIdentity},
-    execution::{DirectoryIdentity, ExecutionBinding, OwnedDirectory},
+    execution::{
+        DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass, HookLedger, HookPhase,
+        HookRecord, HookState, OwnedDirectory, SessionLifecycle,
+    },
     git::{Git, RepositoryId},
     housekeeping::*,
     isolation::{ExecutionRole, IsolationPlan},
@@ -27,8 +30,9 @@ use std::{
     pin::Pin,
     process::Command,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
     },
 };
 use uuid::Uuid;
@@ -473,6 +477,478 @@ fn actor() -> Actor {
         }),
         roles: ["recover".into(), "configure".into()].into(),
     }
+}
+
+struct PausedRegistrationProbe {
+    original: Arc<Probe>,
+    entered: mpsc::Sender<()>,
+    resume: Mutex<mpsc::Receiver<()>>,
+}
+impl ProcessProbe for PausedRegistrationProbe {
+    fn current(&self) -> Result<ProcessIdentity> {
+        self.original.current()
+    }
+    fn observe(&self, process: &ProcessIdentity) -> Result<ProcessObservation> {
+        self.entered.send(()).unwrap();
+        self.resume
+            .lock()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        self.original.observe(process)
+    }
+    fn matching_executable(&self, path: &Path) -> Result<Vec<ProcessIdentity>> {
+        self.original.matching_executable(path)
+    }
+}
+
+#[test]
+fn concurrent_retention_and_process_registration_preserve_both_facts() {
+    let f = Fixture::new();
+    let (entered, observed) = mpsc::channel();
+    let (resume, paused) = mpsc::channel();
+    let probe = Arc::new(PausedRegistrationProbe {
+        original: f.probe.clone(),
+        entered,
+        resume: Mutex::new(paused),
+    });
+    let registration: Value = f
+        .root
+        .child("cleanup")
+        .unwrap()
+        .read(&format!("{}.json", id(7)))
+        .unwrap();
+    let executable = PathBuf::from(
+        registration["isolation"]["executables"][0]
+            .as_str()
+            .unwrap(),
+    );
+    let house = Arc::new(
+        Housekeeping::new(
+            PrivateDir::open(f.root.path()).unwrap(),
+            f.control.clone(),
+            probe.clone(),
+            executable,
+        )
+        .unwrap(),
+    );
+    let process = probe.current().unwrap();
+    f.probe.live.store(true, Ordering::SeqCst);
+    let add_process = {
+        let house = house.clone();
+        let process = process.clone();
+        std::thread::spawn(move || house.record_process(id(7), process))
+    };
+    observed
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    // The process updater has read the old record and is paused at the probe.
+    // A concurrent retention write must wait, then preserve its process fact.
+    let new_retention = f.retained.with_file_name("retained-new");
+    copy_tree(&f.retained, &new_retention);
+    let stored: Value = f
+        .root
+        .child("cleanup")
+        .unwrap()
+        .read(&format!("{}.json", id(7)))
+        .unwrap();
+    let mut location: RetentionLocation =
+        serde_json::from_value(stored["retention"].clone()).unwrap();
+    location.directory = new_retention.clone();
+    let (starting, started) = mpsc::channel();
+    let (finished, result) = mpsc::channel();
+    let retain = std::thread::spawn(move || {
+        starting.send(()).unwrap();
+        finished.send(house.retain(id(7), location)).unwrap();
+    });
+    started.recv().unwrap();
+    assert!(matches!(
+        result.recv_timeout(std::time::Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    resume.send(()).unwrap();
+    add_process.join().unwrap().unwrap();
+    result
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    retain.join().unwrap();
+    let stored: Value = f
+        .root
+        .child("cleanup")
+        .unwrap()
+        .read(&format!("{}.json", id(7)))
+        .unwrap();
+    assert_eq!(
+        stored["retention"]["directory"],
+        new_retention.to_str().unwrap()
+    );
+    assert_eq!(stored["processes"], json!([process]));
+    assert!(f.source.join("file.txt").exists());
+}
+
+fn hook_ledger_fixture(f: &Fixture) -> (PrivateDir, HookLedger, String) {
+    let stored: Value = f
+        .root
+        .child("cleanup")
+        .unwrap()
+        .read(&format!("{}.json", id(7)))
+        .unwrap();
+    let binding: ExecutionBinding = serde_json::from_value(stored["binding"].clone()).unwrap();
+    let mut ledger = HookLedger::new(&binding).unwrap();
+    ledger.initialized = true;
+    // Keep a deliberately stale clean copy to prove that it cannot override the
+    // canonical worker ledger after its exact location is registered.
+    f.house.record_hook_ledger(id(7), &ledger).unwrap();
+    let records = f.root.child("worker-hooks").unwrap();
+    records.write("hooks.json", &ledger).unwrap();
+    f.house
+        .register_hook_ledger_location(id(7), &records)
+        .unwrap();
+    (
+        records,
+        ledger,
+        stored["workflow_digest"].as_str().unwrap().into(),
+    )
+}
+
+#[tokio::test]
+async fn canonical_hook_ledger_tracks_active_unknown_and_completed_transitions() {
+    let f = Fixture::new();
+    let (records, mut ledger, workflow_digest) = hook_ledger_fixture(&f);
+    let initial = f.house.inspect(id(7), &f.client).await.unwrap();
+    ledger.sessions.insert(id(77), SessionLifecycle::Launched);
+    records.write("hooks.json", &ledger).unwrap();
+    assert_eq!(
+        f.house.inspect(id(7), &f.client).await.unwrap_err().code,
+        "cleanup_blocked"
+    );
+    ledger.sessions.insert(id(77), SessionLifecycle::Ended);
+    ledger.records.insert(
+        "fixture-after-run".into(),
+        HookRecord {
+            phase: HookPhase::AfterRun,
+            session: Some(id(77)),
+            workflow_digest,
+            script_digest: Some(bytes_digest(b"fixture only")),
+            cleanup_plan: None,
+            state: HookState::StartedUnknown,
+            exit_code: None,
+            timed_out: false,
+            stdout: String::new(),
+            stderr: String::new(),
+            error_code: None,
+            evidence_class: ExecutionEvidenceClass::DeterministicFixture,
+        },
+    );
+    records.write("hooks.json", &ledger).unwrap();
+    assert_eq!(
+        f.house.inspect(id(7), &f.client).await.unwrap_err().code,
+        "cleanup_blocked"
+    );
+    let record = ledger.records.get_mut("fixture-after-run").unwrap();
+    record.state = HookState::Succeeded;
+    record.exit_code = Some(0);
+    records.write("hooks.json", &ledger).unwrap();
+    let completed = f.house.inspect(id(7), &f.client).await.unwrap();
+    assert_ne!(initial.token, completed.token);
+    assert!(f.source.exists());
+}
+
+#[tokio::test]
+async fn canonical_hook_location_never_falls_back_to_a_stale_copy() {
+    for fault in [
+        "missing-reference",
+        "missing-file",
+        "missing-directory",
+        "replaced-directory",
+    ] {
+        let f = Fixture::new();
+        let (records, ledger, _) = hook_ledger_fixture(&f);
+        let plan = f.house.inspect(id(7), &f.client).await.unwrap();
+        if fault == "missing-reference" {
+            std::fs::remove_file(
+                f.root
+                    .child("cleanup")
+                    .unwrap()
+                    .path()
+                    .join(format!("hook-location-{}.json", id(7))),
+            )
+            .unwrap();
+        } else if fault == "missing-file" {
+            std::fs::remove_file(records.path().join("hooks.json")).unwrap();
+        } else {
+            std::fs::rename(
+                records.path(),
+                records.path().with_file_name("original-worker-hooks"),
+            )
+            .unwrap();
+            if fault == "replaced-directory" {
+                PrivateDir::create(records.path())
+                    .unwrap()
+                    .write("hooks.json", &ledger)
+                    .unwrap();
+            }
+        }
+        assert!(f.house.inspect(id(7), &f.client).await.is_err(), "{fault}");
+        assert!(
+            f.house
+                .clone()
+                .apply(
+                    request(id(640)),
+                    id(7),
+                    plan.token.clone(),
+                    f.client.clone(),
+                    Arc::new(authorize)
+                )
+                .await
+                .is_err(),
+            "{fault}"
+        );
+        assert!(f.source.join("file.txt").exists(), "{fault}");
+        assert_eq!(
+            f.control.operation(id(640)).unwrap_err().code,
+            "record_missing"
+        );
+        if fault == "missing-reference" {
+            let replacement = f.root.child("wrong-worker-hooks").unwrap();
+            replacement.write("hooks.json", &ledger).unwrap();
+            assert_eq!(
+                f.house
+                    .register_hook_ledger_location(id(7), &replacement)
+                    .unwrap_err()
+                    .code,
+                "ownership_conflict"
+            );
+            assert_eq!(
+                f.root
+                    .child("cleanup")
+                    .unwrap()
+                    .read::<Value>(&format!("hook-location-{}.json", id(7)))
+                    .unwrap_err()
+                    .code,
+                "record_missing"
+            );
+            f.house
+                .register_hook_ledger_location(id(7), &records)
+                .unwrap();
+            assert_eq!(
+                f.house.inspect(id(7), &f.client).await.unwrap().token,
+                plan.token
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn unlisted_family_members_and_foreign_aliases_block_cleanup() {
+    for same_family in [true, false] {
+        let f = Fixture::new();
+        let plan = f.house.inspect(id(7), &f.client).await.unwrap();
+        let storage = f.root.child("cleanup").unwrap();
+        let mut extra: Value = storage.read(&format!("{}.json", id(7))).unwrap();
+        extra["binding"]["operation_id"] = json!(id(99));
+        if !same_family {
+            extra["family_id"] = json!(id(98));
+        }
+        // Simulate interrupted enrollment or a corrupted foreign alias index;
+        // no new directory authority or genuine family member is fabricated.
+        storage.write(&format!("{}.json", id(99)), &extra).unwrap();
+        let expected = if same_family {
+            "record_corrupt"
+        } else {
+            "ownership_conflict"
+        };
+        assert_eq!(
+            f.house.inspect(id(7), &f.client).await.unwrap_err().code,
+            expected
+        );
+        assert_eq!(
+            f.house
+                .clone()
+                .apply(
+                    request(id(641)),
+                    id(7),
+                    plan.token,
+                    f.client.clone(),
+                    Arc::new(authorize)
+                )
+                .await
+                .unwrap_err()
+                .code,
+            expected
+        );
+        assert!(f.source.join("file.txt").exists());
+        assert_eq!(
+            f.control.operation(id(641)).unwrap_err().code,
+            "record_missing"
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_registration_mutation_after_final_read_preserves_source() {
+    let f = Fixture::new();
+    let storage = f.root.child("cleanup").unwrap();
+    let leaf = format!("{}.json", id(7));
+    let mut legacy: Value = storage.read(&leaf).unwrap();
+    legacy["schema_version"] = json!(1);
+    legacy.as_object_mut().unwrap().remove("family_id");
+    storage.write(&leaf, &legacy).unwrap();
+    std::fs::remove_file(storage.path().join(format!("family-{}.json", id(6)))).unwrap();
+    let plan = f.house.inspect(id(7), &f.client).await.unwrap();
+    assert!(plan.directory_family_digest.is_none());
+    let changed = Arc::new(AtomicBool::new(false));
+    let did_change = changed.clone();
+    let wire = f.wire.clone();
+    let registration_root = storage.path().to_path_buf();
+    let current_actor = Arc::new(move |actor: &Actor| {
+        authorize(actor)?;
+        // The initial plan, apply preflight and final provider observation each
+        // read main once. Mutate protected fixture data only after all three,
+        // immediately before the final snapshot/unlink predicate.
+        if wire.reads.load(Ordering::SeqCst) >= 3 && !did_change.swap(true, Ordering::SeqCst) {
+            let records = PrivateDir::open(&registration_root)?;
+            let mut current: Value = records.read(&leaf)?;
+            current["retention"]["published_refs"][0]["commit"] =
+                json!("2222222222222222222222222222222222222222");
+            records.write(&leaf, &current)?;
+        }
+        Ok(())
+    });
+    let error = f
+        .house
+        .clone()
+        .apply(
+            request(id(642)),
+            id(7),
+            plan.token,
+            f.client.clone(),
+            current_actor,
+        )
+        .await
+        .unwrap_err();
+    assert!(changed.load(Ordering::SeqCst));
+    assert_eq!(error.code, "stale_cleanup_plan");
+    assert!(f.source.join("file.txt").exists());
+    assert!(f.retained.join("file.txt").exists());
+    assert_eq!(
+        f.control.operation(id(642)).unwrap().phase,
+        ReceiptPhase::Sent
+    );
+}
+
+#[tokio::test]
+async fn directory_family_rejects_a_second_unrelated_registration_without_changing_cleanup() {
+    let f = Fixture::new();
+    let storage = f.root.child("cleanup").unwrap();
+    let stored: Value = storage.read(&format!("{}.json", id(7))).unwrap();
+    assert_eq!(stored["schema_version"], 2);
+    assert_eq!(stored["family_id"], id(6).to_string());
+    let mut binding: ExecutionBinding = serde_json::from_value(stored["binding"].clone()).unwrap();
+    let isolation = serde_json::from_value::<IsolationPlan>(stored["isolation"].clone())
+        .unwrap()
+        .validate()
+        .unwrap();
+    let owned = OwnedDirectory::reopen(
+        Path::new(stored["marker"].as_str().unwrap()),
+        stored["directory_digest"].as_str().unwrap(),
+        &isolation,
+    )
+    .unwrap();
+    let workflow = Workflow::load(Path::new(stored["workflow_path"].as_str().unwrap())).unwrap();
+    let before = f.house.inspect(id(7), &f.client).await.unwrap();
+    assert!(before.directory_family_digest.is_some());
+    f.house
+        .register_execution(&binding, &isolation, &owned, &workflow)
+        .unwrap();
+    binding.operation_id = id(99);
+    assert_eq!(
+        f.house
+            .register_execution(&binding, &isolation, &owned, &workflow)
+            .unwrap_err()
+            .code,
+        "ownership_conflict"
+    );
+    assert_eq!(
+        storage
+            .read::<Value>(&format!("{}.json", id(99)))
+            .unwrap_err()
+            .code,
+        "record_missing"
+    );
+    assert_eq!(
+        f.house.inspect(id(7), &f.client).await.unwrap().token,
+        before.token
+    );
+    assert!(f.source.exists());
+}
+
+#[tokio::test]
+async fn family_detects_replaced_directory_and_incomplete_members_before_any_removal() {
+    for replaced in [true, false] {
+        let f = Fixture::new();
+        let before = f.house.inspect(id(7), &f.client).await.unwrap();
+        if replaced {
+            let previous = f.source.with_file_name("prior-repository");
+            std::fs::rename(&f.source, &previous).unwrap();
+            copy_tree(&previous, &f.source);
+            assert!(previous.exists());
+        } else {
+            let storage = f.root.child("cleanup").unwrap();
+            let name = format!("family-{}.json", id(6));
+            let mut family: Value = storage.read(&name).unwrap();
+            family["members"][id(99).to_string()] = json!({"registration":bytes_digest(b"missing"),"predecessor":id(7),"resume_reference":bytes_digest(b"missing")});
+            storage.write(&name, &family).unwrap();
+        }
+        assert!(f.house.inspect(id(7), &f.client).await.is_err());
+        assert!(
+            f.house
+                .clone()
+                .apply(
+                    request(Uuid::new_v4()),
+                    id(7),
+                    before.token,
+                    f.client.clone(),
+                    Arc::new(|_| Ok(()))
+                )
+                .await
+                .is_err()
+        );
+        assert!(f.source.join("file.txt").exists());
+        assert!(f.retained.join("file.txt").exists());
+    }
+}
+
+#[tokio::test]
+async fn new_family_cannot_drop_its_marker_but_legacy_single_registration_stays_readable() {
+    let f = Fixture::new();
+    let storage = f.root.child("cleanup").unwrap();
+    let name = format!("{}.json", id(7));
+    let mut stored: Value = storage.read(&name).unwrap();
+    stored.as_object_mut().unwrap().remove("family_id");
+    storage.write(&name, &stored).unwrap();
+    assert_eq!(
+        f.house.inspect(id(7), &f.client).await.unwrap_err().code,
+        "record_corrupt"
+    );
+    stored["schema_version"] = json!(1);
+    storage.write(&name, &stored).unwrap();
+    assert_eq!(
+        f.house.inspect(id(7), &f.client).await.unwrap_err().code,
+        "record_corrupt"
+    );
+    // Reproduce the complete legacy shape in this disposable fixture. A real
+    // family cannot become legacy merely by dropping its registration field.
+    std::fs::remove_file(storage.path().join(format!("family-{}.json", id(6)))).unwrap();
+    let plan = f.house.inspect(id(7), &f.client).await.unwrap();
+    assert!(plan.directory_family_digest.is_none());
+    assert!(
+        serde_json::to_value(&plan)
+            .unwrap()
+            .get("directory_family_digest")
+            .is_none()
+    );
 }
 fn request(request_id: Uuid) -> MutationRequest {
     MutationRequest {

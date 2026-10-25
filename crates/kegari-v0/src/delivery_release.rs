@@ -46,6 +46,8 @@ impl DeliveryCoordinator {
                 "continuation",
                 "source_advanced",
                 "worker_preparation",
+                "session_resume",
+                "session_recovery_preparation",
                 "release_resume",
             ]
             .iter()
@@ -871,6 +873,8 @@ impl DeliveryCoordinator {
                             "continuation",
                             "source_advanced",
                             "worker_preparation",
+                            "session_resume",
+                            "session_recovery_preparation",
                         ]
                         .iter()
                         .any(|key| owner.expected.contains_key(*key))
@@ -1160,6 +1164,8 @@ impl DeliveryCoordinator {
                 "continuation",
                 "source_advanced",
                 "worker_preparation",
+                "session_resume",
+                "session_recovery_preparation",
             ]
             .iter()
             .any(|key| owner.expected.contains_key(*key))
@@ -1435,6 +1441,8 @@ impl DeliveryCoordinator {
                 "continuation",
                 "source_advanced",
                 "worker_preparation",
+                "session_resume",
+                "session_recovery_preparation",
             ]
             .iter()
             .any(|key| owner.expected.contains_key(*key))

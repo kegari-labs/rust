@@ -290,6 +290,7 @@ pub(crate) fn complete(
             unfinished,
             advanced,
             retired_retry: None,
+            review_retry: None,
             max_attempts: 3,
         },
     )
@@ -298,6 +299,7 @@ struct FixtureRunOptions<'a> {
     unfinished: Option<&'a UnfinishedChildWork>,
     advanced: Option<&'a VerifiedSourceAdvanced>,
     retired_retry: Option<&'a RetriedUnfinishedWork>,
+    review_retry: Option<&'a ReviewRetryWork>,
     max_attempts: u32,
 }
 pub(crate) fn complete_capped(
@@ -320,6 +322,7 @@ pub(crate) fn complete_capped(
             unfinished: None,
             advanced: None,
             retired_retry: None,
+            review_retry: None,
             max_attempts,
         },
     )
@@ -344,6 +347,31 @@ pub(crate) fn complete_retried(
             unfinished: None,
             advanced: None,
             retired_retry: Some(proof),
+            review_retry: None,
+            max_attempts: proof.grant().new_budget().max_attempts,
+        },
+    )
+}
+pub(crate) fn complete_review_retry(
+    host: &crate::control::ControlHost,
+    lease: &Lease,
+    fixture: &WorkerFixture,
+    proof: &ReviewRetryWork,
+) -> (
+    tempfile::TempDir,
+    VerifiedAuthorizedOutcome,
+    Arc<RunCompletion>,
+) {
+    complete_inner(
+        host,
+        lease,
+        fixture,
+        json!({"schema_version":1,"verdict":"pass","unresolved_findings":[],"supporting_links":[proof.grant().provenance().url]}),
+        FixtureRunOptions {
+            unfinished: None,
+            advanced: None,
+            retired_retry: None,
+            review_retry: Some(proof),
             max_attempts: proof.grant().new_budget().max_attempts,
         },
     )
@@ -363,6 +391,7 @@ fn complete_inner(
         unfinished,
         advanced,
         retired_retry,
+        review_retry,
         max_attempts,
     } = options;
     let contract = &fixture.contract;
@@ -409,6 +438,12 @@ fn complete_inner(
         ),
     };
     if let Some(proof) = retired_retry {
+        reference.phase = proof.phase().clone();
+        reference.attempt = 1;
+        reference.max_turns = proof.grant().new_budget().max_turns;
+        reference.max_review_rounds = proof.grant().new_budget().max_review_rounds;
+    }
+    if let Some(proof) = review_retry {
         reference.phase = proof.phase().clone();
         reference.attempt = 1;
         reference.max_turns = proof.grant().new_budget().max_turns;
@@ -462,6 +497,10 @@ fn complete_inner(
             None => {
                 let inventory = host.operations().unwrap();
                 host.admit_run(lease, input, || {
+                    if let Some(proof) = review_retry {
+                        proof.verify_contract(contract)?;
+                        proof.verify_current(&inventory, std::slice::from_ref(proof.grant()))?;
+                    }
                     if let Some(proof) = retired_retry {
                         proof.verify_contract(contract)?;
                         proof.verify_current(&inventory, std::slice::from_ref(proof.grant()))?;
@@ -497,4 +536,142 @@ fn complete_inner(
         local_exit_confirmed: true,
     });
     (files, outcome, completion)
+}
+
+/// Component fixture: an actual bounded in-process protocol transport produces
+/// the failed terminal state. No native provider/check process is launched, and
+/// this completion must never be inserted into the runtime's joined-run cache.
+pub(crate) async fn failed_review(
+    host: &crate::control::ControlHost,
+    lease: &Lease,
+    fixture: &WorkerFixture,
+) -> Arc<RunCompletion> {
+    use crate::codex::{CodexProfile, RpcClient, SessionBinding, SessionState};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    struct Deny;
+    impl crate::codex::ToolBroker for Deny {
+        fn call<'a>(
+            &'a mut self,
+            _: &'a crate::codex::ToolCall,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Err(Error::new(
+                    "fixture_no_execution",
+                    "no tools in failed review fixture",
+                ))
+            })
+        }
+    }
+    let contract = &fixture.contract;
+    let manifest = &contract.instructions().manifest;
+    let WorkerAuthority::Authorized(gate) = contract.authority() else {
+        panic!()
+    };
+    let reference = RunReference {
+        workspace: gate.workspace_id(),
+        account: contract.account_id().into(),
+        normalized_state: Some("in progress".into()),
+        phase: PhaseKey {
+            work: gate.work_key().unwrap(),
+            generation: canonical_digest(1, &gate.work().generation).unwrap(),
+            phase: manifest.phase.clone(),
+            retry_grant: None,
+        },
+        profile_digest: canonical_digest(1, &manifest.profile).unwrap(),
+        instruction_digest: contract.instructions().manifest_digest.clone(),
+        max_attempts: 1,
+        max_turns: 20,
+        max_review_rounds: 1,
+        attempt: 1,
+    };
+    host.admit_run(
+        lease,
+        RunAdmission {
+            request_id: manifest.operation_id,
+            work_key: gate.work_key().unwrap(),
+            scope_digest: contract.scope_digest().into(),
+            reference,
+        },
+        || Ok(()),
+    )
+    .unwrap();
+    let mut state = SessionState::new(
+        SessionBinding {
+            schema_version: 1,
+            account_id: contract.account_id().into(),
+            work_identity: gate.work_key().unwrap(),
+            operation_id: manifest.operation_id.to_string(),
+            generation: manifest.work_generation.clone(),
+            instruction_digest: contract.instructions().manifest_digest.clone(),
+            isolation_digest: manifest.permissions.enforcement_profile.clone(),
+            profile: CodexProfile {
+                model: manifest.profile.model.clone(),
+                reasoning: manifest.profile.reasoning.clone(),
+                speed: match manifest.profile.speed {
+                    crate::config::Speed::Standard => "standard",
+                    crate::config::Speed::Fast => "fast",
+                }
+                .into(),
+            },
+            cwd: manifest.cwd.clone(),
+        },
+        20,
+    )
+    .unwrap();
+    state.thread_id = Some("failed-review-fixture".into());
+    let (client, server) = tokio::io::duplex(16384);
+    let (cr, cw) = tokio::io::split(client);
+    let (sr, mut sw) = tokio::io::split(server);
+    let server = tokio::spawn(async move {
+        let mut lines = BufReader::new(sr).lines();
+        let init: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        sw.write_all(format!("{}\n",json!({"id":init["id"],"result":{"userAgent":"fixture","platformFamily":"unix","platformOs":"macos","codexHome":"/fixture/auth"}})).as_bytes()).await.unwrap();
+        let _ = lines.next_line().await.unwrap().unwrap();
+        let request: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(request["method"], "review/start");
+        sw.write_all(format!("{}\n{}\n",json!({"id":request["id"],"result":{"reviewThreadId":"failed-review-fixture","turn":{"id":"failed-review-turn","status":"inProgress"}}}),json!({"method":"turn/completed","params":{"threadId":"failed-review-fixture","turn":{"id":"failed-review-turn","status":"failed","items":[],"error":{"message":"synthetic provider failure"}}}})).as_bytes()).await.unwrap();
+    });
+    let mut rpc = RpcClient::from_transport(cr, cw, std::time::Duration::from_secs(2)).unwrap();
+    rpc.initialize().await.unwrap();
+    rpc.review(
+        &mut state,
+        "Review the exact host-prepared source",
+        &mut Deny,
+    )
+    .await
+    .unwrap();
+    while state.terminal.is_none() {
+        rpc.pump(
+            &mut state,
+            &mut Deny,
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+    }
+    server.await.unwrap();
+    assert_eq!(state.terminal.as_deref(), Some("failed"));
+    assert!(state.turn_id.is_none());
+    let completion = Arc::new(RunCompletion {
+        operation_id: manifest.operation_id,
+        state,
+        outcome: RunOutcome::Failed,
+        error: Some(Error::new(
+            "turn_incomplete",
+            "synthetic provider failed terminal",
+        )),
+        elapsed_ms: 1,
+        hook_error: None,
+        checks: vec![],
+        failed_checks: vec![],
+        execution: Some(fixture.execution.clone()),
+        contract: Some(contract.clone()),
+        local_exit_confirmed: true,
+    });
+    host.retire_local(manifest.operation_id, completion.observation())
+        .unwrap();
+    completion
 }
