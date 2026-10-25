@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "asset_version": "1",
+  "runtime_version": "0.1.0",
+  "assets": {
+    "authority": "sha256:a350046ed281d427549d832e79a3894d39fbd7cd34d7826b15fdd9d64c30252c",
+    "child": "sha256:125bc1d6dd6ab7dd7c4bbcaeae1c7916ae71d4f4192c858db8123a47e74d8273",
+    "continuation": "sha256:ee02902fb120d6b4739f1fe5b3bdf97c7143172128dcc0b281a2d5d52c9d299c",
+    "coordination": "sha256:a4210b3d9a8c0a5b17bda0cd01f407fa13b7ba4d60793d76395a90ea41b47bf9",
+    "review": "sha256:0f8cb3e68d3d96e195636a6e70d3d875e0a590483954cbf06210cce8cc0585ee",
+    "validation": "sha256:53381c6434cbbcad08339a7e0628a2b44bfa69f95b2a24bcc676223a1396a6b5"
+  }
+}
