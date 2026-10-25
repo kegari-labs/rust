@@ -1183,3 +1183,169 @@ fn retried_pair_validation_keeps_origin_separate_and_checks_complete_actual_pref
 
 #[path = "control_review_passed_admission_tests.rs"]
 mod passed_admission_tests;
+
+// Data-only observations, never written or admitted. Actual Control supplies the
+// snapshot, but these records mint no native grant, source, failed-check, joined
+// completion or opaque round capability.
+#[test]
+fn advanced_pair_validation_retains_granted_budget_and_complete_consumed_prefix() {
+    let f = setup();
+    let template = f
+        .host
+        .operation(f.round.source.implementation.operation)
+        .unwrap();
+    let make = |id: Uuid, attempt: u32, grant: Option<Uuid>, outcome: &str| {
+        let mut receipt = template.clone();
+        receipt.operation_id = id;
+        receipt.request_id = id;
+        receipt.updated_at = Utc::now() - chrono::Duration::seconds(2);
+        let mut run = f.implementation.clone();
+        run.phase.phase = "child_local_validation".into();
+        run.phase.retry_grant = grant;
+        // This data fixture includes a valid third admission to distinguish
+        // current inventory from an immutable consumed prefix.
+        run.max_attempts = 3;
+        run.attempt = attempt;
+        receipt
+            .expected
+            .insert("run".into(), serde_json::to_string(&run).unwrap());
+        receipt.observed_result = Some(json!({"local_execution":"exited","unresolved_effects":[],
+            "observation":{"outcome":outcome,"local_exit_confirmed":true,"hook_error":null,
+                "session":{"terminal":outcome,"input_required":false,"intervention":null}}}));
+        receipt
+    };
+    let original = make(Uuid::new_v4(), 1, None, "failed");
+    let grant_id = Uuid::new_v4();
+    let prior = make(Uuid::new_v4(), 1, Some(grant_id), "completed");
+    let mut latest = make(Uuid::new_v4(), 2, Some(grant_id), "completed");
+    let link = SourceAdvancedReference {
+        predecessor: prior.operation_id,
+        predecessor_receipt_digest: canonical_digest(1, &prior).unwrap(),
+        source_operation: f.round.source.implementation.operation,
+        source_receipt_digest: f.round.source.implementation.receipt_digest.clone(),
+        trigger_digest: digest("actual opaque advanced validation budget reference only"),
+        progress_digest: digest("changed source progress"),
+        review_rounds_consumed: 1,
+    };
+    latest.expected.insert(
+        "source_advanced".into(),
+        serde_json::to_string(&link).unwrap(),
+    );
+    let mut grant = template.clone();
+    grant.operation_id = grant_id;
+    grant.request_id = grant_id;
+    grant.kind = "linear_comment".into();
+    grant.phase = ReceiptPhase::Acknowledged;
+    grant.observed_result = None;
+    let native_target =
+        "linear:https://linear.invalid/graphql:native-workspace:native-issue".to_string();
+    grant.canonical_targets = vec![native_target.clone()];
+    grant.expected = [
+        (
+            "provider_body_digest".into(),
+            digest("native grant body reference"),
+        ),
+        ("provider_writer".into(), "fixture writer".into()),
+        ("parent_command_id".into(), Uuid::new_v4().to_string()),
+    ]
+    .into();
+    grant
+        .remote_ids
+        .insert("comment_id".into(), Uuid::new_v4().to_string());
+    let inventory: BTreeMap<_, _> = [original.clone(), prior.clone(), latest.clone()]
+        .into_iter()
+        .map(|r| (r.operation_id, r))
+        .collect();
+    let validation = RepairValidationReference {
+        validation: exact(&latest),
+        phase: RunReference::from_receipt(&latest).unwrap().unwrap().phase,
+        source_advanced: link.clone(),
+        outcome_proposal: Uuid::new_v4(),
+        outcome_claim_digest: digest("protected current validation claim reference"),
+        failure_inventory_digest: canonical_digest(1, &inventory).unwrap(),
+        lineage: crate::control::RepairValidationLineage::SourceAdvanced {
+            source_budget_digest: link.trigger_digest,
+            native_target,
+            inventory: inventory
+                .iter()
+                .map(|(id, r)| (*id, canonical_digest(1, r).unwrap()))
+                .collect(),
+            grants: [(grant_id, canonical_digest(1, &grant).unwrap())].into(),
+        },
+    };
+    assert_eq!(validation.source_admission(), &validation.validation);
+    let snapshot = f.host.snapshot().unwrap();
+    let receipts = vec![
+        original.clone(),
+        prior.clone(),
+        latest.clone(),
+        grant.clone(),
+    ];
+    let before = f.host.operations().unwrap();
+    let verify = |value: &RepairValidationReference, items: &[Receipt], current| {
+        pair_chain::verify_validation(&snapshot, &f.round, &f.round.source, value, items, current)
+    };
+    verify(&validation, &receipts, true).unwrap();
+    // Direct's original conservative mixed-grant rule remains unchanged.
+    let mut direct = validation.clone();
+    direct.lineage = crate::control::RepairValidationLineage::Direct {};
+    assert!(verify(&direct, &receipts, true).is_err());
+    for omitted in [
+        original.operation_id,
+        prior.operation_id,
+        latest.operation_id,
+        grant_id,
+    ] {
+        let missing: Vec<_> = receipts
+            .iter()
+            .filter(|r| r.operation_id != omitted)
+            .cloned()
+            .collect();
+        assert!(verify(&validation, &missing, true).is_err());
+    }
+    let mut wrong_budget = validation.clone();
+    let crate::control::RepairValidationLineage::SourceAdvanced {
+        source_budget_digest,
+        ..
+    } = &mut wrong_budget.lineage
+    else {
+        unreachable!()
+    };
+    *source_budget_digest = digest("other opaque source budget");
+    assert!(verify(&wrong_budget, &receipts, true).is_err());
+    let mut later = receipts.clone();
+    later.push(make(Uuid::new_v4(), 3, Some(grant_id), "completed"));
+    assert!(verify(&validation, &later, true).is_err());
+    verify(&validation, &later, false).unwrap();
+    // Exact data hashes are adjusted only here to isolate the monotone budget
+    // check from the whole-record mismatch. This still creates no authority.
+    let mut raised = receipts.clone();
+    let actual = raised
+        .iter_mut()
+        .find(|r| r.operation_id == latest.operation_id)
+        .unwrap();
+    let mut run = RunReference::from_receipt(actual).unwrap().unwrap();
+    run.max_turns += 1;
+    actual
+        .expected
+        .insert("run".into(), serde_json::to_string(&run).unwrap());
+    let mut altered = validation.clone();
+    altered.validation = exact(actual);
+    let crate::control::RepairValidationLineage::SourceAdvanced { inventory, .. } =
+        &mut altered.lineage
+    else {
+        unreachable!()
+    };
+    inventory.insert(actual.operation_id, canonical_digest(1, actual).unwrap());
+    let group: BTreeMap<_, _> = raised
+        .iter()
+        .filter(|r| r.operation_id != grant_id)
+        .map(|r| (r.operation_id, r))
+        .collect();
+    altered.failure_inventory_digest = canonical_digest(1, &group).unwrap();
+    assert!(verify(&altered, &raised, true).is_err());
+    assert_eq!(
+        canonical_digest(1, &f.host.operations().unwrap()).unwrap(),
+        canonical_digest(1, &before).unwrap()
+    );
+}

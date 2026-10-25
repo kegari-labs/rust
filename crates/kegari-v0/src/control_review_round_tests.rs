@@ -772,3 +772,74 @@ fn direct_validation_marker_rejects_unknown_authority_fields() {
         .is_err()
     );
 }
+
+#[test]
+fn source_advanced_validation_has_exact_namespaced_prefix_without_relabeling_retry() {
+    let mut value = repair_continuation(false);
+    let ReviewRoundCause::RepairContinuation { validation, .. } = &mut value.cause else {
+        unreachable!()
+    };
+    let grant = Uuid::from_u128(90);
+    validation.phase.retry_grant = Some(grant);
+    validation.lineage = RepairValidationLineage::SourceAdvanced {
+        source_budget_digest: validation.source_advanced.trigger_digest.clone(),
+        native_target: "linear:https://linear.invalid/graphql:native-workspace:native-issue".into(),
+        inventory: [
+            (
+                validation.source_advanced.predecessor,
+                validation
+                    .source_advanced
+                    .predecessor_receipt_digest
+                    .clone(),
+            ),
+            (
+                validation.validation.operation,
+                validation.validation.receipt_digest.clone(),
+            ),
+        ]
+        .into(),
+        grants: [(grant, digest("actual native publication reference"))].into(),
+    };
+    assert_eq!(validation.source_admission(), &validation.validation);
+    assert_eq!(validation.source_phase(), &validation.phase);
+    value.validate().unwrap();
+    decode(&value, &preparation(&value));
+    decode(&value, &run(&value));
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let restored: ReviewRoundReference = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(serde_json::to_vec(&restored).unwrap(), bytes);
+    for mutation in 0..7 {
+        let mut changed = value.clone();
+        let ReviewRoundCause::RepairContinuation { validation, .. } = &mut changed.cause else {
+            unreachable!()
+        };
+        let RepairValidationLineage::SourceAdvanced {
+            source_budget_digest,
+            native_target,
+            inventory,
+            grants,
+        } = &mut validation.lineage
+        else {
+            unreachable!()
+        };
+        match mutation {
+            0 => *source_budget_digest = digest("different source advancement"),
+            1 => {
+                inventory.remove(&validation.source_advanced.predecessor);
+            }
+            2 => {
+                inventory.remove(&validation.validation.operation);
+            }
+            3 => grants.clear(),
+            4 => validation.phase.retry_grant = Some(Uuid::from_u128(91)),
+            5 => *native_target = "opaque canonical work digest".into(),
+            _ => {
+                inventory.insert(Uuid::nil(), digest("nil reference"));
+            }
+        }
+        assert!(changed.validate().is_err(), "mutation {mutation}");
+    }
+    let mut unknown = serde_json::to_value(&value).unwrap();
+    unknown["cause"]["validation"]["lineage"]["authority"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<ReviewRoundReference>(unknown).is_err());
+}

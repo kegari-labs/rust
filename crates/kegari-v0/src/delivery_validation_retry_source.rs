@@ -122,7 +122,9 @@ impl ValidationSourceLineage {
             .filter(|r| r.operation_id != receipt.operation_id)
             .cloned()
             .collect();
-        lineage.advanced.verify_current(&prior, grants)?;
+        lineage
+            .advanced
+            .verify_consumed_validation_prefix(&prior, grants, receipt)?;
         lineage.verify_prefix(receipts, grants)?;
         Ok(Some(lineage))
     }
@@ -224,14 +226,15 @@ impl ValidationSourceLineage {
                 "original validation prefix is incomplete",
             ));
         }
-        self.advanced.verify_current(&prefix, grants)
+        self.advanced
+            .verify_consumed_validation_prefix(&prefix, grants, origin)
     }
     pub(super) fn verify_joined(
         &self,
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
     ) -> Result<()> {
         require_joined(&self.origin_completion, retained)?;
-        require_joined(self.advanced.previous_completion(), retained)?;
+        self.advanced.verify_joined(retained)?;
         let source = retained(self.advanced.source_operation())?.ok_or_else(|| {
             Error::new(
                 "reconciliation_required",

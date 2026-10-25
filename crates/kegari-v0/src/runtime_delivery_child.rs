@@ -121,6 +121,12 @@ struct ChildReference {
     observed_at: chrono::DateTime<Utc>,
     error: Option<Error>,
 }
+struct ValidationRepairBasis {
+    paired: Arc<VerifiedReviewRoundPlan>,
+    basis: ValidationAdvanceBasis,
+    outcome: VerifiedAuthorizedOutcome,
+    completion: Arc<RunCompletion>,
+}
 struct ChildPipeline {
     reference: ChildReference,
     claim: Arc<CompletedChildClaim>,
@@ -497,9 +503,15 @@ impl RuntimeDelivery {
                 }
             }
             None => child
-                .validation_completed
+                .validation_passed
                 .as_ref()
-                .map(|proof| self.completed_validation_check(proof.clone())),
+                .map(|proof| self.passed_validation_check(proof.clone()))
+                .or_else(|| {
+                    child
+                        .validation_completed
+                        .as_ref()
+                        .map(|proof| self.completed_validation_check(proof.clone()))
+                }),
         };
         if let Some(proof) = &child.validation_completed
             && child.reference.validation_completed_digest.as_deref() != Some(proof.digest())
@@ -861,6 +873,27 @@ impl RuntimeDelivery {
             proof.verify_joined(&|id| runtime.retained_completion(id))
         })
     }
+    fn passed_validation_check(&self, proof: Arc<VerifiedPassedValidation>) -> GateCheck {
+        let runtime = self.runtime.clone();
+        Arc::new(move |gate| {
+            let current = runtime
+                .observations
+                .active_gate(gate, &runtime.dependency_outcomes()?)?;
+            proof
+                .authority()
+                .compare_current(&current, Utc::now(), Duration::seconds(30))?;
+            let receipts = runtime.control.operations()?;
+            let grants = crate::runtime_workflow::current_retry_grants(
+                &runtime.configuration.snapshot()?,
+                &runtime.observations.admission_snapshot()?,
+                proof.authority().work(),
+                &receipts,
+                &runtime.services.key,
+            )?;
+            proof.verify_current(&receipts, &grants)?;
+            proof.verify_joined(&|id| runtime.retained_completion(id))
+        })
+    }
     fn consumed_validation_check(&self, proof: Arc<ConsumedValidationSuccessor>) -> GateCheck {
         let runtime = self.runtime.clone();
         Arc::new(move |gate| {
@@ -929,7 +962,12 @@ impl RuntimeDelivery {
         operation: Uuid,
     ) -> Result<()> {
         let Some(passed) = child.validation_passed.clone() else {
-            if child.validation_completed.is_some() {
+            if child.validation_completed.is_some()
+                || child
+                    .validation_source
+                    .as_ref()
+                    .is_some_and(|source| source.has_validation_budget())
+            {
                 return Err(Error::new(
                     "reconciliation_required",
                     "completed retry lacks its genuine passed capability",
@@ -1232,7 +1270,37 @@ impl RuntimeDelivery {
         if let Some(proof) = &child.source_advanced
             && proof.phase().phase == assignment.phase()
         {
+            proof.verify_assignment(&assignment)?;
             return Ok((proof.assignment().clone(), Some(proof.clone())));
+        }
+        if assignment.phase() == "child_local_validation"
+            && let Some(ValidationRepairBasis {
+                paired,
+                basis,
+                outcome: predecessor,
+                completion,
+            }) = self.validation_repair_basis(child).await?
+        {
+            let proof = coordinator
+                .source_advanced_validated_repair(
+                    SourceAdvancedRequest {
+                        source: RepairSource {
+                            admission,
+                            original: child.claim.clone(),
+                            source: required(&child.source, "sealed source")?,
+                            completion: child.completion.clone(),
+                        },
+                        assignment: &assignment,
+                        predecessor: &predecessor,
+                        completion,
+                    },
+                    paired,
+                    basis,
+                    &self.current_review_grants(&child.reference.work)?,
+                    &self.runtime,
+                )
+                .await?;
+            return Ok((assignment, Some(Arc::new(proof))));
         }
         if assignment.phase() == "child_codex_review"
             && let Some(repair) = self.granted_review_repair(child).await?
@@ -1329,6 +1397,114 @@ impl RuntimeDelivery {
             coordinator.source_advanced(request).await?
         };
         Ok((assignment, Some(Arc::new(proof))))
+    }
+    /// The exact prior pipeline owns the consumed Findings/validation pair.
+    /// Neither a phase label nor a decoded reference can select this lineage.
+    async fn validation_repair_basis(
+        &self,
+        child: &ChildPipeline,
+    ) -> Result<Option<ValidationRepairBasis>> {
+        let candidates = self
+            .children
+            .pipelines
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+            .iter()
+            .filter(|(id, _)| **id != child.reference.operation)
+            .map(|(_, value)| value.clone())
+            .collect::<Vec<_>>();
+        let mut selected = None;
+        for candidate in candidates {
+            let candidate = candidate.lock().await;
+            if candidate.reference.repair_operation != Some(child.reference.operation) {
+                continue;
+            }
+            if candidate.reference.work != child.reference.work {
+                return Err(Error::new(
+                    "validation_source_lineage",
+                    "repair predecessor has another work identity",
+                ));
+            }
+            let Some(paired) = &candidate.paired_round else {
+                continue;
+            };
+            if candidate.reference.paired_round_digest.as_deref() != Some(paired.digest()) {
+                return Err(Error::new(
+                    "validation_source_lineage",
+                    "paired repair plan changed",
+                ));
+            }
+            let operation = candidate.reference.validation.ok_or_else(|| {
+                Error::new(
+                    "validation_source_lineage",
+                    "paired source has no actual validator",
+                )
+            })?;
+            let (outcome, completion) = self.completed_claim(operation)?.ok_or_else(|| {
+                Error::new(
+                    "operation_pending",
+                    "paired validation predecessor has no actual completed result",
+                )
+            })?;
+            let basis = if let Some(passed) = &candidate.validation_passed {
+                if candidate.reference.validation_passed_digest.as_deref() != Some(passed.digest())
+                    || passed.validation_outcome().digest() != outcome.digest()
+                    || !Arc::ptr_eq(passed.validation_completion(), &completion)
+                {
+                    return Err(Error::new(
+                        "validation_source_lineage",
+                        "passed predecessor differs from exact actual validation",
+                    ));
+                }
+                Some(ValidationAdvanceBasis::Passed(passed.clone()))
+            } else if let Some(completed) = &candidate.validation_completed {
+                if candidate.reference.validation_completed_digest.as_deref()
+                    != Some(completed.digest())
+                    || completed.outcome().digest() != outcome.digest()
+                    || !Arc::ptr_eq(completed.completion(), &completion)
+                {
+                    return Err(Error::new(
+                        "validation_source_lineage",
+                        "completed retry predecessor changed",
+                    ));
+                }
+                Some(ValidationAdvanceBasis::FailedChecks(completed.clone()))
+            } else if let Some(previous) = &candidate.validation_source {
+                if candidate.reference.validation_source_digest.as_deref()
+                    != Some(previous.digest())
+                {
+                    return Err(Error::new(
+                        "validation_source_lineage",
+                        "validation source predecessor changed",
+                    ));
+                }
+                previous
+                    .has_validation_budget()
+                    .then(|| ValidationAdvanceBasis::Advanced {
+                        previous: previous.clone(),
+                        outcome: Box::new(outcome.clone()),
+                        completion: completion.clone(),
+                    })
+            } else {
+                None
+            };
+            if let Some(basis) = basis
+                && selected
+                    .replace(ValidationRepairBasis {
+                        paired: paired.clone(),
+                        basis,
+                        outcome,
+                        completion,
+                    })
+                    .is_some()
+            {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "validation source has multiple actual paired predecessors",
+                ));
+            }
+        }
+        Ok(selected)
     }
     async fn granted_review_repair(
         &self,
@@ -2203,6 +2379,28 @@ impl RuntimeDelivery {
                                 },
                                 &workspace.workflow,
                                 completed.clone(),
+                                &local,
+                                &self.runtime,
+                            )
+                            .await?,
+                    );
+                    child.reference.validation_passed_digest = Some(passed.digest().into());
+                    child.validation_passed = Some(passed);
+                } else if let Some(advanced) = &child.validation_source
+                    && advanced.has_validation_budget()
+                {
+                    let passed = Arc::new(
+                        coordinator
+                            .passed_source_validation(
+                                RepairSource {
+                                    admission: &admission,
+                                    original: child.claim.clone(),
+                                    source: required(&child.source, "sealed source")?,
+                                    completion: child.completion.clone(),
+                                },
+                                &workspace.workflow,
+                                advanced.clone(),
+                                (&outcome, completion.clone()),
                                 &local,
                                 &self.runtime,
                             )

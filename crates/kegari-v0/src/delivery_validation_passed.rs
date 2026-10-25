@@ -6,10 +6,14 @@ use crate::delivery::{PassedValidationSuccessor, verify_validation_successor_adm
 use crate::runtime::RuntimeCoordinator;
 use chrono::Duration;
 
+#[path = "delivery_validation_passed_basis.rs"]
+mod basis;
+use basis::PassedValidationBasis;
+
 #[derive(Clone)]
 pub(crate) struct VerifiedPassedValidation {
     reference: PassedValidationReference,
-    completed: Arc<CompletedGrantedValidation>,
+    completed: PassedValidationBasis,
     local: LocalPassed,
     check_digests: Vec<String>,
     grants: Vec<VerifiedRetryGrant>,
@@ -28,7 +32,19 @@ impl VerifiedPassedValidation {
         self.completed.authority()
     }
     pub(crate) fn source(&self) -> &DeliverySource {
-        self.completed.basis.source()
+        self.completed.source()
+    }
+    pub(crate) fn validation_outcome(&self) -> &crate::runtime::VerifiedAuthorizedOutcome {
+        self.completed.outcome()
+    }
+    pub(crate) fn validation_completion(&self) -> &Arc<RunCompletion> {
+        self.completed.completion()
+    }
+    pub(crate) fn verify_validation_inventory(&self, receipts: &[Receipt]) -> Result<()> {
+        self.completed.verify_validation_inventory(receipts)
+    }
+    pub(crate) fn validation_source(&self) -> Option<&Arc<VerifiedSourceAdvanced>> {
+        self.completed.source_advanced()
     }
     pub(crate) fn verify_current(
         &self,
@@ -82,10 +98,10 @@ impl VerifiedPassedValidation {
         let completion = self.completed.completion();
         child::completed_run(self.completed.outcome(), completion)?;
         bound_completion(
-            self.completed.basis.assignment(),
+            self.completed.assignment(),
             completion,
             unique_receipt(receipts, completion.operation_id)?,
-            &self.completed.reference,
+            self.completed.reference(),
         )?;
         let actual = completion
             .checks
@@ -190,6 +206,23 @@ impl DeliveryCoordinator {
         local: &LocalPassed,
         runtime: &RuntimeCoordinator,
     ) -> Result<VerifiedPassedValidation> {
+        self.passed_validation(
+            source,
+            workflow,
+            PassedValidationBasis::Retried(completed),
+            local,
+            runtime,
+        )
+        .await
+    }
+    async fn passed_validation(
+        &self,
+        source: RepairSource<'_>,
+        workflow: &Workflow,
+        completed: PassedValidationBasis,
+        local: &LocalPassed,
+        runtime: &RuntimeCoordinator,
+    ) -> Result<VerifiedPassedValidation> {
         if !Arc::ptr_eq(&self.host, &runtime.control) {
             return Err(passed_error(
                 "passed validation uses another actual control host",
@@ -198,7 +231,6 @@ impl DeliveryCoordinator {
         self.current(source.admission, &[DeliveryPhase::LocalValidation])?;
         local.matches(source.admission)?;
         completed
-            .basis
             .assignment()
             .verify_binding(source.admission.fresh_gate(), "child_local_validation")?;
         let (receipts, grants) = current_inputs(runtime, completed.authority())?;
@@ -208,7 +240,7 @@ impl DeliveryCoordinator {
         // This helper performs the same actual source/claim/seal/Git observation
         // as round construction; it cannot convert a raw source reference to proof.
         let source_reference = self.reviewed_repair_source_reference(&source).await?;
-        if source_reference.source_digest != completed.basis.source().digest()? {
+        if source_reference.source_digest != completed.source().digest()? {
             return Err(passed_error(
                 "passed validation belongs to another implementation source",
             ));
@@ -248,7 +280,7 @@ impl DeliveryCoordinator {
         completed.verify_joined(&|id| runtime.retained_completion(id))?;
         self.current(source.admission, &[DeliveryPhase::LocalValidation])?;
         let (retained_receipts, retained_grants) =
-            passed_receipts(&completed, &receipts, &current_grants)?;
+            completed.retained_receipts(&receipts, &current_grants)?;
         let mut retained_receipts = retained_receipts;
         for reference in [&source_reference.implementation, &source_reference.seal] {
             if canonical_digest(1, unique_receipt(&receipts, reference.operation)?)?
@@ -269,7 +301,7 @@ impl DeliveryCoordinator {
             source: source_reference,
             validation: ReviewReceiptReference {
                 operation: completion.operation_id,
-                receipt_digest: completed.receipt_digest.clone(),
+                receipt_digest: completed.receipt_digest().into(),
             },
             completed_validation_digest: completed.digest().into(),
             local_pass_digest: local_digest(&actual_local)?,
@@ -375,7 +407,7 @@ fn local_digest(local: &LocalPassed) -> Result<String> {
         "workflow":local.workflow_digest, "checks":local.checks}),
     )
 }
-fn passed_receipts(
+pub(super) fn passed_receipts(
     completed: &CompletedGrantedValidation,
     receipts: &[Receipt],
     grants: &[VerifiedRetryGrant],

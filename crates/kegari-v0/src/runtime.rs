@@ -803,7 +803,8 @@ impl RuntimeCoordinator {
                     proof.verify_current(&receipts, &current_grants)?
                 }
                 WorkerReadmission::SourceAdvanced(proof) => {
-                    proof.verify_current(&receipts, &current_grants)?
+                    proof.verify_current(&receipts, &current_grants)?;
+                    proof.verify_joined(&|id| self.retained_completion(id))?;
                 }
                 WorkerReadmission::Retried(proof) => {
                     proof.verify_current(&receipts, &current_grants)?

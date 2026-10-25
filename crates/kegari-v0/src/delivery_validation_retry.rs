@@ -475,6 +475,43 @@ impl CompletedGrantedValidation {
     pub(crate) fn phase(&self) -> &PhaseKey {
         &self.reference.phase
     }
+    pub(crate) fn source(&self) -> &DeliverySource {
+        self.basis.source()
+    }
+    /// Exact captured current validation inventory only; the new typed source
+    /// successor separately proves how the old source/review was consumed.
+    pub(crate) fn verify_validation_inventory(&self, receipts: &[Receipt]) -> Result<()> {
+        if validation_inventory(receipts, self.basis.receipt.runtime_id, &self.reference)?
+            != self.inventory_digest
+        {
+            return Err(Error::new(
+                "stale_result",
+                "completed validation inventory changed",
+            ));
+        }
+        let actual = unique_receipt(receipts, self.completion.operation_id)?;
+        if canonical_digest(1, actual)? != self.receipt_digest {
+            return Err(Error::new(
+                "stale_result",
+                "completed validation receipt changed",
+            ));
+        }
+        child::completed_run(&self.outcome, &self.completion)?;
+        bound_completion(
+            self.basis.assignment(),
+            &self.completion,
+            actual,
+            &self.reference,
+        )
+    }
+    pub(crate) fn retained_receipt_references(
+        &self,
+        receipts: &[Receipt],
+        grants: &[VerifiedRetryGrant],
+    ) -> Result<BTreeMap<Uuid, String>> {
+        self.verify_validation_inventory(receipts)?;
+        Ok(passed::passed_receipts(self, receipts, grants)?.0)
+    }
     pub(crate) fn source_advanced(&self) -> Option<&Arc<VerifiedSourceAdvanced>> {
         self.basis.source_advanced()
     }

@@ -400,10 +400,14 @@ owned until their last holder releases them. This is resource safety, not a budg
 extension or permission to admit a particular number of sessions.
 
 The [validation report](../validation/LOCAL-VALIDATION-RETRY.md) separates focused
-component/data checks from full-suite and native/live evidence. The next-source
-path after a granted validation pass, later review Findings and repaired source
-still needs its typed source-advancement extension; it must retain the actual
-validation grant and remaining budget instead of selecting old ungranted history.
+component/data checks from full-suite and native/live evidence. After a granted
+validation pass, later review Findings and changed repaired source, the next
+validation retains its actual grant and remaining budget. Its typed advancement
+binds the new complete source assignment, all original/granted history and actual
+joined ancestors. A later pass requires new configured checks; failed checks keep
+the exact repaired source and original Findings through typed SourceAdvanced
+ancestry. The [successor report](../validation/LOCAL-VALIDATION-SUCCESSOR.md)
+records this increment's separate validation status.
 Paired provider-session recovery and cold/corrected reconstruction remain separate
 work. Actual joined native/check qualification and human calibration are not
 established by in-process RPC or synthetic terminal metadata.

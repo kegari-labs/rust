@@ -10,6 +10,11 @@ use crate::{
     worker_run::RunCompletion,
 };
 
+#[path = "delivery_validation_budget.rs"]
+mod validation_budget;
+pub(crate) use validation_budget::ValidationAdvanceBasis;
+use validation_budget::ValidationBudgetLineage;
+
 #[derive(Clone)]
 pub struct UnfinishedChildWork {
     inner: Arc<UnfinishedProof>,
@@ -36,6 +41,7 @@ struct UnfinishedProof {
     granted_review: Option<CompletedReviewLineage>,
     paired_repair: Option<Arc<VerifiedReviewRoundPlan>>,
     granted_validation: Option<Arc<CompletedGrantedValidation>>,
+    source_validation: Option<Arc<VerifiedSourceAdvanced>>,
 }
 impl UnfinishedChildWork {
     pub fn predecessor(&self) -> Uuid {
@@ -99,6 +105,9 @@ impl UnfinishedChildWork {
         }
         if let Some(validation) = &self.inner.granted_validation {
             validation.verify_current(receipts, grants)?;
+        }
+        if let Some(source) = &self.inner.source_validation {
+            source.verify_completed_inventory(receipts, grants, self.failure_operation())?;
         }
         if let Some(pair) = &self.inner.paired_repair {
             pair.verify_completed_repair(receipts, grants, &self.inner.predecessor_receipt)?;
@@ -201,7 +210,11 @@ impl UnfinishedChildWork {
 enum RepairReview {
     None,
     Findings(Option<Box<CompletedReviewLineage>>),
-    ContinuedPair(Arc<VerifiedReviewRoundPlan>),
+    ContinuedPair {
+        previous: Arc<VerifiedReviewRoundPlan>,
+        validation_source: Arc<VerifiedSourceAdvanced>,
+        grants: Vec<crate::decisions::VerifiedRetryGrant>,
+    },
     ContinuedPairAfterValidation {
         previous: Arc<VerifiedReviewRoundPlan>,
         validation: Arc<CompletedGrantedValidation>,
@@ -240,14 +253,30 @@ impl DeliveryCoordinator {
         &self,
         request: ValidationRepairRequest<'_>,
         previous: Arc<VerifiedReviewRoundPlan>,
+        validation_source: Arc<VerifiedSourceAdvanced>,
         grants: &[crate::decisions::VerifiedRetryGrant],
     ) -> Result<UnfinishedChildWork> {
         let actual = self
             .host
             .operation(request.source.original.operation_id())?;
         previous.verify_completed_repair(&self.host.operations()?, grants, &actual)?;
-        self.unfinished_validation_inner(request, RepairReview::ContinuedPair(previous))
-            .await
+        validation_source.verify_completed_inventory(
+            &self.host.operations()?,
+            grants,
+            request.completion.operation_id,
+        )?;
+        let result = self
+            .unfinished_validation_inner(
+                request,
+                RepairReview::ContinuedPair {
+                    previous,
+                    validation_source,
+                    grants: grants.to_vec(),
+                },
+            )
+            .await?;
+        result.verify_current(&self.host.operations()?, grants)?;
+        Ok(result)
     }
     pub(super) async fn unfinished_validation_after_granted_round(
         &self,
@@ -499,37 +528,54 @@ impl DeliveryCoordinator {
         obligation: Value,
         review: RepairReview,
     ) -> Result<UnfinishedChildWork> {
-        let (review_round, granted_review, paired_repair, granted_validation, validation_grants) =
-            match review {
-                RepairReview::None => (false, None, None, None, Vec::new()),
-                RepairReview::Findings(lineage) => {
-                    (true, lineage.map(|value| *value), None, None, Vec::new())
-                }
-                RepairReview::ContinuedPair(previous) => {
-                    let findings = previous.completed_findings()?;
-                    (
-                        false,
-                        Some(CompletedReviewLineage::Round(findings)),
-                        Some(previous),
-                        None,
-                        Vec::new(),
-                    )
-                }
-                RepairReview::ContinuedPairAfterValidation {
-                    previous,
-                    validation,
+        let (
+            review_round,
+            granted_review,
+            paired_repair,
+            granted_validation,
+            source_validation,
+            validation_grants,
+        ) = match review {
+            RepairReview::None => (false, None, None, None, None, Vec::new()),
+            RepairReview::Findings(lineage) => (
+                true,
+                lineage.map(|value| *value),
+                None,
+                None,
+                None,
+                Vec::new(),
+            ),
+            RepairReview::ContinuedPair {
+                previous,
+                validation_source,
+                grants,
+            } => {
+                let findings = previous.completed_findings()?;
+                (
+                    false,
+                    Some(CompletedReviewLineage::Round(findings)),
+                    Some(previous),
+                    None,
+                    Some(validation_source),
                     grants,
-                } => {
-                    let findings = previous.completed_findings()?;
-                    (
-                        false,
-                        Some(CompletedReviewLineage::Round(findings)),
-                        Some(previous),
-                        Some(validation),
-                        grants,
-                    )
-                }
-            };
+                )
+            }
+            RepairReview::ContinuedPairAfterValidation {
+                previous,
+                validation,
+                grants,
+            } => {
+                let findings = previous.completed_findings()?;
+                (
+                    false,
+                    Some(CompletedReviewLineage::Round(findings)),
+                    Some(previous),
+                    Some(validation),
+                    None,
+                    grants,
+                )
+            }
+        };
         self.current_child_claim(input.admission, &input.original)?;
         let original = input.original.outcome();
         let original_contract = input
@@ -675,6 +721,25 @@ impl DeliveryCoordinator {
                         "paired retry validation does not bind actual failed checks",
                     ));
                 }
+            } else if let Some(source) = &source_validation {
+                source.verify_completed_inventory(
+                    &inventory,
+                    &validation_grants,
+                    failure.operation_id,
+                )?;
+                if source.source_operation() != predecessor_receipt.operation_id
+                    || source.source_receipt_digest() != canonical_digest(1, &predecessor_receipt)?
+                    || source.phase() != &failure_phase.phase
+                    || source.source().digest()? != owned.digest()?
+                {
+                    return Err(Error::new(
+                        "worker_binding",
+                        "paired source validation differs from actual failed checks",
+                    ));
+                }
+                source.verify_contract(failure.contract.as_ref().ok_or_else(|| {
+                    Error::new("worker_binding", "source validator lost actual contract")
+                })?)?;
             } else {
                 require_latest_phase(&inventory, predecessor_receipt.runtime_id, &failure_phase)?;
             }
@@ -706,14 +771,17 @@ impl DeliveryCoordinator {
             "work":input.admission.scope.work,"source":owned.revision(),"prior_claim":input.original.claim(),
             "remaining":cause,"outcome_claim":{"schema_version":1,"summary":"verified scoped result",
             "fulfilled_criteria":input.original.claim().fulfilled_criteria,"disposition":{"kind":"changed"}}});
-        let digest = canonical_digest(
-            1,
-            &json!({"purpose":"unfinished_child_work","predecessor":predecessor_receipt_digest,
+        let mut identity = json!({"purpose":"unfinished_child_work","predecessor":predecessor_receipt_digest,
             "failure":failure_receipt_digest,"failure_inventory":failure_phase_inventory_digest,"source":owned.digest()?,"authority":input.admission.gate.digest()?,
             "remaining_task":remaining_task,"progress":progress_digest,"review_round":review_round,"granted_review":granted_review.as_ref().map(CompletedReviewLineage::digest),
             "paired_repair":paired_repair.as_ref().map(|p|p.digest()),
-            "granted_validation":granted_validation.as_ref().map(|v|v.digest())}),
-        )?;
+            "granted_validation":granted_validation.as_ref().map(|v|v.digest())});
+        if let Some(source) = &source_validation
+            && source.has_validation_budget()
+        {
+            identity["source_validation"] = json!(source.digest());
+        }
+        let digest = canonical_digest(1, &identity)?;
         let role = original.outcome().instructions.role;
         Ok(UnfinishedChildWork {
             inner: Arc::new(UnfinishedProof {
@@ -738,6 +806,7 @@ impl DeliveryCoordinator {
                 granted_review,
                 paired_repair,
                 granted_validation,
+                source_validation,
             }),
         })
     }
@@ -853,7 +922,9 @@ pub struct VerifiedSourceAdvanced {
     review_rounds_consumed: u32,
     _original: Arc<CompletedChildClaim>,
     _previous_completion: Arc<RunCompletion>,
+    source_completion: Arc<RunCompletion>,
     granted_review: Option<CompletedReviewLineage>,
+    validation_budget: Option<Arc<ValidationBudgetLineage>>,
 }
 impl VerifiedSourceAdvanced {
     /// Observation-only exact closure captured by the actual opaque source.
@@ -892,7 +963,60 @@ impl VerifiedSourceAdvanced {
                 }
             }
         }
+        if let Some(budget) = &self.validation_budget {
+            for (id, digest) in budget.retained() {
+                if let Some(old) = refs.insert(*id, digest.clone())
+                    && old != *digest
+                {
+                    return Err(Error::new(
+                        "validation_source_lineage",
+                        "source ancestry aliases different receipts",
+                    ));
+                }
+            }
+        }
         Ok(refs)
+    }
+    pub(crate) fn has_validation_budget(&self) -> bool {
+        self.validation_budget.is_some()
+    }
+    pub(crate) fn verify_joined(
+        &self,
+        retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        for expected in [&self._previous_completion, &self.source_completion] {
+            if retained(expected.operation_id)?.is_none_or(|actual| {
+                !Arc::ptr_eq(&actual, expected) || !actual.local_exit_confirmed
+            }) {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "source advancement lost actual joined ancestor",
+                ));
+            }
+        }
+        if let Some(budget) = &self.validation_budget {
+            budget.verify_joined(retained)?;
+        }
+        if let Some(CompletedReviewLineage::Round(review)) = &self.granted_review {
+            review.verify_joined(retained)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn retained_validation_grants(&self) -> Vec<crate::decisions::VerifiedRetryGrant> {
+        self.validation_budget
+            .as_ref()
+            .map(|budget| budget.grants().to_vec())
+            .unwrap_or_default()
+    }
+    pub(crate) fn verify_retained_validation_budget(
+        &self,
+        receipts: &[Receipt],
+        grants: &[crate::decisions::VerifiedRetryGrant],
+    ) -> Result<()> {
+        if let Some(budget) = &self.validation_budget {
+            budget.verify_retained(receipts, grants)?;
+        }
+        Ok(())
     }
     pub(super) fn previous_completion(&self) -> &Arc<RunCompletion> {
         &self._previous_completion
@@ -938,6 +1062,29 @@ impl VerifiedSourceAdvanced {
         if let Some(review) = &self.granted_review {
             review.verify_current(receipts, grants)?;
         }
+        if let Some(budget) = &self.validation_budget {
+            budget.verify_current(receipts, grants, false)?;
+        }
+        self.source().revalidate_filesystem()
+    }
+    /// Only the authenticated failed-origin retry reader calls this with the
+    /// exact prefix it derived from the original model and verified retry chain.
+    /// The original model already consumed this source cause; a native retry
+    /// grant may supersede its budget without erasing immutable source ancestry.
+    pub(super) fn verify_consumed_validation_prefix(
+        &self,
+        prefix: &[Receipt],
+        grants: &[crate::decisions::VerifiedRetryGrant],
+        origin: &Receipt,
+    ) -> Result<()> {
+        self.verify_admission_reference(origin)?;
+        self.verify_next_run_header(origin, "failed")?;
+        self.verify_predecessor_inventory(prefix)?;
+        if let Some(budget) = &self.validation_budget {
+            budget.verify_current(prefix, grants, true)?;
+        } else if let Some(review) = &self.granted_review {
+            review.verify_current(prefix, grants)?;
+        }
         self.source().revalidate_filesystem()
     }
     pub(crate) fn verify_completed_inventory(
@@ -955,6 +1102,15 @@ impl VerifiedSourceAdvanced {
                     "advanced review admission disappeared",
                 )
             })?;
+        self.verify_next_run_header(receipt, "completed")?;
+        let prior: Vec<_> = receipts
+            .iter()
+            .filter(|r| r.operation_id != operation)
+            .cloned()
+            .collect();
+        self.verify_current(&prior, grants)
+    }
+    fn verify_next_run_header(&self, receipt: &Receipt, outcome: &str) -> Result<()> {
         self.verify_admission_reference(receipt)?;
         let run = RunReference::from_receipt(receipt)?
             .ok_or_else(|| Error::new("worker_binding", "advanced review admission missing"))?;
@@ -980,19 +1136,65 @@ impl VerifiedSourceAdvanced {
             || result["unresolved_effects"]
                 .as_array()
                 .is_none_or(|v| !v.is_empty())
-            || result["observation"]["outcome"] != "completed"
+            || result["observation"]["outcome"] != outcome
         {
             return Err(Error::new(
                 "stale_result",
                 "advanced review differs from exact completed next admission",
             ));
         }
-        let prior: Vec<_> = receipts
+        Ok(())
+    }
+    /// The completed validation is now immutable evidence consumed by a genuine
+    /// later paired repair. Only its own exact admitted operation is projected
+    /// from the validation inventory; every unrelated/later validator remains.
+    pub(super) fn verify_completed_validation_history(
+        &self,
+        receipts: &[Receipt],
+        grants: &[crate::decisions::VerifiedRetryGrant],
+        outcome: &VerifiedAuthorizedOutcome,
+        completion: &Arc<RunCompletion>,
+    ) -> Result<()> {
+        let receipt = receipts
             .iter()
-            .filter(|r| r.operation_id != operation)
+            .find(|r| r.operation_id == completion.operation_id)
+            .ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "completed source validation disappeared",
+                )
+            })?;
+        self.verify_next_run_header(receipt, "completed")?;
+        child::completed_run(outcome, completion)?;
+        if receipt.expected != outcome.run_receipt().expected
+            || receipt
+                .observed_result
+                .as_ref()
+                .and_then(|r| r.get("observation"))
+                != Some(&completion.observation())
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "completed source validation differs from actual outcome",
+            ));
+        }
+        self.verify_contract(completion.contract.as_ref().ok_or_else(|| {
+            Error::new("worker_binding", "completed validator lost actual contract")
+        })?)?;
+        let prior = receipts
+            .iter()
+            .filter(|r| r.operation_id != completion.operation_id)
             .cloned()
-            .collect();
-        self.verify_current(&prior, grants)
+            .collect::<Vec<_>>();
+        self.verify_predecessor_inventory(&prior)?;
+        let budget = self.validation_budget.as_ref().ok_or_else(|| {
+            Error::new(
+                "validation_source_lineage",
+                "completed source lacks granted budget ancestry",
+            )
+        })?;
+        budget.verify_retained(receipts, grants)?;
+        self.source().revalidate_filesystem()
     }
     fn verify_admission_reference(&self, receipt: &Receipt) -> Result<()> {
         let expected = crate::control::SourceAdvancedReference {
@@ -1086,7 +1288,7 @@ impl DeliveryCoordinator {
         &self,
         request: SourceAdvancedRequest<'_>,
     ) -> Result<VerifiedSourceAdvanced> {
-        self.source_advanced_inner(request, None).await
+        self.source_advanced_inner(request, None, None).await
     }
     pub(crate) async fn source_advanced_retried_review(
         &self,
@@ -1132,7 +1334,7 @@ impl DeliveryCoordinator {
                 "advanced source does not follow its actual granted review",
             ));
         }
-        self.source_advanced_inner(request, Some(lineage.clone()))
+        self.source_advanced_inner(request, Some(lineage.clone()), None)
             .await
     }
     /// Validation of a paired source retains the same actual ancestry but does
@@ -1189,7 +1391,7 @@ impl DeliveryCoordinator {
                 "validation source changes its exact pair",
             ));
         }
-        self.source_advanced_inner(request, Some(lineage.clone()))
+        self.source_advanced_inner(request, Some(lineage.clone()), None)
             .await
     }
     #[cfg(test)]
@@ -1261,6 +1463,7 @@ impl DeliveryCoordinator {
         &self,
         request: SourceAdvancedRequest<'_>,
         granted_review: Option<CompletedReviewLineage>,
+        validation_budget: Option<Arc<ValidationBudgetLineage>>,
     ) -> Result<VerifiedSourceAdvanced> {
         let admission = request.source.admission;
         self.current_child_claim(admission, &request.source.original)?;
@@ -1401,7 +1604,9 @@ impl DeliveryCoordinator {
             review_rounds_consumed = retained_round_scalar_floor(&inventory, &reference)?
                 .max(completed.plan().reference().ordinal);
         }
-        if granted_review.is_none() || reference.phase.phase != "child_codex_review" {
+        if let Some(budget) = &validation_budget {
+            budget.verify_request(&inventory, &predecessor, &reference, &source_receipt)?;
+        } else if granted_review.is_none() || reference.phase.phase != "child_codex_review" {
             require_latest_phase(&inventory, predecessor.runtime_id, &reference)?;
         }
         let phase_inventory_digest =
@@ -1414,11 +1619,12 @@ impl DeliveryCoordinator {
             &source.revision().tree,
             &json!({"phase":reference.phase.phase}),
         )?;
-        let digest = canonical_digest(
-            1,
-            &json!({"purpose":"source_advanced","previous":predecessor_digest,"previous_inventory":phase_inventory_digest,"source":source_receipt_digest,
-            "source_seal":request.source.source.receipt().payload_digest,"assignment":request.assignment.digest()?,"progress":progress_digest,"review_rounds_consumed":review_rounds_consumed,"granted_review":granted_review.as_ref().map(CompletedReviewLineage::digest)}),
-        )?;
+        let mut identity = json!({"purpose":"source_advanced","previous":predecessor_digest,"previous_inventory":phase_inventory_digest,"source":source_receipt_digest,
+            "source_seal":request.source.source.receipt().payload_digest,"assignment":request.assignment.digest()?,"progress":progress_digest,"review_rounds_consumed":review_rounds_consumed,"granted_review":granted_review.as_ref().map(CompletedReviewLineage::digest)});
+        if let Some(budget) = &validation_budget {
+            identity["validation_budget"] = json!(budget.digest());
+        }
+        let digest = canonical_digest(1, &identity)?;
         Ok(VerifiedSourceAdvanced {
             assignment: request.assignment.clone(),
             reference,
@@ -1432,7 +1638,15 @@ impl DeliveryCoordinator {
             review_rounds_consumed,
             _original: request.source.original,
             _previous_completion: request.completion,
-            granted_review,
+            source_completion: request.source.completion,
+            // The validation budget already flattened this genuine completed
+            // round's closure. Keeping it here would recreate an Arc back-chain.
+            granted_review: if validation_budget.is_some() {
+                None
+            } else {
+                granted_review
+            },
+            validation_budget,
         })
     }
 }

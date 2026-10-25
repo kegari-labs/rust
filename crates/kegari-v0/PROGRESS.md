@@ -2,6 +2,25 @@
 
 Local implementation and validation remain in progress; the Goal is incomplete.
 
+The changed-source validation successor passed **766 tests,
+zero failures and two required native ignores across 39 groups** in
+772.838s. Full4 retained615 unchanged inputs at
+`sha256:7582d1afeec97bd6632d8848f6e9ead1e7d2f71ec7f442e49f23d12d2b47d439`.
+StrictClippy4, fmt4,496-block inventory, diff4 and the dispatch-disabled plan4
+also passed with before/after Rust/Cargo1.99.1 identities. Session99672 is closed;
+the collector verified15 retained invocations, including the earlier
+compile and lint failures. Required native ignores remain incomplete. This does
+not establish genuine passed-check/native joined qualification, live evaluations
+or required human calibration; the Goal remains incomplete.
+Root is preparing the exact local checkpoint. This is a separate coherent
+increment from2494a28: it continues validation after source changes, while the
+prior commit binds retries to an unchanged source. No history rewrite is needed. Check1 failed on a moved borrowed
+fixture template; check2 passed after cloning it. StrictClippy2 found one nested
+conditional, corrected without changing its predicates. Admission3 found the
+invalid three-attempt fixture cap; source4 fixes only its declared data limit. Full historical failures
+and source identities remain in the successor report. Paired/carry/evaluation
+layers remain independent TEMP work, unqualified and uninstalled.
+
 The exact-source validation retry increment passed **760 tests,
 zero failures and two required native ignores across 39 groups** in
 737.369s. Full5 retained612 unchanged build inputs at
@@ -12,13 +31,74 @@ Root session1423 is closed. The collector verified 23 retained invocation
 artifacts, including failures. Native ignores remain incomplete requirements;
 this deterministic evidence does not qualify live/native operation or complete
 the Goal.
-The coordinator is preparing the exact diff/index and local signed-off checkpoint.
+The verified local checkpoint is `2494a28f24410f33b64952af5b23da94b99e874c` —
+`feat(kegari-v0): retain exact validation retry provenance`. All36 committed
+file bodies and612 tested inputs match, with a clean tree afterward. No commits
+were consolidated, rewritten or pushed. Verification is retained at
+`/private/tmp/kegari-v0-validation-retry-integration-commit-verification.json`.
 The actual iterative Drop fix keeps long histories bounded without changing retry
 budgets; two65,536-node data-only regressions verify unique and shared tails.
 Full4's11 fixture-probe timeouts, its same-source12/12 diagnostic and the source5
 owned journaled-probe correction remain retained in the detailed report. No
 production timeout or assertion was changed; source5 release5 also passed12/12.
-Future source-successor, paired recovery and carry layers remain TEMP only.
+The source successor is now installed above; paired recovery and carry remain TEMP only.
+
+The corrected changed-source successor layer is independently reviewed at
+manifest7edb2a93fb1308f7d0ee3e7e11a81c05a02160f58745577028d2025956f9ff8a.
+It fixes successful-preparation closure in two readers and adds strict
+SourceAdvanced validation lineage for mixed original/granted history. Direct{}
+bytes remain unchanged; actual G caps and joined source/receipt closure persist.
+Six regressions are authored; current executed results are recorded above.
+Codex's exact TEMP source5 merge is now installed, preserving compiled
+bounds/destruction/fixture fixes.
+
+Root's paired native layer is TEMP only at
+`/private/tmp/kegari-paired-recovery-native-source5-draft` (eight Rust files).
+It retains actual registered round/admitted-resume capabilities, routes separate
+metadata/source/model stages, and verifies completed bridge identity separately
+from fresh clean-source admission. Config independently reviewed the narrow
+completed-record/historical enrollment readers with no new concrete finding;
+the full layer remains uncompiled and needs review/integration with Config's
+opaque paired result/descendant consumers. One TEMP routing edit assertion
+stopped before writing; the subsequent scoped edit succeeded. No repository
+source was changed by those drafts. Git's carried-acceptance vertical layer also
+remains uncompiled TEMP work, with actual baseline-transition integration pending.
+
+Codex's complete eight-file static native review found one scalar/namespace
+conflation: a restarted review-grant ordinal must not lower the retained
+implementation review counter. Root v2 at
+`/private/tmp/kegari-paired-recovery-native-source5-v2` preserves their max,
+manifest3124de9ec5846fa722c050b86dc137dc512e16f2b2603c2c80817bce4c1668b9;
+Codex verified the narrow fix. Config owns matching actual predecessor-derived
+Control accounting and its regression. The original reviewed manifest04f211cc
+remains intact. Config's opaque completed-resume and descendant layer must also
+carry actual admitted bridge handles through every flat source/budget/pass
+closure; native callbacks need the second registered bridge reader. Those
+changes remain incomplete and uninstalled, not a successful recovery claim.
+Codex separately prepares a versioned structured-review evaluation grader layer;
+all actual-agent/provider/native/human evaluation gates remain incomplete.
+
+Root leaf propagation is retained at
+`/private/tmp/kegari-paired-resume-validation-leaves-source4`, manifest
+68aff68e4f86ab9ffc50de77d212279aa6005f1f4b04f64e5e0f502af9a51836.
+Config independently reviewed the four files without a new concrete finding;
+these are syntax-only drafts requiring upstream bridge inventories. Root native
+v3 added matching actual registered-resume readers; independent review then
+found a material new-grant omission: exact-phase scheduling could miss a marked
+review predecessor in the old grant namespace. Native v4 adds request/planning
+round guards at `/private/tmp/kegari-paired-recovery-native-source4-v4`, manifest
+a4307bdbc5ccdf339a1c405ba03a738779809108149ca9968e3cb0fdcafdb851.
+Codex owns its actual-origin ReviewRetryWork predicate and pure scheduler
+regression. This finding remains unvalidated; v4 is not installed or compiled.
+The older native artifact and contrary guard rationale remain historical only.
+
+The structured-review evaluation draft is retained at
+`/private/tmp/kegari-evaluation-structured-review-draft`, manifest
+beb2f39dcf48ac5cef3c26d9f4fafa4de9dea30d5009c177b98550ee2679655a.
+It projects actual completed recorded review claims and preserves raw prose for
+human assessment; it grants no product/native authority. Root review found a
+false-negative for precise GitHub blob-link source references; its correction
+and independent integration checks remain pending. No actual evaluation ran.
 
 Source1 check1 failed13.181s on a missing chrono Duration import, parent visibility
 and one optional fixture field. Source2 check2 passed20.073s. StrictClippy2 then

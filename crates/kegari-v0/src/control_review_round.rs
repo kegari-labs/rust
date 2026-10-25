@@ -73,11 +73,21 @@ pub struct RepairValidationReference {
 }
 
 /// A receipt-only prefix, never a retry/failed-check/source capability. The
-/// current producer also retains the actual CompletedGrantedValidation object.
+/// current producer retains the actual completed validation and its opaque
+/// SourceAdvanced or CompletedGrantedValidation basis.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RepairValidationLineage {
     Direct {},
+    /// A genuine completed SourceAdvanced validator in an already granted
+    /// validation budget. Its actual admission remains the source admission;
+    /// it is never relabelled as the completed result of a retry capability.
+    SourceAdvanced {
+        source_budget_digest: String,
+        native_target: String,
+        inventory: std::collections::BTreeMap<uuid::Uuid, String>,
+        grants: std::collections::BTreeMap<uuid::Uuid, String>,
+    },
     Retried {
         origin: Box<ReviewReceiptReference>,
         #[serde(with = "strict_phase")]
@@ -298,13 +308,17 @@ impl ReviewedSourceReference {
 impl RepairValidationReference {
     pub(crate) fn source_admission(&self) -> &ReviewReceiptReference {
         match &self.lineage {
-            RepairValidationLineage::Direct {} => &self.validation,
+            RepairValidationLineage::Direct {} | RepairValidationLineage::SourceAdvanced { .. } => {
+                &self.validation
+            }
             RepairValidationLineage::Retried { origin, .. } => origin,
         }
     }
     pub(crate) fn source_phase(&self) -> &PhaseKey {
         match &self.lineage {
-            RepairValidationLineage::Direct {} => &self.phase,
+            RepairValidationLineage::Direct {} | RepairValidationLineage::SourceAdvanced { .. } => {
+                &self.phase
+            }
             RepairValidationLineage::Retried { origin_phase, .. } => origin_phase,
         }
     }
@@ -320,6 +334,39 @@ impl RepairValidationReference {
         validate_digest(&self.failure_inventory_digest)?;
         match &self.lineage {
             RepairValidationLineage::Direct {} => (),
+            RepairValidationLineage::SourceAdvanced {
+                source_budget_digest,
+                native_target,
+                inventory,
+                grants,
+            } => {
+                validate_digest(source_budget_digest)?;
+                if source_budget_digest != &self.source_advanced.trigger_digest
+                    || self.phase.retry_grant.is_none()
+                    || !native_target.starts_with("linear:")
+                    || native_target.len() > 4096
+                    || inventory.is_empty()
+                    || grants.is_empty()
+                    || inventory.get(&self.validation.operation)
+                        != Some(&self.validation.receipt_digest)
+                    || inventory.get(&self.source_advanced.predecessor)
+                        != Some(&self.source_advanced.predecessor_receipt_digest)
+                    || self
+                        .phase
+                        .retry_grant
+                        .is_none_or(|id| !grants.contains_key(&id))
+                {
+                    return Err(invalid(
+                        "advanced validation loses its exact source budget or receipt prefix",
+                    ));
+                }
+                for (operation, digest) in inventory.iter().chain(grants) {
+                    if operation.is_nil() {
+                        return Err(invalid("nil validation lineage receipt"));
+                    }
+                    validate_digest(digest)?;
+                }
+            }
             RepairValidationLineage::Retried {
                 origin,
                 origin_phase,

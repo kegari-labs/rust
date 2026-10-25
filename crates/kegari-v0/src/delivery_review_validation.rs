@@ -33,94 +33,101 @@ impl ValidationEvidence {
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
     ) -> Result<()> {
         match self {
-            Self::Direct(source) => require_joined(source.previous_completion(), retained),
+            Self::Direct(source) => source.verify_joined(retained),
             Self::Retried(proof) => proof.verify_joined(retained),
+        }
+    }
+    pub(super) fn source_receipts(&self) -> Result<BTreeMap<Uuid, String>> {
+        match self {
+            Self::Direct(source) => source.retained_receipt_references(),
+            Self::Retried(completed) => completed
+                .source_advanced()
+                .map(|source| source.retained_receipt_references())
+                .transpose()
+                .map(|value| value.unwrap_or_default()),
         }
     }
     pub(super) fn reference_lineage(
         &self,
         receipts: &[Receipt],
         grants: &[VerifiedRetryGrant],
+        completion: &Arc<RunCompletion>,
     ) -> Result<RepairValidationLineage> {
-        let Self::Retried(proof) = self else {
-            return Ok(RepairValidationLineage::Direct {});
-        };
-        proof.verify_current(receipts, grants)?;
-        let origin = proof
-            .original_source_admission()
-            .ok_or_else(|| blocked("retried paired validation has no original source admission"))?;
-        let actual = actual_receipt(receipts, origin.operation_id)?;
-        if canonical_digest(1, actual)? != canonical_digest(1, origin)? {
-            return Err(blocked("original validation source receipt changed"));
-        }
-        let origin_run = closed_run(actual, "failed")?;
-        let latest = actual_receipt(receipts, proof.completion().operation_id)?;
+        self.verify_current(receipts, grants, completion)?;
+        let latest = actual_receipt(receipts, completion.operation_id)?;
         let latest_run = closed_run(latest, "completed")?;
-        if origin_run.phase.phase != "child_local_validation"
-            || origin_run.phase.work != latest_run.phase.work
-            || origin_run.phase.generation != latest_run.phase.generation
-            || origin_run.workspace != latest_run.workspace
-            || origin_run.account != latest_run.account
-        {
-            return Err(blocked(
-                "retried validator changes original source workspace or phase",
-            ));
-        }
-        let inventory = validation_inventory(receipts, latest.runtime_id, &latest_run)?;
-        let mut publication = BTreeMap::new();
-        let mut native_target: Option<String> = None;
-        for receipt in receipts {
-            if !inventory.contains_key(&receipt.operation_id) {
-                continue;
-            }
-            let run = RunReference::from_receipt(receipt)?
-                .ok_or_else(|| blocked("validation inventory contains non-model record"))?;
-            if let Some(id) = run.phase.retry_grant {
-                let grant = grants
-                    .iter()
-                    .find(|g| g.record().operation_id == id)
-                    .ok_or_else(|| blocked("validation prefix lost current native grant"))?;
-                crate::runtime_workflow::require_current_grant(grant, grants)?;
-                let work = grant.work();
-                let target = format!(
-                    "linear:{}:{}:{}",
-                    work.linear_endpoint,
-                    work.linear_workspace,
-                    work.child.unwrap_or(work.parent)
-                );
-                if native_target
-                    .as_ref()
-                    .is_some_and(|expected| expected != &target)
-                {
+        require_recorded_session(latest, completion)?;
+        match self {
+            Self::Direct(source) => {
+                if !source.has_validation_budget() {
+                    return Ok(RepairValidationLineage::Direct {});
+                }
+                let actual = SourceAdvancedReference::from_receipt(latest)?.ok_or_else(|| {
+                    blocked("advanced validator lost its actual source admission")
+                })?;
+                if actual != source_reference(source) || latest_run.phase != *source.phase() {
                     return Err(blocked(
-                        "validation grants name different actual provider targets",
+                        "advanced validator changed its exact source budget",
                     ));
                 }
-                native_target = Some(target);
-                let actual = actual_receipt(receipts, id)?;
-                publication.insert(id, canonical_digest(1, actual)?);
+                let inventory = validation_inventory(receipts, latest.runtime_id, &latest_run)?;
+                let (native_target, publications) =
+                    validation_publications(receipts, grants, &inventory)?;
+                Ok(RepairValidationLineage::SourceAdvanced {
+                    source_budget_digest: source.digest().into(),
+                    native_target,
+                    inventory,
+                    grants: publications,
+                })
+            }
+            Self::Retried(proof) => {
+                let origin = proof.original_source_admission().ok_or_else(|| {
+                    blocked("retried paired validation has no original source admission")
+                })?;
+                let actual = actual_receipt(receipts, origin.operation_id)?;
+                if canonical_digest(1, actual)? != canonical_digest(1, origin)? {
+                    return Err(blocked("original validation source receipt changed"));
+                }
+                let origin_run = closed_run(actual, "failed")?;
+                if origin_run.phase.phase != "child_local_validation"
+                    || origin_run.phase.work != latest_run.phase.work
+                    || origin_run.phase.generation != latest_run.phase.generation
+                    || origin_run.workspace != latest_run.workspace
+                    || origin_run.account != latest_run.account
+                {
+                    return Err(blocked(
+                        "retried validator changes original source workspace or phase",
+                    ));
+                }
+                let inventory = validation_inventory(receipts, latest.runtime_id, &latest_run)?;
+                let (native_target, publications) =
+                    validation_publications(receipts, grants, &inventory)?;
+                Ok(RepairValidationLineage::Retried {
+                    origin: Box::new(receipt_reference(actual)?),
+                    origin_phase: origin_run.phase,
+                    completed_retry_digest: proof.digest().into(),
+                    native_target,
+                    inventory,
+                    grants: publications,
+                })
             }
         }
-        Ok(RepairValidationLineage::Retried {
-            origin: Box::new(receipt_reference(actual)?),
-            origin_phase: origin_run.phase,
-            completed_retry_digest: proof.digest().into(),
-            native_target: native_target
-                .ok_or_else(|| blocked("granted validation lost actual native target"))?,
-            inventory,
-            grants: publication,
-        })
     }
     pub(super) fn retained_grants(
         &self,
         receipts: &[Receipt],
         grants: &[VerifiedRetryGrant],
+        completion: &Arc<RunCompletion>,
     ) -> Result<Vec<VerifiedRetryGrant>> {
+        if let Self::Direct(source) = self {
+            source.verify_retained_validation_budget(receipts, grants)?;
+            return Ok(source.retained_validation_grants());
+        }
         let RepairValidationLineage::Retried {
             grants: references, ..
-        } = self.reference_lineage(receipts, grants)?
+        } = self.reference_lineage(receipts, grants, completion)?
         else {
-            return Ok(Vec::new());
+            return Err(blocked("retried validation lost its typed lineage"));
         };
         references
             .keys()
@@ -133,6 +140,63 @@ impl ValidationEvidence {
             })
             .collect()
     }
+}
+fn validation_publications(
+    receipts: &[Receipt],
+    grants: &[VerifiedRetryGrant],
+    inventory: &BTreeMap<Uuid, String>,
+) -> Result<(String, BTreeMap<Uuid, String>)> {
+    let mut publications = BTreeMap::new();
+    let mut native_target: Option<String> = None;
+    for receipt in receipts {
+        if !inventory.contains_key(&receipt.operation_id) {
+            continue;
+        }
+        let run = RunReference::from_receipt(receipt)?
+            .ok_or_else(|| blocked("validation inventory contains non-model record"))?;
+        if let Some(id) = run.phase.retry_grant {
+            let grant = grants
+                .iter()
+                .find(|g| g.record().operation_id == id)
+                .ok_or_else(|| blocked("validation prefix lost current native grant"))?;
+            crate::runtime_workflow::require_current_grant(grant, grants)?;
+            if grant.phase_key() != run.phase
+                || grant.record().runtime_id != receipt.runtime_id
+                || grant.record().workspace_id != run.workspace
+                || grants
+                    .iter()
+                    .filter(|current| current.phase() == grant.phase())
+                    .count()
+                    != 1
+            {
+                return Err(blocked(
+                    "validation grant no longer uniquely names its actual budget",
+                ));
+            }
+            let work = grant.work();
+            let target = format!(
+                "linear:{}:{}:{}",
+                work.linear_endpoint,
+                work.linear_workspace,
+                work.child.unwrap_or(work.parent)
+            );
+            if native_target
+                .as_ref()
+                .is_some_and(|expected| expected != &target)
+            {
+                return Err(blocked(
+                    "validation grants name different actual provider targets",
+                ));
+            }
+            native_target = Some(target);
+            let actual = actual_receipt(receipts, id)?;
+            publications.insert(id, canonical_digest(1, actual)?);
+        }
+    }
+    Ok((
+        native_target.ok_or_else(|| blocked("granted validation lost actual native target"))?,
+        publications,
+    ))
 }
 fn validation_inventory(
     receipts: &[Receipt],
@@ -213,7 +277,7 @@ impl DeliveryCoordinator {
         let run = closed_run(actual, "completed")?;
         require_recorded_session(actual, &validation_completion)?;
         let evidence = ValidationEvidence::Retried(validation.clone());
-        let lineage = evidence.reference_lineage(&receipts, grants)?;
+        let lineage = evidence.reference_lineage(&receipts, grants, &validation_completion)?;
         let unfinished = Arc::new(
             self.unfinished_validation_after_granted_round(
                 request,

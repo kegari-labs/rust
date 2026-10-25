@@ -179,10 +179,11 @@ pub(super) fn verify_validation(
     require_not_held(snapshot, receipt)?;
     require_spacing(receipt)?;
     let origin = exact_receipt(receipts, validation.source_admission())?;
-    let origin_outcome = if validation.lineage.is_direct() {
-        "completed"
-    } else {
-        "failed"
+    let origin_outcome = match &validation.lineage {
+        RepairValidationLineage::Retried { .. } => "failed",
+        RepairValidationLineage::Direct {} | RepairValidationLineage::SourceAdvanced { .. } => {
+            "completed"
+        }
     };
     let origin_run = closed_worker(origin, origin_outcome)?;
     require_not_held(snapshot, origin)?;
@@ -225,7 +226,7 @@ pub(super) fn verify_validation(
         ));
     }
     if !validation.lineage.is_direct() {
-        return verify_retried_validation(snapshot, round, validation, receipts, current);
+        return verify_namespaced_validation(snapshot, round, validation, receipts, current);
     }
     let mut inventory = BTreeMap::new();
     for observed in receipts {
@@ -265,21 +266,38 @@ pub(super) fn verify_validation(
 /// The recorded prefix is immutable evidence. The required final opaque callback
 /// verifies actual native grant ancestry and joined assignment/check capability;
 /// these protected receipt checks never mint that authority from hashes.
-fn verify_retried_validation(
+fn verify_namespaced_validation(
     snapshot: &ControlSnapshot,
     round: &ReviewRoundReference,
     validation: &RepairValidationReference,
     receipts: &[Receipt],
     current: bool,
 ) -> Result<()> {
-    let RepairValidationLineage::Retried {
-        inventory: expected,
-        grants,
-        native_target,
-        ..
-    } = &validation.lineage
-    else {
-        return Err(round_error("retried validation requires its exact lineage"));
+    let (expected, grants, native_target) = match &validation.lineage {
+        RepairValidationLineage::Retried {
+            inventory,
+            grants,
+            native_target,
+            ..
+        } => (inventory, grants, native_target),
+        RepairValidationLineage::SourceAdvanced {
+            source_budget_digest,
+            inventory,
+            grants,
+            native_target,
+        } => {
+            if source_budget_digest != &validation.source_advanced.trigger_digest {
+                return Err(round_error(
+                    "advanced validation changes its actual source budget",
+                ));
+            }
+            (inventory, grants, native_target)
+        }
+        RepairValidationLineage::Direct {} => {
+            return Err(round_error(
+                "namespaced validation requires its exact lineage",
+            ));
+        }
     };
     if receipts.len() > MAX_ROUND_RECEIPTS || expected.len() > MAX_ROUND_RECEIPTS {
         return Err(Error::new(

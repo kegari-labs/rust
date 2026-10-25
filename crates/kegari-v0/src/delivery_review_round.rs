@@ -226,7 +226,11 @@ impl VerifiedReviewRoundPlan {
                     || reference.outcome_claim_digest != validation_outcome.digest()
                     || reference.failure_inventory_digest
                         != unfinished.failure_phase_inventory_digest()
-                    || validation_source.reference_lineage(receipts, grants)? != reference.lineage
+                    || validation_source.reference_lineage(
+                        receipts,
+                        grants,
+                        validation_completion,
+                    )? != reference.lineage
                     || crate::control::SourceAdvancedReference::from_receipt(actual_receipt(
                         receipts,
                         reference.source_admission().operation,
@@ -347,6 +351,40 @@ impl VerifiedReviewRoundPlan {
             .collect();
         self.verify_current(&before, grants)
     }
+    pub(crate) fn completed_repair_for_validation(
+        &self,
+        receipts: &[Receipt],
+        grants: &[VerifiedRetryGrant],
+        completion: &Arc<RunCompletion>,
+    ) -> Result<Arc<CompletedReviewRound>> {
+        if !self.reference.is_repair() {
+            return Err(blocked(
+                "validation advancement requires an actual paired implementation",
+            ));
+        }
+        let receipt = actual_receipt(receipts, completion.operation_id)?;
+        self.verify_terminal(receipts, grants, receipt, "completed")?;
+        require_recorded_session(receipt, completion)?;
+        self.verify_contract(
+            completion
+                .contract
+                .as_ref()
+                .ok_or_else(|| blocked("paired implementation lost contract"))?,
+        )?;
+        self.completed_findings()
+    }
+    pub(crate) fn retained_repair_receipts(
+        &self,
+        receipts: &[Receipt],
+        operation: Uuid,
+    ) -> Result<BTreeMap<Uuid, String>> {
+        let actual = actual_receipt(receipts, operation)?;
+        self.verify_terminal_header(receipts, actual, "completed")?;
+        let mut retained = self.retained.clone();
+        retain_terminal(&mut retained, receipts, actual)?;
+        Ok(retained)
+    }
+
     fn verify_run_bounds(&self, run: &RunReference) -> Result<()> {
         let previous = match &self.basis {
             RoundBasis::Initial => {
@@ -947,9 +985,16 @@ impl DeliveryCoordinator {
         require_recorded_session(validation, &validation_completion)?;
         let advanced = crate::control::SourceAdvancedReference::from_receipt(validation)?
             .ok_or_else(|| blocked("continued validation lacks its exact source advancement"))?;
+        let evidence = ValidationEvidence::Direct(validation_source.clone());
+        let lineage = evidence.reference_lineage(&receipts, grants, &validation_completion)?;
         let unfinished = Arc::new(
-            self.unfinished_validation_in_round(request, previous.clone(), grants)
-                .await?,
+            self.unfinished_validation_in_round(
+                request,
+                previous.clone(),
+                validation_source.clone(),
+                grants,
+            )
+            .await?,
         );
         let mut reference = previous.reference.clone();
         reference.round_limit = reference
@@ -963,7 +1008,7 @@ impl DeliveryCoordinator {
                 validation: receipt_reference(validation)?,
                 phase: validation_run.phase,
                 source_advanced: advanced,
-                lineage: crate::control::RepairValidationLineage::Direct {},
+                lineage,
                 outcome_proposal: validation_outcome.outcome().proposal_id,
                 outcome_claim_digest: validation_outcome.digest().into(),
                 failure_inventory_digest: unfinished.failure_phase_inventory_digest().into(),
@@ -978,7 +1023,7 @@ impl DeliveryCoordinator {
             RoundBasis::RepairContinuation {
                 previous,
                 unfinished: unfinished.clone(),
-                validation_source: ValidationEvidence::Direct(validation_source),
+                validation_source: evidence,
                 validation_outcome,
                 validation_completion,
             },
@@ -1234,10 +1279,14 @@ impl DeliveryCoordinator {
             RoundBasis::AfterRepair { paired, .. } => paired.validation_grants.clone(),
         };
         if let RoundBasis::RepairContinuation {
-            validation_source, ..
+            validation_source,
+            validation_completion,
+            ..
         } = &basis
         {
-            for grant in validation_source.retained_grants(&receipts, grants)? {
+            for grant in
+                validation_source.retained_grants(&receipts, grants, validation_completion)?
+            {
                 if let Some(old) =
                     validation_grants.insert(grant.record().operation_id, grant.clone())
                     && old.digest() != grant.digest()
@@ -1264,9 +1313,16 @@ impl DeliveryCoordinator {
             RoundBasis::RepairContinuation {
                 previous,
                 validation_completion,
+                validation_source,
                 ..
             } => {
                 let mut retained = previous.retained.clone();
+                for (id, digest) in validation_source.source_receipts()? {
+                    if canonical_digest(1, actual_receipt(&receipts, id)?)? != digest {
+                        return Err(blocked("continued validation source ancestry changed"));
+                    }
+                    retain_exact(&mut retained, id, digest)?;
+                }
                 retain_terminal(
                     &mut retained,
                     &receipts,
