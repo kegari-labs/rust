@@ -201,6 +201,52 @@ impl AuthorizedObjectRequest {
             authority_digest: admission.fresh_gate().digest()?,
         })
     }
+    /// Import both roots only for a current corrected parent with an actual
+    /// terminal predecessor effect. The old accepted candidate is provenance,
+    /// never a new production effect authorization.
+    pub(crate) fn for_successor_merge(
+        contract: &RepositoryContract,
+        permit: &Permit,
+        admission: &DeliveryAdmission,
+        predecessor: &crate::runtime_delivery::KnownPredecessorBaseline,
+        observed: &crate::delivery::ObservedReleaseStep,
+    ) -> Result<Self> {
+        predecessor.require_effect(observed, admission.fresh_gate())?;
+        if admission.scope().phase != crate::delivery::DeliveryPhase::CandidateAssembly
+            || admission.scope().work.child.is_some()
+            || predecessor.work() != &admission.scope().work
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "successor source needs this corrected parent's assembly admission",
+            ));
+        }
+        let mut request = Self::for_release_merge(contract, permit, admission, observed)?;
+        let candidate = predecessor
+            .origin()
+            .manifest()
+            .candidates
+            .iter()
+            .find(|candidate| candidate.repository == contract.repository)
+            .ok_or_else(|| Error::new("candidate_provenance", "predecessor candidate missing"))?;
+        let result = candidate.result.as_ref().ok_or_else(|| {
+            Error::new(
+                "candidate_provenance",
+                "predecessor candidate is incomplete",
+            )
+        })?;
+        if result.tree != request.revision.tree
+            || predecessor.baseline(&contract.repository)?.production() != &request.revision
+        {
+            return Err(Error::new(
+                "production_provenance",
+                "observed predecessor merge is not exact current accepted product tree",
+            ));
+        }
+        insert_revision(&mut request.required_revisions, result)?;
+        insert_revision(&mut request.required_revisions, &candidate.production)?;
+        Ok(request)
+    }
     /// The squash and the reviewed head are distinct roots after squash merge.
     /// Both must be retained so the original patch can be verified unchanged.
     pub fn for_staging_merge(

@@ -20,6 +20,10 @@ use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+#[path = "evaluation_context.rs"]
+mod context_binding;
+use context_binding::{HostContext, NativeContextBinding};
+
 pub const SUITE_SCHEMA: u32 = 1;
 pub const GRADER_VERSION: &str = "kegari-observable-v2";
 pub const MAX_EVIDENCE_BYTES: usize = 8 * 1024 * 1024;
@@ -321,32 +325,7 @@ fn relative(text: &str) -> Result<&Path> {
     Ok(path)
 }
 fn bounded_read(path: &Path) -> Result<Vec<u8>> {
-    let metadata =
-        std::fs::symlink_metadata(path).map_err(|e| Error::io("inspect evaluation input", e))?;
-    if !metadata.is_file() || metadata.len() > MAX_EVIDENCE_BYTES as u64 {
-        return Err(Error::new(
-            "evidence_limit",
-            "evaluation input is not a bounded regular file",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.nlink() != 1 {
-            return Err(Error::new(
-                "scope_violation",
-                "evaluation files may not alias another file",
-            ));
-        }
-    }
-    let bytes = std::fs::read(path).map_err(|e| Error::io("read evaluation input", e))?;
-    if bytes.len() > MAX_EVIDENCE_BYTES {
-        return Err(Error::new(
-            "evidence_limit",
-            "evaluation file grew beyond limit",
-        ));
-    }
-    Ok(bytes)
+    Ok(fixture_capture::read_file(path, MAX_EVIDENCE_BYTES)?.into_bytes())
 }
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     serde_json::from_slice(&bounded_read(path)?)
@@ -373,56 +352,12 @@ fn file_mode(metadata: &std::fs::Metadata) -> u32 {
         }
     }
 }
+#[path = "evaluation_fixture.rs"]
+mod fixture_capture;
+
 /// Sorted path/content digest, independent of machine path, clock and file enumeration order.
 pub fn snapshot(root: &Path) -> Result<BTreeMap<String, FileSnapshot>> {
-    fn visit(
-        root: &Path,
-        path: &Path,
-        result: &mut BTreeMap<String, FileSnapshot>,
-        bytes: &mut usize,
-    ) -> Result<()> {
-        let meta =
-            std::fs::symlink_metadata(path).map_err(|e| Error::io("inspect fixture tree", e))?;
-        if meta.is_dir() {
-            for entry in
-                std::fs::read_dir(path).map_err(|e| Error::io("read fixture directory", e))?
-            {
-                let entry = entry.map_err(|e| Error::io("read fixture entry", e))?;
-                // Only the execution repository's own Git administration is
-                // checked separately by the revision verifier. A nested `.git`
-                // name cannot hide an added file from scope/diff grading.
-                if path == root && entry.file_name() == ".git" {
-                    continue;
-                }
-                visit(root, &entry.path(), result, bytes)?;
-            }
-        } else {
-            let data = bounded_read(path)?;
-            *bytes = bytes
-                .checked_add(data.len())
-                .ok_or_else(|| Error::invalid("fixture size overflow"))?;
-            if result.len() >= MAX_FILES || *bytes > MAX_EVIDENCE_BYTES {
-                return Err(Error::new("evidence_limit", "fixture tree exceeds bound"));
-            }
-            let key = path
-                .strip_prefix(root)
-                .map_err(|_| Error::invalid("fixture escaped root"))?
-                .to_str()
-                .ok_or_else(|| Error::invalid("fixture path not UTF-8"))?
-                .to_string();
-            result.insert(
-                key,
-                FileSnapshot {
-                    digest: bytes_digest(&data),
-                    mode: file_mode(&meta),
-                },
-            );
-        }
-        Ok(())
-    }
-    let mut result = BTreeMap::new();
-    visit(root, root, &mut result, &mut 0)?;
-    Ok(result)
+    Ok(fixture_capture::CapturedTree::capture(root)?.snapshot())
 }
 pub fn tree_digest(root: &Path) -> Result<String> {
     canonical_digest(1, &snapshot(root)?)
@@ -443,6 +378,7 @@ pub struct PreparedFixture {
     // access is useful to the host, but cannot silently substitute another
     // fixture after preparation while retaining the original report provenance.
     preparation_digest: String,
+    context_binding: Option<NativeContextBinding>,
 }
 impl PreparedFixture {
     fn preparation_digest(&self) -> Result<String> {
@@ -452,7 +388,7 @@ impl PreparedFixture {
                 "root":self.root,"repository":self.repository,"scratch":self.scratch,
                 "codex_home":self.codex_home,"grader_root":self.grader_root,
                 "before":self.before,"input":self.input,"prior":self.prior,
-                "fixture_digest":self.fixture_digest
+                "fixture_digest":self.fixture_digest,"context_binding":self.context_binding
             }),
         )
     }
@@ -486,7 +422,21 @@ pub fn prepare_fixture(
             "fixture source escapes the suite",
         ));
     }
-    if tree_digest(&source)? != variant.fixture_digest {
+    let captured = fixture_capture::CapturedTree::capture(&source)?;
+    prepare_captured_fixture(&suite_root, variant, &captured, destination, grader_root)
+}
+
+// Every source input below comes from the same immutable capture whose digest
+// is checked here. A concurrent source edit cannot enter the reset under an old
+// fixture identity, even if the source is restored before preparation ends.
+fn prepare_captured_fixture(
+    suite_root: &Path,
+    variant: &Variant,
+    captured: &fixture_capture::CapturedTree,
+    destination: &Path,
+    grader_root: &Path,
+) -> Result<PreparedFixture> {
+    if canonical_digest(1, &captured.snapshot())? != variant.fixture_digest {
         return Err(Error::new(
             "fixture_changed",
             "fixture changed before reset",
@@ -513,7 +463,7 @@ pub fn prepare_fixture(
     );
     if root.starts_with(&grader_root)
         || grader_root.starts_with(&root)
-        || root.starts_with(&suite_root)
+        || root.starts_with(suite_root)
     {
         return Err(Error::new(
             "grader_exposed",
@@ -526,17 +476,14 @@ pub fn prepare_fixture(
     let prior: Option<Value> = match &variant.seed {
         Seed::Fresh => None,
         Seed::DeclaredPrior { artifact, digest } => {
-            let data = bounded_read(&source.join(relative(artifact)?))?;
-            if bytes_digest(&data) != *digest {
+            let data = captured.file(artifact)?.bytes();
+            if bytes_digest(data) != *digest {
                 return Err(Error::new("seed_changed", "declared prior state changed"));
             }
-            Some(
-                serde_json::from_slice(&data)
-                    .map_err(|_| Error::invalid("prior state not JSON"))?,
-            )
+            Some(serde_json::from_slice(data).map_err(|_| Error::invalid("prior state not JSON"))?)
         }
     };
-    let source_files = snapshot(&source.join("repository"))?;
+    let source_files = captured.repository_files();
     // The reused-guidance variant stages its declared old guidance in this same
     // directory, then applies the current fixture before fresh production discovery.
     if let Some(files) = prior
@@ -545,7 +492,7 @@ pub fn prepare_fixture(
         .and_then(Value::as_object)
     {
         for (path, text) in files {
-            if !source_files.contains_key(path) {
+            if !source_files.contains_key(path.as_str()) {
                 return Err(Error::invalid(
                     "declared prior file is outside current fixture inventory",
                 ));
@@ -565,23 +512,15 @@ pub fn prepare_fixture(
             .map_err(|e| Error::io("stage declared prior file", e))?;
         }
     }
-    for path in source_files.keys() {
+    for (path, file) in &source_files {
         let dest = repository.join(relative(path)?);
         std::fs::create_dir_all(
             dest.parent()
                 .ok_or_else(|| Error::invalid("missing parent"))?,
         )
         .map_err(|e| Error::io("create fixture directories", e))?;
-        let source_file = source.join("repository").join(path);
-        std::fs::write(&dest, bounded_read(&source_file)?)
-            .map_err(|e| Error::io("copy fixture file", e))?;
-        std::fs::set_permissions(
-            &dest,
-            std::fs::metadata(&source_file)
-                .map_err(|e| Error::io("read fixture file mode", e))?
-                .permissions(),
-        )
-        .map_err(|e| Error::io("preserve fixture file mode", e))?;
+        std::fs::write(&dest, file.bytes()).map_err(|e| Error::io("copy fixture file", e))?;
+        file.apply_mode(&dest)?;
     }
     let scratch = root.join("scratch");
     let codex_home = root.join("codex-home");
@@ -595,7 +534,7 @@ pub fn prepare_fixture(
         }
     }
     let workflow_path = repository.join("WORKFLOW.md");
-    let workflow = String::from_utf8(bounded_read(&workflow_path)?)
+    let workflow = std::str::from_utf8(captured.file("repository/WORKFLOW.md")?.bytes())
         .map_err(|_| Error::invalid("fixture workflow must be UTF-8"))?;
     let scratch_text = scratch
         .to_str()
@@ -603,13 +542,20 @@ pub fn prepare_fixture(
     // Only this declared fixture resource parameter is substituted; production
     // Workflow parsing/rendering still owns the complete effective workflow.
     let escaped = scratch_text.replace('\\', "\\\\").replace('"', "\\\"");
-    std::fs::write(
-        &workflow_path,
-        workflow.replace("@KegariScratch@", &escaped),
-    )
-    .map_err(|e| Error::io("bind fixture scratch resource", e))?;
-    let input = read_json(&source.join("context.json"))?;
-    let before = snapshot(&repository)?;
+    let bound_workflow = workflow.replace("@KegariScratch@", &escaped);
+    std::fs::write(&workflow_path, &bound_workflow)
+        .map_err(|e| Error::io("bind fixture scratch resource", e))?;
+    let input = serde_json::from_slice(captured.file("context.json")?.bytes())
+        .map_err(|_| Error::invalid("invalid evaluation JSON"))?;
+    let context_binding = if let Some(file) = captured.optional_file("context-binding.json") {
+        let binding: NativeContextBinding = serde_json::from_slice(file.bytes())
+            .map_err(|_| Error::invalid("invalid evaluation JSON"))?;
+        binding.validate(&input)?;
+        Some(binding)
+    } else {
+        None
+    };
+    let before = captured.verify_reset(&repository, bound_workflow.as_bytes())?;
     let mut prepared = PreparedFixture {
         root,
         repository,
@@ -621,6 +567,7 @@ pub fn prepare_fixture(
         prior,
         fixture_digest: variant.fixture_digest.clone(),
         preparation_digest: String::new(),
+        context_binding,
     };
     prepared.preparation_digest = prepared.preparation_digest()?;
     Ok(prepared)
@@ -681,20 +628,27 @@ fn verify_fixture_scope(
         AgentRole::IndependentReview => ExecutionRole::IndependentReview,
         AgentRole::Validation => ExecutionRole::Validation,
     };
-    let expected_writes: BTreeSet<PathBuf> = fixture
-        .input
-        .pointer("/scope/write_paths")
-        .and_then(Value::as_array)
-        .ok_or_else(|| Error::invalid("fixture scope lacks write paths"))?
-        .iter()
-        .map(|value| {
-            relative(
+    let declared_writes = if let Some(binding) = &fixture.context_binding {
+        binding.validate(&fixture.input)?;
+        binding.write_paths().to_vec()
+    } else {
+        fixture
+            .input
+            .pointer("/scope/write_paths")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::invalid("fixture scope lacks write paths"))?
+            .iter()
+            .map(|value| {
                 value
                     .as_str()
-                    .ok_or_else(|| Error::invalid("write path is not text"))?,
-            )
-            .map(|path| fixture.repository.join(path))
-        })
+                    .map(str::to_owned)
+                    .ok_or_else(|| Error::invalid("write path is not text"))
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    let expected_writes: BTreeSet<PathBuf> = declared_writes
+        .iter()
+        .map(|path| relative(path).map(|path| fixture.repository.join(path)))
         .collect::<Result<_>>()?;
     let plan = isolation.plan();
     let actual: BTreeSet<_> = plan
@@ -737,14 +691,13 @@ pub fn assemble_trial(
     isolation: &ValidatedIsolation,
     report_root: &Path,
 ) -> Result<AssembledInstructions> {
+    verify_declared_phase(variant, input.role, input.phase)?;
     verify_grader_boundary(
         isolation,
         &[fixture.grader_root.clone(), report_root.to_owned()],
     )?;
     verify_fixture_scope(variant, fixture, isolation, &input.permissions)?;
-    if input.role != variant.role
-        || input.phase != variant.phase
-        || input.cwd != fixture.repository
+    if input.cwd != fixture.repository
         || input.codex_home != fixture.codex_home
         || isolation.plan().repository != fixture.repository
         || input.workflow.path != fixture.repository.join("WORKFLOW.md")
@@ -771,10 +724,18 @@ pub fn assemble_trial(
     verify_fixture_context(
         input.context,
         fixture,
-        input.workspace_id,
-        input.operation_id,
-        input.profile,
-        input.phase,
+        &HostContext {
+            workspace: input.workspace_id,
+            operation: input.operation_id,
+            profile: input.profile,
+            phase: input.phase,
+            work_generation: input.work_generation,
+            correction_revision: input.correction_revision,
+            repository_revision: input
+                .repository
+                .as_ref()
+                .map(|repository| repository.revision.as_str()),
+        },
     )?;
     instructions::assemble(input)
 }
@@ -785,12 +746,18 @@ pub fn assemble_trial(
 fn verify_fixture_context(
     context: &Value,
     fixture: &PreparedFixture,
-    workspace: uuid::Uuid,
-    operation: uuid::Uuid,
-    profile: &Profile,
-    phase: &str,
+    host: &HostContext<'_>,
 ) -> Result<()> {
     fixture.verify_preparation()?;
+    if let Some(binding) = &fixture.context_binding {
+        if context != &binding.materialize(&fixture.input, host)? {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "native task or declared host context was substituted",
+            ));
+        }
+        return Ok(());
+    }
     let mut expected = fixture
         .input
         .as_object()
@@ -804,14 +771,15 @@ fn verify_fixture_context(
     for (key, value) in [
         (
             "workspace",
-            serde_json::json!({"id":workspace,"name":"synthetic"}),
+            serde_json::json!({"id":host.workspace,"name":"synthetic"}),
         ),
-        ("operation", serde_json::json!({"id":operation})),
+        ("operation", serde_json::json!({"id":host.operation})),
         (
             "profile",
-            serde_json::to_value(profile).map_err(|_| Error::invalid("profile encoding failed"))?,
+            serde_json::to_value(host.profile)
+                .map_err(|_| Error::invalid("profile encoding failed"))?,
         ),
-        ("phase", Value::String(phase.into())),
+        ("phase", Value::String(host.phase.into())),
     ] {
         if expected.insert(key.into(), value).is_some() {
             return Err(Error::invalid("fixture redeclares reserved host context"));
@@ -1637,6 +1605,19 @@ fn verify_trial_declaration(
     Ok(())
 }
 
+/// Native workers already have an assembled contract, so they bypass the direct
+/// assembler above. Both entries must bind the declared phase independently of
+/// context placeholders, which intentionally use the actual host's identities.
+fn verify_declared_phase(variant: &Variant, role: AgentRole, phase: &str) -> Result<()> {
+    if role != variant.role || phase != variant.phase {
+        return Err(Error::new(
+            "evaluation_fidelity",
+            "actual worker role or phase differs from the declared trial",
+        ));
+    }
+    Ok(())
+}
+
 /// Invoked explicitly, once per fresh trial. There is no retry-until-pass loop.
 pub async fn run_live_trial(
     suite: &SuiteManifest,
@@ -1665,6 +1646,11 @@ pub async fn run_live_trial(
             "operator-supplied evaluated model/account/profile binding is unresolved".into();
         return Ok(report);
     };
+    verify_declared_phase(
+        variant,
+        operation.assembled.manifest.role,
+        &operation.assembled.manifest.phase,
+    )?;
     operation.host.validate_live_operation(
         operation.assembled,
         operation.isolation,
@@ -1674,10 +1660,15 @@ pub async fn run_live_trial(
     verify_fixture_context(
         operation.host.bound_context(),
         operation.fixture,
-        operation.assembled.manifest.workspace_id,
-        operation.assembled.manifest.operation_id,
-        &operation.assembled.manifest.profile,
-        &operation.assembled.manifest.phase,
+        &HostContext {
+            workspace: operation.assembled.manifest.workspace_id,
+            operation: operation.assembled.manifest.operation_id,
+            profile: &operation.assembled.manifest.profile,
+            phase: &operation.assembled.manifest.phase,
+            work_generation: &operation.assembled.manifest.work_generation,
+            correction_revision: &operation.assembled.manifest.correction_revision,
+            repository_revision: operation.assembled.manifest.repository_revision.as_deref(),
+        },
     )?;
     verify_grader_boundary(
         operation.isolation,
@@ -2158,8 +2149,15 @@ where
             )?
         } else {
             store.started(&key)?;
-            match tokio::time::timeout(remaining, execute(variant.clone(), key.clone(), remaining))
-                .await
+            // Preparation, admission and final collection belong to this trial,
+            // too. An executor stalled before run_live_trial must not borrow the
+            // rest of the suite's larger wall-clock allowance.
+            let trial_limit = remaining.min(Duration::from_secs(variant.bounds.max_seconds));
+            match tokio::time::timeout(
+                trial_limit,
+                execute(variant.clone(), key.clone(), trial_limit),
+            )
+            .await
             {
                 Ok(Ok(report))
                     if report.trial == key && report.suite_digest == suite.digest()? =>
@@ -2185,7 +2183,11 @@ where
                     variant,
                     key,
                     TrialOutcome::Interrupted,
-                    "total suite duration exhausted while execution was outstanding; reconcile owned processes and effects",
+                    if trial_limit < remaining {
+                        "declared trial duration exhausted while execution was outstanding; reconcile owned processes and effects"
+                    } else {
+                        "total suite duration exhausted while execution was outstanding; reconcile owned processes and effects"
+                    },
                 )?,
             }
         };

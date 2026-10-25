@@ -65,6 +65,8 @@ enum Stage {
     Publish,
     Close,
     Complete,
+    RepairLaunch,
+    RepairWaiting,
     Blocked,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -80,6 +82,12 @@ struct ChildReference {
     phase_operation: Option<Uuid>,
     validation: Option<Uuid>,
     review: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    repair_operation: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unfinished_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_advanced_digest: Option<String>,
     observed_at: chrono::DateTime<Utc>,
     error: Option<Error>,
 }
@@ -100,6 +108,8 @@ struct ChildPipeline {
     staged: Option<StagedDelta>,
     published: Option<Box<PublishedChild>>,
     phase: Option<ActivePhase>,
+    unfinished: Option<Arc<UnfinishedChildWork>>,
+    source_advanced: Option<Arc<VerifiedSourceAdvanced>>,
 }
 pub(super) struct CandidateChild {
     pub(super) child: Uuid,
@@ -270,6 +280,9 @@ impl RuntimeDelivery {
                         phase_operation: None,
                         validation: None,
                         review: None,
+                        repair_operation: None,
+                        unfinished_digest: None,
+                        source_advanced_digest: None,
                         observed_at: Utc::now(),
                         error: None,
                     },
@@ -288,6 +301,8 @@ impl RuntimeDelivery {
                     staged: None,
                     published: None,
                     phase: None,
+                    unfinished: None,
+                    source_advanced: None,
                 };
                 self.persist_child(&pipeline)?;
                 self.children
@@ -573,6 +588,16 @@ impl RuntimeDelivery {
         operation_id: Uuid,
         assignment: DeliveryWorkerAssignment,
     ) -> Result<Uuid> {
+        self.launch_assignment_with_source(lease, operation_id, assignment, None)
+            .await
+    }
+    async fn launch_assignment_with_source(
+        &self,
+        lease: &Lease,
+        operation_id: Uuid,
+        assignment: DeliveryWorkerAssignment,
+        source_advanced: Option<Arc<VerifiedSourceAdvanced>>,
+    ) -> Result<Uuid> {
         let authority = WorkerAuthority::Authorized(assignment.authority().clone());
         let phase = PhaseKey {
             work: authority.work_key()?,
@@ -586,11 +611,17 @@ impl RuntimeDelivery {
             .values()
             .find(|w| w.id == assignment.authority().workspace_id())
             .ok_or_else(|| Error::new("scope_violation", "assignment workspace disappeared"))?;
-        let schedule = self.runtime.next_attempt(
-            &phase,
-            workspace.id,
-            &config.connections[&workspace.codex_connection].account_id,
-        )?;
+        let schedule = match &source_advanced {
+            Some(proof) => {
+                proof.verify_assignment(&assignment)?;
+                self.runtime.next_attempt_for_source_advanced(proof)?
+            }
+            None => self.runtime.next_attempt(
+                &phase,
+                workspace.id,
+                &config.connections[&workspace.codex_connection].account_id,
+            )?,
+        };
         if schedule.not_before > Utc::now() {
             return Err(Error::new(
                 "operation_pending",
@@ -606,11 +637,127 @@ impl RuntimeDelivery {
                 phase,
                 source: None,
                 delivery: Some(assignment),
+                unfinished: None,
+                source_advanced,
                 max_seconds: 3600,
                 max_turns: schedule.max_turns,
             },
         )
         .await
+    }
+    async fn advanced_assignment(
+        &self,
+        coordinator: &DeliveryCoordinator,
+        admission: &DeliveryAdmission,
+        child: &ChildPipeline,
+        assignment: DeliveryWorkerAssignment,
+    ) -> Result<(
+        DeliveryWorkerAssignment,
+        Option<Arc<VerifiedSourceAdvanced>>,
+    )> {
+        if let Some(proof) = &child.source_advanced
+            && proof.phase().phase == assignment.phase()
+        {
+            return Ok((proof.assignment().clone(), Some(proof.clone())));
+        }
+        let phase = PhaseKey {
+            work: assignment.authority().work_key()?,
+            generation: canonical_digest(1, &assignment.authority().work().generation)?,
+            phase: assignment.phase().into(),
+            retry_grant: None,
+        };
+        let mut latest = None;
+        for receipt in self.runtime.control.operations()? {
+            if let Some(run) = RunReference::from_receipt(&receipt)?
+                && run.phase == phase
+                && latest
+                    .as_ref()
+                    .is_none_or(|(ordinal, _)| run.attempt > *ordinal)
+            {
+                latest = Some((run.attempt, receipt.operation_id));
+            }
+        }
+        let Some((_, operation)) = latest else {
+            return Ok((assignment, None));
+        };
+        let (predecessor, completion) = self.completed_claim(operation)?.ok_or_else(|| {
+            Error::new(
+                "operation_pending",
+                "prior required check has no actual completed outcome",
+            )
+        })?;
+        let proof = coordinator
+            .source_advanced(SourceAdvancedRequest {
+                source: RepairSource {
+                    admission,
+                    original: child.claim.clone(),
+                    source: required(&child.source, "sealed source")?,
+                    completion: child.completion.clone(),
+                },
+                assignment: &assignment,
+                predecessor: &predecessor,
+                completion,
+            })
+            .await?;
+        Ok((assignment, Some(Arc::new(proof))))
+    }
+    fn retain_unfinished(
+        &self,
+        child: &mut ChildPipeline,
+        proof: UnfinishedChildWork,
+        error: Error,
+    ) -> Result<()> {
+        let digest = proof.digest().to_owned();
+        child.unfinished = Some(Arc::new(proof));
+        child.reference.unfinished_digest = Some(digest);
+        self.finish_child_phase(child, Stage::RepairLaunch)?;
+        child.reference.error = Some(error);
+        self.persist_child(child)
+    }
+    async fn launch_child_repair(&self, lease: &Lease, child: &mut ChildPipeline) -> Result<()> {
+        let proof = child.unfinished.clone().ok_or_else(|| {
+            Error::new(
+                "reconciliation_required",
+                "retained repair intent lacks actual unfinished-work capability",
+            )
+        })?;
+        if child.reference.unfinished_digest.as_deref() != Some(proof.digest()) {
+            return Err(Error::new(
+                "record_corrupt",
+                "repair intent differs from retained evidence",
+            ));
+        }
+        let operation = child
+            .reference
+            .repair_operation
+            .unwrap_or_else(Uuid::new_v4);
+        if self.worker_launch_admitted(operation)? {
+            child.reference.stage = Stage::RepairWaiting;
+            return self.persist_child(child);
+        }
+        let schedule = self.runtime.next_attempt_for_unfinished(&proof)?;
+        let assignment = crate::delivery::repair_worker_assignment(&proof)?;
+        proof.verify_assignment(&assignment)?;
+        child.reference.repair_operation = Some(operation);
+        self.persist_child(child)?;
+        crate::runtime_workers::launch(
+            self.runtime.clone(),
+            crate::runtime_workers::LaunchRequest {
+                lease: lease.clone(),
+                operation_id: operation,
+                authority: WorkerAuthority::Authorized(proof.authority().clone()),
+                phase: proof.phase().clone(),
+                source: None,
+                delivery: Some(assignment),
+                unfinished: Some(proof),
+                source_advanced: None,
+                max_seconds: 3600,
+                max_turns: schedule.max_turns,
+            },
+        )
+        .await?;
+        child.reference.stage = Stage::RepairWaiting;
+        self.persist_child(child)
     }
     pub(super) async fn candidate_children(
         &self,
@@ -832,7 +979,10 @@ impl RuntimeDelivery {
         projection: &RuntimeProjection,
         child: &mut ChildPipeline,
     ) -> Result<()> {
-        if matches!(child.reference.stage, Stage::Complete | Stage::Blocked) {
+        if matches!(
+            child.reference.stage,
+            Stage::Complete | Stage::Blocked | Stage::RepairWaiting
+        ) {
             return Ok(());
         }
         let workspace_id = child
@@ -863,6 +1013,15 @@ impl RuntimeDelivery {
                 "stale_result",
                 "child delivery generation changed",
             ));
+        }
+        if child.reference.stage == Stage::RepairLaunch {
+            let proof = child.unfinished.as_ref().ok_or_else(|| {
+                Error::new("reconciliation_required", "repair proof is unavailable")
+            })?;
+            proof
+                .authority()
+                .compare_current(&gate, Utc::now(), Duration::seconds(30))?;
+            return self.launch_child_repair(lease, child).await;
         }
         let workspace = match &child.phase {
             Some(phase) => (*phase.workspace).clone(),
@@ -897,7 +1056,9 @@ impl RuntimeDelivery {
                     DeliveryPhase::NoChange
                 }
             }
-            Stage::Complete | Stage::Blocked => return Ok(()),
+            Stage::Complete | Stage::Blocked | Stage::RepairLaunch | Stage::RepairWaiting => {
+                return Ok(());
+            }
         };
         if child.reference.stage == Stage::Validate || child.reference.stage == Stage::Review {
             let operation = if child.reference.stage == Stage::Validate {
@@ -1018,11 +1179,23 @@ impl RuntimeDelivery {
             }
             Stage::LaunchValidation => {
                 let assignment=coordinator.child_validation_assignment(&admission,&child.claim,required(&child.source,"sealed source")?,&child.completion,json!({"claim":child.claim.claim(),"purpose":"validate the exact sealed child source using configured local checks"}))?;
+                let (assignment, advanced) = self
+                    .advanced_assignment(&coordinator, &admission, child, assignment)
+                    .await?;
+                child.reference.source_advanced_digest =
+                    advanced.as_ref().map(|p| p.digest().to_owned());
+                child.source_advanced = advanced;
                 self.finish_child_phase(child, Stage::LaunchValidation)?;
                 let operation = child.reference.validation.unwrap_or_else(Uuid::new_v4);
                 child.reference.validation = Some(operation);
                 self.persist_child(child)?;
-                self.launch_assignment(lease, operation, assignment).await?;
+                self.launch_assignment_with_source(
+                    lease,
+                    operation,
+                    assignment,
+                    child.source_advanced.clone(),
+                )
+                .await?;
                 child.reference.stage = Stage::Validate;
                 self.persist_child(child)?;
             }
@@ -1042,7 +1215,31 @@ impl RuntimeDelivery {
                             completion: &completion,
                         },
                     )
-                    .await?;
+                    .await;
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) if terminal_gate_failure(&error) => {
+                        let proof = coordinator
+                            .unfinished_validation(ValidationRepairRequest {
+                                source: RepairSource {
+                                    admission: &admission,
+                                    original: child.claim.clone(),
+                                    source: required(&child.source, "sealed source")?,
+                                    completion: child.completion.clone(),
+                                },
+                                workflow: &workspace.workflow,
+                                outcome: &outcome,
+                                completion: completion.clone(),
+                            })
+                            .await;
+                        return match proof {
+                            Ok(proof) => self.retain_unfinished(child, proof, error),
+                            Err(unavailable) if unavailable.code == "no_work_trigger" => Err(error),
+                            Err(unavailable) => Err(unavailable),
+                        };
+                    }
+                    Err(error) => return Err(error),
+                };
                 let ChildDeliveryProgress::Local(local) = result else {
                     return Err(Error::new(
                         "delivery_protocol",
@@ -1182,11 +1379,23 @@ impl RuntimeDelivery {
                     &review,
                 )?;
                 child.assignment = Some(review);
+                let (assignment, advanced) = self
+                    .advanced_assignment(&coordinator, &admission, child, assignment)
+                    .await?;
+                child.reference.source_advanced_digest =
+                    advanced.as_ref().map(|p| p.digest().to_owned());
+                child.source_advanced = advanced;
                 self.finish_child_phase(child, Stage::LaunchReview)?;
                 let operation = child.reference.review.unwrap_or_else(Uuid::new_v4);
                 child.reference.review = Some(operation);
                 self.persist_child(child)?;
-                self.launch_assignment(lease, operation, assignment).await?;
+                self.launch_assignment_with_source(
+                    lease,
+                    operation,
+                    assignment,
+                    child.source_advanced.clone(),
+                )
+                .await?;
                 child.reference.stage = Stage::Review;
                 self.persist_child(child)?;
             }
@@ -1194,16 +1403,38 @@ impl RuntimeDelivery {
                 let (outcome, completion) = self
                     .completed_claim(child.reference.review.unwrap())?
                     .ok_or_else(|| Error::new("operation_pending", "Codex review remains owned"))?;
-                child.review = Some(
-                    coordinator
-                        .publish_completed_review(
-                            &admission,
-                            required(&child.assignment, "review assignment")?,
-                            &outcome,
-                            &completion,
-                        )
-                        .await?,
-                );
+                let published = coordinator
+                    .publish_completed_review(
+                        &admission,
+                        required(&child.assignment, "review assignment")?,
+                        &outcome,
+                        &completion,
+                    )
+                    .await;
+                child.review = Some(match published {
+                    Ok(review) => review,
+                    Err(error) if terminal_gate_failure(&error) => {
+                        let proof = coordinator
+                            .unfinished_review(ReviewRepairRequest {
+                                source: RepairSource {
+                                    admission: &admission,
+                                    original: child.claim.clone(),
+                                    source: required(&child.source, "sealed source")?,
+                                    completion: child.completion.clone(),
+                                },
+                                assignment: required(&child.assignment, "review assignment")?,
+                                outcome: &outcome,
+                                completion: completion.clone(),
+                            })
+                            .await;
+                        return match proof {
+                            Ok(proof) => self.retain_unfinished(child, proof, error),
+                            Err(unavailable) if unavailable.code == "no_work_trigger" => Err(error),
+                            Err(unavailable) => Err(unavailable),
+                        };
+                    }
+                    Err(error) => return Err(error),
+                });
                 self.finish_child_phase(
                     child,
                     if changed {
@@ -1301,7 +1532,7 @@ impl RuntimeDelivery {
                     .await?;
                 self.finish_child_phase(child, Stage::Complete)?;
             }
-            Stage::Complete | Stage::Blocked => {}
+            Stage::Complete | Stage::Blocked | Stage::RepairLaunch | Stage::RepairWaiting => {}
         }
         Ok(())
     }
@@ -1340,6 +1571,22 @@ fn required<'a, T>(value: &'a Option<T>, name: &str) -> Result<&'a T> {
 #[cfg(test)]
 mod retention_tests {
     use super::*;
+    #[test]
+    fn absent_repair_fields_preserve_legacy_signed_pipeline_payload() {
+        let digest = crate::digest::bytes_digest(b"legacy pipeline");
+        let value = json!({"schema_version":1,"runtime":Uuid::from_u128(1),"operation":Uuid::from_u128(7),"proposal":Uuid::from_u128(8),"claim_digest":digest,
+            "work":{"linear_endpoint":"https://linear.invalid/graphql","linear_workspace":Uuid::from_u128(2),"parent":Uuid::from_u128(10),"child":Uuid::from_u128(11),"generation":{"authorization":digest,"definition":digest,"correction":digest,"scope":digest}},
+            "stage":"blocked","phase_operation":null,"validation":null,"review":null,"observed_at":"2026-01-04T00:00:00Z","error":null});
+        let key = crate::evidence::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap();
+        let signed = key.sign("runtime_child_pipeline", &value).unwrap();
+        let typed: crate::evidence::Signed<ChildReference> =
+            serde_json::from_value(serde_json::to_value(signed).unwrap()).unwrap();
+        key.verify("runtime_child_pipeline", &typed).unwrap();
+        assert_eq!(
+            canonical_digest(1, &value).unwrap(),
+            canonical_digest(1, &typed.payload).unwrap()
+        );
+    }
     #[tokio::test]
     async fn failed_never_spawned_setup_retires_after_guard_drop_but_live_setup_is_preserved() {
         let (_root, fixture, service) = super::super::tests::fixture().await;
@@ -1542,6 +1789,9 @@ mod retention_tests {
                 phase_operation: None,
                 validation: None,
                 review: None,
+                repair_operation: None,
+                unfinished_digest: None,
+                source_advanced_digest: None,
                 observed_at: Utc::now(),
                 error: None,
             },
@@ -1560,6 +1810,8 @@ mod retention_tests {
             staged: None,
             published: None,
             phase: None,
+            unfinished: None,
+            source_advanced: None,
         }));
         service
             .children
@@ -1615,3 +1867,7 @@ mod retention_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_delivery_continuation_tests.rs"]
+mod continuation_tests;

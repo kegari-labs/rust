@@ -343,6 +343,71 @@ pub fn build_release_plan(input: ReleasePlanInput<'_>) -> Result<ReleasePlan> {
                                     "existing target artifact is absent from complete baseline",
                                 )
                             })?;
+                        if baseline.baseline().source_for_target(&deployment.target_id)
+                            != Some(result.commit.as_str())
+                        {
+                            let predecessor = baseline
+                                .baseline()
+                                .successor_recovery_operation
+                                .ok_or_else(|| {
+                                    production_error(
+                                        "divergent target has no sealed predecessor baseline",
+                                    )
+                                })?;
+                            if !candidate.production_integrations.iter().any(|integration| {
+                                integration.release_operation == predecessor
+                                    && integration.parent_id == parent.work.parent
+                                    && integration.merged == *result
+                                    && integration.observed_main == *result
+                            }) {
+                                return Err(production_error(
+                                    "deployment-only successor lacks actual accepted contribution integration",
+                                ));
+                            }
+                            deployment.workflow.proof.validate()?;
+                            let reference = deployment
+                                .workflow
+                                .proof
+                                .workflow_ref
+                                .rsplit_once('@')
+                                .and_then(|(_, r)| r.strip_prefix("refs/"))
+                                .filter(|r| r.starts_with("heads/") || r.starts_with("tags/"))
+                                .ok_or_else(|| {
+                                    production_error(
+                                        "existing-source workflow has no pinned dispatch reference",
+                                    )
+                                })?;
+                            let deploy = step_id("deploy", &deployment.id);
+                            steps.push(ReleaseStep {
+                                id: deploy.clone(),
+                                depends_on: predecessors,
+                                kind: StepKind::DeployExisting {
+                                    repository: contract.repository.clone(),
+                                    target: target.clone(),
+                                    workflow_id: deployment.workflow.workflow_id,
+                                    workflow_revision: deployment
+                                        .workflow
+                                        .workflow_revision
+                                        .clone(),
+                                    dispatch_ref: reference.into(),
+                                    source_input: deployment.workflow.source_input.clone(),
+                                    source: result.clone(),
+                                    expected_artifact: None,
+                                },
+                            });
+                            steps.push(ReleaseStep {
+                                id: verification,
+                                depends_on: BTreeSet::from([deploy.clone()]),
+                                kind: StepKind::VerifyDeployed {
+                                    repository: contract.repository.clone(),
+                                    target,
+                                    source: result.clone(),
+                                    deployment_step: deploy,
+                                    expected_artifact: None,
+                                },
+                            });
+                            continue;
+                        }
                         steps.push(ReleaseStep {
                             id: verification,
                             depends_on: predecessors,
@@ -364,10 +429,12 @@ pub fn build_release_plan(input: ReleasePlanInput<'_>) -> Result<ReleasePlan> {
         ));
     }
     if steps.is_empty()
-        || parent
-            .candidates
-            .iter()
-            .all(|c| c.ordered_delta_digests.is_empty())
+        || !steps.iter().any(|step| {
+            matches!(
+                step.kind,
+                StepKind::Merge { .. } | StepKind::DeployExisting { .. }
+            )
+        })
     {
         return Err(Error::new(
             "no_release_required",
@@ -517,6 +584,8 @@ fn configured_deployment<'a>(
 ) -> Result<&'a crate::config::DeploymentStep> {
     let target = match kind {
         StepKind::Deploy { target, .. }
+        | StepKind::DeployExisting { target, .. }
+        | StepKind::VerifyDeployed { target, .. }
         | StepKind::Verify { target, .. }
         | StepKind::VerifyExisting { target, .. } => target,
         _ => return Err(production_error("merge has no deployment contract")),
@@ -537,6 +606,13 @@ fn configured_deployment<'a>(
         ));
     };
     if let StepKind::Deploy {
+        workflow_id,
+        workflow_revision,
+        dispatch_ref,
+        source_input,
+        ..
+    }
+    | StepKind::DeployExisting {
         workflow_id,
         workflow_revision,
         dispatch_ref,
@@ -572,7 +648,12 @@ impl DeliveryCoordinator {
         let production = request.evidence.production();
         let candidate = match &request.evidence {
             ReleaseStepEvidence::Changed { prepared, .. } => {
-                if matches!(payload.kind, StepKind::VerifyExisting { .. }) {
+                if matches!(
+                    payload.kind,
+                    StepKind::VerifyExisting { .. }
+                        | StepKind::DeployExisting { .. }
+                        | StepKind::VerifyDeployed { .. }
+                ) {
                     return Err(production_error(
                         "existing target verification cannot substitute changed candidate evidence",
                     ));
@@ -581,8 +662,12 @@ impl DeliveryCoordinator {
                 prepared.candidate()
             }
             ReleaseStepEvidence::Existing { baseline, .. } => {
-                if !matches!(payload.kind, StepKind::VerifyExisting { .. })
-                    || baseline.contract_digest() != a.scope.contract_digest
+                if !matches!(
+                    payload.kind,
+                    StepKind::VerifyExisting { .. }
+                        | StepKind::DeployExisting { .. }
+                        | StepKind::VerifyDeployed { .. }
+                ) || baseline.contract_digest() != a.scope.contract_digest
                     || request.parent.manifest().work != a.scope.work
                     || !request
                         .parent
@@ -681,6 +766,35 @@ impl DeliveryCoordinator {
                 {
                     return Err(production_error(
                         "deployment step lacks actual observed merge source/tree",
+                    ));
+                }
+            }
+            StepKind::DeployExisting { source, target, .. }
+            | StepKind::VerifyDeployed { source, target, .. } => {
+                configured_deployment(self.contract(a)?, &payload.kind)?;
+                let ReleaseStepEvidence::Existing { baseline, .. } = &request.evidence else {
+                    return Err(production_error("existing-source baseline missing"));
+                };
+                let ResourceKey::Target { id, .. } = target else {
+                    return Err(production_error("existing target identity invalid"));
+                };
+                if source != &baseline.baseline().production
+                    || payload.exact_source_commit.as_ref() != Some(&source.commit)
+                    || baseline.baseline().successor_recovery_operation.is_none()
+                    || baseline
+                        .baseline()
+                        .source_for_target(id)
+                        .is_none_or(|deployed| deployed == source.commit)
+                    || !candidate.production_integrations.iter().any(|integration| {
+                        Some(integration.release_operation)
+                            == baseline.baseline().successor_recovery_operation
+                            && integration.parent_id == a.scope.work.parent
+                            && integration.merged == *source
+                            && integration.observed_main == *source
+                    })
+                {
+                    return Err(production_error(
+                        "existing-source deployment is not exact accepted known-predecessor recovery",
                     ));
                 }
             }
@@ -829,7 +943,15 @@ impl DeliveryCoordinator {
                     None,
                 )
             }
-            StepKind::Deploy { expected_tree, .. } => {
+            StepKind::Deploy { expected_tree, .. }
+            | StepKind::DeployExisting {
+                source:
+                    crate::git::Revision {
+                        tree: expected_tree,
+                        ..
+                    },
+                ..
+            } => {
                 self.current_repository_protection(a, "main").await?;
                 let step = configured_deployment(contract, &payload.kind)?;
                 let prepared = request
@@ -849,7 +971,7 @@ impl DeliveryCoordinator {
                 challenge = Some(prepared);
                 (Some(command), Some(step.id.clone()))
             }
-            StepKind::Verify { .. } => (
+            StepKind::Verify { .. } | StepKind::VerifyDeployed { .. } => (
                 None,
                 Some(configured_deployment(contract, &payload.kind)?.id.clone()),
             ),
@@ -1147,7 +1269,10 @@ impl DeliveryCoordinator {
             &[DeliveryPhase::Release, DeliveryPhase::Recovery],
         )?;
         let record = self.read_release_effect(admission, plan, step, attempt)?;
-        if matches!(record.payload.kind, StepKind::Deploy { .. }) {
+        if matches!(
+            record.payload.kind,
+            StepKind::Deploy { .. } | StepKind::DeployExisting { .. }
+        ) {
             if record.admission_operation != admission.operation_id()
                 || record.scope.digest()? != admission.scope.digest()?
             {
@@ -1386,7 +1511,7 @@ impl DeliveryCoordinator {
                     );
                 }
             }
-            StepKind::Deploy { .. } => {
+            StepKind::Deploy { .. } | StepKind::DeployExisting { .. } => {
                 let receipt = receipt.as_ref().ok_or_else(|| {
                     production_error("deployment has no durable dispatch receipt")
                 })?;
@@ -1430,13 +1555,16 @@ impl DeliveryCoordinator {
                     }
                 }
             }
-            StepKind::Verify { .. } => {
+            StepKind::Verify { .. } | StepKind::VerifyDeployed { .. } => {
                 let configured = configured_deployment(contract, &r.payload.kind)?;
                 let target = observer.recover_target(contract, &configured.id).await?;
                 // Verification must refer to this plan's actual deployment step,
                 // not another successful deployment at the same source.
                 let deployment = match &r.payload.kind {
                     StepKind::Verify {
+                        deployment_step, ..
+                    }
+                    | StepKind::VerifyDeployed {
                         deployment_step, ..
                     } => self.load_release_effect(
                         plan,
@@ -1506,6 +1634,20 @@ impl DeliveryCoordinator {
                 expected_artifact,
                 ..
             } => (repository, target, expected_tree, expected_artifact),
+            StepKind::DeployExisting {
+                repository,
+                target,
+                source,
+                expected_artifact,
+                ..
+            }
+            | StepKind::VerifyDeployed {
+                repository,
+                target,
+                source,
+                expected_artifact,
+                ..
+            } => (repository, target, &source.tree, expected_artifact),
             _ => return Err(production_error("target proof cannot establish a merge")),
         };
         let t = target.target();

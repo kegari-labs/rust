@@ -324,6 +324,7 @@ pub fn parent(
             repository,
             production: revision,
             deployed_revision: None,
+            target_revisions: BTreeMap::new(),
             deployed_artifact: None,
             deployment_free: true,
             successor_recovery_operation: None,

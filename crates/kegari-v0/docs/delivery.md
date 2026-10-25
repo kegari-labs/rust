@@ -253,6 +253,21 @@ capacity/spacing waits can retry the same effect-free intent; a retained
 preparation requires recovery. Admitted phases retain their original settings
 while current permission and scope revocations still apply. Maintenance polls
 only those phases and never starts the next worker. A known terminal validation
-or review failure retains its evidence, retires proven terminal ownership, and
-blocks further phase execution; it does not authorize a new attempt. Unknown
-process/provider effects keep their original holds.
+or review failure retains its evidence and retires only proven terminal ownership.
+A new repair requires the opaque `UnfinishedChildWork` producer to bind an actual
+failed required check or exact-head review finding, original implementation
+admission, unchanged sealed source and current scope/profile. A later passing
+check supersedes an earlier failure; any later relevant admission invalidates
+the retained trigger. Unknown process/provider effects keep their original holds.
+
+The child pipeline hands a genuine trigger to the original finite implementation
+phase. Repair uses a fresh clone and session. A materially changed repair tree
+can then issue `VerifiedSourceAdvanced` for the original validation/review phase;
+its old attempt, turn and review limits remain in force. The complete native
+context is retained, with the exact assigned task under
+`evidence.delivery_assignment`. The deterministic integration fixture covers
+actual owned Git sealing, protected completed-protocol records, assembled
+contracts and Control admissions; it does not qualify a live model, native
+repository execution or an actual runtime joined-process cache. Corrected
+phase generations, mixed retry-grant lineages and cold reconstruction of these
+private triggers remain explicit recovery prerequisites.

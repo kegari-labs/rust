@@ -1934,6 +1934,7 @@ async fn changed_candidate_fixture() -> (
             repository: child_revision.repository.clone(),
             production: candidate.manifest.production.clone(),
             deployed_revision: None,
+            target_revisions: BTreeMap::new(),
             deployed_artifact: None,
             target_artifacts: BTreeMap::new(),
             deployment_free: true,
@@ -2814,5 +2815,212 @@ async fn release_effect_recovery_requires_exact_attempt_and_preserves_older_inte
             .filter(|(url, _)| url.ends_with("/merge"))
             .count(),
         1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn original_release_reader_requires_actual_native_publications_and_immutable_receipts() {
+    let (f, parent, slice, _) = changed_candidate_fixture().await;
+    let writer = id(5).to_string();
+    let acceptors = BTreeSet::from([writer.clone()]);
+    let owner = format!("owner:{}", f.admission.permit.lease.owner_id);
+    let accepted = crate::evidence::prepare_acceptance(
+        &parent,
+        crate::evidence::AcceptanceRequest {
+            supplied_token: parent.token(),
+            current_work: &parent.manifest().work,
+            pending_correction: false,
+            actor: crate::evidence::AcceptanceActor {
+                control_actor: &owner,
+                linear_actor: &writer,
+                provider_writer: &writer,
+                has_accept_role: true,
+                permitted_acceptors: &acceptors,
+            },
+            runtime_id: id(1),
+            operation_id: Uuid::new_v4(),
+            now: Utc::now(),
+        },
+        &f.key,
+    )
+    .unwrap();
+    let repository = f.repository_contract.repository.clone();
+    let mut plan = ReleasePlan {
+        schema_version: 1,
+        runtime_id: id(1),
+        operation_id: Uuid::new_v4(),
+        parent_id: parent.manifest().work.parent,
+        linear_workspace: parent.manifest().work.linear_workspace,
+        generation: parent.manifest().work.generation.clone(),
+        evidence_token: parent.token().into(),
+        acceptance_digest: accepted.digest().unwrap(),
+        carried_acceptance: None,
+        resources: BTreeSet::from([ResourceKey::Repository {
+            repository: repository.clone(),
+        }]),
+        dependencies: vec![],
+        spacing_seconds: 0,
+        deployment_free: BTreeSet::from([repository.clone()]),
+        steps: vec![crate::release::ReleaseStep {
+            id: "merge".into(),
+            depends_on: BTreeSet::new(),
+            kind: StepKind::Merge {
+                repository,
+                pull_request: 17,
+                production_base: slice.manifest().production.clone(),
+                candidate: slice.manifest().result.clone().unwrap(),
+                selected_delta_digests: slice.manifest().ordered_delta_digests.clone(),
+            },
+        }],
+    };
+    f.host
+        .finish(
+            f.admission.operation_id(),
+            json!({"fixture":"preparation finished"}),
+        )
+        .unwrap();
+    let permit = f
+        .host
+        .admit(
+            &f.admission.permit.lease,
+            parent.manifest().publication_operation,
+            f.admission.gate.work_key().unwrap(),
+            canonical_digest(1, &"fixture original parent publication").unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    let parent_body = f
+        .coordinator
+        .fixture_original_parent_body(&parent, &slice, id(1))
+        .unwrap();
+    let mut ids = Vec::new();
+    for (request_id, body) in [
+        (Uuid::new_v4(), parent_body),
+        (
+            accepted.payload.operation_id,
+            record_body("human_acceptance", &accepted).unwrap(),
+        ),
+    ] {
+        let receipt = f
+            .coordinator
+            .broker
+            .mutate(
+                f.host.clone(),
+                MutationRequest {
+                    request_id,
+                    runtime_id: id(1),
+                    actor: Actor {
+                        principal: None,
+                        identity: format!("owner:{}", permit.lease.owner_id),
+                        roles: BTreeSet::new(),
+                    },
+                    kind: String::new(),
+                    canonical_targets: vec![],
+                    expected: BTreeMap::new(),
+                    payload: Value::Null,
+                },
+                Some(permit.clone()),
+                None,
+                ProviderMutation::LinearComment {
+                    issue: parent.manifest().work.parent,
+                    body,
+                },
+                || Ok(()),
+            )
+            .await
+            .unwrap();
+        ids.push(Uuid::parse_str(&receipt.remote_ids["comment_id"]).unwrap());
+    }
+    f.host
+        .finish(
+            permit.operation_id,
+            json!({"fixture":"original publication complete"}),
+        )
+        .unwrap();
+    f.host
+        .admit(
+            &permit.lease,
+            plan.operation_id,
+            permit.work_key.clone(),
+            plan.digest().unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    let proof = f
+        .coordinator
+        .release_origin(&plan, ids[0], ids[1])
+        .await
+        .unwrap();
+    assert_eq!(proof.manifest(), parent.manifest());
+    assert_eq!(proof.plan().digest().unwrap(), plan.digest().unwrap());
+    assert_eq!(
+        proof.slice_operation(&slice.manifest().repository).unwrap(),
+        slice.operation_id()
+    );
+    let saved = f.wire.lock().unwrap().comments[&id(100)].clone();
+    f.wire
+        .lock()
+        .unwrap()
+        .comments
+        .get_mut(&id(100))
+        .unwrap()
+        .retain(|comment| comment["id"] != json!(ids[1]));
+    assert!(
+        f.coordinator
+            .release_origin(&plan, ids[0], ids[1])
+            .await
+            .is_err()
+    );
+    f.wire
+        .lock()
+        .unwrap()
+        .comments
+        .insert(id(100), saved.clone());
+    f.wire
+        .lock()
+        .unwrap()
+        .comments
+        .get_mut(&id(100))
+        .unwrap()
+        .iter_mut()
+        .find(|comment| comment["id"] == json!(ids[0]))
+        .unwrap()["body"] = json!("edited signed parent record");
+    assert!(
+        f.coordinator
+            .release_origin(&plan, ids[0], ids[1])
+            .await
+            .is_err()
+    );
+    f.wire.lock().unwrap().comments.insert(id(100), saved);
+    f.host
+        .finish(plan.operation_id, json!({"fixture":"original retired"}))
+        .unwrap();
+    plan.operation_id = Uuid::new_v4();
+    plan.carried_acceptance = Some(crate::evidence::CarriedAcceptance {
+        schema_version: 1,
+        original_reviewed_token: plan.evidence_token.clone(),
+        original_acceptance_digest: plan.acceptance_digest.clone(),
+        current_evidence_token: plan.evidence_token.clone(),
+        unchanged_patch_proof: canonical_digest(1, &"fixture carry").unwrap(),
+        production_validation_digest: canonical_digest(1, &"fixture validation").unwrap(),
+        created_at: Utc::now(),
+    });
+    f.host
+        .admit(
+            &permit.lease,
+            plan.operation_id,
+            permit.work_key.clone(),
+            plan.digest().unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    assert_eq!(
+        f.coordinator
+            .release_origin(&plan, ids[0], ids[1])
+            .await
+            .unwrap_err()
+            .code,
+        "candidate_provenance",
+        "carried-acceptance history remains an explicit unsupported prerequisite, never silently direct acceptance"
     );
 }

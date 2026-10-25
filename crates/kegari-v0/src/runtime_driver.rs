@@ -465,6 +465,8 @@ impl RuntimeDriver {
                             phase: action.phase,
                             source,
                             delivery: None,
+                            unfinished: None,
+                            source_advanced: None,
                             max_seconds: bound,
                             max_turns: action.schedule.max_turns,
                         },

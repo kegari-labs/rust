@@ -891,6 +891,10 @@ async fn failed_check_artifacts_are_retained_before_a_corrected_rerun() {
     let CheckCompletion::Failed(failed) = completion else {
         panic!("expected real failed execution receipt")
     };
+    assert_eq!(
+        failed.production_failure().unwrap_err().code,
+        "unqualified_fixture"
+    );
     assert!(!failed.record().successful);
     let directory = kegari_v0::storage::PrivateDir::create(
         &f._temp

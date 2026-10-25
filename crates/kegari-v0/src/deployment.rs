@@ -33,6 +33,7 @@ pub struct ProductionObserver {
     key: Arc<AttestationKey>,
     records: PrivateDir,
     current: CurrentAuthority,
+    successor: Option<Arc<crate::runtime_delivery::KnownPredecessorBaseline>>,
 }
 #[derive(Clone, Debug)]
 pub struct VerifiedProductionBaseline {
@@ -297,9 +298,13 @@ impl ProductionObserver {
         let [configured] = matching.as_slice() else {
             return Err(blocked("existing target is missing or ambiguous"));
         };
-        let baseline = self.observe(contract).await?;
-        if baseline.baseline.production != *source
-            || baseline.baseline.artifact_for_target(target) != Some(artifact)
+        let baseline = self.observe_recovery(contract).await?;
+        if baseline.production != *source
+            || !baseline.targets.iter().any(|current| {
+                current.target == target
+                    && current.source == *source
+                    && current.artifact_digest == artifact
+            })
         {
             return Err(blocked(
                 "existing target no longer serves the accepted production source/artifact",
@@ -357,6 +362,78 @@ impl ProductionObserver {
             key,
             records,
             current,
+            successor: None,
+        })
+    }
+    /// Retain an authenticated, fully observed predecessor for this preparation.
+    /// A raw recovery identifier is never sufficient to select this path.
+    pub fn with_successor(
+        &self,
+        successor: Arc<crate::runtime_delivery::KnownPredecessorBaseline>,
+    ) -> Result<Self> {
+        successor.revalidate()?;
+        (self.current)(successor.gate())?;
+        Ok(Self {
+            github: self.github.clone(),
+            control: self.control.clone(),
+            key: self.key.clone(),
+            records: PrivateDir::open(self.records.path())?,
+            current: self.current.clone(),
+            successor: Some(successor),
+        })
+    }
+    async fn observe_successor(
+        &self,
+        contract: &RepositoryContract,
+        successor: &crate::runtime_delivery::KnownPredecessorBaseline,
+    ) -> Result<VerifiedProductionBaseline> {
+        successor.revalidate()?;
+        (self.current)(successor.gate())?;
+        let expected = successor.baseline(&contract.repository)?;
+        let current = self.observe_recovery(contract).await?;
+        if current.contract_digest != expected.contract_digest
+            || current.production != expected.production
+            || target_identity(&current.targets)? != target_identity(&expected.targets)?
+        {
+            return Err(blocked(
+                "production changed after known predecessor observation",
+            ));
+        }
+        successor.revalidate()?;
+        (self.current)(successor.gate())?;
+        let sources: BTreeMap<_, _> = current
+            .targets
+            .iter()
+            .map(|target| (target.target.clone(), target.source.commit.clone()))
+            .collect();
+        let artifacts: BTreeMap<_, _> = current
+            .targets
+            .iter()
+            .map(|target| (target.target.clone(), target.artifact_digest.clone()))
+            .collect();
+        let common = |values: &BTreeMap<String, String>| {
+            values
+                .values()
+                .next()
+                .filter(|first| values.values().all(|value| value == *first))
+                .cloned()
+        };
+        let baseline = ProductionBaseline {
+            repository: current.repository,
+            production: current.production,
+            deployed_revision: common(&sources),
+            target_revisions: sources,
+            deployed_artifact: common(&artifacts),
+            target_artifacts: artifacts,
+            deployment_free: matches!(&contract.configuration.deployment, Deployment::None(value) if value == "none"),
+            successor_recovery_operation: Some(successor.predecessor()),
+        };
+        baseline.validate()?;
+        Ok(VerifiedProductionBaseline {
+            baseline,
+            targets: current.targets,
+            contract_digest: current.contract_digest,
+            observed_at: current.observed_at,
         })
     }
     /// Capture an exact source challenge before the permitted configured workflow
@@ -721,6 +798,9 @@ impl ProductionObserver {
         &self,
         contract: &RepositoryContract,
     ) -> Result<VerifiedProductionBaseline> {
+        if let Some(successor) = &self.successor {
+            return self.observe_successor(contract, successor).await;
+        }
         let contract_digest = contract.digest()?;
         let production = self.main(contract).await?;
         let mut targets = Vec::new();
@@ -770,7 +850,11 @@ impl ProductionObserver {
         let baseline = ProductionBaseline {
             repository: contract.repository.clone(),
             production: production.clone(),
-            deployed_revision: (!deployment_free).then_some(production.commit),
+            deployed_revision: (!deployment_free).then_some(production.commit.clone()),
+            target_revisions: targets
+                .iter()
+                .map(|target| (target.target.clone(), target.source.commit.clone()))
+                .collect(),
             deployed_artifact: common,
             target_artifacts,
             deployment_free,

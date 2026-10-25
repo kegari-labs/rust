@@ -13,6 +13,8 @@ pub enum Trigger {
     Correction,
     DependencySatisfied,
     ScheduledRetry,
+    VerifiedUnfinished,
+    VerifiedSourceAdvanced,
     OperatorRetry,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

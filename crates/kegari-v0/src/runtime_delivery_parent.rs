@@ -47,6 +47,7 @@ struct ParentPipeline {
     child_authorities: BTreeMap<Uuid, FreshGate>,
     staged: Vec<StagedDelta>,
     baselines: Vec<Arc<VerifiedProductionBaseline>>,
+    integrations: Vec<crate::git::VerifiedProductionIntegration>,
     slices: Vec<Arc<IsolatedSlice>>,
     vector: Option<ParentCandidateVector>,
     integrated: Option<IntegratedEvidence>,
@@ -150,7 +151,7 @@ impl RuntimeDelivery {
             vector_digest: required_parent(&pipeline.vector, "candidate vector")?
                 .digest()
                 .into(),
-            integrations: vec![],
+            integrations: pipeline.integrations.clone(),
         }))
     }
     pub(super) async fn integrated_responsibility_ready(
@@ -440,6 +441,7 @@ impl RuntimeDelivery {
                 child_authorities: BTreeMap::new(),
                 staged,
                 baselines: vec![],
+                integrations: vec![],
                 slices: vec![],
                 vector: None,
                 integrated: None,
@@ -567,6 +569,13 @@ impl RuntimeDelivery {
         ) {
             return Ok(());
         }
+        let snapshot = self.runtime.observations.admission_snapshot()?;
+        let predecessor = self.known_predecessor_baseline(&snapshot, gate).await?;
+        let observer = predecessor
+            .as_ref()
+            .map(|proof| workspace.observer.with_successor(proof.clone()))
+            .transpose()?;
+        let observer = observer.as_ref().unwrap_or(workspace.observer.as_ref());
         let contract =
             workspace
                 .coordinator
@@ -678,7 +687,7 @@ impl RuntimeDelivery {
             .iter()
             .find(|repository| &repository.repository == repository_id)
             .ok_or_else(|| Error::new("scope_violation", "candidate repository disappeared"))?;
-        let baseline = workspace.observer.observe(repository).await?;
+        let baseline = observer.observe(repository).await?;
         self.parent_phase(
             lease,
             workspace,
@@ -693,6 +702,15 @@ impl RuntimeDelivery {
         let admission = current.admission.clone();
         match parent.reference.stage {
             ParentStage::Assemble => {
+                if let Some(predecessor) = &predecessor {
+                    let integrations = coordinator
+                        .acquire_successor_integrations(&admission, predecessor.clone())
+                        .await?;
+                    parent
+                        .integrations
+                        .retain(|proof| proof.record().repository != repository.repository);
+                    parent.integrations.extend(integrations);
+                }
                 let git = current.git.clone();
                 let source = PathBuf::from(&repository.configuration.source);
                 let identity =
@@ -744,7 +762,7 @@ impl RuntimeDelivery {
                             required_children: contract.required_children(),
                             child_dependencies: &dependencies,
                             satisfied_children: &satisfied,
-                            production_integrations: &[],
+                            production_integrations: &parent.integrations,
                             identity,
                         },
                     )
@@ -766,7 +784,7 @@ impl RuntimeDelivery {
                     coordinator
                         .prepare_parent_vector(
                             &contract,
-                            &workspace.observer,
+                            observer,
                             &parent.slices.iter().map(Arc::as_ref).collect::<Vec<_>>(),
                             &parent.baselines.iter().map(Arc::as_ref).collect::<Vec<_>>(),
                         )
@@ -776,7 +794,7 @@ impl RuntimeDelivery {
                 self.finish_parent_phase(parent, ParentStage::LaunchIntegrated)?;
             }
             ParentStage::LaunchIntegrated => {
-                let assignment=coordinator.integrated_worker_assignment(&contract,e2e,required_parent(&parent.vector,"candidate vector")?,&workspace.observer,&parent.slices.iter().map(Arc::as_ref).collect::<Vec<_>>(),json!({"purpose":"execute every configured integrated check against this complete isolated parent vector","parent":projection.issue})).await?;
+                let assignment=coordinator.integrated_worker_assignment(&contract,e2e,required_parent(&parent.vector,"candidate vector")?,observer,&parent.slices.iter().map(Arc::as_ref).collect::<Vec<_>>(),json!({"purpose":"execute every configured integrated check against this complete isolated parent vector","parent":projection.issue})).await?;
                 self.finish_parent_phase(parent, ParentStage::LaunchIntegrated)?;
                 let operation = parent.reference.integrated.unwrap_or_else(Uuid::new_v4);
                 parent.reference.integrated = Some(operation);
@@ -797,7 +815,7 @@ impl RuntimeDelivery {
                             &contract,
                             e2e,
                             required_parent(&parent.vector, "candidate vector")?,
-                            &workspace.observer,
+                            observer,
                             &completion.checks.iter().collect::<Vec<_>>(),
                         )
                         .await?,
@@ -821,7 +839,7 @@ impl RuntimeDelivery {
                 self.finish_parent_phase(parent, ParentStage::LaunchReview)?;
             }
             ParentStage::LaunchReview => {
-                parent.assignment=Some(coordinator.prepare_parent_review(ParentEvidenceInputs{contract:&contract,observer:&workspace.observer,vector:required_parent(&parent.vector,"candidate vector")?.clone(),integrated:required_parent(&parent.integrated,"integrated execution")?.clone(),e2e_gate:e2e,child_gates:&child_gates,children:&parent.children,workflow:&workspace.workflow,production_integrations:&[]},json!({"parent":projection.issue,"purpose":"evaluate the complete canonical parent outcome and all acceptance criteria"})).await?);
+                parent.assignment=Some(coordinator.prepare_parent_review(ParentEvidenceInputs{contract:&contract,observer,vector:required_parent(&parent.vector,"candidate vector")?.clone(),integrated:required_parent(&parent.integrated,"integrated execution")?.clone(),e2e_gate:e2e,child_gates:&child_gates,children:&parent.children,workflow:&workspace.workflow,production_integrations:&parent.integrations},json!({"parent":projection.issue,"purpose":"evaluate the complete canonical parent outcome and all acceptance criteria"})).await?);
                 let assignment = coordinator.parent_review_worker_assignment(
                     &contract,
                     required_parent(&parent.assignment, "parent review assignment")?,
@@ -845,7 +863,7 @@ impl RuntimeDelivery {
                         &admission,
                         ParentPublicationInputs {
                             contract: &contract,
-                            observer: &workspace.observer,
+                            observer,
                             assignment: required_parent(
                                 &parent.assignment,
                                 "parent review assignment",
@@ -912,6 +930,7 @@ mod lifecycle_tests {
             child_authorities: BTreeMap::new(),
             staged: vec![],
             baselines: vec![],
+            integrations: vec![],
             slices: vec![],
             vector: None,
             integrated: None,

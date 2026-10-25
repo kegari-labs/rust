@@ -692,6 +692,9 @@ impl WorkerContract {
     pub fn authority(&self) -> &WorkerAuthority {
         &self.authority
     }
+    pub(crate) fn context(&self) -> &Value {
+        &self.context
+    }
 }
 
 pub struct WorkerExecution {

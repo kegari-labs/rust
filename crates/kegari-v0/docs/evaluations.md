@@ -46,8 +46,13 @@ cached agent trials. All fixtures and grading material are independently
 reviewable. Input/scorer changes require updating the declared digest and
 regrading comparisons; changed rubrics do not preserve comparability by default.
 
-`prepare_fixture` refuses an existing destination, copies bounded regular files and preserves their modes,
-rejects hardlinks/symlinks and verifies fixture/seed digests. It never clears a
+`prepare_fixture` refuses an existing destination and captures bounded regular
+files once, binding their bytes and modes to the declared digest. It rejects
+hardlinks/symlinks, changing file descriptors, oversized directory inventories
+and excessive nesting. Prior state, context, native bindings and reset files all
+come from that same immutable capture. It verifies the final reset against those
+captured bytes, allowing only the declared scratch substitution in `WORKFLOW.md`.
+It never clears a
 previous attempt. Its private preparation digest binds the input, declared prior
 state, initial file snapshot and all prepared paths; replacing any of these
 invalidates assembly, live preflight and grading. The schema-1 context is exactly
@@ -57,6 +62,21 @@ and `phase`. IDs must be the real admitted identities. Extra nested metadata and
 undeclared guidance are rejected, including hints placed inside `workspace` or
 `operation`. A native fixture mapping needs an explicit versioned declaration;
 these comparisons must not be relaxed to make a native context pass.
+
+Native context declarations can now include `context-binding.json` beside
+`context.json`. This file is part of the declared fixture digest and private
+preparation seal. Its schema version is `1`, with sorted unique `source_write_paths`
+and `slots` entries containing a JSON `pointer` and typed `source`. Each declared
+location in `context.json` must contain exactly `{"$kegari":"SOURCE"}`; every
+placeholder must be declared exactly once. Required slots are `/workspace/id`,
+`/operation/id`, `/profile` and `/phase`. Additional sources are limited to the
+actual assembly's `work_generation`, `correction_revision` and
+`repository_revision`. Digests and revision identities are validated. The binding
+cannot copy arbitrary observed context, infer substitutions, or omit extra fields.
+The complete rendered context, including all native metadata and assignment
+payloads, must equal the production worker's context. Timeline input remains
+outside the initial prompt. This matcher is implemented; migration of the suite's
+native provider fixtures and owned clone binding is still incomplete.
 
 `verify_grader_boundary` checks actual validated filesystem
 grants, repository, scratch, private scorer and report roots. The scorer and
@@ -106,6 +126,7 @@ checks and profile edits must not call it. The API is in `src/evaluation.rs`:
    owned workers on cancellation; it cannot clear unresolved remote effects.
    No paid fallback or remote mutation authority is implied.
 6. `run_live_trial` first checks the complete variant against the suite declaration
+   and the actual worker role and phase against that variant,
    and the actual worker's entire bound context against the sealed fixture. It
    verifies the pinned executable, account, catalog/profile,
    rate-limit observation and concrete permission configuration, then uses
@@ -114,8 +135,12 @@ checks and profile edits must not call it. The API is in `src/evaluation.rs`:
    `turn/steer`, or queue a subsequent bounded turn after completion. A steer
    response does not count as correction consumption; only the host's verified
    correction watermark does. The timeout terminates the owned adapter and
-   marks outstanding effects uncertain. The suite deadline also bounds a
-   hung host executor and records all remaining variants as skipped.
+   marks outstanding effects uncertain. The outer runner applies the lesser of
+   each declared trial deadline and the remaining suite allowance to the entire
+   executor, including fixture preparation/admission and final collection. A hung
+   trial's future is dropped, invoking its owned cancellation guard, and its
+   interruption is recorded before the next attempt is considered. The suite
+   deadline records all remaining variants as skipped.
    A successful actual lifecycle can then yield `AdmittedTrial::finish` and
    `RuntimeCoordinator::finish_trial`; these consume the checked completion and
    do not reconstruct a permit or use a replay trace as production evidence.

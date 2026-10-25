@@ -1112,6 +1112,10 @@ pub struct ProductionBaseline {
     pub repository: RepositoryId,
     pub production: Revision,
     pub deployed_revision: Option<String>,
+    /// Complete per-target source inventory; a common deployed_revision is only
+    /// present when every target serves the same commit.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub target_revisions: BTreeMap<String, String>,
     pub deployed_artifact: Option<String>,
     /// Exact target artifact inventory. `deployed_artifact`, when present, is
     /// only a common digest shared by every target, never a synthetic aggregate.
@@ -1131,16 +1135,45 @@ impl ProductionBaseline {
             if self.deployed_revision.is_some()
                 || self.deployed_artifact.is_some()
                 || !self.target_artifacts.is_empty()
+                || !self.target_revisions.is_empty()
             {
                 return Err(Error::invalid(
                     "deployment-free baseline must not invent deployment activity",
                 ));
             }
         } else {
-            let deployed = self.deployed_revision.as_deref().ok_or_else(|| {
-                Error::new("production_baseline", "deployed source revision is unknown")
-            })?;
-            validate_oid(deployed)?;
+            if self.deployed_revision.is_none() && self.target_revisions.is_empty() {
+                return Err(Error::new(
+                    "production_baseline",
+                    "deployed source revisions are unknown",
+                ));
+            }
+            if let Some(deployed) = &self.deployed_revision {
+                validate_oid(deployed)?;
+            }
+            if !self.target_revisions.is_empty()
+                && self.target_revisions.keys().collect::<BTreeSet<_>>()
+                    != self.target_artifacts.keys().collect::<BTreeSet<_>>()
+            {
+                return Err(Error::new(
+                    "production_baseline",
+                    "target source and artifact inventories differ",
+                ));
+            }
+            for (target, revision) in &self.target_revisions {
+                validate_oid(revision)?;
+                if target.trim().is_empty()
+                    || self
+                        .deployed_revision
+                        .as_ref()
+                        .is_some_and(|common| common != revision)
+                {
+                    return Err(Error::new(
+                        "production_baseline",
+                        "target identity or common source revision is inconsistent",
+                    ));
+                }
+            }
             if self.deployed_artifact.is_none() && self.target_artifacts.is_empty() {
                 return Err(Error::new(
                     "production_baseline",
@@ -1164,7 +1197,16 @@ impl ProductionBaseline {
                 }
                 validate_digest(artifact)?;
             }
-            if deployed != self.production.commit && self.successor_recovery_operation.is_none() {
+            if self.successor_recovery_operation.is_none()
+                && (self
+                    .deployed_revision
+                    .as_ref()
+                    .is_some_and(|revision| revision != &self.production.commit)
+                    || self
+                        .target_revisions
+                        .values()
+                        .any(|revision| revision != &self.production.commit))
+            {
                 return Err(Error::new(
                     "production_baseline",
                     "main/deployment divergence needs explicit reconciled successor recovery",
@@ -1172,6 +1214,13 @@ impl ProductionBaseline {
             }
         }
         Ok(())
+    }
+    pub fn source_for_target(&self, target: &str) -> Option<&str> {
+        if self.target_revisions.is_empty() {
+            self.deployed_revision.as_deref()
+        } else {
+            self.target_revisions.get(target).map(String::as_str)
+        }
     }
     pub fn artifact_for_target(&self, target: &str) -> Option<&str> {
         if self.target_artifacts.is_empty() {
@@ -1765,6 +1814,26 @@ impl VerifiedAcceptedCandidate {
     }
 }
 
+/// Historical contribution authority, derived only from the exact actual
+/// admitted plan and its authenticated original publications. It is not current
+/// parent readiness and does not authorize a new merge or deployment.
+pub(crate) fn recorded_candidate_authority(
+    origin: &crate::delivery::VerifiedReleaseOrigin,
+    candidate: &CandidateManifest,
+) -> Result<VerifiedAcceptedCandidate> {
+    if !origin.manifest().candidates.contains(candidate) {
+        return Err(Error::new(
+            "acceptance_required",
+            "historical release did not accept this candidate",
+        ));
+    }
+    Ok(VerifiedAcceptedCandidate {
+        candidate_digest: canonical_digest(1, candidate)?,
+        evidence_token: origin.plan().evidence_token.clone(),
+        acceptance_digest: origin.plan().acceptance_digest.clone(),
+    })
+}
+
 pub fn verify_accepted_candidate(
     parent: &VerifiedParent,
     acceptance: &VerifiedAcceptance,
@@ -2117,7 +2186,7 @@ fn validate_no_release_required(
                 b.repository == target.repository
                     && !b.deployment_free
                     && b.production == target.source
-                    && b.deployed_revision.as_ref() == Some(&target.source.commit)
+                    && b.source_for_target(&target.target) == Some(target.source.commit.as_str())
                     && b.artifact_for_target(&target.target)
                         == Some(target.artifact_digest.as_str())
             })
@@ -2280,5 +2349,55 @@ pub fn artifact_bytes(reference: impl Into<String>, bytes: &[u8]) -> ArtifactRef
     ArtifactReference {
         reference: reference.into(),
         digest: bytes_digest(bytes),
+    }
+}
+
+#[cfg(test)]
+mod baseline_revision_tests {
+    use super::*;
+    fn legacy() -> serde_json::Value {
+        serde_json::json!({"repository":{"hostname":"github.com","id":"77"},
+            "production":{"commit":"1111111111111111111111111111111111111111","tree":"2222222222222222222222222222222222222222"},
+            "deployed_revision":"1111111111111111111111111111111111111111",
+            "deployed_artifact":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target_artifacts":{"production":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+            "deployment_free":false,"successor_recovery_operation":null})
+    }
+    #[test]
+    fn absent_target_sources_preserve_original_signed_manifest_and_digest() {
+        let value = legacy();
+        let digest = canonical_digest(1, &value).unwrap();
+        let baseline: ProductionBaseline = serde_json::from_value(value.clone()).unwrap();
+        baseline.validate().unwrap();
+        assert!(baseline.target_revisions.is_empty());
+        assert_eq!(serde_json::to_value(&baseline).unwrap(), value);
+        assert_eq!(canonical_digest(1, &baseline).unwrap(), digest);
+        let key = AttestationKey::new("legacy-baseline".into(), vec![25; 32]).unwrap();
+        let signed = key.sign("legacy_baseline", &value).unwrap();
+        let recovered: Signed<ProductionBaseline> =
+            serde_json::from_value(serde_json::to_value(signed).unwrap()).unwrap();
+        key.verify("legacy_baseline", &recovered).unwrap();
+    }
+    #[test]
+    fn mixed_target_sources_are_complete_and_never_an_ordinary_baseline() {
+        let mut baseline: ProductionBaseline = serde_json::from_value(legacy()).unwrap();
+        baseline.deployed_revision = None;
+        baseline.target_revisions = BTreeMap::from([
+            ("production".into(), "1".repeat(40)),
+            ("secondary".into(), "3".repeat(40)),
+        ]);
+        baseline.target_artifacts.insert(
+            "secondary".into(),
+            baseline.deployed_artifact.clone().unwrap(),
+        );
+        assert!(baseline.validate().is_err());
+        baseline.successor_recovery_operation = Some(Uuid::from_u128(20));
+        baseline.validate().unwrap();
+        assert_eq!(
+            baseline.source_for_target("secondary"),
+            Some("3333333333333333333333333333333333333333")
+        );
+        baseline.target_revisions.remove("secondary");
+        assert!(baseline.validate().is_err());
     }
 }

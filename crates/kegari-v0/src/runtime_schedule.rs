@@ -11,6 +11,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+#[cfg(test)]
+#[path = "runtime_schedule_continuation_tests.rs"]
+mod continuation_tests;
+
 /// An admitted run keeps its capacity through restart until the host recorded
 /// actual local exit. Losing the in-memory Permit map never frees a session slot.
 pub fn occupying_runs(runtime: Uuid, receipts: &[Receipt]) -> Result<Vec<RunReference>> {
@@ -123,6 +127,105 @@ pub fn plan(
     receipts: &[Receipt],
     now: DateTime<Utc>,
 ) -> Result<RunSchedule> {
+    plan_inner(runtime, phase, workspace, receipts, None, now)
+}
+/// Planning is diagnostic, not a continuation capability. Only the runtime's
+/// opaque unfinished-work proof can reach the continued admission transaction.
+pub(crate) fn plan_unfinished(
+    runtime: &RuntimeConfig,
+    phase: &PhaseKey,
+    workspace: Uuid,
+    receipts: &[Receipt],
+    continuation: &crate::control::RunContinuationReference,
+    now: DateTime<Utc>,
+) -> Result<RunSchedule> {
+    plan_inner(
+        runtime,
+        phase,
+        workspace,
+        receipts,
+        Some(PlanTrigger::Unfinished(continuation)),
+        now,
+    )
+}
+pub(crate) fn plan_source_advanced(
+    runtime: &RuntimeConfig,
+    phase: &PhaseKey,
+    workspace: Uuid,
+    receipts: &[Receipt],
+    source: &crate::control::SourceAdvancedReference,
+    now: DateTime<Utc>,
+) -> Result<RunSchedule> {
+    if !matches!(
+        phase.phase.as_str(),
+        "child_local_validation" | "child_codex_review"
+    ) {
+        return Err(Error::new(
+            "worker_binding",
+            "source advancement cannot change this worker phase",
+        ));
+    }
+    plan_inner(
+        runtime,
+        phase,
+        workspace,
+        receipts,
+        Some(PlanTrigger::SourceAdvanced(source)),
+        now,
+    )
+}
+#[derive(Clone, Copy)]
+enum PlanTrigger<'a> {
+    Unfinished(&'a crate::control::RunContinuationReference),
+    SourceAdvanced(&'a crate::control::SourceAdvancedReference),
+}
+impl<'a> PlanTrigger<'a> {
+    fn predecessor(self) -> Uuid {
+        match self {
+            Self::Unfinished(r) => r.predecessor,
+            Self::SourceAdvanced(r) => r.predecessor,
+        }
+    }
+    fn predecessor_digest(self) -> &'a str {
+        match self {
+            Self::Unfinished(r) => &r.predecessor_receipt_digest,
+            Self::SourceAdvanced(r) => &r.predecessor_receipt_digest,
+        }
+    }
+    fn cause(self) -> Uuid {
+        match self {
+            Self::Unfinished(r) => r.failure_operation,
+            Self::SourceAdvanced(r) => r.source_operation,
+        }
+    }
+    fn trigger_digest(self) -> &'a str {
+        match self {
+            Self::Unfinished(r) => &r.trigger_digest,
+            Self::SourceAdvanced(r) => &r.trigger_digest,
+        }
+    }
+    fn progress_digest(self) -> &'a str {
+        match self {
+            Self::Unfinished(r) => &r.progress_digest,
+            Self::SourceAdvanced(r) => &r.progress_digest,
+        }
+    }
+    fn review_rounds(self) -> u32 {
+        match self {
+            Self::Unfinished(r) => r.review_rounds_consumed,
+            Self::SourceAdvanced(r) => r.review_rounds_consumed,
+        }
+    }
+}
+
+fn plan_inner(
+    runtime: &RuntimeConfig,
+    phase: &PhaseKey,
+    workspace: Uuid,
+    receipts: &[Receipt],
+    continuation: Option<PlanTrigger<'_>>,
+    now: DateTime<Utc>,
+) -> Result<RunSchedule> {
     crate::evidence::validate_digest(&phase.generation)?;
     if phase.work.is_empty() || phase.phase.is_empty() || workspace.is_nil() {
         return Err(Error::invalid(
@@ -186,6 +289,12 @@ pub fn plan(
         );
     }
     let Some((last, _)) = history.last() else {
+        if continuation.is_some() {
+            return Err(Error::new(
+                "no_work_trigger",
+                "unfinished work has no original phase admission",
+            ));
+        }
         return Ok(next);
     };
     // Earlier uncertainty cannot be erased by a later unrelated receipt.
@@ -231,6 +340,134 @@ pub fn plan(
             "provider intervention cannot become an automatic retry",
         ));
     }
+    if let Some(continuation) = continuation {
+        if history.iter().any(|(receipt, _)| !reconciled_exit(receipt)) {
+            return Err(Error::new(
+                "reconciliation_required",
+                "every earlier implementation attempt must have a confirmed exit and reconciled effects",
+            ));
+        }
+        if last.operation_id != continuation.predecessor()
+            || crate::digest::canonical_digest(1, *last)? != continuation.predecessor_digest()
+            || observed.get("outcome").and_then(Value::as_str) != Some("completed")
+            || observed
+                .get("hook_error")
+                .is_some_and(|error| !error.is_null())
+            || observed
+                .pointer("/session/terminal")
+                .and_then(Value::as_str)
+                != Some("completed")
+            || observed
+                .get("local_exit_confirmed")
+                .and_then(Value::as_bool)
+                != Some(true)
+        {
+            return Err(Error::new(
+                "stale_result",
+                "unfinished work differs from latest actual completed implementation and confirmed exit",
+            ));
+        }
+        for (receipt, _) in &history {
+            let unfinished = crate::control::RunContinuationReference::from_receipt(receipt)?;
+            let advanced = crate::control::SourceAdvancedReference::from_receipt(receipt)?;
+            for previous in unfinished
+                .as_ref()
+                .map(PlanTrigger::Unfinished)
+                .into_iter()
+                .chain(advanced.as_ref().map(PlanTrigger::SourceAdvanced))
+            {
+                if previous.trigger_digest() == continuation.trigger_digest()
+                    || previous.progress_digest() == continuation.progress_digest()
+                {
+                    return Err(Error::new(
+                        "no_progress",
+                        "this source and obligation already consumed an admission",
+                    ));
+                }
+                if previous.review_rounds() > continuation.review_rounds() {
+                    return Err(Error::new(
+                        "record_corrupt",
+                        "admission cannot reset consumed review rounds",
+                    ));
+                }
+            }
+        }
+        if continuation.review_rounds() >= next.max_review_rounds {
+            return Err(Error::new(
+                "review_rounds_exhausted",
+                "unfinished repair cannot exceed the original review-round bound",
+            ));
+        }
+        let failure = receipts
+            .iter()
+            .find(|receipt| receipt.operation_id == continuation.cause())
+            .ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "unfinished obligation has no actual failure admission",
+                )
+            })?;
+        let failure_run = RunReference::from_receipt(failure)?.ok_or_else(|| {
+            Error::new(
+                "no_work_trigger",
+                "unfinished obligation lacks a worker run",
+            )
+        })?;
+        if failure.runtime_id != runtime.id
+            || failure_run.workspace != workspace
+            || failure_run.phase.work != phase.work
+            || failure_run.phase.generation != phase.generation
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "unfinished obligation belongs to another runtime, workspace or work generation",
+            ));
+        }
+        if !reconciled_exit(failure) {
+            return Err(Error::new(
+                "reconciliation_required",
+                "unfinished failure session must have a confirmed exit and reconciled effects",
+            ));
+        }
+        if let PlanTrigger::SourceAdvanced(reference) = continuation {
+            if failure_run.phase.phase != "implementation"
+                || crate::digest::canonical_digest(1, failure)? != reference.source_receipt_digest
+                || !completed_session(failure)
+            {
+                return Err(Error::new(
+                    "stale_result",
+                    "new source must bind its exact completed implementation",
+                ));
+            }
+            for receipt in receipts {
+                if let Some(source_run) = RunReference::from_receipt(receipt)?
+                    && source_run.phase == failure_run.phase
+                    && (source_run.attempt > failure_run.attempt
+                        || source_run.attempt == failure_run.attempt
+                            && receipt.operation_id != failure.operation_id)
+                {
+                    return Err(Error::new(
+                        "stale_result",
+                        "a later or conflicting implementation source admission exists",
+                    ));
+                }
+            }
+        }
+        next.trigger = match continuation {
+            PlanTrigger::Unfinished(_) => Trigger::VerifiedUnfinished,
+            PlanTrigger::SourceAdvanced(_) => Trigger::VerifiedSourceAdvanced,
+        };
+        next.not_before =
+            last.updated_at.max(failure.updated_at) + chrono::Duration::milliseconds(1000);
+        if next.not_before > now {
+            return Err(Error::new(
+                "retry_wait",
+                "verified unfinished work awaits one-second continuation spacing",
+            )
+            .detail(json!({"not_before":next.not_before,"attempt":next.attempt})));
+        }
+        return Ok(next);
+    }
     if observed.get("outcome").and_then(Value::as_str) != Some("failed") {
         return Err(Error::new(
             "no_work_trigger",
@@ -262,6 +499,29 @@ pub fn plan(
             .detail(json!({"not_before":next.not_before,"attempt":next.attempt})));
     }
     Ok(next)
+}
+
+fn completed_session(receipt: &Receipt) -> bool {
+    receipt.observed_result.as_ref().is_some_and(|result| {
+        let observed = &result["observation"];
+        observed["outcome"].as_str() == Some("completed")
+            && observed["local_exit_confirmed"].as_bool() == Some(true)
+            && observed["hook_error"].is_null()
+            && observed["session"]["terminal"].as_str() == Some("completed")
+            && observed["session"]["intervention"].is_null()
+            && observed["session"]["input_required"].as_bool() != Some(true)
+    })
+}
+
+fn reconciled_exit(receipt: &Receipt) -> bool {
+    receipt.phase == ReceiptPhase::Reconciled
+        && receipt.observed_result.as_ref().is_some_and(|result| {
+            result.get("local_execution").and_then(Value::as_str) == Some("exited")
+                && result
+                    .get("unresolved_effects")
+                    .and_then(Value::as_array)
+                    .is_some_and(|effects| effects.is_empty())
+        })
 }
 
 /// Final capacity check uses actual active admission records under the host lock.

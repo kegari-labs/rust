@@ -1813,6 +1813,8 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
         authority,
         source: None,
         delivery: Some(assignment.clone()),
+        unfinished: None,
+        source_advanced: None,
         max_seconds: 60,
         max_turns: 2,
     };

@@ -14,6 +14,9 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "control_continuation.rs"]
+mod continuation;
+pub use continuation::{RunContinuationReference, SourceAdvancedReference};
 #[path = "control_release.rs"]
 mod release_recovery;
 pub use release_recovery::ReleaseResumeReference;
@@ -268,6 +271,8 @@ pub struct MetadataAdmission {
 }
 enum AdmissionReference {
     Run(RunReference),
+    ContinuedRun(RunReference, RunContinuationReference),
+    SourceAdvancedRun(RunReference, SourceAdvancedReference),
     Metadata(MetadataReference),
     ReleaseResume(ReleaseResumeReference),
 }
@@ -1017,15 +1022,20 @@ impl ControlHost {
                 "work identity already has an active operation",
             ));
         }
-        if let Some(AdmissionReference::Run(reference)) = &reference {
+        if let Some(
+            AdmissionReference::Run(run)
+            | AdmissionReference::ContinuedRun(run, _)
+            | AdmissionReference::SourceAdvancedRun(run, _),
+        ) = &reference
+        {
             let mut prior = BTreeMap::new();
-            let mut cap = reference.max_attempts;
+            let mut cap = run.max_attempts;
             for receipt in self.receipts.all()? {
                 if let Some(old) = RunReference::from_receipt(&receipt)?
-                    && old.phase == reference.phase
+                    && old.phase == run.phase
                 {
-                    if old.workspace != reference.workspace
-                        || prior.insert(old.attempt, receipt.operation_id).is_some()
+                    if old.workspace != run.workspace
+                        || prior.insert(old.attempt, receipt).is_some()
                     {
                         return Err(Error::new(
                             "record_corrupt",
@@ -1041,11 +1051,17 @@ impl ControlHost {
                     "phase attempt history has a gap",
                 ));
             }
-            if reference.attempt != prior.len() as u32 + 1 || reference.attempt > cap {
+            if run.attempt != prior.len() as u32 + 1 || run.attempt > cap {
                 return Err(Error::new(
                     "attempts_exhausted",
                     "admission would reset, duplicate or exceed the durable phase budget",
                 ));
+            }
+            if let Some(AdmissionReference::ContinuedRun(_, continuation)) = &reference {
+                self.verify_run_continuation(&s.snapshot(), run, continuation, &prior)?;
+            }
+            if let Some(AdmissionReference::SourceAdvancedRun(_, source)) = &reference {
+                self.verify_source_advanced(&s.snapshot(), run, source, &prior)?;
             }
         }
         if let Some(AdmissionReference::Metadata(reference)) = &reference {
@@ -1096,11 +1112,30 @@ impl ControlHost {
             ("scope".into(), permit.scope_digest.clone()),
             ("control".into(), permit.control_generation.to_string()),
         ]);
-        if let Some(AdmissionReference::Run(reference)) = &reference {
+        if let Some(
+            AdmissionReference::Run(reference)
+            | AdmissionReference::ContinuedRun(reference, _)
+            | AdmissionReference::SourceAdvancedRun(reference, _),
+        ) = &reference
+        {
             expected.insert(
                 "run".into(),
                 serde_json::to_string(&reference)
                     .map_err(|_| Error::invalid("run reference encoding"))?,
+            );
+        }
+        if let Some(AdmissionReference::ContinuedRun(_, continuation)) = &reference {
+            expected.insert(
+                "continuation".into(),
+                serde_json::to_string(continuation)
+                    .map_err(|_| Error::invalid("continuation reference encoding"))?,
+            );
+        }
+        if let Some(AdmissionReference::SourceAdvancedRun(_, source)) = &reference {
+            expected.insert(
+                "source_advanced".into(),
+                serde_json::to_string(source)
+                    .map_err(|_| Error::invalid("source-advanced reference encoding"))?,
             );
         }
         if let Some(AdmissionReference::Metadata(reference)) = reference {

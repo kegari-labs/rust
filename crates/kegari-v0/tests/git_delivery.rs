@@ -1583,6 +1583,7 @@ impl GateFixture {
                 repository: fixture.repository.clone(),
                 production: candidate.manifest.production.clone(),
                 deployed_revision: None,
+                target_revisions: BTreeMap::new(),
                 deployed_artifact: None,
                 target_artifacts: BTreeMap::new(),
                 deployment_free: true,
@@ -2291,6 +2292,7 @@ fn parent_fixture_for_candidates(
                 repository: c.repository.clone(),
                 production: c.production.clone(),
                 deployed_revision: None,
+                target_revisions: BTreeMap::new(),
                 deployed_artifact: None,
                 target_artifacts: BTreeMap::new(),
                 deployment_free: true,
@@ -3048,6 +3050,17 @@ fn v0_t30_partial_a_delivered_b_merged_recovery_has_no_replayed_contribution_or_
         } else {
             "previous-b"
         }));
+        let target = if baseline.repository == a.repository {
+            "target-a"
+        } else {
+            "target-b"
+        };
+        baseline
+            .target_revisions
+            .insert(target.into(), baseline.deployed_revision.clone().unwrap());
+        baseline
+            .target_artifacts
+            .insert(target.into(), baseline.deployed_artifact.clone().unwrap());
         baseline.successor_recovery_operation = Some(release_operation);
     }
     manifest.production_targets = BTreeSet::from(["target-a".into(), "target-b".into()]);
@@ -3077,6 +3090,218 @@ fn v0_t30_partial_a_delivered_b_merged_recovery_has_no_replayed_contribution_or_
         ("target-a".into(), ("github".into(), a.repository.clone())),
         ("target-b".into(), ("github".into(), b.repository.clone())),
     ]);
+    // Real owned Git integration proofs establish that neither repository needs
+    // another merge. Hosted checks below are explicit deterministic facts.
+    let required = vec![CheckRequirement {
+        id: "production-ci".into(),
+        kind: CheckKind::ProductionCi,
+        workflow_id: Some(400),
+        command: vec![],
+    }];
+    let mut production = Vec::new();
+    for candidate in &manifest.candidates {
+        let source = &candidate.production;
+        let revision = RevisionBinding {
+            repository: candidate.repository.clone(),
+            head: source.commit.clone(),
+            base: source.commit.clone(),
+            tested_commit: source.commit.clone(),
+            tested_tree: source.tree.clone(),
+        };
+        let mut snapshot = checks(&manifest.work, &revision);
+        let mut run = snapshot.runs[1].clone();
+        run.id = "production-ci".into();
+        run.kind = CheckKind::ProductionCi;
+        run.workflow_id = Some(400);
+        snapshot.runs = vec![run];
+        production.push(
+            verify_existing_production(&parent, &revision, &required, &snapshot, &proofs).unwrap(),
+        );
+    }
+    let source_a = manifest
+        .baselines
+        .iter()
+        .find(|baseline| baseline.repository == a.repository)
+        .unwrap()
+        .production
+        .clone();
+    let source_b = manifest
+        .baselines
+        .iter()
+        .find(|baseline| baseline.repository == b.repository)
+        .unwrap()
+        .production
+        .clone();
+    let target_a = ResourceKey::Target {
+        provider: "github".into(),
+        id: "target-a".into(),
+    };
+    let target_b = ResourceKey::Target {
+        provider: "github".into(),
+        id: "target-b".into(),
+    };
+    let plan = ReleasePlan {
+        schema_version: 1,
+        runtime_id: Uuid::new_v4(),
+        operation_id: Uuid::new_v4(),
+        parent_id,
+        linear_workspace: manifest.work.linear_workspace,
+        generation: manifest.work.generation.clone(),
+        evidence_token: parent.token().into(),
+        acceptance_digest: acceptance.digest().into(),
+        carried_acceptance: None,
+        resources: BTreeSet::from([
+            ResourceKey::Repository {
+                repository: a.repository.clone(),
+            },
+            ResourceKey::Repository {
+                repository: b.repository.clone(),
+            },
+            target_a.clone(),
+            target_b.clone(),
+        ]),
+        dependencies: vec![],
+        spacing_seconds: 0,
+        deployment_free: BTreeSet::new(),
+        steps: vec![
+            ReleaseStep {
+                id: "verify-a".into(),
+                depends_on: BTreeSet::new(),
+                kind: StepKind::VerifyExisting {
+                    repository: a.repository.clone(),
+                    target: target_a.clone(),
+                    source: source_a.clone(),
+                    artifact_digest: d("delivered-a"),
+                },
+            },
+            ReleaseStep {
+                id: "deploy-b".into(),
+                depends_on: BTreeSet::from(["verify-a".into()]),
+                kind: StepKind::DeployExisting {
+                    repository: b.repository.clone(),
+                    target: target_b.clone(),
+                    workflow_id: 400,
+                    workflow_revision: "a".repeat(40),
+                    dispatch_ref: "heads/deploy".into(),
+                    source_input: "source".into(),
+                    source: source_b.clone(),
+                    expected_artifact: None,
+                },
+            },
+            ReleaseStep {
+                id: "verify-b".into(),
+                depends_on: BTreeSet::from(["deploy-b".into()]),
+                kind: StepKind::VerifyDeployed {
+                    repository: b.repository.clone(),
+                    target: target_b.clone(),
+                    source: source_b.clone(),
+                    deployment_step: "deploy-b".into(),
+                    expected_artifact: None,
+                },
+            },
+        ],
+    };
+    let admission = AdmissionFacts {
+        running: true,
+        included: true,
+        authorized: true,
+        no_pending_correction: true,
+        preparation_complete: true,
+        provider_reads_complete: true,
+        repository_policy_usable: true,
+        credentials_usable: true,
+        manual_mode: true,
+        explicit_manual_request: Some(Uuid::new_v4()),
+        actor_may_release: true,
+        owner_generation: 1,
+        control_generation: 1,
+        required_step_ids: plan.steps.iter().map(|step| step.id.clone()).collect(),
+    };
+    let mut attempt = ReleaseAttempt::admit(
+        plan.clone(),
+        DeliveryEvidence {
+            parent: &parent,
+            acceptance: &acceptance,
+            carried: None,
+            production: &production,
+        },
+        admission,
+        Utc::now(),
+    )
+    .unwrap();
+    assert!(
+        plan.steps
+            .iter()
+            .all(|step| !matches!(step.kind, StepKind::Merge { .. }))
+    );
+    let revisions = BTreeMap::from([
+        (a.repository.clone(), source_a.clone()),
+        (b.repository.clone(), source_b.clone()),
+    ]);
+    let facts = FreshReleaseFacts {
+        generation: &plan.generation,
+        evidence_token: &plan.evidence_token,
+        owner_generation: 1,
+        authority_current: true,
+        pending_correction: false,
+        provider_reads_complete: true,
+        resource_lock_owned: true,
+        credentials_usable: true,
+        repository_policy_current: true,
+        force_stopped: false,
+        current_revisions: &revisions,
+    };
+    for (step, effect) in [
+        (
+            "verify-a",
+            ObservedEffect::Verification {
+                repository: a.repository.clone(),
+                target: target_a,
+                source_commit: source_a.commit,
+                tree: source_a.tree,
+                artifact_digest: d("delivered-a"),
+                evidence_digest: d("native-a-proof"),
+            },
+        ),
+        (
+            "deploy-b",
+            ObservedEffect::Deployment {
+                repository: b.repository.clone(),
+                target: target_b.clone(),
+                source_commit: source_b.commit.clone(),
+                tree: source_b.tree.clone(),
+                artifact_digest: d("delivered-b"),
+                deployment_id: "actual-fixture-deployment-b".into(),
+                run: OwnedRun {
+                    repository: b.repository.clone(),
+                    operation_id: plan.operation_id,
+                    run_id: 550,
+                    attempt: 1,
+                    actor_account_id: "selected-user".into(),
+                    origin_digest: d("fixture-owned-target-run"),
+                },
+            },
+        ),
+        (
+            "verify-b",
+            ObservedEffect::Verification {
+                repository: b.repository.clone(),
+                target: target_b,
+                source_commit: source_b.commit,
+                tree: source_b.tree,
+                artifact_digest: d("delivered-b"),
+                evidence_digest: d("native-b-proof"),
+            },
+        ),
+    ] {
+        let payload = attempt.prepare_step(step, &facts, |_| Ok(())).unwrap();
+        assert!(payload.exact_source_commit.is_some());
+        attempt.mark_sent(&payload, &facts, |_| Ok(())).unwrap();
+        attempt
+            .observe_success(step, effect, Utc::now(), |_| Ok(()))
+            .unwrap();
+    }
+    assert!(attempt.completed());
     let record = NoReleaseRequired {
         schema_version: 1,
         runtime_id: Uuid::new_v4(),
@@ -3332,6 +3557,7 @@ fn mixed_release_verifies_unchanged_target_without_inventing_merge_or_deploy() {
         repository: unchanged.repository.clone(),
         production: source.clone(),
         deployed_revision: Some(source.commit.clone()),
+        target_revisions: BTreeMap::new(),
         deployed_artifact: Some(artifact.clone()),
         target_artifacts: BTreeMap::from([("already-serving".into(), artifact.clone())]),
         deployment_free: false,

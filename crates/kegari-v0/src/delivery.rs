@@ -4558,6 +4558,7 @@ pub use production_release::*;
 
 #[path = "delivery_assignment.rs"]
 mod assignment;
+pub(crate) use assignment::public_model_context;
 pub use assignment::*;
 
 #[cfg(test)]
@@ -4565,3 +4566,7 @@ pub(crate) use production_release::tests::observed_merge_for_runtime;
 
 #[path = "delivery_objects.rs"]
 mod objects;
+
+#[path = "delivery_continuation.rs"]
+mod continuation;
+pub use continuation::*;

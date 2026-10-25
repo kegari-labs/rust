@@ -1893,6 +1893,8 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
         };
         let mut request = LaunchRequest {
             delivery: None,
+            unfinished: None,
+            source_advanced: None,
             lease: f.permit.lease.clone(),
             operation_id: id(810),
             authority,
@@ -2291,6 +2293,7 @@ fn correction_context_contains_exact_native_text_and_rejects_stale_or_missing_re
         url: "https://linear.invalid/comment/501".into(),
     };
     let issue:Issue=serde_json::from_value(json!({"id":parent.key.issue,"workspace_id":parent.key.workspace,"endpoint":parent.key.endpoint,"identifier":"FIX-10","title":"Parent","description":"Complete current parent specification","team_id":id(503),"project_id":null,"creator_id":id(502),"assignee_id":null,"parent_id":null,"state_id":id(504),"state_name":"In Progress","state_type":"started","labels":[],"priority":null,"created_at":null,"updated_at":null,"url":"https://linear.invalid/FIX-10","diagnostics":[]})).unwrap();
+    parent.issue = Some(issue.clone());
     let observation = IssueObservation {
         issue,
         comments: vec![comment.clone()],
@@ -2333,6 +2336,78 @@ fn correction_context_contains_exact_native_text_and_rejects_stale_or_missing_re
         id(502).to_string()
     );
     assert!(!context.to_string().contains("unrelated private source"));
+    let bound = kegari_v0::runtime_workers::authorized_context(
+        &parent,
+        &gate,
+        "work",
+        id(4),
+        &["42".into()],
+        json!({"retained_evidence":{"digest":bytes_digest(b"retained")}}),
+    )
+    .unwrap();
+    assert!(bound.get("native_context").is_none());
+    assert_eq!(bound["evidence"]["native_context"], context);
+    assert!(
+        bound["operation"]["work"]["generation"]
+            .get("authorization")
+            .is_none()
+    );
+    assert_eq!(
+        bound["operation"]["work"]["generation"]["authorization_digest"],
+        gate.work().generation.authorization
+    );
+    assert_eq!(
+        bound["evidence"]["retained_evidence"]["digest"],
+        bytes_digest(b"retained")
+    );
+    let manifest = &fixture.contract.instructions().manifest;
+    let build = |context: &Value| {
+        assemble(AssemblyInput {
+            workflow: &fixture.input.workflow,
+            role: AgentRole::Coordination,
+            phase: "work",
+            context,
+            workspace_id: gate.workspace_id(),
+            operation_id: id(4),
+            work_generation: &manifest.work_generation,
+            correction_revision: &manifest.correction_revision,
+            profile: gate.profile(),
+            cwd: &manifest.cwd,
+            codex_home: &manifest.codex_home,
+            codex_version: &manifest.codex_version,
+            repository: manifest
+                .repository_root
+                .as_ref()
+                .map(|root| RepositoryContext {
+                    root: root.clone(),
+                    revision: manifest.repository_revision.clone().unwrap(),
+                    scope_paths: vec!["a.txt".into()],
+                }),
+            required_context: &[],
+            project_doc_max_bytes: 32768,
+            permissions: manifest.permissions.clone(),
+            tools: manifest.tools.clone(),
+            provider_discovery: ProviderDiscovery::Unavailable {
+                reason: "deterministic context fixture".into(),
+            },
+            known_secrets: &[],
+        })
+    };
+    let assembled = build(&bound).unwrap();
+    assert!(assembled.prompt.contains(body));
+    assert!(!assembled.prompt.contains("unrelated private source"));
+    let mut actual = fixture.input.clone();
+    actual.context = bound.clone();
+    actual.authority = WorkerAuthority::Authorized(gate.clone());
+    actual.assembled = assembled;
+    WorkerContract::new(actual).unwrap();
+    let mut rejected = bound.clone();
+    rejected["evidence"]["request_headers"] =
+        json!({"authorization":bytes_digest(b"credential-shaped value")});
+    assert!(build(&rejected).is_err());
+    let mut rejected = bound;
+    rejected["native_context"] = context;
+    assert!(build(&rejected).is_err());
     parent
         .observations
         .get_mut(&parent.key.issue)

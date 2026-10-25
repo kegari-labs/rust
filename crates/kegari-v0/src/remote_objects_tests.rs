@@ -1,6 +1,7 @@
 //! Actual disposable Git protocol/import fixtures; injected provider wire and
 //! boot identity do not constitute native enforcement or live qualification.
 use super::*;
+use crate::test_process_probe as probe;
 use crate::{
     app::ConfigurationControl,
     platform::ProcessProbe,
@@ -16,8 +17,6 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
-#[path = "remote_objects_test_probe.rs"]
-mod probe;
 fn fixture_git(binary: &Path, cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Vec<u8> {
     let mut child = Command::new(binary)
         .current_dir(cwd)

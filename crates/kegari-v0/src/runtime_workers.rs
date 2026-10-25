@@ -214,6 +214,10 @@ pub struct LaunchRequest {
     pub source: Option<SourceSelection>,
     /// Opaque delivery assignment; cannot be constructed from worker/CLI JSON.
     pub delivery: Option<crate::delivery::DeliveryWorkerAssignment>,
+    /// Exact host-verified remaining obligation; worker/CLI text cannot mint it.
+    pub unfinished: Option<Arc<crate::delivery::UnfinishedChildWork>>,
+    /// Actual repaired source authorizing a repeated required check/review phase.
+    pub source_advanced: Option<Arc<crate::delivery::VerifiedSourceAdvanced>>,
     pub max_seconds: u64,
     pub max_turns: u32,
 }
@@ -231,6 +235,7 @@ impl LaunchRequest {
             || self.max_turns == 0
             || self.phase.work != self.authority.work_key()?
             || self.phase.generation != generation
+            || self.unfinished.is_some() && self.source_advanced.is_some()
         {
             return Err(Error::new(
                 "worker_binding",
@@ -239,6 +244,41 @@ impl LaunchRequest {
         }
         if let Some(source) = &self.source {
             source.revision.validate()?;
+        }
+        if let Some(proof) = &self.unfinished {
+            let assignment = self.delivery.as_ref().ok_or_else(|| {
+                Error::new(
+                    "worker_binding",
+                    "unfinished work requires its sealed repair assignment",
+                )
+            })?;
+            if proof.phase() != &self.phase || proof.predecessor() == self.operation_id {
+                return Err(Error::new(
+                    "worker_binding",
+                    "repair cannot replace its original phase or reuse the predecessor operation",
+                ));
+            }
+            proof.verify_assignment(assignment)?;
+            WorkerAuthority::Authorized(proof.authority().clone()).compare(&self.authority)?;
+        }
+        if let Some(proof) = &self.source_advanced {
+            let assignment = self.delivery.as_ref().ok_or_else(|| {
+                Error::new(
+                    "worker_binding",
+                    "advanced source requires its exact delivery assignment",
+                )
+            })?;
+            if proof.phase() != &self.phase
+                || proof.predecessor() == self.operation_id
+                || proof.source_operation() == self.operation_id
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "advanced source cannot replace its phase or reuse an operation",
+                ));
+            }
+            proof.verify_assignment(assignment)?;
+            WorkerAuthority::Authorized(proof.authority().clone()).compare(&self.authority)?;
         }
         if let Some(assignment) = &self.delivery {
             let WorkerAuthority::Authorized(gate) = &self.authority else {
@@ -319,8 +359,7 @@ pub async fn prepare_admitted(
     request: LaunchRequest,
 ) -> Result<AdmittedWorker> {
     let mut plan = Plan::read(&runtime, request)?;
-    let initial_schedule =
-        runtime.next_attempt(&plan.request.phase, plan.workspace.id, &plan.account)?;
+    let initial_schedule = plan.schedule(&runtime)?;
     runtime.check_worker_capacity(
         plan.workspace.id,
         &plan.account,
@@ -383,7 +422,7 @@ pub async fn prepare_admitted(
         },
     )?;
     let mut prepared = prepared?;
-    let schedule = runtime.next_attempt(&plan.request.phase, plan.workspace.id, &plan.account)?;
+    let schedule = plan.schedule(&runtime)?;
     if plan.request.max_turns > schedule.max_turns {
         return Err(Error::new(
             "turns_exhausted",
@@ -391,27 +430,41 @@ pub async fn prepare_admitted(
         ));
     }
     let contract = prepared.run.contract().clone();
-    let permit = runtime.admit_worker(
-        &plan.request.lease,
-        RunAdmission {
-            request_id: plan.request.operation_id,
-            work_key: contract.work_key()?,
-            scope_digest: contract.scope_digest().into(),
-            reference: RunReference {
-                workspace: plan.workspace.id,
-                account: plan.account.clone(),
-                normalized_state: Some(plan.normalized_state.clone()),
-                phase: plan.request.phase.clone(),
-                profile_digest: canonical_digest(1, &contract.instructions().manifest.profile)?,
-                instruction_digest: contract.instructions().manifest_digest.clone(),
-                max_attempts: schedule.max_attempts,
-                max_turns: schedule.max_turns,
-                max_review_rounds: schedule.max_review_rounds,
-                attempt: schedule.attempt,
-            },
+    let admission = RunAdmission {
+        request_id: plan.request.operation_id,
+        work_key: contract.work_key()?,
+        scope_digest: contract.scope_digest().into(),
+        reference: RunReference {
+            workspace: plan.workspace.id,
+            account: plan.account.clone(),
+            normalized_state: Some(plan.normalized_state.clone()),
+            phase: plan.request.phase.clone(),
+            profile_digest: canonical_digest(1, &contract.instructions().manifest.profile)?,
+            instruction_digest: contract.instructions().manifest_digest.clone(),
+            max_attempts: schedule.max_attempts,
+            max_turns: schedule.max_turns,
+            max_review_rounds: schedule.max_review_rounds,
+            attempt: schedule.attempt,
         },
-        &contract,
-    )?;
+    };
+    let permit = match (&plan.request.unfinished, &plan.request.source_advanced) {
+        (Some(proof), None) => {
+            runtime.admit_unfinished_worker(&plan.request.lease, admission, &contract, proof)?
+        }
+        (None, Some(proof)) => runtime.admit_source_advanced_worker(
+            &plan.request.lease,
+            admission,
+            &contract,
+            proof,
+        )?,
+        (None, None) => runtime.admit_worker(&plan.request.lease, admission, &contract)?,
+        (Some(_), Some(_)) => {
+            return Err(Error::new(
+                "worker_binding",
+                "conflicting readmission causes",
+            ));
+        }
+    };
     let start: Result<AdmittedWorker> = (|| {
         runtime.register_run(permit.clone(), contract.clone())?;
         // Preparation and model execution have distinct permits. Reusing an
@@ -595,6 +648,22 @@ fn fresh(runtime: &RuntimeCoordinator, request: &LaunchRequest) -> Result<()> {
     Ok(())
 }
 impl Plan {
+    fn schedule(
+        &self,
+        runtime: &RuntimeCoordinator,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        match (&self.request.unfinished, &self.request.source_advanced) {
+            (Some(proof), None) => runtime.next_attempt_for_unfinished(proof),
+            (None, Some(proof)) => runtime.next_attempt_for_source_advanced(proof),
+            (None, None) => {
+                runtime.next_attempt(&self.request.phase, self.workspace.id, &self.account)
+            }
+            (Some(_), Some(_)) => Err(Error::new(
+                "worker_binding",
+                "conflicting readmission causes",
+            )),
+        }
+    }
     fn read(runtime: &RuntimeCoordinator, request: LaunchRequest) -> Result<Self> {
         request.validate_binding()?;
         fresh(runtime, &request)?;
@@ -636,7 +705,14 @@ impl Plan {
                 })?;
                 (
                     role,
-                    json!({"issue":issue,"parent":parent.issue,"children":parent.children,"scope":gate.child_scope(),"phase":request.phase.phase,"workspace":{"id":workspace.id,"name":parent.workspace_name,"repositories":workspace.repositories.keys().collect::<Vec<_>>()},"dependencies":parent.prerequisites,"corrections":parent.corrections,"native_context":native_context(parent, gate)?,"evidence":scoped_evidence(runtime, &parent.key)?,"attempt":null,"profile":gate.profile(),"operation":{"id":request.operation_id,"work":gate.work()}}),
+                    authorized_context(
+                        parent,
+                        gate,
+                        &request.phase.phase,
+                        request.operation_id,
+                        &workspace.repositories.keys().cloned().collect::<Vec<_>>(),
+                        scoped_evidence(runtime, &parent.key)?,
+                    )?,
                     None,
                     canonical_digest(1, &gate.work().generation)?,
                     issue.state_name.trim().to_lowercase(),
@@ -676,7 +752,7 @@ impl Plan {
         }
         let source = if let Some(assignment) = &request.delivery {
             role = assignment.role();
-            context = assignment.context().clone();
+            context = assignment.bind_context(context, request.operation_id)?;
             assignment.source().map(|source| SourceSelection {
                 repository: source.repository().id.clone(),
                 revision: source.revision().clone(),
@@ -1556,6 +1632,51 @@ fn forbidden_paths(
     }
     Ok(forbidden)
 }
+/// Complete documented context envelope used by actual authorized worker
+/// preparation. Native observations remain nested data alongside verified evidence.
+pub fn authorized_context(
+    parent: &crate::reconcile::ParentProjection,
+    gate: &crate::reconcile::FreshGate,
+    phase: &str,
+    operation: Uuid,
+    repositories: &[String],
+    mut evidence: Value,
+) -> Result<Value> {
+    if operation.is_nil() || phase.is_empty() {
+        return Err(Error::new(
+            "worker_binding",
+            "authorized context needs actual operation and phase",
+        ));
+    }
+    let native = native_context(parent, gate)?;
+    let issue = match gate.work().child {
+        Some(child) => parent
+            .children
+            .get(&child)
+            .and_then(|child| child.issue.as_ref()),
+        None => parent.issue.as_ref(),
+    }
+    .ok_or_else(|| Error::new("incompletely_observed", "worker's actual issue disappeared"))?;
+    let records = evidence
+        .as_object_mut()
+        .ok_or_else(|| Error::new("worker_binding", "scoped evidence must be an object"))?;
+    if records.contains_key("native_context") {
+        return Err(Error::new(
+            "worker_binding",
+            "scoped evidence already contains native context",
+        ));
+    }
+    records.insert("native_context".into(), native);
+    crate::delivery::public_model_context(
+        &json!({"issue":issue,"parent":parent.issue,"children":parent.children,
+        "scope":gate.child_scope(),"phase":phase,
+        "workspace":{"id":gate.workspace_id(),"name":parent.workspace_name,"repositories":repositories},
+        "dependencies":parent.prerequisites,"corrections":parent.corrections,
+        "evidence":evidence,"attempt":null,"profile":gate.profile(),
+        "operation":{"id":operation,"work":gate.work()}}),
+    )
+}
+
 /// Native source material for the exact admitted parent/child; it grants no authority.
 pub fn native_context(
     parent: &crate::reconcile::ParentProjection,

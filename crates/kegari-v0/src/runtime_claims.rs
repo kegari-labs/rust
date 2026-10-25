@@ -346,6 +346,11 @@ pub(crate) use tests::{
     test_fixture_with_claim,
 };
 #[cfg(test)]
+#[path = "runtime_claims_contract_fixture.rs"]
+mod contract_fixture;
+#[cfg(test)]
+pub(crate) use contract_fixture::test_completed_contract_fixture;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{

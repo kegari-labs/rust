@@ -1161,6 +1161,12 @@ impl RuntimeDelivery {
             Utc::now(),
             Duration::seconds(30),
         )?;
+        let predecessor = self.known_predecessor_baseline(projection, &gate).await?;
+        let observer = predecessor
+            .as_ref()
+            .map(|proof| workspace.observer.with_successor(proof.clone()))
+            .transpose()?;
+        let observer = observer.as_ref().unwrap_or(workspace.observer.as_ref());
         let repository_evidence = repository_evidence(&preparation, &workspace.contracts)?;
         // Before queue admission, recover every complete production gate from
         // current provider observations rather than relying on its creation time.
@@ -1185,10 +1191,7 @@ impl RuntimeDelivery {
                     baseline,
                     production: _,
                 } => {
-                    workspace
-                        .observer
-                        .reobserve(item.contract, baseline)
-                        .await?;
+                    observer.reobserve(item.contract, baseline).await?;
                     workspace
                         .coordinator
                         .hydrate_existing_production_validation(
@@ -1314,6 +1317,9 @@ impl RuntimeDelivery {
             |admission_snapshot| {
                 self.runtime.registration.verify_active_owner(lease)?;
                 check(&gate)?;
+                if let Some(predecessor) = &predecessor {
+                    predecessor.revalidate()?;
+                }
                 let current_config = self.runtime.configuration.snapshot()?;
                 if current_config.revision()? != workspace.configuration.revision()? {
                     return Err(Error::new(
@@ -2068,6 +2074,16 @@ fn release_revision(
                 repository: actual,
                 source,
                 ..
+            }
+            | domain::StepKind::DeployExisting {
+                repository: actual,
+                source,
+                ..
+            }
+            | domain::StepKind::VerifyDeployed {
+                repository: actual,
+                source,
+                ..
             } if actual == repository => {
                 return Ok(evidence::RevisionBinding {
                     repository: repository.clone(),
@@ -2702,3 +2718,7 @@ mod tests {
 
 #[path = "runtime_delivery_recovery.rs"]
 mod recovery;
+
+#[path = "runtime_delivery_baseline.rs"]
+mod baseline;
+pub use baseline::KnownPredecessorBaseline;

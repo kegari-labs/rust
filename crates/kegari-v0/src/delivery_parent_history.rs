@@ -518,3 +518,7 @@ impl DeliveryCoordinator {
         })
     }
 }
+
+#[path = "delivery_release_origin.rs"]
+mod origin;
+pub use origin::VerifiedReleaseOrigin;

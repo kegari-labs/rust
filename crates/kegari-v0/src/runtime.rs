@@ -386,6 +386,41 @@ impl RuntimeCoordinator {
         workspace: Uuid,
         account: &str,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
+        self.plan_attempt(phase, workspace, account, None, None)
+    }
+    pub fn next_attempt_for_unfinished(
+        &self,
+        proof: &crate::delivery::UnfinishedChildWork,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        self.next_attempt_for_readmission(WorkerReadmission::Unfinished(proof))
+    }
+    pub fn next_attempt_for_source_advanced(
+        &self,
+        proof: &crate::delivery::VerifiedSourceAdvanced,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        self.next_attempt_for_readmission(WorkerReadmission::SourceAdvanced(proof))
+    }
+    fn next_attempt_for_readmission(
+        &self,
+        proof: WorkerReadmission<'_>,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        let config = self.configuration.snapshot()?;
+        let workspace = config
+            .workspaces
+            .values()
+            .find(|workspace| workspace.id == proof.authority().workspace_id())
+            .ok_or_else(|| Error::new("scope_violation", "readmission workspace disappeared"))?;
+        let account = &config.connections[&workspace.codex_connection].account_id;
+        self.plan_attempt(proof.phase(), workspace.id, account, Some(proof), None)
+    }
+    fn plan_attempt(
+        &self,
+        phase: &crate::scheduler::PhaseKey,
+        workspace: Uuid,
+        account: &str,
+        readmission: Option<WorkerReadmission<'_>>,
+        locked_snapshot: Option<&crate::control::ControlSnapshot>,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
         let config = self.configuration.snapshot()?;
         let ws = config
             .workspaces
@@ -403,7 +438,14 @@ impl RuntimeCoordinator {
                 "worker account differs from the selected workspace connection",
             ));
         }
-        let state = self.control.snapshot()?;
+        let observed;
+        let state = match locked_snapshot {
+            Some(state) => state,
+            None => {
+                observed = self.control.snapshot()?;
+                &observed
+            }
+        };
         if state
             .active_operations
             .iter()
@@ -493,7 +535,96 @@ impl RuntimeCoordinator {
             &phase.work,
             &receipts,
         )?;
-        crate::runtime_schedule::plan(&limits, phase, workspace, &receipts, Utc::now())
+        if let Some(proof) = readmission {
+            proof.verify_inventory(&receipts)?;
+            if proof.phase() != phase
+                || proof.authority().workspace_id() != workspace
+                || proof.authority().work_key()? != phase.work
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "readmission differs from its original phase and current child",
+                ));
+            }
+            self.current_admission_authority(&WorkerAuthority::Authorized(
+                proof.authority().clone(),
+            ))?;
+            let failure = receipts
+                .iter()
+                .find(|receipt| receipt.operation_id == proof.cause_operation())
+                .ok_or_else(|| {
+                    Error::new(
+                        "reconciliation_required",
+                        "readmission lost its actual source or failure admission",
+                    )
+                })?;
+            if canonical_digest(1, failure)? != proof.cause_receipt_digest() {
+                return Err(Error::new(
+                    "stale_result",
+                    "readmission no longer matches its exact cause receipt",
+                ));
+            }
+            let predecessor = receipts
+                .iter()
+                .find(|receipt| receipt.operation_id == proof.predecessor())
+                .ok_or_else(|| {
+                    Error::new(
+                        "reconciliation_required",
+                        "readmission predecessor is unavailable",
+                    )
+                })?;
+            let prior_run = RunReference::from_receipt(predecessor)?.ok_or_else(|| {
+                Error::new("worker_binding", "readmission predecessor lacks a run")
+            })?;
+            if prior_run.account != account {
+                return Err(Error::new(
+                    "identity_mismatch",
+                    "readmission cannot replace the original account",
+                ));
+            }
+            proof.source().revalidate_filesystem()?;
+            let completed = self
+                .retained_completion(proof.completed_operation())?
+                .ok_or_else(|| {
+                    Error::new(
+                        "reconciliation_required",
+                        "readmission lost its actual joined completion",
+                    )
+                })?;
+            if !completed.local_exit_confirmed
+                || completed.hook_error.is_some()
+                || !matches!(completed.outcome, crate::worker_run::RunOutcome::Completed)
+                || completed.state.intervention.is_some()
+                || completed.state.input_required
+            {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "readmission requires a known completed session without provider or hook blockers",
+                ));
+            }
+            match proof {
+                WorkerReadmission::Unfinished(proof) => crate::runtime_schedule::plan_unfinished(
+                    &limits,
+                    phase,
+                    workspace,
+                    &receipts,
+                    &continuation_reference(proof),
+                    Utc::now(),
+                ),
+                WorkerReadmission::SourceAdvanced(proof) => {
+                    crate::runtime_schedule::plan_source_advanced(
+                        &limits,
+                        phase,
+                        workspace,
+                        &receipts,
+                        &source_advanced_reference(proof),
+                        Utc::now(),
+                    )
+                }
+            }
+        } else {
+            crate::runtime_schedule::plan(&limits, phase, workspace, &receipts, Utc::now())
+        }
     }
     pub(crate) fn retain_retry_grant(
         &self,
@@ -974,6 +1105,43 @@ impl RuntimeCoordinator {
         input: crate::control::RunAdmission,
         contract: &WorkerContract,
     ) -> Result<Permit> {
+        self.admit_worker_inner(lease, input, contract, None)
+    }
+    pub(crate) fn admit_unfinished_worker(
+        &self,
+        lease: &Lease,
+        input: crate::control::RunAdmission,
+        contract: &WorkerContract,
+        proof: &crate::delivery::UnfinishedChildWork,
+    ) -> Result<Permit> {
+        self.admit_worker_inner(
+            lease,
+            input,
+            contract,
+            Some(WorkerReadmission::Unfinished(proof)),
+        )
+    }
+    pub(crate) fn admit_source_advanced_worker(
+        &self,
+        lease: &Lease,
+        input: crate::control::RunAdmission,
+        contract: &WorkerContract,
+        proof: &crate::delivery::VerifiedSourceAdvanced,
+    ) -> Result<Permit> {
+        self.admit_worker_inner(
+            lease,
+            input,
+            contract,
+            Some(WorkerReadmission::SourceAdvanced(proof)),
+        )
+    }
+    fn admit_worker_inner(
+        &self,
+        lease: &Lease,
+        input: crate::control::RunAdmission,
+        contract: &WorkerContract,
+        readmission: Option<WorkerReadmission<'_>>,
+    ) -> Result<Permit> {
         let reference = input.reference.clone();
         if input.work_key != contract.work_key()?
             || input.scope_digest != contract.scope_digest()
@@ -993,8 +1161,36 @@ impl RuntimeCoordinator {
         let active = self
             .observations
             .capture_active(workspace, revision, workflow)?;
-        let permit = self.control.admit_run_observed(lease, input, |_snapshot| {
+        let final_gate = |snapshot: &crate::control::ControlSnapshot| {
             self.registration.verify_active_owner(lease)?;
+            if let Some(proof) = readmission {
+                proof.verify_contract(contract)?;
+                if proof.phase() != &reference.phase {
+                    return Err(Error::new(
+                        "worker_binding",
+                        "readmission cannot replace its original phase",
+                    ));
+                }
+                WorkerAuthority::Authorized(proof.authority().clone())
+                    .compare(contract.authority())?;
+                let schedule = self.plan_attempt(
+                    &reference.phase,
+                    reference.workspace,
+                    &reference.account,
+                    Some(proof),
+                    Some(snapshot),
+                )?;
+                if reference.attempt != schedule.attempt
+                    || reference.max_attempts > schedule.max_attempts
+                    || reference.max_turns > schedule.max_turns
+                    || reference.max_review_rounds > schedule.max_review_rounds
+                {
+                    return Err(Error::new(
+                        "admission_budget",
+                        "readmission exceeds original finite phase bounds",
+                    ));
+                }
+            }
             self.require_provider_session_clear(&reference.account, &reference.phase.work)?;
             self.current_admission_authority(contract.authority())?;
             let config = self.configuration.snapshot()?;
@@ -1094,7 +1290,26 @@ impl RuntimeCoordinator {
                 .get(&reference.account)
                 .cloned();
             crate::runtime_schedule::ensure_capacity(&config, &active, &reference, quota.as_ref())
-        })?;
+        };
+        let permit = match readmission {
+            Some(WorkerReadmission::Unfinished(proof)) => {
+                self.control.admit_run_continued_observed(
+                    lease,
+                    input,
+                    continuation_reference(proof),
+                    final_gate,
+                )?
+            }
+            Some(WorkerReadmission::SourceAdvanced(proof)) => {
+                self.control.admit_run_source_advanced_observed(
+                    lease,
+                    input,
+                    source_advanced_reference(proof),
+                    final_gate,
+                )?
+            }
+            None => self.control.admit_run_observed(lease, input, final_gate)?,
+        };
         self.state
             .lock()
             .map_err(|_| Error::new("runtime_unavailable", "active snapshot registration failed"))?
@@ -2111,6 +2326,94 @@ fn observed_quota(value: &Value, now: chrono::DateTime<Utc>) -> Quota {
         Quota::Unknown
     } else {
         Quota::Available { observed_at: now }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WorkerReadmission<'a> {
+    Unfinished(&'a crate::delivery::UnfinishedChildWork),
+    SourceAdvanced(&'a crate::delivery::VerifiedSourceAdvanced),
+}
+impl<'a> WorkerReadmission<'a> {
+    fn authority(self) -> &'a crate::reconcile::FreshGate {
+        match self {
+            Self::Unfinished(p) => p.authority(),
+            Self::SourceAdvanced(p) => p.authority(),
+        }
+    }
+    fn phase(self) -> &'a crate::scheduler::PhaseKey {
+        match self {
+            Self::Unfinished(p) => p.phase(),
+            Self::SourceAdvanced(p) => p.phase(),
+        }
+    }
+    fn predecessor(self) -> Uuid {
+        match self {
+            Self::Unfinished(p) => p.predecessor(),
+            Self::SourceAdvanced(p) => p.predecessor(),
+        }
+    }
+    fn cause_operation(self) -> Uuid {
+        match self {
+            Self::Unfinished(p) => p.failure_operation(),
+            Self::SourceAdvanced(p) => p.source_operation(),
+        }
+    }
+    fn cause_receipt_digest(self) -> &'a str {
+        match self {
+            Self::Unfinished(p) => p.failure_receipt_digest(),
+            Self::SourceAdvanced(p) => p.source_receipt_digest(),
+        }
+    }
+    fn completed_operation(self) -> Uuid {
+        match self {
+            Self::Unfinished(p) => p.predecessor(),
+            Self::SourceAdvanced(p) => p.source_operation(),
+        }
+    }
+    fn source(self) -> &'a crate::delivery::DeliverySource {
+        match self {
+            Self::Unfinished(p) => p.source(),
+            Self::SourceAdvanced(p) => p.source(),
+        }
+    }
+    fn verify_contract(self, contract: &WorkerContract) -> Result<()> {
+        match self {
+            Self::Unfinished(p) => p.verify_contract(contract),
+            Self::SourceAdvanced(p) => p.verify_contract(contract),
+        }
+    }
+    fn verify_inventory(self, receipts: &[crate::control::Receipt]) -> Result<()> {
+        match self {
+            Self::Unfinished(proof) => proof.verify_failure_inventory(receipts),
+            Self::SourceAdvanced(proof) => proof.verify_predecessor_inventory(receipts),
+        }
+    }
+}
+fn source_advanced_reference(
+    proof: &crate::delivery::VerifiedSourceAdvanced,
+) -> crate::control::SourceAdvancedReference {
+    crate::control::SourceAdvancedReference {
+        predecessor: proof.predecessor(),
+        predecessor_receipt_digest: proof.predecessor_receipt_digest().into(),
+        source_operation: proof.source_operation(),
+        source_receipt_digest: proof.source_receipt_digest().into(),
+        trigger_digest: proof.digest().into(),
+        progress_digest: proof.progress_digest().into(),
+        review_rounds_consumed: proof.review_rounds_consumed(),
+    }
+}
+
+fn continuation_reference(
+    proof: &crate::delivery::UnfinishedChildWork,
+) -> crate::control::RunContinuationReference {
+    crate::control::RunContinuationReference {
+        predecessor: proof.predecessor(),
+        predecessor_receipt_digest: proof.predecessor_receipt_digest().into(),
+        trigger_digest: proof.digest().into(),
+        progress_digest: proof.progress_digest().into(),
+        failure_operation: proof.failure_operation(),
+        review_rounds_consumed: proof.review_rounds_consumed(),
     }
 }
 

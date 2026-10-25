@@ -1,24 +1,36 @@
 # Kegari v0 build progress
 
-Local implementation and integration remain in progress. The current frozen
-correction/recovery checkpoint passed **577 tests, zero failures and 2 explicitly
-ignored native qualifications** across 36 groups. Strict all-target Clippy,
-formatting, coverage inventory and diff checks passed, and all 525 source inputs
-remained unchanged. The [checkpoint report](validation/LOCAL-CORRECTION-RECOVERY.md)
-and [machine-readable evidence](validation/correction-recovery-checks.json) record
-its scope, commands and limitations. The authorized local commit is being prepared;
-`6b5a304e5898ab4ae87969ae41085c90b06e73d2` remains the previous committed checkpoint.
+Local implementation and integration remain in progress. The frozen continuation,
+successor and evaluation fidelity increment passed **613 tests, zero failures and
+2 explicitly ignored native qualifications** across 36 groups. Strict all-target
+Clippy, formatting, contract inventory and diff checks passed. All 534 tested
+inputs retained
+`sha256:e715dd644a2c7e1c19cccc09a33fcfe5d298f83cd9f3d37c9ec3c6d6d7cf83d6`.
+The [checkpoint report](validation/LOCAL-CONTINUATION-SUCCESSOR.md) and
+[machine-readable evidence](validation/continuation-successor-checks.json) record
+commands, results, review corrections and limitations. The increment is verified
+and pending its authorized local commit; the index was empty before staging.
 
-Native executable composition, active correction transitions, bounded remote object
-acquisition, explicit release recovery and no-release completion are wired and
-locally tested. This is a distinct correction/recovery increment after the separately
-validated delivery-progression checkpoint, so preserving that review and rollback
-boundary is more useful than rewriting it. No consolidation is planned.
+Genuine failed-check/review repair, changed-source validation/review, exact native
+instruction context, deployment-only successor capabilities and immutable bounded
+evaluation fixture capture are implemented and locally tested. The preceding
+correction/recovery checkpoint remains
+`90ce6d4631dc605a43ba1aa4033c839832b9cf95` —
+`feat(kegari-v0): connect corrections and delivery recovery` (577 passes, two
+native ignores). Keeping the distinct behavior and verification boundary is more
+useful than rewriting that commit. No history consolidation or rewrite is planned.
 
-Unfinished-work continuation, native fixture/evaluation composition, deployment-only
-successors, complete historical runtime recovery scenarios and native descendant
-containment remain incomplete. Arbitrary repository commands still fail closed
-before unqualified execution. Actual-agent and native qualification remain unrun.
+Next work: compatible provider-session resume, cold continuation proof recovery,
+cross-correction/mixed retry-grant lineage, full runtime successor and historical
+carry scenarios, native evaluation fixture migration and concrete runtime
+composition. Agents are inspecting their next bounded slices read-only while
+root records this checkpoint. Source edits remain frozen until commit; all test
+processes from this checkpoint have completed.
+
+Native descendant containment remains incomplete. Arbitrary repository commands
+fail closed before unqualified execution. Actual-agent/native qualifications and
+human calibration remain unrun; a passing local checkpoint does not establish
+readiness to coordinate the lasting build.
 
 The operator remains **unattended**. Live agents, remote mutations, installation,
 deployment and required human calibration have not been authorized or run.
@@ -60,10 +72,10 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 | §§3.1–3.4: strict config, credentials, workflow/reload; REQ-34/35/40/41/50/51/57; H01/H02 | Config/workflow/secret/reload tests, installed asset assembly | 28 focused tests pass including context-composition review fixes; native Keychain implemented but unrun; serialized setup integration in flight |
 | §§3.5–4: preparation, provider reads, authorization/scope/review; REQ-01–04/29/37–39/43/44/62 | Paginated provider fixtures, event provenance and scope revocation | Not run |
 | §5: lifecycle/dependencies/corrections; REQ-07–09/19/22–24/30 | Correction races, retained child sets, dependency generations | Local correction/scope primitives tested; provider reconciliation tested; full workflow loop in flight |
-| §6: scheduling/bounds/claims; REQ-12/21/32/35 | Fair account/workspace admission, attempts and pause races | Bounded scheduler/driver and protected process ownership integrated and locally tested; unfinished-work continuation remains incomplete |
+| §6: scheduling/bounds/claims; REQ-12/21/32/35 | Fair account/workspace admission, attempts and pause races | Bounded scheduler/driver and protected process ownership integrated and locally tested; genuine repair/follow-up proofs tested; cold/corrected lineage and compatible session resume incomplete |
 | §7: isolation/Codex/harness; REQ-31/32/34/42/54; H01/H02 | Pinned-schema protocol fixtures, OS sandbox probes, manifest/discovery | Pinned protocol, active corrections and shared worker/evaluation path tested locally; actual containment canaries blocked and live discovery unverified |
 | §8: local/hosted/review/staging/evidence/acceptance; REQ-05/06/10/11/19–21/25–28/43/44/53 | Exact-revision evidence, attestation, Git fixtures, stale tokens/video | Native provider adapters and separate gate progression integrated and locally tested; complete live workflow/media qualification outstanding |
-| §9: candidates/carry/queues/release/recovery; REQ-13/15–18/27/28/30 | A/B isolation, patch bytes, partial effects/holds, correction races | Release/recovery decisions and no-release completion wired with focused fixtures; deployment-only successor and complete historical runtime scenarios incomplete |
+| §9: candidates/carry/queues/release/recovery; REQ-13/15–18/27/28/30 | A/B isolation, patch bytes, partial effects/holds, correction races | Release/recovery decisions and no-release completion wired with focused fixtures; deployment-only successor capabilities tested; full runtime supersession and historical carry scenarios incomplete |
 | §10: complete CLI/control/overview/TLS; REQ-49–51/55–57 | CLI/API observable tests, peer identities, snapshot pagination | CLI/control/dispatcher/native executable factory wired; deterministic CLI/API/transport checks pass; native service qualification unrun |
 | §11: intent/cancellation/recovery/cleanup/logs/handover; REQ-31/33/36/40/41/52/58–62 | Crash boundaries, restart/stop/force, preservation and redaction | Not run |
 | §12.1 SC-01–SC-26, each retained scenario | Observable deterministic + required live profiles | Partial primitive coverage; no complete end-to-end scenario claimed |
@@ -75,6 +87,64 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 
 ## Validation and evidence
 
+- **Continuation checkpoint admission:** the host now records the run and its
+  unfinished-work reference in one serialized admission. It requires the exact
+  latest reconciled/exited predecessor, an actual same-work failure admission,
+  one-second spacing, unused trigger/material-progress digests, retained minimum
+  attempt/turn/review limits and monotone consumed review rounds. Four new
+  actual-journal tests pass, including concurrent predecessor consumption,
+  callback refusal without an admission, restart retention and unknown-effect
+  preservation. The existing control/storage suite also passes (24 tests).
+  Logs: `/private/tmp/kegari-v0-continuation-control.log` and
+  `/private/tmp/kegari-v0-continuation-control-storage.log`. Initial compilation
+  exposed a module-visibility error and two concurrently edited fixture
+  constructors; both were corrected before these runs. Producer/consumer
+  integration, independent review and combined checks remain in progress.
+  Independent worker-agent review found no material defect in that atomic seam.
+  A new positive producer fixture subsequently exposed two integration defects:
+  completed validator/reviewer phases need a distinct verified changed-source
+  trigger after repair, and raw delivery task payloads were replacing the full
+  native instruction context. The team is correcting both without resetting
+  phase budgets or weakening assembly. Root added the distinct atomic
+  `SourceAdvancedReference` path and authored its journal regression; the next
+  test runs stopped at concurrently changing release enum matches and the new
+  assignment envelope method before assertions. A subsequent coherent run passed
+  all five control continuation/follow-up tests, including the final-gate check
+  that a newer implementation admission invalidates an older source trigger
+  (`/private/tmp/kegari-v0-source-followup-control.log`). Broader pipeline and
+  full-checkpoint validation subsequently passed as recorded above.
+- **Continuation checkpoint evaluation corrections:** the outer runner now limits the whole
+  executor (including preparation/admission) to the lesser of the declared trial
+  duration and remaining suite time. Its new cancellation/retained-report
+  regression passed with the evaluation suite (23 tests, log
+  `/private/tmp/kegari-v0-continuation-evaluation.log`). A declared native context
+  binding is now implemented and library compilation passed: versioned sorted
+  typed slots come from the actual assembly identities, and all remaining native
+  context must match exactly. The declaration is included in the fixture hash
+  and private preparation seal. Two matcher tests now pass, and the evaluation
+  suite passes all 24 tests including production assembly/file provenance
+  (`/private/tmp/kegari-v0-native-context-tests.log` and
+  `/private/tmp/kegari-v0-native-context-evaluation.log`). The positive assembly
+  test first failed on an unsupported top-level `native_context`; production and
+  fixture context now place it inside the documented `evidence` object. A separate
+  positive producer fixture found the public generation `authorization` digest
+  collided with secret-field rejection; the team is adding a typed public
+  provenance projection while retaining that rejection. Full
+  suite migration, owned-clone binding, live authority/CLI composition and actual
+  host-result projections remain engineering work. This is not live evidence.
+  Independent review then identified two additional fidelity defects: the native
+  trial path omitted actual phase versus declared variant equality, and fixture
+  bytes could change between the initial source hash and later copying/decoding.
+  The shared phase preflight and substitution regression are now implemented;
+  immutable bounded fixture capture is also implemented. Six capture tests and
+  all 24 evaluation integration tests pass on that source, with strict selected
+  lint and formatting. Capture verifies one descriptor's bounded bytes/modes,
+  directory entry/depth limits and the final reset against the captured inventory.
+  Changed-and-restored source, missing native binding, wrong copied bytes/mode
+  and extra files have regressions. Logs are
+  `/private/tmp/kegari-v0-fixture-capture-tests.log`,
+  `/private/tmp/kegari-v0-evaluation-capture-integration.log` and
+  `/private/tmp/kegari-v0-fixture-capture-clippy.log`.
 - **Current no-release implementation and review:** already-production completion
   now has a whole-parent immutable signed intent, a real finite metadata admission,
   current native parent/acceptance references, complete current production source
@@ -481,6 +551,21 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 These block only dependent validation, not local implementation. No missing prerequisite is permission to weaken the contract.
 
 ## Milestones and recovery notes
+
+- Frozen continuation/successor/evaluation checkpoint: 613 passing tests, zero
+  failures, two native ignores, strict lint/fmt/inventory/diff checks passed.
+  Actual test and Clippy sessions exited zero; all 534 before/after input hashes
+  match. The read-only evaluator reports 56 slots with dispatch disabled.
+  Independent review corrections and remaining gaps are recorded in
+  `validation/LOCAL-CONTINUATION-SUCCESSOR.md`. No live activity occurred.
+- Local checkpoint `90ce6d4631dc605a43ba1aa4033c839832b9cf95` —
+  `feat(kegari-v0): connect corrections and delivery recovery` records native
+  executable composition, active correction transitions, bounded remote object
+  acquisition, explicit release recovery and no-release completion. Frozen
+  verification: 577 passed, two native ignored; strict lint/fmt/inventory passed.
+  Signed off by the configured human committer with `Assisted-by: Codex`.
+  No commits were consolidated or pushed; the worktree and source hash were
+  verified immediately after committing.
 
 - Local checkpoint `6b5a304e5898ab4ae87969ae41085c90b06e73d2` —
   `feat(kegari-v0): add guarded delivery progression` records guarded process and

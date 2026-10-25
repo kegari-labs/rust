@@ -108,6 +108,22 @@ impl RuntimeDelivery {
                 "corrected successor production validation is incomplete",
             ));
         }
+        let predecessor = self
+            .known_predecessor_baseline(&projection, &gate)
+            .await?
+            .ok_or_else(|| {
+                Error::new(
+                    "recovery_blocked",
+                    "corrected successor lacks exact known predecessor capability",
+                )
+            })?;
+        if predecessor.predecessor() != original.attempt.plan.operation_id {
+            return Err(Error::new(
+                "recovery_blocked",
+                "corrected baseline belongs to another predecessor",
+            ));
+        }
+        let observer = workspace.observer.with_successor(predecessor.clone())?;
         let repositories = repository_evidence(&preparation, &workspace.contracts)?;
         // Current proof readback precedes the serialized local-only transition.
         for item in &repositories {
@@ -122,10 +138,7 @@ impl RuntimeDelivery {
                         .await?
                 }
                 ReleaseStepEvidence::Existing { baseline, .. } => {
-                    workspace
-                        .observer
-                        .reobserve(item.contract, baseline)
-                        .await?;
+                    observer.reobserve(item.contract, baseline).await?;
                     workspace
                         .coordinator
                         .hydrate_existing_production_validation(
@@ -181,6 +194,7 @@ impl RuntimeDelivery {
             &original_digest,
             |snapshot| {
                 self.recovery_gate(&decision, snapshot)?;
+                predecessor.revalidate()?;
                 self.require_retired_successor_predecessor(&original)?;
                 checked(&gate)?;
                 current_baselines(&baselines)?;
@@ -268,6 +282,39 @@ impl RuntimeDelivery {
                 })
             },
         )
+    }
+    pub(in crate::runtime_delivery::release) fn assigned_successor_work(
+        &self,
+        predecessor: &AttemptRecord,
+        operation: Uuid,
+        work: &WorkIdentity,
+    ) -> Result<bool> {
+        let signed: Signed<SuccessorIntent> = self.records.read(&leaf(operation))?;
+        self.runtime
+            .services
+            .key
+            .verify("release_successor_intent", &signed)?;
+        let intent = signed.payload;
+        let receipt = self.runtime.control.operation(intent.transition_id)?;
+        if intent.predecessor != predecessor.attempt.plan.operation_id
+            || intent.plan.operation_id != operation
+            || intent.predecessor_plan_digest != predecessor.attempt.plan.digest()?
+            || !matches!(
+                receipt.phase,
+                ReceiptPhase::Acknowledged | ReceiptPhase::Reconciled
+            )
+            || receipt.kind != "release_recovery_transition"
+            || receipt.payload_digest != intent.transition_digest
+            || receipt.expected.get("recovery_action").map(String::as_str) != Some("supersede")
+            || predecessor.recovery_receipts.get(&intent.transition_id)
+                != Some(&intent.transition_digest)
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "assigned successor lacks exact acknowledged authorization",
+            ));
+        }
+        Ok(&intent.work == work)
     }
     fn require_retired_successor_predecessor(&self, record: &AttemptRecord) -> Result<()> {
         let receipt = self.runtime.control.operation(record.admission_operation)?;

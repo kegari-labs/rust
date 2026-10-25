@@ -47,6 +47,25 @@ pub enum StepKind {
         expected_tree: String,
         expected_artifact: Option<String>,
     },
+    /// Deploy the accepted source already on main after a known predecessor.
+    /// There is no replacement merge or invented source step.
+    DeployExisting {
+        repository: RepositoryId,
+        target: ResourceKey,
+        workflow_id: u64,
+        workflow_revision: String,
+        dispatch_ref: String,
+        source_input: String,
+        source: Revision,
+        expected_artifact: Option<String>,
+    },
+    VerifyDeployed {
+        repository: RepositoryId,
+        target: ResourceKey,
+        source: Revision,
+        deployment_step: String,
+        expected_artifact: Option<String>,
+    },
     /// Observe an already-serving accepted unchanged repository target.
     /// This step never authorizes a merge, deployment or workflow dispatch.
     VerifyExisting {
@@ -71,6 +90,8 @@ impl StepKind {
             Self::Merge { repository, .. }
             | Self::Deploy { repository, .. }
             | Self::Verify { repository, .. }
+            | Self::DeployExisting { repository, .. }
+            | Self::VerifyDeployed { repository, .. }
             | Self::VerifyExisting { repository, .. } => repository,
         }
     }
@@ -211,6 +232,50 @@ impl ReleasePlan {
                         validate_digest(artifact)?;
                     }
                 }
+                StepKind::DeployExisting {
+                    repository,
+                    target,
+                    workflow_id,
+                    workflow_revision,
+                    dispatch_ref,
+                    source_input,
+                    source,
+                    expected_artifact,
+                } => {
+                    source.validate()?;
+                    validate_oid(workflow_revision)?;
+                    validate_target(target)?;
+                    if *workflow_id == 0
+                        || dispatch_ref.trim().is_empty()
+                        || source_input.trim().is_empty()
+                        || self.deployment_free.contains(repository)
+                        || !deployment_targets.insert(target.clone())
+                    {
+                        return Err(Error::invalid(
+                            "existing-source deployment requires an exact configured route and unique target",
+                        ));
+                    }
+                    required_resources.insert(target.clone());
+                    if let Some(artifact) = expected_artifact {
+                        validate_digest(artifact)?;
+                    }
+                }
+                StepKind::VerifyDeployed {
+                    target,
+                    source,
+                    expected_artifact,
+                    ..
+                } => {
+                    source.validate()?;
+                    validate_target(target)?;
+                    if !verification_targets.insert(target.clone()) {
+                        return Err(Error::invalid("target requires one terminal verification"));
+                    }
+                    required_resources.insert(target.clone());
+                    if let Some(artifact) = expected_artifact {
+                        validate_digest(artifact)?;
+                    }
+                }
                 StepKind::VerifyExisting {
                     target,
                     source,
@@ -287,6 +352,18 @@ impl ReleasePlan {
                         && (!ancestors[&step.id].contains(deployment_step)
                             || !step_map.get(deployment_step).is_some_and(|s| matches!(&s.kind, StepKind::Deploy { target: t, repository: r, .. } if t == target && r == repository))) {
                         return Err(Error::invalid("verification must follow its matching deployment"));
+                    }
+                }
+                StepKind::DeployExisting { repository, .. } => {
+                    if merge_repositories.contains(repository) || self.deployment_free.contains(repository) {
+                        return Err(Error::invalid("existing-source deployment cannot share a changed or deployment-free repository"));
+                    }
+                }
+                StepKind::VerifyDeployed { repository, target, source, deployment_step, .. } => {
+                    if !ancestors[&step.id].contains(deployment_step)
+                        || !step_map.get(deployment_step).is_some_and(|step| matches!(&step.kind,
+                            StepKind::DeployExisting { repository: r, target: t, source: s, .. } if r == repository && t == target && s == source)) {
+                        return Err(Error::invalid("existing-source verification must follow its exact configured deployment"));
                     }
                 }
                 StepKind::VerifyExisting { repository, .. } => {
@@ -807,6 +884,74 @@ impl ReleaseAttempt {
             }
         }
         for step in &plan.steps {
+            if let StepKind::DeployExisting {
+                repository,
+                target: ResourceKey::Target { id, .. },
+                source,
+                ..
+            }
+            | StepKind::VerifyDeployed {
+                repository,
+                target: ResourceKey::Target { id, .. },
+                source,
+                ..
+            } = &step.kind
+            {
+                let baseline = parent
+                    .manifest()
+                    .baselines
+                    .iter()
+                    .find(|baseline| &baseline.repository == repository)
+                    .ok_or_else(|| {
+                        Error::new(
+                            "scope_violation",
+                            "existing-source deployment baseline missing",
+                        )
+                    })?;
+                let predecessor = baseline.successor_recovery_operation.ok_or_else(|| {
+                    Error::new(
+                        "scope_violation",
+                        "existing-source deployment requires known predecessor lineage",
+                    )
+                })?;
+                let candidate_matches = parent.manifest().candidates.iter().any(|candidate| {
+                    &candidate.repository == repository
+                        && candidate.ordered_delta_digests.is_empty()
+                        && &candidate.production == source
+                        && candidate.result.as_ref() == Some(source)
+                        && candidate.production_integrations.iter().any(|integration| {
+                            integration.release_operation == predecessor
+                                && integration.parent_id == plan.parent_id
+                                && &integration.merged == source
+                                && &integration.observed_main == source
+                        })
+                });
+                let validation_matches = production.iter().any(|proof| {
+                    proof.is_existing_production()
+                        && proof.work() == &parent.manifest().work
+                        && &proof.revision().repository == repository
+                        && proof.revision().head == source.commit
+                        && proof.revision().base == source.commit
+                        && proof.revision().tested_commit == source.commit
+                        && proof.revision().tested_tree == source.tree
+                });
+                if !candidate_matches
+                    || !validation_matches
+                    || baseline.production != *source
+                    || baseline.deployment_free
+                    || baseline
+                        .source_for_target(id)
+                        .is_none_or(|current| current == source.commit)
+                    || baseline.artifact_for_target(id).is_none()
+                {
+                    return Err(Error::new(
+                        "scope_violation",
+                        "existing-source deployment lacks exact accepted integration, divergent target and complete production validation",
+                    ));
+                }
+            }
+        }
+        for step in &plan.steps {
             if let StepKind::VerifyExisting {
                 repository,
                 target,
@@ -827,7 +972,7 @@ impl ReleaseAttempt {
                     &baseline.repository == repository
                         && &baseline.production == source
                         && !baseline.deployment_free
-                        && baseline.deployed_revision.as_ref() == Some(&source.commit)
+                        && baseline.source_for_target(id) == Some(source.commit.as_str())
                         && baseline.target_artifacts.get(id) == Some(artifact_digest)
                 });
                 let validation_matches = production.iter().any(|proof| {
@@ -970,6 +1115,12 @@ impl ReleaseAttempt {
             }
             StepKind::VerifyExisting {
                 repository, source, ..
+            }
+            | StepKind::DeployExisting {
+                repository, source, ..
+            }
+            | StepKind::VerifyDeployed {
+                repository, source, ..
             } => {
                 if facts.current_revisions.get(repository) != Some(source) {
                     return Err(Error::new(
@@ -1011,7 +1162,9 @@ impl ReleaseAttempt {
     fn source_commit(&self, step: &ReleaseStep) -> Result<Option<String>> {
         let id = match &step.kind {
             StepKind::Merge { .. } => return Ok(None),
-            StepKind::VerifyExisting { source, .. } => return Ok(Some(source.commit.clone())),
+            StepKind::VerifyExisting { source, .. }
+            | StepKind::DeployExisting { source, .. }
+            | StepKind::VerifyDeployed { source, .. } => return Ok(Some(source.commit.clone())),
             StepKind::Deploy {
                 source_merge_step, ..
             }
@@ -1278,6 +1431,66 @@ impl ReleaseAttempt {
                     && target == actual_target
                     && expected_tree == tree
                     && self.source_commit(step)?.as_ref() == Some(source_commit)
+                    && expected_artifact
+                        .as_ref()
+                        .is_none_or(|expected| expected == artifact_digest)
+                    && matches!(self.steps.get(deployment_step), Some(StepState::Succeeded { effect, .. }) if matches!(effect.as_ref(), ObservedEffect::Deployment { artifact_digest: deployed, .. } if deployed == artifact_digest))
+            }
+            (
+                StepKind::DeployExisting {
+                    repository,
+                    target,
+                    source,
+                    expected_artifact,
+                    ..
+                },
+                ObservedEffect::Deployment {
+                    repository: actual_repo,
+                    target: actual_target,
+                    source_commit,
+                    tree,
+                    artifact_digest,
+                    deployment_id,
+                    run,
+                },
+            ) => {
+                validate_digest(artifact_digest)?;
+                repository == actual_repo
+                    && target == actual_target
+                    && source.commit == *source_commit
+                    && source.tree == *tree
+                    && expected_artifact
+                        .as_ref()
+                        .is_none_or(|expected| expected == artifact_digest)
+                    && !deployment_id.is_empty()
+                    && run.repository == *repository
+                    && run.operation_id == self.plan.operation_id
+                    && run.run_id > 0
+                    && run.attempt > 0
+            }
+            (
+                StepKind::VerifyDeployed {
+                    repository,
+                    target,
+                    source,
+                    expected_artifact,
+                    deployment_step,
+                },
+                ObservedEffect::Verification {
+                    repository: actual_repo,
+                    target: actual_target,
+                    source_commit,
+                    tree,
+                    artifact_digest,
+                    evidence_digest,
+                },
+            ) => {
+                validate_digest(artifact_digest)?;
+                validate_digest(evidence_digest)?;
+                repository == actual_repo
+                    && target == actual_target
+                    && source.commit == *source_commit
+                    && source.tree == *tree
                     && expected_artifact
                         .as_ref()
                         .is_none_or(|expected| expected == artifact_digest)

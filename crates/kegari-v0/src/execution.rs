@@ -620,6 +620,29 @@ impl FailedCheckExecution {
     pub fn record(&self) -> &CheckExecutionRecord {
         &self.record
     }
+    /// A repair trigger needs a known failed command from the qualified boundary.
+    /// Timeouts, output truncation and changed source are blockers, not repair proof.
+    pub fn production_failure(&self) -> Result<&CheckExecutionRecord> {
+        if self.record.evidence_class != ExecutionEvidenceClass::ConfinedExecution {
+            return Err(Error::new(
+                "unqualified_fixture",
+                "fixture failure is not production repair evidence",
+            ));
+        }
+        if self.record.successful
+            || self.record.before != self.record.after
+            || self.record.command.exit_code.is_none_or(|code| code == 0)
+            || self.record.command.timed_out
+            || self.record.command.output_truncated
+            || self.record.blocker.is_none()
+        {
+            return Err(Error::new(
+                "no_work_trigger",
+                "check has no unchanged-source known command failure",
+            ));
+        }
+        Ok(&self.record)
+    }
     pub fn retain_outputs(
         &self,
         boundary: &ValidatedIsolation,

@@ -177,9 +177,28 @@ and link until revalidation. An offline runtime fixture exercises publication,
 retirement, STOPPED readback and acceptance invalidation with actual owned Git and
 local provider fixtures. This is deterministic evidence, not live qualification.
 
-Deployment-only corrected successors remain a separate implementation increment.
-They cannot invent a production merge when the corrected tree is already on main
-but a configured target is behind. Complete historical UI reconstruction after a
-new generation and full recovery scenario qualification also remain outstanding.
-Remote Git-object acquisition has its own authenticated adapter and does not itself
-prove production integration.
+Corrected parent preparation can now retain a known predecessor's exact source
+and target baseline through the sealed capability described in `deployment.md`.
+The original parent comment must have its exact admission receipt, and acceptance
+must have its original operation and control actor; copied signed comments cannot
+substitute those effects. Native missing, edited or duplicate selected records
+fail. Historical carried-acceptance releases remain an explicit prerequisite.
+
+The current assembly imports both the accepted candidate and observed squash
+objects under its actual current permit. It verifies the original signed slice,
+Git bytes and accepted contribution provenance before carrying those unchanged
+contributions into the new candidate. STOPPED hydration can only read already
+retained authenticated objects. An absent import cannot be replaced by provider
+JSON or an invented integration proof.
+
+`DeployExisting` and `VerifyDeployed` explicitly deploy and verify an accepted
+source already on main. They require a declared known-predecessor baseline,
+actual prior contribution integration, complete current production validation,
+and fresh human acceptance. Targets already serving that source use
+`VerifyExisting`; no replacement merge is created. The configured dependency graph
+and complete target inventory still apply. Offline coverage includes real Git
+integration proofs and a mixed A-already-delivered/B-needs-deployment domain run,
+original native publication/receipt readback, and actual local-retirement checks.
+A positive complete runtime supersession fixture, full historical-parent runtime
+continuation, chained prior integrations, carried-acceptance history and visual
+historical assets still need dedicated implementation/qualification work.

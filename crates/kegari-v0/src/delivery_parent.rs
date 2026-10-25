@@ -1020,7 +1020,6 @@ impl DeliveryCoordinator {
                 != contract.gate.config_revision()
             || worker.instructions.role != crate::instructions::AgentRole::Coordination
             || worker.instructions.workflow_digest != contract.gate.workflow_digest()
-            || worker.instructions.context_digest != canonical_digest(1, &assignment.context)?
             || worker.instructions.permissions.repository_code_execution
             || !worker
                 .instructions
@@ -1038,6 +1037,26 @@ impl DeliveryCoordinator {
                 "parent synthesis did not review the current complete verified result context",
             ));
         }
+        let actual = input.completion.contract.as_ref().ok_or_else(|| {
+            Error::new(
+                "worker_binding",
+                "parent review lacks actual assembled contract",
+            )
+        })?;
+        if actual.instructions().manifest_digest != worker.instruction_digest
+            || actual.tools().digest() != worker.tool_contract_digest
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "parent review differs from protected contract",
+            ));
+        }
+        assignment::verify_assignment_contract(
+            actual,
+            &contract.gate,
+            "parent_evidence_review",
+            &assignment.context,
+        )?;
         let e2e = input
             .child_gates
             .get(&contract.e2e_child)
@@ -1800,4 +1819,4 @@ mod target_equivalence_tests {
 
 #[path = "delivery_parent_history.rs"]
 mod history;
-pub use history::{HistoricalReleaseParent, RecoveredReleaseParent};
+pub use history::{HistoricalReleaseParent, RecoveredReleaseParent, VerifiedReleaseOrigin};

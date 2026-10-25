@@ -61,3 +61,6 @@ pub mod workflow;
 pub mod decisions;
 
 pub mod host_process;
+#[cfg(test)]
+#[path = "remote_objects_test_probe.rs"]
+pub(crate) mod test_process_probe;

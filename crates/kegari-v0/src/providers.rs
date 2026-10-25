@@ -751,6 +751,14 @@ impl LinearClient {
             .await?;
         graph_data(value, &headers)
     }
+    /// Canonical identity of an issue at this already-bound provider endpoint.
+    pub fn issue_key(&self, issue: Uuid) -> Result<crate::authority::IssueKey> {
+        crate::authority::IssueKey::new(
+            self.http.policy.endpoint.as_str(),
+            self.workspace_id,
+            issue,
+        )
+    }
     pub async fn identity(&self) -> Result<AccountIdentity> {
         let data = self
             .graph(

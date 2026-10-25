@@ -29,12 +29,18 @@ fn profile() -> Profile {
     }
 }
 fn setup(variant: &Variant) -> (TempDir, PreparedFixture, ValidatedIsolation, PathBuf) {
+    setup_from(&root(), variant)
+}
+fn setup_from(
+    suite_root: &Path,
+    variant: &Variant,
+) -> (TempDir, PreparedFixture, ValidatedIsolation, PathBuf) {
     let temp = TempDir::new().unwrap();
     let base = temp.path().canonicalize().unwrap();
     let reports = base.join("reports");
     std::fs::create_dir(&reports).unwrap();
     let fixture = prepare_fixture(
-        &root(),
+        suite_root,
         variant,
         &base.join("trial"),
         &root().join("scorer"),
@@ -81,6 +87,133 @@ fn setup(variant: &Variant) -> (TempDir, PreparedFixture, ValidatedIsolation, Pa
     .validate()
     .unwrap();
     (temp, fixture, isolation, reports)
+}
+
+#[test]
+fn declared_native_context_file_uses_production_assembly_without_context_waivers() {
+    let mut variant = suite()
+        .variants
+        .iter()
+        .find(|v| v.id == "guidance_new")
+        .unwrap()
+        .clone();
+    let declared = TempDir::new().unwrap();
+    let suite_root = declared.path().canonicalize().unwrap();
+    let source = root().join(&variant.fixture);
+    let native = suite_root.join("fixture");
+    std::fs::create_dir(&native).unwrap();
+    for relative in snapshot(&source).unwrap().keys() {
+        let path = native.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::copy(source.join(relative), path).unwrap();
+    }
+    let mut template: Value =
+        serde_json::from_slice(&std::fs::read(native.join("context.json")).unwrap()).unwrap();
+    template["workspace"] = json!({"id":{"$kegari":"workspace_id"},"name":"explicit-native-fixture","repositories":["101"]});
+    template["operation"] = json!({"id":{"$kegari":"operation_id"}});
+    template["profile"] = json!({"$kegari":"profile"});
+    template["phase"] = json!({"$kegari":"phase"});
+    template["evidence"]["native_context"] = json!({"declared_fact":"synthetic provider context"});
+    let binding = json!({"schema_version":1,"source_write_paths":template["scope"]["write_paths"],"slots":[
+        {"pointer":"/operation/id","source":"operation_id"},{"pointer":"/phase","source":"phase"},
+        {"pointer":"/profile","source":"profile"},{"pointer":"/workspace/id","source":"workspace_id"}]});
+    std::fs::write(
+        native.join("context.json"),
+        serde_json::to_vec_pretty(&template).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        native.join("context-binding.json"),
+        serde_json::to_vec_pretty(&binding).unwrap(),
+    )
+    .unwrap();
+    variant.fixture = "fixture".into();
+    variant.fixture_digest = tree_digest(&native).unwrap();
+    let (_temp, fixture, isolation, reports) = setup_from(&suite_root, &variant);
+    let workflow = Workflow::load(&fixture.repository.join("WORKFLOW.md")).unwrap();
+    let profile = profile();
+    let workspace = Uuid::new_v4();
+    let operation = Uuid::new_v4();
+    let mut context = template.clone();
+    context.as_object_mut().unwrap().remove("timeline");
+    context["workspace"]["id"] = json!(workspace);
+    context["operation"]["id"] = json!(operation);
+    context["profile"] = json!(profile);
+    context["phase"] = json!(variant.phase);
+    let input = AssemblyInput {
+        workflow: &workflow,
+        role: variant.role,
+        phase: &variant.phase,
+        context: &context,
+        workspace_id: workspace,
+        operation_id: operation,
+        work_generation: "fixture-generation",
+        correction_revision: "fixture-correction",
+        profile: &profile,
+        cwd: &fixture.repository,
+        codex_home: &fixture.codex_home,
+        codex_version: kegari_v0::instructions::SUPPORTED_CODEX_VERSION,
+        repository: Some(RepositoryContext {
+            root: fixture.repository.clone(),
+            revision: "1234567890123456789012345678901234567890".into(),
+            scope_paths: vec!["src/limit.py".into()],
+        }),
+        required_context: &[],
+        project_doc_max_bytes: 32768,
+        permissions: PermissionManifest {
+            read_roots: vec![fixture.repository.clone()],
+            resource_write_paths: vec![],
+            source_write_paths: isolation
+                .plan()
+                .source_writes
+                .iter()
+                .map(|grant| grant.path.clone())
+                .collect(),
+            scratch_roots: vec![fixture.scratch.clone()],
+            repository_code_execution: true,
+            enforcement_profile: isolation.digest().into(),
+            network: WorkerNetwork::Denied,
+        },
+        tools: vec![],
+        provider_discovery: ProviderDiscovery::Unavailable {
+            reason: "deterministic native declaration fixture".into(),
+        },
+        known_secrets: &[],
+    };
+    let assembled =
+        assemble_trial(input.clone(), &variant, &fixture, &isolation, &reports).unwrap();
+    assert!(assembled.prompt.contains("ROOT_V1"));
+    assert!(assembled.prompt.contains("NESTED_V1"));
+    assert_eq!(
+        assembled.manifest.context_digest,
+        kegari_v0::digest::canonical_digest(1, &context).unwrap()
+    );
+    assert!(!fixture.repository.join("context-binding.json").exists());
+    let mut changed = context.clone();
+    changed["evidence"]["native_context"]["answer_hint"] = json!("undeclared guidance");
+    let mut changed_input = input;
+    changed_input.context = &changed;
+    assert_eq!(
+        assemble_trial(changed_input, &variant, &fixture, &isolation, &reports)
+            .unwrap_err()
+            .code,
+        "evaluation_fidelity"
+    );
+    // Replacing the declaration after its hash was declared is rejected before
+    // creating another trial or treating it as equivalent provenance.
+    std::fs::write(native.join("context-binding.json"), b"{}").unwrap();
+    let temp = TempDir::new().unwrap();
+    assert_eq!(
+        prepare_fixture(
+            &suite_root,
+            &variant,
+            &temp.path().canonicalize().unwrap().join("trial"),
+            &root().join("scorer")
+        )
+        .unwrap_err()
+        .code,
+        "fixture_changed"
+    );
 }
 fn trace(id: &str) -> Value {
     serde_json::from_slice(
@@ -784,6 +917,85 @@ fn crash_record_and_failed_history_cannot_be_replaced_by_lucky_pass() {
             .iter()
             .any(|blocker| blocker.contains("duplicate"))
     );
+}
+
+#[tokio::test]
+async fn finite_trial_deadline_cancels_hung_preparation_before_next_trial() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct Cancelled(Arc<AtomicBool>);
+    impl Drop for Cancelled {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let mut suite = suite();
+    suite.max_seconds = 10;
+    for variant in &mut suite.variants {
+        variant.bounds.max_seconds = 1;
+    }
+    suite.profiles[0].binding = Some(ProfileBinding {
+        profile: profile(),
+        account_id: "deterministic-account".into(),
+        operator_reference: "not-live-authority".into(),
+    });
+    suite.profiles[0].unresolved = None;
+    let temp = TempDir::new().unwrap();
+    let store =
+        ReportStore::create(&temp.path().canonicalize().unwrap().join("reports"), &suite).unwrap();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let mut calls = 0;
+    let reports = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        run_suite(&suite, &store, |variant, key, limit| {
+            assert!(limit <= std::time::Duration::from_secs(1));
+            calls += 1;
+            let first = calls == 1;
+            let cancelled = cancelled.clone();
+            let suite = suite.clone();
+            async move {
+                if first {
+                    let _guard = Cancelled(cancelled);
+                    std::future::pending::<kegari_v0::error::Result<TrialReport>>().await
+                } else {
+                    assert!(cancelled.load(Ordering::SeqCst));
+                    TrialReport::unrun(
+                        &suite,
+                        &variant,
+                        key,
+                        TrialOutcome::Blocked,
+                        "deterministic-only remaining trial",
+                    )
+                }
+            }
+        }),
+    )
+    .await
+    .expect("per-trial timeout must not wait for the suite deadline")
+    .unwrap();
+    assert_eq!(calls, 56);
+    assert_eq!(reports[0].outcome, TrialOutcome::Interrupted);
+    assert!(
+        reports[0]
+            .reason
+            .starts_with("declared trial duration exhausted")
+    );
+    assert!(reports[0].unresolved_remote_effects);
+    assert!(
+        reports[1..]
+            .iter()
+            .all(|r| r.outcome == TrialOutcome::Blocked)
+    );
+    assert!(
+        reports
+            .iter()
+            .all(|r| r.evidence_class == EvidenceClass::NotRun)
+    );
+    let archive = kegari_v0::evaluation_reports::ReportArchive::open(store.root()).unwrap();
+    assert_eq!(archive.reports().len(), 56);
+    assert_eq!(archive.reports()[0].outcome, TrialOutcome::Interrupted);
 }
 
 #[test]

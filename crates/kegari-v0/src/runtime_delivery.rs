@@ -308,6 +308,15 @@ impl RuntimeDelivery {
         workspace: &WorkspaceDelivery,
         gate: &FreshGate,
     ) -> Result<(Arc<DeliveryCoordinator>, Arc<LocalProcessPermit>)> {
+        self.readonly_coordinator_with_successor(workspace, gate, None)
+            .await
+    }
+    async fn readonly_coordinator_with_successor(
+        &self,
+        workspace: &WorkspaceDelivery,
+        gate: &FreshGate,
+        predecessor: Option<&KnownPredecessorBaseline>,
+    ) -> Result<(Arc<DeliveryCoordinator>, Arc<LocalProcessPermit>)> {
         let mut roots = BTreeMap::new();
         for contract in &workspace.contracts {
             let root = crate::git::configured_host_read_root(
@@ -323,6 +332,22 @@ impl RuntimeDelivery {
                     "ownership_conflict",
                     "configured and retained repository roots overlap",
                 ));
+            }
+        }
+        if let Some(predecessor) = predecessor {
+            for root in workspace
+                .coordinator
+                .retained_successor_host_roots(gate, predecessor)?
+            {
+                if let Some(existing) = roots.get(root.root()) {
+                    let _ = existing;
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "predecessor read root overlaps another source",
+                    ));
+                } else {
+                    roots.insert(root.root().to_owned(), root);
+                }
             }
         }
         let read_coordinator = workspace.coordinator.clone();
@@ -467,17 +492,45 @@ impl RuntimeDelivery {
                 child_gates.insert(*child, gate);
             }
         }
-        let (coordinator, authority) = self.readonly_coordinator(workspace, &gate).await?;
+        let snapshot = self.runtime.observations.admission_snapshot()?;
+        let predecessor = self.known_predecessor_baseline(&snapshot, &gate).await?;
+        let observer = predecessor
+            .as_ref()
+            .map(|proof| workspace.observer.with_successor(proof.clone()))
+            .transpose()?;
+        let observer = observer.as_ref().unwrap_or(workspace.observer.as_ref());
+        let (coordinator, authority) = self
+            .readonly_coordinator_with_successor(workspace, &gate, predecessor.as_deref())
+            .await?;
         let result = async {
+            let mut integrations = Vec::new();
+            if let Some(predecessor) = &predecessor {
+                for baseline in predecessor.baselines() {
+                    let production = baseline.production();
+                    let observation = coordinator.observation(
+                        gate.clone(),
+                        crate::evidence::RevisionBinding {
+                            repository: baseline.repository().clone(),
+                            head: production.commit.clone(),
+                            base: production.commit.clone(),
+                            tested_commit: production.commit.clone(),
+                            tested_tree: production.tree.clone(),
+                        },
+                    )?;
+                    integrations.extend(
+                        coordinator.retained_successor_integrations(&observation, predecessor)?,
+                    );
+                }
+            }
             let contract = coordinator.parent_contract(gate, parent, &workspace.workflow)?;
             coordinator
                 .refresh_delivery(
                     ParentHydrationInputs {
                         contract: &contract,
-                        observer: &workspace.observer,
+                        observer,
                         child_gates: &child_gates,
                         workflow: &workspace.workflow,
-                        production_integrations: &[],
+                        production_integrations: &integrations,
                     },
                     &workspace.configuration,
                 )
@@ -837,3 +890,5 @@ pub use parent::ParentSources;
 
 #[path = "runtime_delivery_release.rs"]
 mod release;
+
+pub use release::KnownPredecessorBaseline;

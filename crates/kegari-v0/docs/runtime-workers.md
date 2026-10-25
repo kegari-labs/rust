@@ -46,18 +46,14 @@ repository checks, restricted Git inspection and source writes use host tools.
 Deterministic coverage checks source/generation binding, configured resource
 flags, forbidden resource aliases, role/tool narrowing and actual assembled
 manifests. It does not qualify live Codex or native sandbox containment. The
-native command boundary still retains `process_tree_unverified` where group exit
-and pipe EOF cannot prove that detached descendants exited. Delivery-specific
-sealed review/validation phases, continuation readmission, full descendant containment, startup reconciliation of retained native worker
-process references and non-Linear cleanup eligibility are separate remaining
-integration work; retained preparation records do not authorize cleanup.
+native command boundary rejects repository execution with
+`process_tree_unverified` before spawn where full descendant containment has not
+been qualified. Retained preparation records do not authorize cleanup.
 
 Source resolution reads the actual configured provider staging reference twice
 around commit/tree metadata, or rereads the exact independent PR before and after
 that metadata. Changed source/configuration/authority blocks preparation. It does
-not update the operator checkout. The exact selected objects must currently be
-available there for a local owned clone; an authenticated owned remote-object
-cache is pending. Git metadata and clone commands use the preparation permit's
+not update the operator checkout. Git metadata and clone commands use the preparation permit's
 journaled process path. After model admission the execution boundary is rebuilt
 with the model permit, so preparation authority is never reused for later checks.
 
@@ -76,3 +72,47 @@ consumes `.into_trial()`, which exposes actual `TrialOperation` references and
 real hooks. Dropping either admitted capability fences before cancellation and
 preserves uncertain process/effect ownership. This composition does not itself
 satisfy actual-agent qualification or the pending native fixture mapping.
+
+Unfinished child work requires an opaque delivery proof from an actual failed
+required validation or completed exact-head review with findings. The proof
+retains the original implementation phase, joined predecessor, actual failure
+receipt, sealed source and precise remaining task. Summaries, serialized
+references and old failed checks cannot issue this capability.
+
+`next_attempt_for_unfinished` and final continued admission preserve the minimum
+historical attempt, turn and review limits. The planner waits at least one second
+after both predecessor and failure reconciliation, rejects any earlier unresolved
+execution, and requires the original account and current strict admission
+authority. Final admission rechecks the complete repair contract and receipt
+digests under the control lock, then consumes the exact latest predecessor and
+trigger in the same durable admission. Concurrent consumers cannot fork it;
+repeating the same source and unmet obligation is `no_progress`.
+
+A completed repair can authorize another required validation or review only
+through a separate opaque source-advanced proof. It binds the new completed
+implementation, a materially changed source tree, the exact earlier phase
+receipt and its original finite limits. Validation/review keep their original
+phase names and attempt history. The final admission consumes that proof
+atomically, waits for actual exits and reconciliation, and refuses repeated
+source/obligation pairs or exhausted review rounds.
+
+Both trigger types retain the complete relevant validation/review admission
+inventory. The final gate rejects a stale proof after another check or review is
+admitted, including a different retry-grant lineage. Mixed grant histories
+require explicit verified lineage recovery; timestamps or old failure text do
+not select authority.
+
+Delivery assignments retain the complete native issue, parent, scope and
+dependency context. Their exact host-created payload is embedded under
+`evidence.delivery_assignment`; it does not replace the documented context
+envelope. Assembly still verifies the actual operation, workspace, profile and
+phase, and result readers bind both the complete protected context and assigned
+payload. Native observations live under `evidence.native_context`. Typed public
+generation digests use `authorization_digest` in model context; unrelated
+credential-shaped fields still fail the unchanged secret guard.
+
+Repair assignments use a fresh clone, assembly and provider thread because their
+source and task context changed. This bounded path does not yet permit a repair
+across a material correction-generation change, reconstruct opaque unfinished
+proofs after restart, or establish the separate compatibility proof needed to
+resume an older provider thread. Those cases remain held for verified recovery.

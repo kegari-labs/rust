@@ -37,7 +37,10 @@ impl CompletedChildClaim {
     pub fn digest(&self) -> &str {
         self.outcome.digest()
     }
-    fn work(&self) -> &WorkIdentity {
+    pub(super) fn outcome(&self) -> &VerifiedAuthorizedOutcome {
+        &self.outcome
+    }
+    pub(super) fn work(&self) -> &WorkIdentity {
         self.outcome.effective_authority().work()
     }
 }
@@ -155,7 +158,7 @@ impl DeliveryCoordinator {
             correction,
         })
     }
-    fn current_child_claim(
+    pub(super) fn current_child_claim(
         &self,
         admission: &DeliveryAdmission,
         claim: &CompletedChildClaim,
@@ -276,6 +279,23 @@ impl DeliveryCoordinator {
                         "validation_gate",
                         "local validation needs a current completed exact-commit validation session",
                     ));
+                }
+                let required = local_requirements(self.contract(admission)?, workflow)?;
+                let records: Vec<_> = completion
+                    .checks
+                    .iter()
+                    .map(|c| (c.record(), false))
+                    .chain(completion.failed_checks.iter().map(|c| (c.record(), true)))
+                    .collect();
+                match super::continuation::latest_required_failures(&required, &records) {
+                    Ok(_) => {
+                        return Err(Error::new(
+                            "validation_failed",
+                            "latest required check remains failed",
+                        ));
+                    }
+                    Err(error) if error.code == "no_work_trigger" => {}
+                    Err(error) => return Err(error),
                 }
                 ChildDeliveryProgress::Local(self.verify_local_checks(
                     admission,
@@ -810,17 +830,12 @@ impl DeliveryCoordinator {
             workflow_digest: admission.gate.workflow_digest().into(),
         })
     }
-    pub async fn publish_completed_review(
-        &self,
+    pub(super) fn completed_review_claim(
         admission: &DeliveryAdmission,
         assignment: &ChildReviewAssignment,
         outcome: &VerifiedAuthorizedOutcome,
-        completion: &Arc<RunCompletion>,
-    ) -> Result<PublishedReview> {
-        self.current(
-            admission,
-            &[DeliveryPhase::ReviewPublication, DeliveryPhase::NoChange],
-        )?;
+        completion: &RunCompletion,
+    ) -> Result<ReviewResultClaim> {
         completed_run(outcome, completion)?;
         let worker = outcome.outcome();
         if assignment.work != admission.scope.work
@@ -829,9 +844,10 @@ impl DeliveryCoordinator {
             || assignment.workflow_digest != admission.gate.workflow_digest()
             || outcome.original_authority().work() != &admission.scope.work
             || outcome.original_authority().config_revision() != admission.gate.config_revision()
+            || canonical_digest(1, &worker.instructions.profile)?
+                != canonical_digest(1, admission.gate.profile())?
             || worker.instructions.role != AgentRole::Review
             || worker.instructions.workflow_digest != assignment.workflow_digest
-            || worker.instructions.context_digest != canonical_digest(1, &assignment.context)?
             || worker.instructions.repository_revision.as_deref() != Some(&assignment.revision.head)
             || worker.instructions.permissions.repository_code_execution
             || !worker
@@ -850,6 +866,23 @@ impl DeliveryCoordinator {
                 "completed review does not match host-prepared exact patch context",
             ));
         }
+        let contract = completion.contract.as_ref().ok_or_else(|| {
+            Error::new("worker_binding", "review lacks actual assembled contract")
+        })?;
+        if contract.instructions().manifest_digest != worker.instruction_digest
+            || contract.tools().digest() != worker.tool_contract_digest
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "review contract differs from protected outcome",
+            ));
+        }
+        assignment::verify_assignment_contract(
+            contract,
+            &admission.gate,
+            "child_codex_review",
+            &assignment.context,
+        )?;
         let claim: ReviewResultClaim = serde_json::from_value(worker.claim.clone())
             .map_err(|_| Error::new("worker_claim", "review result has no supported schema"))?;
         if claim.schema_version != 1
@@ -867,6 +900,21 @@ impl DeliveryCoordinator {
                 "review result is inconsistent or exceeds finite bounds",
             ));
         }
+        Ok(claim)
+    }
+    pub async fn publish_completed_review(
+        &self,
+        admission: &DeliveryAdmission,
+        assignment: &ChildReviewAssignment,
+        outcome: &VerifiedAuthorizedOutcome,
+        completion: &Arc<RunCompletion>,
+    ) -> Result<PublishedReview> {
+        self.current(
+            admission,
+            &[DeliveryPhase::ReviewPublication, DeliveryPhase::NoChange],
+        )?;
+        let claim = Self::completed_review_claim(admission, assignment, outcome, completion)?;
+        let worker = outcome.outcome();
         let signed =
             self.key.sign(
                 "codex_review",
@@ -1147,6 +1195,125 @@ mod tests {
             completed_run(&claim, &completion).unwrap_err().code,
             "worker_binding"
         );
+    }
+    #[test]
+    fn exact_review_validator_rejects_other_head_context_correction_and_unknown_exit() {
+        let (_original_temp, original, _) = fixture();
+        let context = json!({"patch":"exact protected review context"});
+        let (_temp, outcome, completion) = crate::runtime_claims::test_fixture_with_claim(
+            AgentRole::Review,
+            original.original_authority().work().clone(),
+            context.clone(),
+            Some("a".repeat(40)),
+            json!({"schema_version":1,"verdict":"findings","unresolved_findings":["required null case fails"],"supporting_links":[]}),
+        );
+        let gate = outcome.original_authority().clone();
+        let revision = RevisionBinding {
+            repository: RepositoryId {
+                hostname: "github.com".into(),
+                id: "42".into(),
+            },
+            head: "a".repeat(40),
+            base: "b".repeat(40),
+            tested_commit: "a".repeat(40),
+            tested_tree: "c".repeat(40),
+        };
+        let scope = DeliveryScope {
+            schema_version: 1,
+            runtime_id: Uuid::from_u128(1),
+            phase: DeliveryPhase::ReviewPublication,
+            work: gate.work().clone(),
+            repository: revision.repository.clone(),
+            revision: revision.clone(),
+            fresh_gate_digest: gate.digest().unwrap(),
+            contract_digest: bytes_digest(b"fixture contract"),
+            candidate_vector_digest: None,
+        };
+        let permit = Permit {
+            operation_id: Uuid::new_v4(),
+            lease: crate::control::Lease {
+                runtime_id: scope.runtime_id,
+                owner_generation: 1,
+                owner_id: Uuid::new_v4(),
+            },
+            control_generation: 1,
+            work_key: gate.work_key().unwrap(),
+            scope_digest: scope.digest().unwrap(),
+            registered_at: Utc::now(),
+        };
+        let admission = DeliveryAdmission::bind(permit, gate.clone(), scope).unwrap();
+        let assignment = ChildReviewAssignment {
+            work: gate.work().clone(),
+            revision,
+            delta_digest: bytes_digest(b"actual fixture delta identity"),
+            pull_request: Some(1),
+            context,
+            config_revision: gate.config_revision().into(),
+            workflow_digest: gate.workflow_digest().into(),
+        };
+        assert_eq!(
+            DeliveryCoordinator::completed_review_claim(
+                &admission,
+                &assignment,
+                &outcome,
+                &completion
+            )
+            .unwrap_err()
+            .code,
+            "worker_binding"
+        );
+        for mismatch in 0..3 {
+            let mut wrong = assignment.clone();
+            match mismatch {
+                0 => wrong.revision.head = "d".repeat(40),
+                1 => wrong.context = json!({"patch":"other"}),
+                _ => wrong.work.generation.correction = bytes_digest(b"other correction"),
+            }
+            assert_eq!(
+                DeliveryCoordinator::completed_review_claim(
+                    &admission,
+                    &wrong,
+                    &outcome,
+                    &completion
+                )
+                .unwrap_err()
+                .code,
+                if mismatch == 1 {
+                    "worker_binding"
+                } else {
+                    "review_gate"
+                }
+            );
+        }
+        let mut completion =
+            Arc::try_unwrap(completion).unwrap_or_else(|_| panic!("fixture completion shared"));
+        completion.local_exit_confirmed = false;
+        assert_eq!(
+            DeliveryCoordinator::completed_review_claim(
+                &admission,
+                &assignment,
+                &outcome,
+                &completion
+            )
+            .unwrap_err()
+            .code,
+            "worker_binding"
+        );
+        completion.local_exit_confirmed = true;
+        completion.state.binding.profile.model = "another-profile".into();
+        assert_eq!(
+            DeliveryCoordinator::completed_review_claim(
+                &admission,
+                &assignment,
+                &outcome,
+                &completion
+            )
+            .unwrap_err()
+            .code,
+            "worker_binding"
+        );
+        // This validates authenticated review input only. The fixture deliberately
+        // has no native WorkerContract or source and cannot mint a repair trigger.
     }
     #[test]
     fn unsupported_claim_fields_cannot_smuggle_passed_gate_evidence() {
