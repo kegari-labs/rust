@@ -1,8 +1,44 @@
 {
   "schema_version": 1,
   "spec_sha256": "80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326",
-  "notice": "Coverage inventory is not validation. Full clauses remain in SPEC. Deterministic, actual-agent, integration and human evidence are distinct.",
+  "notice": "Complete contract content inventory through section 14, including preamble, context and required fenced forms; headings, table separators and section 15 attribution/legal material are excluded. Inclusion does not infer requirement strength or validation. Full clauses remain in SPEC. Deterministic, actual-agent, integration and human evidence are distinct.",
   "clauses": [
+    {
+      "id": "clause:0:c592f9115a81",
+      "section": "0",
+      "line": 3,
+      "sha256": "c592f9115a814ecdd551c9a2753df97ae7d79020e80cb2ae54de25737f77ca16",
+      "excerpt": "Version: 1.2 — approved scope, harness deliverables and evaluation requirements retained; workflow-path and provider-intervention clarifications approved on 2026-10-25.",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:0:0b16a1757bcd",
+      "section": "0",
+      "line": 5,
+      "sha256": "0b16a1757bcd9bdb3ff0f9a65c05321fdaa672d755e5750aa96d3ef61618fc2c",
+      "excerpt": "This is the implementation contract for the temporary `kegari-v0` Rust executable. It includes the complete headless parent/subissue delivery workflow needed to coordinate the last",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:0:41eef3de7188",
+      "section": "0",
+      "line": 7,
+      "sha256": "41eef3de71883f70c8dc0faebbb1d581a1b36c46995cbf1da6713533ff29825f",
+      "excerpt": "This document adapts the OpenAI Symphony Service Specification. It is changed material, not an unmodified Symphony specification or a claim of Symphony conformance. This adapted do",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:1.1:a6e3852aeac8",
+      "section": "1.1",
+      "line": 13,
+      "sha256": "a6e3852aeac8b859166e43f4103f30f2e80ec8b4465d4fbe035acf42a7d313a1",
+      "excerpt": "The following local sources were read completely during the initial reconciliation. All three repositories were clean at the revisions below; no fetch, update or alternative baseli",
+      "status": "not_assessed",
+      "evidence": []
+    },
     {
       "id": "clause:1.1:c37552393a48",
       "section": "1.1",
@@ -36,6 +72,15 @@
       "line": 19,
       "sha256": "079929fbfc1ee5905319c96630beca591fb5e5bbfa3cbcc954ba01b8a6c39fd8",
       "excerpt": "| Deliberate Rust scaffold inspected read-only | `7c2303b49fcf8474939fe7caa04cba557e9450d9`; `com.kegari.rust` |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:1.1:833affb7b457",
+      "section": "1.1",
+      "line": 21,
+      "sha256": "833affb7b457d2fd1db3d33fe7299c19251901d4b12832bb72ad9efe66529b49",
+      "excerpt": "The discovery files are `README.md`, `workflow.md`, `workspaces-and-execution.md`, `git-and-releases.md`, `dashboard-and-controls.md`, `technical-direction.md`, `acceptance-scenari",
       "status": "not_assessed",
       "evidence": []
     },
@@ -261,6 +306,15 @@
       "line": 69,
       "sha256": "dcb55c0a052922ae4b351f138f4353f78955848790c73265892f63535a347f82",
       "excerpt": "Keys MUST use provider identities, not names alone:",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:2.2:e8c2e4c728bd",
+      "section": "2.2",
+      "line": 71,
+      "sha256": "e8c2e4c728bd7e9b56c77f9fc9f749f62e23eb65e8b28fa7f37fb339e237e5f2",
+      "excerpt": "- Linear work: canonical API endpoint, Linear workspace UUID and issue UUID. Human keys such as `WEB-101` are display/resolution aids.\n- GitHub repository: canonical hostname and s",
       "status": "not_assessed",
       "evidence": []
     },
@@ -868,6 +922,24 @@
       "evidence": []
     },
     {
+      "id": "clause:3.5:8966e4c7d535",
+      "section": "3.5",
+      "line": 192,
+      "sha256": "8966e4c7d5352d967b0336eb4509c2067f39f9a24a109d2601369bb8a50fbe77",
+      "excerpt": "```kegari\n{\"schema_version\":1,\"kind\":\"parent\",\"required_children\":[\"<Linear-UUID>\"],\"e2e_child\":\"<Linear-UUID>\",\"visual\":true,\"production_targets\":[\"<configured-target-id>\"]}\n```",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:3.5:f2e8a16d843a",
+      "section": "3.5",
+      "line": 196,
+      "sha256": "f2e8a16d843a7e00a68957a3aa6bc0eefddfc46aaa07ace0f514d01242a0f01a",
+      "excerpt": "```kegari\n{\"schema_version\":1,\"kind\":\"child\",\"responsibility\":\"implementation\",\"write_repository\":\"<GitHub-repository-id>\",\"write_paths\":[\"src/\",\"tests/\"],\"read_repositories\":[],\"t",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:3.5:a620f28e9904",
       "section": "3.5",
       "line": 200,
@@ -967,11 +1039,29 @@
       "evidence": []
     },
     {
+      "id": "clause:4.2:0730a5b1c4c5",
+      "section": "4.2",
+      "line": 230,
+      "sha256": "0730a5b1c4c503c9a11b2cf3b6f1f06605499d81fff0d4acd3489d5e96c458dc",
+      "excerpt": "Authorization requires the configured label's current presence AND a verified permitted authorizer event. Read the complete relevant Linear history and identify the latest unambigu",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:4.2:e5389c8d345b",
       "section": "4.2",
       "line": 232,
       "sha256": "e5389c8d345b2241cb8de014447b1b2c372427dd627190536a9735554156cf9c",
       "excerpt": "The host MUST record an authorization snapshot on the parent, including the label event, child IDs, definition/scope digests and current production targets. Record publication is i",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:4.2:f750b609923f",
+      "section": "4.2",
+      "line": 234,
+      "sha256": "f750b609923f70a0a4e879d5da3548ed9fa7d14ca89cf7fdac92885f3c7057a6",
+      "excerpt": "An in-scope correction from a permitted corrector requires no extra authorization label cycle, readiness action or replacement hierarchy. It cannot expand the already authorized re",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1147,6 +1237,15 @@
       "evidence": []
     },
     {
+      "id": "clause:5.1:6c1b7aae7142",
+      "section": "5.1",
+      "line": 272,
+      "sha256": "6c1b7aae71423f621f89b04b5505b07f629fa8499bb011be1a4190fa87cc8e63",
+      "excerpt": "Child completion requires fulfilled scope/acceptance criteria, actual required local and hosted validation, Codex review, successful staging integration for repository changes, and",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:5.2:67dfe185aeff",
       "section": "5.2",
       "line": 276,
@@ -1201,11 +1300,38 @@
       "evidence": []
     },
     {
+      "id": "clause:5.3:a20845c912e8",
+      "section": "5.3",
+      "line": 290,
+      "sha256": "a20845c912e8a7bd03637f7b8594512cecd051cbe26738e9478ddaabde465a06",
+      "excerpt": "1. Fetch and reconcile the current parent/child definitions, authority and all relevant comment revisions.\n2. Once corrective intent is established (immediately for explicit CLI co",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:5.3:3620c9a4517c",
       "section": "5.3",
       "line": 297,
       "sha256": "3620c9a4517ce61b1a554f364624686bd176b9d03561abc046fe422485641c42",
       "excerpt": "Workers report the correction watermark they processed. Before accepting their outcome, the host MUST reread current correction revisions. An outcome behind that watermark cannot e",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:5.3:9ead73ea40fe",
+      "section": "5.3",
+      "line": 299,
+      "sha256": "9ead73ea40fe658660355e609afb25186159538dce7c9a935cc086811c064f57",
+      "excerpt": "Polling can observe only provider-visible revisions; the system cannot guarantee that an unseen concurrent remote edit prevents an already in-flight action. Once a correction is ob",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:5.4:b3b9484b24c3",
+      "section": "5.4",
+      "line": 303,
+      "sha256": "b3b9484b24c361ae0ff4e54ee5117c77178ea968a2e2cb592843dd6146e2254f",
+      "excerpt": "Legitimate triggers are initial verified parent authorization, pending scoped correction, a newly satisfied dependency, a scheduled retry within its budget, or an explicit operator",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1233,6 +1359,15 @@
       "line": 313,
       "sha256": "cc1d176c3bbc850086607e748738999355b7c2eda6a79ed754058535ef6525d2",
       "excerpt": "Every new operation, including a worker spawn, preparation/CI operation, integration or release attempt, MUST obtain a control-host admission permit containing its operation ID, ow",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:6.1:c223b0782c0e",
+      "section": "6.1",
+      "line": 315,
+      "sha256": "c223b0782c0e28bc8f9d00ffd0c72b974f7744358260d3bfcbecbf74b7600c6a",
+      "excerpt": "Admission requires available capacity under global, verified-account, workspace and applicable normalized-state limits. A running session counts once against all applicable limits.",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1273,11 +1408,56 @@
       "evidence": []
     },
     {
+      "id": "clause:6.2:71db2cb81496",
+      "section": "6.2",
+      "line": 327,
+      "sha256": "71db2cb814962c397982bfcea8e84cd43f68e0cf7778736eecf293df48a273b4",
+      "excerpt": "1. Refresh configuration, permission reductions, operator intent and connection health.\n2. Reconcile running/uncertain operations, comment revisions, authorization and active paren",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:6.2:c92df1e18486",
       "section": "6.2",
       "line": 334,
       "sha256": "c92df1e18486f50efe3f647590930022ad975db8f6499c41b956decba3ee4c3a",
       "excerpt": "A failed discovery read prevents new admissions from that workspace's incomplete snapshot. Active work may finish under its last verified authorization only while there is no obser",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:6.2:9e862f3a1a53",
+      "section": "6.2",
+      "line": 336,
+      "sha256": "9e862f3a1a531dd6e7a6c483082de82db4e32c5685c54ab2add30eb3d119c08c",
+      "excerpt": "Immediately before dispatch: refresh the work identity, current parent authorization, correction watermark, child scope, dependency results, profile, available capacity and path/sa",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:6.3:d0eacc7c8f3a",
+      "section": "6.3",
+      "line": 340,
+      "sha256": "d0eacc7c8f3af8fb7f4298000abe6c22ffb3ed6e7b66b458a9bffa76f7aa3bb9",
+      "excerpt": "An active agent operation is one provider session of at most `max_turns`; subsequent sessions/reviews/retries are new admissions. An already launched validation/CI job can finish d",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:6.3:7e544fae8652",
+      "section": "6.3",
+      "line": 342,
+      "sha256": "7e544fae8652ac68419b5d58a12140ed07e4c4bbed2365d1d377402e6d9b1223",
+      "excerpt": "Pause/filter exclusion permits the currently admitted session's bounded turns and already admitted operation to finish, but never a new session, review run, retry or production rel",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:6.4:176ef521e100",
+      "section": "6.4",
+      "line": 346,
+      "sha256": "176ef521e10011ae85b5a23d9d9cd76efd2b8424001b6739f792c3670785a700",
+      "excerpt": "Each phase/work-generation has at most `max_attempts_per_phase` admitted worker sessions, including the initial session (default 3, not three additional retries). Each session has ",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1399,6 +1579,15 @@
       "evidence": []
     },
     {
+      "id": "clause:7.1:931c8f202d10",
+      "section": "7.1",
+      "line": 370,
+      "sha256": "931c8f202d1010914e69867899bcb783f1a149120522ccdd817c8a2b899e34a0",
+      "excerpt": "Use isolated clones or worktrees with their own working/index state; never execute in the operator's checkout or discard its dirty files. Reuse an owned preserved execution directo",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:7.1:daabed8a80ed",
       "section": "7.1",
       "line": 372,
@@ -1417,11 +1606,38 @@
       "evidence": []
     },
     {
+      "id": "clause:7.1:cb5760f7b773",
+      "section": "7.1",
+      "line": 376,
+      "sha256": "cb5760f7b7737f67c3e9aa941305120caea646a171f8375ed43385389eda9f34",
+      "excerpt": "Parent coordination sessions have no product/test write capability. They may propose scoped routing/readiness/evidence actions through narrow tools. Integration/release assembly is",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:7.1:07e862b3cb71",
       "section": "7.1",
       "line": 378,
       "sha256": "07e862b3cb7117618b0663b1e4d9de71ecc3f748d7c432be639102ec2c9a109f",
       "excerpt": "The broker advertises only implemented, phase-permitted tools. Tools MUST validate arguments and return structured success/failure without exposing raw credentials. Examples of per",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:7.1:8dfa1a3edd8c",
+      "section": "7.1",
+      "line": 380,
+      "sha256": "8dfa1a3edd8c80359bd529216c24d6fc2acecfe4102f8491f1ba05cefb5e4ebb",
+      "excerpt": "Hooks run in the validated directory, with minimal environment and a configurable timeout (default 60 seconds):",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:7.1:41ff9c81e71c",
+      "section": "7.1",
+      "line": 382,
+      "sha256": "41ff9c81e71c5ad90c46b4501679072b4d4df875dcac916b31271c155ac88db4",
+      "excerpt": "- `after_create`: once after creating/populating a new owned directory. Failure blocks that creation; do not mark it initialized or rerun blindly over partial effects.\n- `before_ru",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1462,11 +1678,38 @@
       "evidence": []
     },
     {
+      "id": "clause:7.2:f29886564cb5",
+      "section": "7.2",
+      "line": 397,
+      "sha256": "f29886564cb549ca08821847f370209b835c50047826d1b45aba649822eae8d7",
+      "excerpt": "At session start, assemble the delivered guidance and actual work context for the admitted role under §7.5. A child receives its full specification, parent intent, authorized scope",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:7.2:787f49342e12",
+      "section": "7.2",
+      "line": 399,
+      "sha256": "787f49342e1222a0a13bc24e9da3ec44e2a763d79713de57747e7b741985803a",
+      "excerpt": "For live steering, use the current `expectedTurnId` where supported. If the provider reports no active turn/stale turn, reconcile and leave the correction pending for a new admitte",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:7.3:51f3bdbeb122",
       "section": "7.3",
       "line": 403,
       "sha256": "51f3bdbeb122b70a3be892f9bfdcfd8c2835b2d8e1563020ee705f309c12d1ef",
       "excerpt": "The client MUST correctly parse fragmented and coalesced newline-delimited JSON-RPC messages, correlate response IDs and handle interleaved notifications/tool requests. Protocol st",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:7.3:c6c80bc190b7",
+      "section": "7.3",
+      "line": 405,
+      "sha256": "c6c80bc190b70e2df798b60ba25a90d330056a78dbf09d40591b4addbccd68dd",
+      "excerpt": "Emit normalized events for session start/startup failure, turn completion/failure/cancellation, input-required, provider intervention, supported tool result, unsupported tool reque",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1588,6 +1831,15 @@
       "evidence": []
     },
     {
+      "id": "clause:8.2:a73029e009aa",
+      "section": "8.2",
+      "line": 443,
+      "sha256": "a73029e009aabaf4c45027074570cb27488333b9c8d01adb5ea316f1690534f1",
+      "excerpt": "1. Required local tests passed for the candidate.\n2. The full configured CI suite ran on GitHub-hosted runners against the relevant candidate/merge result and passed.\n3. Codex revi",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:8.2:ed3884f40d95",
       "section": "8.2",
       "line": 449,
@@ -1642,6 +1894,15 @@
       "evidence": []
     },
     {
+      "id": "clause:8.3:f40a88a097ac",
+      "section": "8.3",
+      "line": 463,
+      "sha256": "f40a88a097ac4b65a4f70712d33bfbdaf1d6f79f742ff697e1a03611aecc428e",
+      "excerpt": "Serialize integration per repository across workspaces. Immediately before merge, reread authority, corrections, PR head/base, required gates and protections; pass the expected hea",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:8.3:1f29f806ab20",
       "section": "8.3",
       "line": 465,
@@ -1669,6 +1930,15 @@
       "evidence": []
     },
     {
+      "id": "clause:8.4:bc1e47b16ca4",
+      "section": "8.4",
+      "line": 473,
+      "sha256": "bc1e47b16ca4812361c7a4c9094117d7d981108f0d1056eaa035dbbf71be3d9d",
+      "excerpt": "The review/result record is written to the child Linear issue when there is no PR, with the same authenticated provenance and links to GitHub validation. Independent PR review rema",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:8.5:3ee8724121e2",
       "section": "8.5",
       "line": 477,
@@ -1683,6 +1953,15 @@
       "line": 479,
       "sha256": "54d46458fc548689e3eeaa5814c86af652b2fbb11dadf8860f7a12aace9ed714",
       "excerpt": "The evidence manifest MUST include:",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:8.5:59663e4e9e0b",
+      "section": "8.5",
+      "line": 481,
+      "sha256": "59663e4e9e0bdf5e673953c7c8861642efe98b5e8c1e50c1f8953b515edbf4d8",
+      "excerpt": "- Parent ID, authorization/definition/correction generation and complete required-child inventory, with each child's outcome and any justified no-change case.\n- Executive summary, ",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1714,11 +1993,38 @@
       "evidence": []
     },
     {
+      "id": "clause:8.6:0a8a7b5b7aed",
+      "section": "8.6",
+      "line": 496,
+      "sha256": "0a8a7b5b7aed867891b2ab8c096b2b52bcc1bb89fe94a6db3158f164d08a5900",
+      "excerpt": "Acceptance and Linear closure are separate recoverable writes; a lost response cannot create a second approval or imply that closure succeeded. An acceptance record becomes usable ",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:8.6:9e04b9c4f6da",
+      "section": "8.6",
+      "line": 498,
+      "sha256": "9e04b9c4f6da3b14b1e4832f0daa423626d0df5ab6df4c4a8465329573b66249",
+      "excerpt": "Acceptance authorizes the parent result, not immediate production. Manual mode still requires an explicit eligible single-parent release command. Automatic mode may admit release o",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:9.1:3a86cefe549f",
       "section": "9.1",
       "line": 504,
       "sha256": "3a86cefe549f845c714cb1df5997ca772cf8e4e2d444365d9b0cf466829bef13",
       "excerpt": "The implementation MUST use this supported algorithm; promoting the staging branch wholesale is forbidden.",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.1:3969cd7411d3",
+      "section": "9.1",
+      "line": 506,
+      "sha256": "3969cd7411d3742afa32f405640dbe82a0db754e2dabc0b4ffa78506eaac38f2",
+      "excerpt": "1. Resolve the current parent generation, every required child responsibility, declared dependencies and recorded deltas. Require implementation/test-code/documentation deltas to b",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1750,6 +2056,15 @@
       "evidence": []
     },
     {
+      "id": "clause:9.1.1:7a92ce11fc39",
+      "section": "9.1.1",
+      "line": 521,
+      "sha256": "7a92ce11fc39b9e1eb7dc6cfee598b6274f7d87d86852e1f4d2f4b546f492740",
+      "excerpt": "Only a verified replacement mapping may mark old artifacts superseded. Retain them as history; account for all required child outcomes and validate the newly assembled parent resul",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:9.2:0d92b8450ecc",
       "section": "9.2",
       "line": 525,
@@ -1759,11 +2074,74 @@
       "evidence": []
     },
     {
+      "id": "clause:9.2:3de3818887a1",
+      "section": "9.2",
+      "line": 527,
+      "sha256": "3de3818887a1a3f318c3b3f3d4234b4c5d309cb3bc96a06f9cdcb92200776515",
+      "excerpt": "- The parent definition, correction generation, required-child scope/satisfaction, selected implementation deltas, intended behavior and authority are unchanged. Fresh test/evidenc",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.2:930a6f5e1a24",
+      "section": "9.2",
+      "line": 533,
+      "sha256": "930a6f5e1a243650b778875d2d50ae6dff97888da85d20a2d4ae55693df2cee2",
+      "excerpt": "Record a `carried_acceptance` link from the original human-reviewed token to the new candidate/evidence token with the unchanged-patch proof and new validation results. Preserve wh",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.2:68e071d37f65",
+      "section": "9.2",
+      "line": 535,
+      "sha256": "68e071d37f65cea64797a6be7bd773546b5b2c89c3cf64f1f2f7017c44399bda",
+      "excerpt": "Before a release command the CLI displays the original acceptance and current validated candidate/lineage. The release token names the current candidate, not a stale token silently",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:9.3:da5d4e478c8f",
       "section": "9.3",
       "line": 539,
       "sha256": "da5d4e478c8f471a3a2ae40fd2be72b68fcb0d6454b58ff7bec1d4200bacde8b",
       "excerpt": "Preparation and irreversible delivery have separate admission predicates. Authorized, included work under RUNNING intent may admit bounded candidate assembly, isolated validation, ",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.3:fca69939065d",
+      "section": "9.3",
+      "line": 541,
+      "sha256": "fca69939065dbd7443d64a50d5916cf35707bdcae65faa478b646ea3f02c33a5",
+      "excerpt": "A parent is ready for release only when: current authorized included scope is complete; dependencies are satisfied; current evidence has explicit acceptance or valid carry lineage;",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.3:6fca5d21284e",
+      "section": "9.3",
+      "line": 543,
+      "sha256": "6fca5d21284e91ba14aae73d19043bf9e5fe59b2661b123c7fcaa8ec42623610",
+      "excerpt": "Release resource keys are canonical repository IDs plus configured production environment/target IDs. An attempt acquires all its keys atomically in stable sorted order. Attempts w",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.3:95df9c17e6af",
+      "section": "9.3",
+      "line": 545,
+      "sha256": "95df9c17e6afe72a1f39b569a823568e29651d2eb02e1e1d110531738b9f02ab",
+      "excerpt": "Within eligible work, order by dependency readiness, acceptance time (oldest first) and canonical parent ID. An ineligible item does not force unrelated eligible targets to wait. A",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.3:3c9880e2ff31",
+      "section": "9.3",
+      "line": 547,
+      "sha256": "3c9880e2ff3183a803dc821eb98e9aaadaa6c4fcd66d5fa5da83c75936c690a1",
+      "excerpt": "Spacing is measured from the observed successful completion of the previous overlapping parent release to the next release start. The applicable delay is the maximum configured spa",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1795,6 +2173,15 @@
       "evidence": []
     },
     {
+      "id": "clause:9.4:fccbdd59ec6d",
+      "section": "9.4",
+      "line": 557,
+      "sha256": "fccbdd59ec6d58e831924b764e3fd5b19721cce5ce5e45f41a7859e8a32880f1",
+      "excerpt": "Every production PR uses squash merge, expected-head validation and current-base protections as in §8.3. If any production base changes, stop before mutation, reassemble and valida",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:9.4:0baa7242463a",
       "section": "9.4",
       "line": 559,
@@ -1804,11 +2191,83 @@
       "evidence": []
     },
     {
+      "id": "clause:9.4:9a2be184a244",
+      "section": "9.4",
+      "line": 561,
+      "sha256": "9a2be184a2445e29ecd4e2b2124fa8098035449de04b75ea877a961a4bca88fe",
+      "excerpt": "Cross-repository releases are not atomic transactions. Execute the declared step DAG, observing each prerequisite before dependent steps. Whole-parent success requires every requir",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.5:f6a17be5d040",
+      "section": "9.5",
+      "line": 565,
+      "sha256": "f6a17be5d040d1354677b5b6f91b58f896d29d8fd03f035072d892833a501690",
+      "excerpt": "Immediately before each irreversible step, revalidate current authority, child/correction/evidence generations, acceptance/carry lineage, exact Git revisions, resource locks and re",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.5:731087efecf8",
+      "section": "9.5",
+      "line": 567,
+      "sha256": "731087efecf8f51c261b89a583cb304ca68a241e3d2d287753563fc1d0e0981b",
+      "excerpt": "There is no atomic transaction spanning Linear comments, GitHub merge and a deployment provider. Do not claim that a comment not yet observable to Kegari can cancel a request alrea",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.6:489a2729a17d",
+      "section": "9.6",
+      "line": 571,
+      "sha256": "489a2729a17dc4981ccbc23d4b26c7b369a5edf6193ab0a7cbfb58be961d71ac",
+      "excerpt": "Any failed or uncertain release step holds its affected repositories/environments and dependent releases. Unrelated disjoint applications continue. Publish a parent release record ",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.6:b42db6e7c873",
+      "section": "9.6",
+      "line": 573,
+      "sha256": "b42db6e7c87308e52a6dc247b8b26f6702d5945bb8ad72b1d41d93d9fd6ca7d6",
+      "excerpt": "There is no automatic rollback, production incident diagnosis or production-monitoring policy. An operator can pause, force-stop, investigate and arrange separately authorized reco",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:9.6:42bc421cc630",
       "section": "9.6",
       "line": 575,
       "sha256": "42bc421cc6302199440cad5ef60dd7d1d95015578e5116c46ea19f228e0d8d81",
       "excerpt": "- `resume`: continue only verified uncompleted steps of the same still-current accepted result, after fresh gates. Already integrated/deployed steps are not repeated.\n- `abandon`: ",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.6:ffea37c8b1ae",
+      "section": "9.6",
+      "line": 580,
+      "sha256": "ffea37c8b1ae4287216847e39ae1d0fe2c406e4f9b4c519e761223912a4bf04b",
+      "excerpt": "Preparation of a corrected successor while a known hold exists is permitted under normal execution authority once all potentially conflicting remote actions are reconciled. It crea",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.6:442c3cd58730",
+      "section": "9.6",
+      "line": 582,
+      "sha256": "442c3cd58730bf04a943c80d4736ac90583d07cefd51ec25f8dea625752dd88b",
+      "excerpt": "Unknown outcomes cannot be cleared by a “mark successful” override. If external operator repairs changed code, they need traceable authorized child/review/evidence treatment before",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:9.6:0cf6cac74943",
+      "section": "9.6",
+      "line": 584,
+      "sha256": "0cf6cac749439e17ca1ce4d82c168d257df176954ffefca4b9cb35c69e8305e6",
+      "excerpt": "When a remote cancellation fails or cannot be confirmed, retain the hold. An acknowledged cancellation request is not a cancelled job. A job may complete while cancellation is requ",
       "status": "not_assessed",
       "evidence": []
     },
@@ -1831,11 +2290,38 @@
       "evidence": []
     },
     {
+      "id": "clause:10.1:005ae7653acd",
+      "section": "10.1",
+      "line": 594,
+      "sha256": "005ae7653acd4666a216a5040ff326493f001c7a08a63c8eb85c9919ad8a8ba4",
+      "excerpt": "Parent references are `<workspace-id-or-unique-name>/<Linear-UUID-or-key>`. An unqualified reference is allowed only when unique among the targeted runtime's configured workspaces.",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:10.1:39df9c5e6b55",
       "section": "10.1",
       "line": 596,
       "sha256": "39df9c5e6b552d8cf15e692c6dd84e4f976359e64e59936a13bde7b55ca0d588",
       "excerpt": "Human output MUST show target/runtime, affected workspace/parent, actual state, operation/request ID where relevant, result/reason and next action. `--json` emits one UTF-8 JSON re",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:10.1:46ab3ff8dcab",
+      "section": "10.1",
+      "line": 598,
+      "sha256": "46ab3ff8dcab3a03e42b0b6add80f375181891a5578b9011624fbf13e9895d17",
+      "excerpt": "Every mutation accepts `--request-id UUID`; without it the client creates one once and retains/returns it across transport retries. The server binds that ID to authenticated actor,",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:10.1:861c717801d9",
+      "section": "10.1",
+      "line": 600,
+      "sha256": "861c717801d93b0f79c921f5c01174a5886e439dad905bd530cf023a187f17b6",
+      "excerpt": "Lifecycle mutations additionally accept `--expected-control REV`, mapped to `expected_control_generation` in the API. When omitted, the client first obtains the current generation ",
       "status": "not_assessed",
       "evidence": []
     },
@@ -2128,11 +2614,47 @@
       "evidence": []
     },
     {
+      "id": "clause:10.1:cde283b66600",
+      "section": "10.1",
+      "line": 637,
+      "sha256": "cde283b66600cf418ba7da39b21f62021f2dfe5055cb3e31da3287735fbc1c5c",
+      "excerpt": "Exit codes: `0` successful read or durably accepted mutation (pending versus completed stated explicitly); `2` invalid command/input; `3` invalid config/unmet prerequisite; `4` una",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:10.2:864bb3bd804a",
+      "section": "10.2",
+      "line": 641,
+      "sha256": "864bb3bd804abb737fbada5a236c1e600acacd226febd801f91822b991045378",
+      "excerpt": "Always show these sections, including empty sections, in this exact order:",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:10.2:da272d0ec73e",
+      "section": "10.2",
+      "line": 643,
+      "sha256": "da272d0ec73e58b32a3fa34b04e44c531964b18e542d65c88fdf16fb040e6af8",
+      "excerpt": "1. **Ready for release** — accepted current candidates whose release admission gates are satisfied, including manual ones awaiting the explicit release command. An active release m",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:10.2:d778cb9557ec",
       "section": "10.2",
       "line": 648,
       "sha256": "d778cb9557ec66dd4e80891db3b28029c8e0c26347bcc85d6c17ce7ff54e3cb1",
       "excerpt": "Rows MUST include workspace/parent identity and Linear link, relevant child progress, current phase, freshness, blocker/wait reason and acceptance/release distinction. Required chi",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:10.2:d145c6069fd2",
+      "section": "10.2",
+      "line": 650,
+      "sha256": "d145c6069fd208afdf475d90b23372661e106e802eaf5f28bad5128ee5a57215",
+      "excerpt": "Highlight the next useful operator action: first an eligible manual release, then a ready parent review, then the actionable root blocker holding the next otherwise releasable pare",
       "status": "not_assessed",
       "evidence": []
     },
@@ -2169,6 +2691,15 @@
       "line": 660,
       "sha256": "b9f4b4f8c15c4df644a0243185ea4768f28e51e470e1bd81fd554e5af19ebf8f",
       "excerpt": "Local control uses the owner-protected Unix socket and verified OS peer identity, mapped to the same operator roles. Managed workers MUST be denied this socket and privileged remot",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:10.3:ca716f9e8b4f",
+      "section": "10.3",
+      "line": 662,
+      "sha256": "ca716f9e8b4f200cae1a8797af6bcd4b761ae297f16acc21bac120310351ff7a",
+      "excerpt": "Expose these authenticated API routes over both transports, sharing one dispatcher:",
       "status": "not_assessed",
       "evidence": []
     },
@@ -2232,6 +2763,15 @@
       "line": 672,
       "sha256": "ca933094b9e2131dd7d55cc713ab9fe83612b47a558d844850f5d1bf8a4a476b",
       "excerpt": "No arbitrary shell-command, URL-proxy or provider-query endpoint is permitted. Client-only browser opening, target preferences and local service installation/shutdown are not remot",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:10.3:213d17ac06fa",
+      "section": "10.3",
+      "line": 674,
+      "sha256": "213d17ac06faa518c8ec5e6bf52c526d1fec0e8917fbd09a17faf686ca970b41",
+      "excerpt": "Require `X-Kegari-Protocol: 1`, expected Host/authority and expected runtime identity on every request; POST requires `application/json`. Reject browser `Origin` headers (including",
       "status": "not_assessed",
       "evidence": []
     },
@@ -2407,11 +2947,47 @@
       "evidence": []
     },
     {
+      "id": "clause:11.2:2414f66a6e59",
+      "section": "11.2",
+      "line": 708,
+      "sha256": "2414f66a6e594d3b4b0c654a0944d2dd83ec5187f868237be878bae5cf984400",
+      "excerpt": "Request cancellation only of identifiable instance-owned GitHub CI/deployment run attempts whose current ownership is verified. The initial cancellation pass is bounded to 15 secon",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:11.3:f8deb6e6b88a",
+      "section": "11.3",
+      "line": 712,
+      "sha256": "f8deb6e6b88a4fa9bb2b10cb70c9e47a8d36af6b75cd85f51f5117f7f08eda20",
+      "excerpt": "Before external mutation, persist the prepared receipt and payload/generation identity; mark transmission and returned IDs as observed. Following a crash/lost response, query the p",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:11.3:10ea4c0ba419",
+      "section": "11.3",
+      "line": 714,
+      "sha256": "10ea4c0ba41922abd4fba10c7539a0cb29bd4d306b76ccf24e2ae2c00fd76c3b",
+      "excerpt": "Adopt an existing remote object only when exactly one matching object, target, actor/ownership and immutable payload can be verified. Multiple matches are a conflict. A failed/inco",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:11.3:a0f9ce016c7e",
       "section": "11.3",
       "line": 716,
       "sha256": "a0f9ce016c7e80ee82f10d36ce9c9326a060cf8b83d3b45c9a17fdb75e17c8d4",
       "excerpt": "Recovery MUST reconstruct current state from Linear/GitHub, verify local receipts and preserved directories, restore attempt counts, operator intent and unresolved provider-interve",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:11.3:10436176a3f6",
+      "section": "11.3",
+      "line": 718,
+      "sha256": "10436176a3f6e4f2217a60b9f6e1f0ca3d1067736699d3b10bd523751e17ba0b",
+      "excerpt": "There is no automatic cross-host failover or takeover. Local locking prevents duplicate local owners under the supported deployment; it cannot prove an unrelated installation elsew",
       "status": "not_assessed",
       "evidence": []
     },
@@ -2439,6 +3015,24 @@
       "line": 728,
       "sha256": "0555afb3db445753134696ef0644199629fa80bdd6a8482b5c5a527624287073",
       "excerpt": "Default retention is preserve. Startup, terminal tracker states, claim release, force-stop, successful release and account removal MUST NOT automatically delete execution directori",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:11.5:2be1767bbb57",
+      "section": "11.5",
+      "line": 730,
+      "sha256": "2be1767bbb57b15400a008f7e07ed5e5422e7e7c1368235a7ff50cefeac1d101",
+      "excerpt": "Explicit cleanup first returns a digest-bound plan of exact paths and proof of eligibility. Applying that unchanged plan requires: no active/queued/uncertain operation references; ",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:11.5:0ae344726be2",
+      "section": "11.5",
+      "line": 732,
+      "sha256": "0ae344726be2efcae879707515d2816a3ca4d7127dd84ca8cee57217f785c818",
+      "excerpt": "Completed receipts may be compacted only after their referenced authoritative result and duplicate-prevention tombstone are retained, all dependents/recovery uses are satisfied and",
       "status": "not_assessed",
       "evidence": []
     },
@@ -3091,6 +3685,15 @@
       "evidence": []
     },
     {
+      "id": "clause:12.3:2f1ded6c5411",
+      "section": "12.3",
+      "line": 834,
+      "sha256": "2f1ded6c54112e936daacb15c6520892d45a70321c0b3a20935ac84d0715219e",
+      "excerpt": "The specification is ready to direct that later build once its product decisions are resolved. Implementation and operational readiness remain separate achievements. No live integr",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
       "id": "clause:12.4.1:89f10c937993",
       "section": "12.4.1",
       "line": 840,
@@ -3689,6 +4292,600 @@
           "status": "not_run"
         }
       ]
+    },
+    {
+      "id": "clause:13:c96f1af7f14d",
+      "section": "13",
+      "line": 881,
+      "sha256": "c96f1af7f14daccb3980c3bbca10669326dad56e3324f2c7780434faefc9434e",
+      "excerpt": "Source IDs retain their discovery numbering. `W`, `E`, `G`, `C`, `T` below mean the discovery files `workflow.md`, `workspaces-and-execution.md`, `git-and-releases.md`, `dashboard-",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:7b13ba70482c",
+      "section": "13",
+      "line": 883,
+      "sha256": "7b13ba70482c389fe5920276667456ceaff285f91f8d7b840f3df42c5a041081",
+      "excerpt": "| Source requirements / location | V0 treatment and implementing sections | Acceptance evidence |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:da5dcdfc1c43",
+      "section": "13",
+      "line": 885,
+      "sha256": "da5dcdfc1c43ee34dfe8d49dacb1283f8a8f9aa2fec193c6318e061f5cdbb691",
+      "excerpt": "| REQ-01, REQ-02, REQ-03 — W | Retained: prepared Codex/Linear intent, end-to-end parent, self-contained bounded children; §§2–5,7 | SC-01/19/20 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:30281d05a71e",
+      "section": "13",
+      "line": 886,
+      "sha256": "30281d05a71ee3ebb609473c621caeabf2750f22162937c846eb8c65f6fdfa44",
+      "excerpt": "| REQ-04 — W | Retained: mandatory E2E child and necessary documentation, explicit test access; §§3.5,5,8.5 | SC-01/19; V0-T05/16 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:43d45bb6a162",
+      "section": "13",
+      "line": 887,
+      "sha256": "43d45bb6a162e69f1c7ce26248bfa39234fdbbb71457d2d116f11ebddc4702a3",
+      "excerpt": "| REQ-05 — C | Split: actual visual E2E video and parent association retained; dashboard presentation later; §8.5 | SC-01/09/20; V0-T18 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:1a47b4880760",
+      "section": "13",
+      "line": 888,
+      "sha256": "1a47b48807605dcea5716b5e35c9eb6dd98b9e23f1677195bae906e914adf6d1",
+      "excerpt": "| REQ-06 — W | Retained: explicit human parent acceptance/final closure; §8.6 | SC-01/20; V0-T19 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:b18ebde3c5f1",
+      "section": "13",
+      "line": 889,
+      "sha256": "b18ebde3c5f1eafe5cbb9e09c66ee0195ed5c9d374d4121998a2c3659b715f39",
+      "excerpt": "| REQ-07, REQ-08, REQ-09 — W | Retained: single correction, child routing, edits/steering and completion races; §5.3 | SC-04/05; V0-T11/21 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:b39dcb07582f",
+      "section": "13",
+      "line": 890,
+      "sha256": "b39dcb07582fa4f65db19eeeb0e5af5d526396cd61b4dc45d09f131d42228858",
+      "excerpt": "| REQ-10, REQ-11 — G | Retained: full shared parent-title branch suffix, child ID, main/staging separation; §8.1 | SC-01/14/17 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:020a1405dd2e",
+      "section": "13",
+      "line": 891,
+      "sha256": "020a1405dd2ecc882593cc60d1e1b0549ee345b4471176332dd47751be45badf",
+      "excerpt": "| REQ-12 — E | Retained: unattended execution within actual allowance; §§6,7.4,11 | SC-15/18/26; V0-T13 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:80ee7844face",
+      "section": "13",
+      "line": 892,
+      "sha256": "80ee7844faceb79f09267a1e082246486db0566508bc9c5d121f1de013693582",
+      "excerpt": "| REQ-13 — G | Retained: explicit auto/manual single-parent release; §§8.6,9,10 | SC-10/20/24 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:c904796c50f2",
+      "section": "13",
+      "line": 893,
+      "sha256": "c904796c50f21af9c696174b5c1e81984c9050721052e4aa904f0e48a5812895",
+      "excerpt": "| REQ-14 — T | Completed reconciliation against pinned generic spec; §§1,13–15; no Elixir requirements inferred | This audit; V0-T matrix |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:ddec19613ea6",
+      "section": "13",
+      "line": 894,
+      "sha256": "ddec19613ea6b9cb451d471e30c2108e61a9087e4c42198720ed21fa84399955",
+      "excerpt": "| REQ-15, REQ-16, REQ-17 — G | Retained, mechanisms resolved: selected deltas, overlapping-target serialization, independent queues, completion-to-start spacing; §9 | SC-10/11/12; ",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:057d01ebd2c7",
+      "section": "13",
+      "line": 895,
+      "sha256": "057d01ebd2c762de65610cb464b0f67c6af5aab546f8a7d068db5444d31a3162",
+      "excerpt": "| REQ-18 — G | Retained: manual production incident/rollback policy; §9.6 | SC-12/25 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:70f0856c1cb9",
+      "section": "13",
+      "line": 896,
+      "sha256": "70f0856c1cb93ff2c4a28ba916ae870462bf05275f4b8c1926aac47c1b6b5a38",
+      "excerpt": "| REQ-19, REQ-20 — W | Retained: all-child completeness and actual parent evidence, including nonvisual; §§5,8 | SC-01/07/09/19; V0-T18 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:22da021eb33d",
+      "section": "13",
+      "line": 897,
+      "sha256": "22da021eb33d6bf76cfae5326e2e569314760e6e507ec812bdc97f8a9030bb0f",
+      "excerpt": "| REQ-21 — G | Retained: Codex review with finite clean/no-change path; §§6.4,8.2–8.4 | SC-07/08; V0-T14 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:87040689ffb3",
+      "section": "13",
+      "line": 898,
+      "sha256": "87040689ffb388e624ce80bdddf56e4306231e5180a5b34e063785d074efe23e",
+      "excerpt": "| REQ-22 — W; REQ-23, REQ-24 — E | Retained: planning first, no runtime clarification, visible contained blockers; §§3.5,5,7.3,11.4 | SC-06; V0-T10 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:bc92355e5e11",
+      "section": "13",
+      "line": 899,
+      "sha256": "bc92355e5e11fad7b15ce35a32e5a954f73eacdb9ef2b132e91b0b5cd994ccf1",
+      "excerpt": "| REQ-25, REQ-26 — G | Retained: distinct local/hosted CI/review/staging gates; code feedback GitHub, product feedback Linear; §8 | SC-07/17 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:7a7376265728",
+      "section": "13",
+      "line": 900,
+      "sha256": "7a7376265728120c2c34b89b22f9346ee66aef4f438974299a92ebc9af5db946",
+      "excerpt": "| REQ-27, REQ-28 — G | Retained: production retests unchanged reviewed code, child-only fixes, stale approval invalidation; §§5,8.6,9 | SC-04/05/10/20; V0-T17/20 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:0591ad418bf3",
+      "section": "13",
+      "line": 901,
+      "sha256": "0591ad418bf397c55b14689c4af6f58f15697bae53fe5238af119649179f2855",
+      "excerpt": "| REQ-29 — W; REQ-37 — E | Retained: parent authorization/selection and complete inherited child set; §§3.5,4.2 | SC-02/03/19/22; V0-T03/05 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:a8fc5a08c558",
+      "section": "13",
+      "line": 902,
+      "sha256": "a8fc5a08c558cc469d14d81a2131b525c763e101493162d2f3d9e82b3b579189",
+      "excerpt": "| REQ-30 — G | Retained: declared dependencies plus provenance/validation cross-check; §§5.2,9 | SC-11; V0-T16 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:1c4b149d631f",
+      "section": "13",
+      "line": 903,
+      "sha256": "1c4b149d631f3c085750febc917582a13de931b90b10eed7e891f18368db19bb",
+      "excerpt": "| REQ-31 — E | Retained with confirmed limited-file/provider-internal-storage interpretation; §§2.3,11 | SC-13/26; V0-T08/09 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:345161b95b83",
+      "section": "13",
+      "line": 904,
+      "sha256": "345161b95b831eba9cbf08895153a5b328a0a00716e313cddd7edb6118b18bc3",
+      "excerpt": "| REQ-32 — E | Retained: multiple workspaces/concurrent independent work; §§2–4,6 | SC-15/21 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:8263132b2b5b",
+      "section": "13",
+      "line": 905,
+      "sha256": "8263132b2b5ba898254a2f6d23f69fb9070b1b509d5af48a6ebe4f19eada7626",
+      "excerpt": "| REQ-33 — C | Split: background without terminal retained (§11); native menu-bar/Dock wrapper excluded v0 | SC-18/20 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:310d05010583",
+      "section": "13",
+      "line": 906,
+      "sha256": "310d0501058389ea9066dc6cdc3ddf63554d4153460a0bd9193c3b9ff5be60ba",
+      "excerpt": "| REQ-34 — W | Retained: OpenAI prompting principles and self-contained inputs; §§3.5,7.2,14 | SC-01/06/19 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:71ee0de29251",
+      "section": "13",
+      "line": 907,
+      "sha256": "71ee0de29251148f9b20d9ffa64014c7217fa9073ce8c9b266ad073f60f5091e",
+      "excerpt": "| REQ-35 — E | Retained: four current child labels, no trigger/restart; §§3.2,4,7.2 | SC-02; V0-T11 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:d23340871c69",
+      "section": "13",
+      "line": 908,
+      "sha256": "d23340871c69390f385143021efeb0672f964f6685e4a4751c568ee6a2e27b1b",
+      "excerpt": "| REQ-36 — T | Retained: usable-after-login startup, locked-session operation subject to actual prerequisites; §11 | SC-18/26 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:078d7c34d45a",
+      "section": "13",
+      "line": 909,
+      "sha256": "078d7c34d45ae417c17947a2ae829de6a7ee1b5235cff71507ef61d7e457349c",
+      "excerpt": "| REQ-38, REQ-39 — E | Retained: repository union, author-only PR filter, implemented opt-in independent review; authority resolved to feedback only; §4.4 | SC-03/16 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:15908bde661f",
+      "section": "13",
+      "line": 910,
+      "sha256": "15908bde661f6e193dff6641a3f435dcf729fa2e087c1cee0d750de9aa759584",
+      "excerpt": "| REQ-40, REQ-41 — E | Retained shared connections/local credentials/CLI onboarding; graphical onboarding later; §§2.3,3,6,10 | SC-15/18/21 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:a853f84d3702",
+      "section": "13",
+      "line": 911,
+      "sha256": "a853f84d3702668fb15c6974289d5d9f8c0bb02629ce7b8b2fa06f0d68a02eb1",
+      "excerpt": "| REQ-42 — E | Derived boundary retained and enforced through host/sandbox controls; §§2.4,7.1 | SC-14/15/19; V0-T12 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:c52c2e90958a",
+      "section": "13",
+      "line": 912,
+      "sha256": "c52c2e90958a3932eb7f70d1d3f46f4cd318bcd1cd1b5a2f24843a3dacde76fd",
+      "excerpt": "| REQ-43, REQ-44 — E/G | Automatic selected-user PRs retained; derived review-identity problem resolved with authenticated status gate, no bypass; §8 | SC-17; V0-T15 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:142da9fec76e",
+      "section": "13",
+      "line": 913,
+      "sha256": "142da9fec76e59c38e6070fba89a0e0d637bbd6675aeacc2bbdaedd87e877e5a",
+      "excerpt": "| REQ-45 — T | Same public configuration path/open-source intent retained; distribution packaging later; §§1,3,12,15 | SC-21; setup validation |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:cd5d344cd783",
+      "section": "13",
+      "line": 914,
+      "sha256": "cd5d344cd783b4bacc6846d49967a421163400790a8fae374fd4ff4dec40e045",
+      "excerpt": "| REQ-46 — T | Rust/headless separable core retained; thin native wrapper later; §§1,10–11 | SC-18/20 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:4906fcd6000f",
+      "section": "13",
+      "line": 915,
+      "sha256": "4906fcd6000f4576cd230b9bc7b6a8de685bbac0057923eada2f563e457d5bae",
+      "excerpt": "| REQ-47, REQ-48 — T | Qwik bundling/hosting and Homebrew complete-product distribution excluded v0; basic installed binary/background setup retained; §§1,10–12 | SC-20/26 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:bfd3bb36b488",
+      "section": "13",
+      "line": 916,
+      "sha256": "bfd3bb36b488c3a019fd7e3663c989803e14657c39825e9e21ef45dbee9a07d3",
+      "excerpt": "| REQ-49 — T | Tailscale/permitted identities retained for HTTPS CLI; browser-dashboard access later; §10.3 | SC-18; V0-T22 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:f5d510201698",
+      "section": "13",
+      "line": 917,
+      "sha256": "f5d510201698fb977d1b4e849b6e7c402a7f92ae8d903a2c7e793ac1d8a6fe23",
+      "excerpt": "| REQ-50, REQ-51 — C/T | Retained complete small CLI, one runtime and local hidden config; graphical parity later; §§3,10–11 | SC-18/21/23/26 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:038d2358e70a",
+      "section": "13",
+      "line": 918,
+      "sha256": "038d2358e70a033179b0a68d6032e894aa624829f7584506d1afb8a45faca66e",
+      "excerpt": "| REQ-52 — T | Retained full bootstrap/validation/handover workflow; separate-temp-repository clauses superseded by same Rust repository/package decision; §§1.2–1.3,11.7,12 | SC-20",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:fc0028119dfb",
+      "section": "13",
+      "line": 919,
+      "sha256": "fc0028119dfb5cd087b5a7440ef339fe223a546ed80923a36447478eb312c493",
+      "excerpt": "| REQ-53 — C | Parent acceptance/evidence retained; graphical review later; §§8.5–8.6,10 | SC-01/09/20 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:5e5974932318",
+      "section": "13",
+      "line": 920,
+      "sha256": "5e5974932318e997bc8b00c1c96001880a838d3c55a564269a4f56dea7867218",
+      "excerpt": "| REQ-54 — W | Retained absolute child-only implementation, no parent override; §§2,3.5,5,7,9 | SC-19; V0-T12/16 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:64e171483c5c",
+      "section": "13",
+      "line": 921,
+      "sha256": "64e171483c5c2d5336d8de5fbf1c9b084ff2be2ff09e97d91bdf34924679414a",
+      "excerpt": "| REQ-55, REQ-56, REQ-57 — C | Retained exact overview order/next action, Linear evidence and CLI decisions, both configuration routes; §§3,8,10 | SC-20/21/23; V0-T18/19 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:58b941cac8e3",
+      "section": "13",
+      "line": 922,
+      "sha256": "58b941cac8e30412f95e72a2bcf62460935b868a0a5019a0e553255f2ebcce27",
+      "excerpt": "| REQ-58, REQ-59, REQ-60, REQ-61 — C | Retained distinct pause/stop/force/start/restart and remote same-runtime control; HTTPS/control-host mechanism selected; §§10–11 | SC-18/24/2",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:69f784d4bdd2",
+      "section": "13",
+      "line": 923,
+      "sha256": "69f784d4bdd230a8202d9ef209e6846eb149d10a7813e794f4cd47fc6273b199",
+      "excerpt": "| REQ-62 — E | Retained filter drain/no new work, separate revocation stop; §§4.3,6,11 | SC-22/24; V0-T04 |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:f4bc4fcfdba7",
+      "section": "13",
+      "line": 925,
+      "sha256": "f4bc4fcfdba7edaef55113e34b342f3346630340aba038010cc9b3066dcb7848",
+      "excerpt": "The discovery decisions/open-question register and repository map supply planning context and source status. This specification resolves v0 questions through the approved mechanism",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:58ff523a34e3",
+      "section": "13",
+      "line": 927,
+      "sha256": "58ff523a34e39be595ead3cb4200b9cf30a529e988a41092d1a03fb59fe264de",
+      "excerpt": "The following additions were explicitly approved on 2026-10-25 after the initial reconciliation. They clarify Kegari's implementation deliverables and qualification, informed by th",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:abb5eefae727",
+      "section": "13",
+      "line": 929,
+      "sha256": "abb5eefae727c9ecf87218bd68028f01efd92d2e44622fa7debdec35cc166ede",
+      "excerpt": "| Added v0 requirement | Normative location and relationship | Acceptance evidence |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:45e6124fc9c3",
+      "section": "13",
+      "line": 931,
+      "sha256": "45e6124fc9c3548d42b0a1bd8636f536d0d329b6900f48f85f3225ab0c3f7c4a",
+      "excerpt": "| V0-H01 | Usable versioned instruction sources, starter workflow and target preparation; §3.6, with installed-asset ownership in §§1.3,3.1,11.7. Elaborates retained REQ-34/45/52 a",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:167d51435cf0",
+      "section": "13",
+      "line": 932,
+      "sha256": "167d51435cf007792729ee8ab02ae94ede16e11ff7b7a0578070ad59312943fa",
+      "excerpt": "| V0-H02 | Actual instruction assembly/discovery, scoped context and version provenance; §7.5. Extends the retained Symphony template/context contract without changing Kegari autho",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:a47d194f9f0e",
+      "section": "13",
+      "line": 933,
+      "sha256": "a47d194f9f0e8727a035f2d1699466bc2ab8f1fd54776a1c222f607706d412b2",
+      "excerpt": "| V0-H03 | Executable task-specific cases, actual-harness trials, grader isolation, explicit criteria, repeated bounded runs, complete reports and regression maintenance; §12.4. Su",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:3fc5bc4e22b5",
+      "section": "13",
+      "line": 935,
+      "sha256": "3fc5bc4e22b57f3c3733068aa20e5667d773addda762cb1f0d8398ed484d501b",
+      "excerpt": "Version 1.2's clarifications were approved on 2026-10-25: workflow command/artifact resolution in §§3.4,7.1 is covered by V0-T01/33; provider-intervention classification and durabl",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:337274e945bb",
+      "section": "13",
+      "line": 937,
+      "sha256": "337274e945bb00b556c3bfe2aa94d1d1c14274afe385efc27baf953fdcfc34e7",
+      "excerpt": "| Symphony provisions | Relationship and v0 resolution |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:77debdfae4c0",
+      "section": "13",
+      "line": 939,
+      "sha256": "77debdfae4c08284a871d9cfcd9d847eab4bb7a98f3c8e9a0e00f9e25ed01d54",
+      "excerpt": "| Normative language; §§1–3 | Adopt orchestration/separation concepts and precise keywords; extend product scope to runtime-enforced delivery workflow, preserve actual operational ",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:ab511a2fb2ad",
+      "section": "13",
+      "line": 940,
+      "sha256": "ab511a2fb2adc960d159780b15dd334870712f500de7b449c310c672b5d4e815",
+      "excerpt": "| §4 | Extend identities/entities to parent/child/account/generation/evidence/release. “Workspace” becomes execution directory. Validated completion suppresses unnecessary dispatch",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:406a176dfc24",
+      "section": "13",
+      "line": 941,
+      "sha256": "406a176dfc247014af89d394e251a29bcbc007b479191b16be4c6c8aeaddb195",
+      "excerpt": "| §§5–6 | Retain typed config, Markdown/YAML workflow, strict rendering, reload/preflight/errors. Explicit per-workspace path replaces cwd default; local host authority and Linear ",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:f64738b45dc7",
+      "section": "13",
+      "line": 942,
+      "sha256": "f64738b45dc702c5e03221b36447799b05c9204036f3b07606a12b8c1687e8c3",
+      "excerpt": "| §§7–8 | Replace issue-only admission, routing-exclusion termination and unconditional success continuation. Parent inclusion, filter drain, revocation stop, bounded typed outcome",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:b0b41e9c6b9c",
+      "section": "13",
+      "line": 943,
+      "sha256": "b0b41e9c6b9ce2993ddc2d5c2c65bd405d90cdeba4f7c950b7730918457f39a5",
+      "excerpt": "| §9 | Retain contained directories, reuse, hooks/timeouts and safe cwd; strengthen actual write/tool isolation and preserve work. Terminal cleanup removed; failed cleanup hook pre",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:ce7f86a2e428",
+      "section": "13",
+      "line": 944,
+      "sha256": "ce7f86a2e42849159582342977f9124303d72f57b07064503ec3eaa563f516ad",
+      "excerpt": "| §10 | Retain app-server startup/streaming/events/timeouts/tool errors; use supported pinned adapter, real steering and strict scopes. Example auto-approval is not mandatory. Sile",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:f87a75ca75e0",
+      "section": "13",
+      "line": 945,
+      "sha256": "f87a75ca75e0a62d6d030662ec36c6b42e02f88ae8f50d2f8907266e77438795",
+      "excerpt": "| §11 | Retain complete normalized/paginated adapter reads/errors. Add required host-brokered Linear/GitHub writes and human decisions rather than leaving business gates to prompts",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:9082b85211a8",
+      "section": "13",
+      "line": 946,
+      "sha256": "9082b85211a8db48e57692175e0552dbd4c155aa31dd86ea520788833d96438d",
+      "excerpt": "| §12 | Retain strict context/template/continuation handling; add role-appropriate parent/child/review context, corrections, profiles, actual instruction discovery and provenance w",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:1b8f560f114d",
+      "section": "13",
+      "line": 947,
+      "sha256": "1b8f560f114d06dd96bb14cfb44101fbfaed4d72ed63a962263368f476052082",
+      "excerpt": "| §§13.1–13.6 | Retain structured logging/status/token accounting; mandatory complete CLI and per-actual-account rate-limit accounting replace optional/minimal status (§§7.4,10.2,1",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:1ee193664e5c",
+      "section": "13",
+      "line": 948,
+      "sha256": "1ee193664e5cdb39845c095d0b054eba14bed9b63138ae50b9fae4592861ec74",
+      "excerpt": "| §13.7 | Do not implement upstream dashboard/JSON extension unchanged. Selected Axum HTTPS JSON control API serves mandatory remote CLI; no browser/frontend/Protobuf dependency (§",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:bdf3e267c2a7",
+      "section": "13",
+      "line": 949,
+      "sha256": "bdf3e267c2a7f51aecd0cc2abe540fef57595aac0b66cc4734357de4372ada08",
+      "excerpt": "| §§14–15 | Retain explicit error classes, operational safety and secret handling; replace in-memory-only recovery/terminal deletion with intent, receipts, fencing and conservative",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:a5359481eda3",
+      "section": "13",
+      "line": 950,
+      "sha256": "a5359481eda33bb6648c3fbbded77ad6ca6176c534ce30cb38cdd6dc59f774a9",
+      "excerpt": "| §16 | Replace reference algorithms coherently with §§4–6,8–11; no hidden fallback to issue-only eligibility, automatic success retry or destructive startup cleanup. |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:b74742638b0b",
+      "section": "13",
+      "line": 951,
+      "sha256": "b74742638b0bd45327c573e689915243e709248e16ad088223cefb2870bda0a8",
+      "excerpt": "| §§17–18 | Adapt parsing/adapter/scheduler/protocol/observability/CLI test expectations and add delivery/authority/recovery scenarios. Kegari also requires evaluations of delivere",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:13:3c0511935e72",
+      "section": "13",
+      "line": 952,
+      "sha256": "3c0511935e727c5b844457ca76928bbbc577aa72ba0879e3a04eaa2923f2d271",
+      "excerpt": "| Appendix A.1–A.3 | Optional SSH remote workers excluded. Remote CLI is a different capability and is retained via HTTPS (§10). |",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:14:7466179c7354",
+      "section": "14",
+      "line": 956,
+      "sha256": "7466179c7354ab7bea212348b60e856c1e29a950b809d559d54607aa6415f622",
+      "excerpt": "The following targeted official documentation informed mechanisms. They establish documented capabilities/constraints, not end-to-end tested compatibility. The later implementation",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:14:37cd2b327396",
+      "section": "14",
+      "line": 958,
+      "sha256": "37cd2b32739690edc39a23b5e25ed293d38c9fb308f793a178547b7ccf7a94e0",
+      "excerpt": "- [Codex app-server](https://learn.chatgpt.com/docs/app-server): initialization, thread/turn lifecycle, steering, review, account/model and rate-limit operations. The installed `0.",
+      "status": "not_assessed",
+      "evidence": []
+    },
+    {
+      "id": "clause:14:c3ad7f4b2cda",
+      "section": "14",
+      "line": 973,
+      "sha256": "c3ad7f4b2cda60b89e5fb3c3d09ae73ce5503aead6213e7d3ee19bfde71f3bc7",
+      "excerpt": "These verification limits are acceptance obligations for the later build, not permission to replace the selected workflow with an easier subset. If an integration cannot meet a req",
+      "status": "not_assessed",
+      "evidence": []
     }
   ],
   "requirements": [

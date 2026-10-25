@@ -11,8 +11,15 @@ Session69517 is closed. The collector verified 23 retained invocations and
 their log/source/tool artifacts, including earlier failures. The two native ignores
 remain incomplete requirements; this deterministic pass is not operational
 qualification or completion of the Goal.
-The core increment is ready for the coordinating agent's exact diff/index
-inspection and local signed-off commit. No later retry source is installed.
+The verified core checkpoint is `6ef65e5efb7303c97c9b85f1df0536fdff8c21b0` —
+`feat(kegari-v0): bind child reviews to bounded round ancestry`. All42 staged
+files and603 tested inputs match the commit, with a clean tree afterward.
+No history was rewritten. Initial automatic review rejected the local commit
+for missing trusted explicit authorization; exact authorization in the
+user-designated objective was reverified and normal automatic re-review approved.
+No bypass/manual gate or remote mutation occurred. Verification:
+`/private/tmp/kegari-v0-review-round-core-commit-verification.json`.
+No later retry source is installed.
 
 Full6 failed405.337s with241 library passes/3 failures, later groups unrun.
 Source7 corrected the obsolete validation-as-review-round assertion; schedule7
@@ -35,14 +42,25 @@ This composition is not installed or compiled. Final independent reviews cover
 the actual cause/bounds/current-successor/grant seams; genuine passed/native
 execution qualification is still absent. Original layers remain preserved.
 
-The contract inventory correction remains held at
-`/private/tmp/kegari-contract-inventory-coverage-overlay`:496 blocks (+133), all
-previous363 entries/136 named requirements/stale entries preserved exactly; every
-new block unassessed. Six TEMP parser/retention tests and TEMP consistency check
-passed. Independent review is ongoing. No repository ledger/input change has
-occurred. Old363-block consistency did not establish complete normative coverage.
-External production observation and paired transient recovery remain separate
-unfinished engineering; live/human blockers do not stop authorized local work.
+The contract inventory correction is now installed and verified:496 blocks,
+including133 newly enumerated unassessed entries. All363 original clause objects,
+136 named requirements and stale entries remain exact. Six repository tests,
+ledger consistency and diff checks pass with unchanged603 Rust inputs. No Cargo
+repeat or product evidence upgrade was needed. Two independent reviews confirm
+all559 in-scope nonstructural lines are indexed once. Historical completeness
+claims are corrected explicitly in the [inventory report](validation/LOCAL-CONTRACT-INVENTORY.md).
+This evidence-tool increment is ready for its separate local commit.
+
+Root's next retry composition is `/private/tmp/kegari-validation-combined-core8-v3`,
+31 files, manifest5df0414b2f0429e171cfb83e091653365acf13853855d4f00e628c5ade906196.
+It adds the reviewed shared65,536-record resource bound, required type reexport,
+and obsolete-comment cleanup; it is formatted but still uninstalled/uncompiled.
+The failed partial v2 TEMP preparation is retained (wrong overlay source path;
+no repository write). A separate changed-source validation successor must keep
+actual granted G ancestry and remaining caps after passed retry/Findings/repair;
+Codex prepares it and Config independently reviews. Carried acceptance and
+external production observations remain unfinished engineering. Required native,
+actual-agent, provider and human qualification remain separate blockers.
 
 The history evidence below applies to committed source10, not these new inputs.
 
@@ -103,7 +121,7 @@ changes were performed. SPEC remains version1.2 with approved SHA
 `80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326`.
 This checkpoint does not establish readiness to coordinate the lasting build.
 
-Next: commit the verified coherent core increment after exact staging checks. Then integrate and validate
+Next: commit the verified inventory correction, then integrate and validate
 validation retry and clean-successor lineage only after their concrete producers,
 consumers and independent findings are resolved. Further engineering includes
 paired transient recovery, external production observations, cold/corrected and

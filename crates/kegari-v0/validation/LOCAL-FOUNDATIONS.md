@@ -46,4 +46,4 @@ Tailscale, ffmpeg and ffprobe were not found on PATH during initial inspection. 
 
 ## Contract inventory
 
-`coverage.json` inventories all normative prose blocks and contract table rows through §12, plus REQ-01–62, SC-01–26, V0-T01–37, V0-E01–08 and V0-H01–03. Every item starts unassessed. Source hashes prevent a changed contract from silently inheriting old evidence. Partial unit coverage will be recorded as partial; the grouped progress ledger remains in `../PROGRESS.md`.
+The initial `coverage.json` selector enumerated363 blocks through §12 and136 named requirements. Its earlier claim to include all normative prose was incorrect: it omitted descriptive mandatory content, required fenced forms and §§13–14. The [inventory correction](LOCAL-CONTRACT-INVENTORY.md) retains every original evidence entry while adding133 unassessed content blocks. Historical consistency checks remain valid for their exact selector; they do not establish complete normative coverage. The grouped progress ledger remains in `../PROGRESS.md`.

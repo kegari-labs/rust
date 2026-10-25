@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "evidence_class": "inventory and evidence-retention mechanics; not product conformance",
+  "observed_at": "2026-10-25T22:36:42.589700+00:00",
+  "python": "3.14.3 (main, Mar  3 2026, 09:44:09) [Clang 17.0.0 (clang-1700.6.4.2)]",
+  "git_head": "6ef65e5efb7303c97c9b85f1df0536fdff8c21b0",
+  "inputs_before": {
+    "tools/contract_inventory.py": "1bbcf9d8c45d9826f4db1ff408561ae8cbd4766c7b1750840afc9d2ca13b1d42",
+    "tools/test_contract_inventory.py": "f0bb892df3fd346626f5dd75419d5eb5b75eb75ba13ab07eda0047afa12fd429",
+    "validation/coverage.json": "d777de49720673f62ac22068bbc2189705ebb0aed8b5c642e73d37c4833cf445",
+    "SPEC.md": "80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326"
+  },
+  "inputs_after": {
+    "tools/contract_inventory.py": "1bbcf9d8c45d9826f4db1ff408561ae8cbd4766c7b1750840afc9d2ca13b1d42",
+    "tools/test_contract_inventory.py": "f0bb892df3fd346626f5dd75419d5eb5b75eb75ba13ab07eda0047afa12fd429",
+    "validation/coverage.json": "d777de49720673f62ac22068bbc2189705ebb0aed8b5c642e73d37c4833cf445",
+    "SPEC.md": "80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326"
+  },
+  "inputs_unchanged": true,
+  "source_digest": "sha256:5e614d0b3417e80dc611d69f5750e7b3610c8cdfeac0b06104e24a8c8e86f3aa",
+  "source_unchanged": true,
+  "preservation": {
+    "all_old_clauses_exact": true,
+    "named_requirements_exact": true,
+    "stale_entries_exact": true,
+    "additions_unassessed": true,
+    "old_count": 363,
+    "new_count": 496,
+    "added_count": 133,
+    "named_count": 136,
+    "unique_ids": true
+  },
+  "checks": [
+    {
+      "command": [
+        "/Users/lgr/.pyenv/versions/3.14.3/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "crates/kegari-v0/tools",
+        "-p",
+        "test_contract_inventory.py",
+        "-v"
+      ],
+      "started_at": "2026-10-25T22:36:42.354523+00:00",
+      "elapsed_seconds": 0.131,
+      "exit_code": 0,
+      "log": "/private/tmp/kegari-v0-contract-inventory-current-1-0.log",
+      "log_sha256": "e516aff9a555c8e08facbb93a58ba1b6257b74e59a72f558fedaa05651225ba4"
+    },
+    {
+      "command": [
+        "/Users/lgr/.pyenv/versions/3.14.3/bin/python3",
+        "crates/kegari-v0/tools/contract_inventory.py",
+        "--check"
+      ],
+      "started_at": "2026-10-25T22:36:42.485634+00:00",
+      "elapsed_seconds": 0.037,
+      "exit_code": 0,
+      "log": "/private/tmp/kegari-v0-contract-inventory-current-1-1.log",
+      "log_sha256": "de843922ff0517de68c07be40f91edfad2f63da24be0a5586d6f429bd7d943fc"
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "started_at": "2026-10-25T22:36:42.522960+00:00",
+      "elapsed_seconds": 0.011,
+      "exit_code": 0,
+      "log": "/private/tmp/kegari-v0-contract-inventory-current-1-2.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "limitation": "Old363 consistency checks remain historical; new133 clauses are unassessed. No Rust tests rerun or evidence statuses upgraded."
+}
