@@ -104,6 +104,25 @@ The API supports the production path without an evaluation-only replacement
 broker. That concrete runtime composition has not yet been exercised; API and
 fixture completion must not be described as end-to-end live validation.
 
+Each live trial also requires the actual scoped worker's opaque
+`WorkerProviderLaunch`. It binds the original admission, complete instructions,
+isolation, permissions, executable and auth home. Evaluation uses the same
+journaled version probe, serialized app-server spawn, owned process registry and
+RPC request gate as ordinary workers. An evaluation lease alone cannot authorize
+an unjournaled subprocess. Cancellation fences the actual operation; unconfirmed
+exit retains its ownership and makes the report interrupted.
+
+Final observations hash the actual candidate files and preserve each check's
+original checked-file digest. A later edit or revision change makes an older
+result unknown for the current candidate. Dirty source cannot be relabeled as
+tested; the host must first establish the next exact validation revision.
+Artifact observations revalidate their exact immutable retained bytes, and a
+missing final observation is recorded as a failure explanation rather than
+silently omitted grading. Fixture execution still cannot mint production evidence.
+An outer suite timeout also fences/cancels the actual admitted operation before
+the dropped trial releases its provider handles. An unconfirmed exit remains
+interrupted with unresolved ownership; handle destruction is not proof of exit.
+
 ## Running permitted deterministic checks
 
 From the Rust workspace:
@@ -120,6 +139,39 @@ production workflow/asset assembly, hidden grader boundaries, finite duration,
 all 56 blocked results when the profile is unresolved, immutable records,
 crash/unknown records and duplicate/lucky-rerun rejection. These commands do not
 start Codex model work and do not need credentials.
+
+## Inspecting and comparing retained reports
+
+The maintainer executable performs local read-only inspection. From the Rust
+workspace, use absolute report-directory paths:
+
+```sh
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo run --locked -p kegari-v0 --bin kegari-v0-evaluation -- plan crates/kegari-v0/evaluations/manifest.json
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo run --locked -p kegari-v0 --bin kegari-v0-evaluation -- inspect /absolute/path/to/reports
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo run --locked -p kegari-v0 --bin kegari-v0-evaluation -- compare /absolute/path/to/baseline /absolute/path/to/candidate
+```
+
+These commands emit one JSON object and never start a trial. Inspection reads
+every declared attempt, marks missing started results interrupted/unknown, and
+lists unstarted attempts as skipped. These reconstructed observations are never
+written into the original archive. Corrupt, mismatched, linked or undeclared
+records produce an explicit error. Reads are bounded to 8 MiB per record and
+256 MiB per archive. New archives have owner-only files and descriptor-relative
+exclusive writes; a replaced directory cannot redirect them. Existing files are
+never overwritten or automatically repaired.
+
+Comparison preserves baseline failures even when a later attempt passes. It
+reports runtime/build/instruction changes, both outcomes, actual versus replayed
+evidence, elapsed time and available usage. Changed fixtures, rubrics, profiles,
+provider versions, actual input, permission configuration, evidence class, tool
+contracts or declared trial conditions are marked
+incomparable. Historical schema-1 provider/grader versions remain inspectable;
+they do not become executable under the current adapter. Comparability describes
+conditions, not an improvement or qualification claim. Unknown usage stays null.
+Missing original results are incomparable and retain the declared grader version;
+unavailable execution build, timing and completion evidence are never inferred
+from the inspecting binary. Successful actual-agent reports require a recorded
+turn, activity and evidence references with ordered durable start/end times.
 
 ## Reports and human review
 

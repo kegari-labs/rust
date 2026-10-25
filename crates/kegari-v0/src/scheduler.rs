@@ -88,6 +88,16 @@ pub struct Scheduler {
     last_workspace: Option<Uuid>,
 }
 impl Scheduler {
+    pub fn replace_limits(&mut self, limits: Limits) -> Result<()> {
+        limits.validate()?;
+        self.limits = limits;
+        Ok(())
+    }
+    /// Refresh removes no longer selected pending work without changing actual
+    /// running allocations or workspace rotation.
+    pub fn retain_pending(&mut self, selected: &BTreeSet<String>) {
+        self.pending.retain(|key, _| selected.contains(key));
+    }
     pub fn new(limits: Limits) -> Result<Self> {
         limits.validate()?;
         Ok(Self {

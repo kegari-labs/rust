@@ -1,5 +1,7 @@
 //! Host composition state. All worker callbacks consume current provider proofs
 //! and actual process registration; worker summaries never establish delivery.
+pub use crate::runtime_actions::{RuntimeAction, WorkerAction};
+pub use crate::runtime_claims::{VerifiedAuthorizedOutcome, VerifiedCoordinationOutcome};
 use crate::{
     app::{ConfigurationControl, RuntimeInspection},
     authority::IssueKey,
@@ -39,10 +41,15 @@ struct State {
     runs: BTreeMap<Uuid, RegisteredRun>,
     prepared_active: BTreeMap<Uuid, crate::observations::ActiveSnapshot>,
     delivery: BTreeMap<IssueKey, ParentDelivery>,
+    delivery_snapshots: BTreeMap<IssueKey, crate::delivery::VerifiedDeliverySnapshot>,
     archived_delivery: BTreeMap<(IssueKey, String), ParentDelivery>,
     explicit_corrections: BTreeMap<Uuid, crate::decisions::VerifiedExplicitCorrection>,
     retry_grants: BTreeMap<Uuid, crate::decisions::VerifiedRetryGrant>,
     retry_errors: BTreeMap<String, Error>,
+    schedule_blockers: BTreeMap<String, Error>,
+    completion_errors: BTreeMap<Uuid, Error>,
+    claim_errors: BTreeMap<Uuid, Error>,
+    delivery_errors: BTreeMap<String, Error>,
     outcomes: DependencyOutcomes,
     history: Vec<HistoryRow>,
     release_details: BTreeMap<IssueKey, Value>,
@@ -51,6 +58,7 @@ struct State {
     resume_proofs: BTreeMap<Uuid, String>,
     correction_inputs: BTreeMap<(Uuid, u64), (String, String)>,
     provider_holds: BTreeMap<Uuid, crate::codex::SessionState>,
+    completions: BTreeMap<Uuid, Arc<RunCompletion>>,
 }
 /// Shared authority and evidence projection for native runtime phases. The
 /// orchestration driver registers exact admitted contracts before launching and
@@ -68,6 +76,262 @@ pub struct RuntimeCoordinator {
     state: Mutex<State>,
 }
 impl RuntimeCoordinator {
+    pub fn invalidate_delivery(&self, parent: &IssueKey, error: Error) -> Result<()> {
+        invalidate_delivery(&self.control, &self.state, parent, error)
+    }
+    /// Read current completed classifier outputs after actual local exit. Other
+    /// roles and stale generations cannot become correction publication tasks.
+    pub fn pending_coordination_outcomes(&self) -> Result<Vec<VerifiedCoordinationOutcome>> {
+        let projection = self.observations.admission_snapshot()?;
+        let control = self.control.snapshot()?;
+        let outcomes = self.dependency_outcomes()?;
+        let mut ready = Vec::new();
+        let mut errors = BTreeMap::new();
+        for receipt in self.control.operations()? {
+            let Some(run) = RunReference::from_receipt(&receipt)? else {
+                continue;
+            };
+            if !run.phase.phase.starts_with("correction_classification_")
+                || receipt.phase != crate::control::ReceiptPhase::Reconciled
+                || receipt
+                    .observed_result
+                    .as_ref()
+                    .and_then(|r| r.get("local_execution"))
+                    .and_then(Value::as_str)
+                    != Some("exited")
+                || control
+                    .active_operations
+                    .iter()
+                    .any(|p| p.work_key == run.phase.work)
+                || control
+                    .unresolved_operations
+                    .values()
+                    .any(|targets| targets.contains(&run.phase.work))
+            {
+                continue;
+            }
+            let Some(workspace) = projection
+                .workspaces
+                .get(&run.workspace)
+                .filter(|w| w.complete)
+            else {
+                continue;
+            };
+            let Some(parent) = workspace
+                .parents
+                .values()
+                .find(|p| p.key.identity().is_ok_and(|k| k == run.phase.work))
+            else {
+                continue;
+            };
+            if parent.corrections.pending_ids().is_empty() {
+                continue;
+            }
+            let observed = (|| {
+                let current = parent.fresh_gate(
+                    None,
+                    GatePurpose::Coordination,
+                    &outcomes,
+                    Utc::now(),
+                    Duration::seconds(30),
+                )?;
+                if canonical_digest(1, &current.work().generation)? != run.phase.generation {
+                    return Ok(vec![]);
+                }
+                self.require_provider_session_clear(&run.account, &run.phase.work)?;
+                let records = PrivateDir::open(
+                    &self
+                        .registration
+                        .root()
+                        .path()
+                        .join("worker-records")
+                        .join(receipt.operation_id.to_string()),
+                )?;
+                let mut claims = Vec::new();
+                for proposal in crate::runtime_claims::proposal_ids(&records, &receipt)? {
+                    let claim = self.coordination_outcome(receipt.operation_id, proposal)?;
+                    if claim.outcome().claim.get("kind").and_then(Value::as_str)
+                        != Some("correction_classification")
+                    {
+                        continue;
+                    }
+                    if claim
+                        .original_authority()
+                        .compare_current(&current, Utc::now(), Duration::seconds(30))
+                        .is_ok()
+                    {
+                        claims.push(claim);
+                    }
+                }
+                Ok(claims)
+            })();
+            match observed {
+                Ok(claims) => ready.extend(claims),
+                Err(error) => {
+                    errors.insert(receipt.operation_id, error);
+                }
+            }
+        }
+        self.state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "claim recovery lock failed"))?
+            .claim_errors = errors;
+        Ok(ready)
+    }
+    /// Replace readiness only with a freshly hydrated provider/artifact snapshot.
+    /// Empty verified snapshots deliberately remove stale cached success.
+    pub fn retain_delivery_snapshot(
+        &self,
+        snapshot: crate::delivery::VerifiedDeliverySnapshot,
+    ) -> Result<()> {
+        let parent = IssueKey::new(
+            &snapshot.work().linear_endpoint,
+            snapshot.work().linear_workspace,
+            snapshot.work().parent,
+        )?;
+        self.control.serialize_observation(|_| {
+            let config = self.configuration.snapshot()?;
+            let projection = self.observations.admission_snapshot()?;
+            let expected = snapshot.authority();
+            self.configuration
+                .authority_fences()?
+                .check_workspace(expected.workspace_id())?;
+            if snapshot.work().child.is_some()
+                || snapshot.work() != expected.work()
+                || expected.config_revision() != config.revision()?
+                || snapshot.observed_at() > Utc::now() + Duration::seconds(5)
+                || Utc::now() - snapshot.observed_at() > Duration::seconds(30)
+            {
+                return Err(Error::new(
+                    "stale_result",
+                    "delivery snapshot is not current parent evidence",
+                ));
+            }
+            let mut state = self.state.lock().map_err(|_| {
+                Error::new("runtime_unavailable", "delivery proof cache lock failed")
+            })?;
+            let (_, outcomes) = effective_evidence(
+                &state,
+                &projection,
+                &config.revision()?,
+                &self.configuration.authority_fences()?,
+            );
+            let current = projection
+                .parent(expected.workspace_id(), snapshot.work().parent)?
+                .fresh_gate(
+                    None,
+                    expected.purpose(),
+                    &outcomes,
+                    Utc::now(),
+                    Duration::seconds(30),
+                )?;
+            expected.compare_current(&current, Utc::now(), Duration::seconds(30))?;
+            state.delivery_errors.remove(&parent.identity()?);
+            state.delivery_snapshots.insert(parent, snapshot);
+            // A replaced, missing or stale provider generation cannot continue
+            // satisfying another parent's dependencies through an old cache.
+            state.delivery_snapshots.retain(|_, proof| {
+                projection
+                    .workspaces
+                    .get(&proof.authority().workspace_id())
+                    .filter(|workspace| workspace.complete)
+                    .and_then(|workspace| workspace.parents.get(&proof.work().parent))
+                    .is_some_and(|parent| parent.work.as_ref() == Some(proof.work()))
+                    && proof.authority().config_revision() == projection.config_revision
+                    && Utc::now() - proof.observed_at() <= Duration::seconds(30)
+            });
+            let mut delivery = BTreeMap::new();
+            let mut outcomes = DependencyOutcomes::default();
+            for (parent, proof) in &state.delivery_snapshots {
+                delivery.insert(parent.clone(), proof.parent_delivery().clone());
+                outcomes.merge(proof.outcomes());
+            }
+            state.delivery = delivery;
+            state.outcomes = outcomes;
+            Ok(())
+        })
+    }
+    pub fn authorized_outcome(
+        &self,
+        operation: Uuid,
+        proposal: Uuid,
+    ) -> Result<VerifiedAuthorizedOutcome> {
+        let admission = self.control.operation(operation)?;
+        let records = PrivateDir::open(
+            &self
+                .registration
+                .root()
+                .path()
+                .join("worker-records")
+                .join(operation.to_string()),
+        )?;
+        crate::runtime_claims::recover_authorized(
+            &self.services.key,
+            &self.claims,
+            &records,
+            self.runtime_id,
+            admission,
+            proposal,
+        )
+    }
+    pub fn ready_actions(&self) -> Result<Vec<RuntimeAction>> {
+        let config = self.configuration.snapshot()?;
+        let projection = self.observations.admission_snapshot()?;
+        self.refresh_retry_references(&projection)?;
+        let (outcomes, delivery, grants) = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| Error::new("runtime_unavailable", "action projection lock failed"))?;
+            let (delivery, outcomes) = effective_evidence(
+                &state,
+                &projection,
+                &config.revision()?,
+                &self.configuration.authority_fences()?,
+            );
+            (outcomes, delivery, state.retry_grants.clone())
+        };
+        let selected = crate::runtime_actions::select(
+            crate::runtime_actions::SelectionInput {
+                config: &config,
+                projection: &projection,
+                outcomes: &outcomes,
+                delivery: &delivery,
+                grants: &grants,
+            },
+            |phase, workspace, account| self.next_attempt(phase, workspace, account),
+        )?;
+        self.state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "action projection lock failed"))?
+            .schedule_blockers = selected.blockers;
+        Ok(selected.actions)
+    }
+    /// Recover host-recorded provenance without adopting a worker's completion
+    /// claim as workflow success or granting a fresh mutation permit.
+    pub fn coordination_outcome(
+        &self,
+        operation: Uuid,
+        proposal: Uuid,
+    ) -> Result<VerifiedCoordinationOutcome> {
+        let admission = self.control.operation(operation)?;
+        let records = PrivateDir::open(
+            &self
+                .registration
+                .root()
+                .path()
+                .join("worker-records")
+                .join(operation.to_string()),
+        )?;
+        crate::runtime_claims::recover_coordination(
+            &self.services.key,
+            &self.claims,
+            &records,
+            self.runtime_id,
+            admission,
+            proposal,
+        )
+    }
     pub fn new(services: RuntimeDependencies) -> Result<Arc<Self>> {
         let config = services.configuration.snapshot()?;
         if services.control.snapshot()?.intent.runtime_id != config.runtime.id
@@ -239,22 +503,36 @@ impl RuntimeCoordinator {
     /// Cache-only accessors are also used inside the serialized decision gate.
     /// They must never reacquire ControlHost or perform provider reads.
     pub fn current_delivery(&self, parent: &IssueKey) -> Result<ParentDelivery> {
-        Ok(self
+        let projection = self.observations.admission_snapshot()?;
+        let revision = self.configuration.snapshot()?.revision()?;
+        let state = self
             .state
             .lock()
-            .map_err(|_| Error::new("runtime_unavailable", "evidence cache lock failed"))?
-            .delivery
-            .get(parent)
-            .cloned()
-            .unwrap_or_default())
+            .map_err(|_| Error::new("runtime_unavailable", "evidence cache lock failed"))?;
+        Ok(effective_evidence(
+            &state,
+            &projection,
+            &revision,
+            &self.configuration.authority_fences()?,
+        )
+        .0
+        .remove(parent)
+        .unwrap_or_default())
     }
     pub fn dependency_outcomes(&self) -> Result<DependencyOutcomes> {
-        Ok(self
+        let projection = self.observations.admission_snapshot()?;
+        let revision = self.configuration.snapshot()?.revision()?;
+        let state = self
             .state
             .lock()
-            .map_err(|_| Error::new("runtime_unavailable", "dependency cache lock failed"))?
-            .outcomes
-            .clone())
+            .map_err(|_| Error::new("runtime_unavailable", "dependency cache lock failed"))?;
+        Ok(effective_evidence(
+            &state,
+            &projection,
+            &revision,
+            &self.configuration.authority_fences()?,
+        )
+        .1)
     }
     pub(crate) fn retain_acceptance(
         &self,
@@ -271,13 +549,94 @@ impl RuntimeCoordinator {
                 "acceptance differs from its parent/runtime",
             ));
         }
-        self.state
+        let projection = self.observations.admission_snapshot()?;
+        let revision = self.configuration.snapshot()?.revision()?;
+        let fences = self.configuration.authority_fences()?;
+        let mut state = self
+            .state
             .lock()
-            .map_err(|_| Error::new("runtime_unavailable", "acceptance cache lock failed"))?
-            .delivery
-            .get_mut(parent)
-            .ok_or_else(|| Error::new("evidence_missing", "parent evidence has not been hydrated"))?
-            .acceptance(acceptance)?;
+            .map_err(|_| Error::new("runtime_unavailable", "acceptance cache lock failed"))?;
+        let proof = state.delivery_snapshots.get_mut(parent).ok_or_else(|| {
+            Error::new(
+                "evidence_missing",
+                "parent evidence has not been freshly hydrated",
+            )
+        })?;
+        if !evidence_projection_current(
+            proof.authority(),
+            proof.observed_at(),
+            &projection,
+            &revision,
+            &fences,
+            Utc::now(),
+        ) {
+            return Err(Error::new(
+                "stale_result",
+                "acceptance cannot update a stale or permission-fenced evidence snapshot",
+            ));
+        }
+        // This records a verified decision against the existing evidence token;
+        // it never refreshes the provider observation's age.
+        proof.acceptance(acceptance)?;
+        let delivery = proof.parent_delivery().clone();
+        state.delivery.insert(parent.clone(), delivery);
+        drop(state);
+        self.services.wake.notify_one();
+        Ok(())
+    }
+    /// Attach freshly verified read-only release readiness to the same current
+    /// parent snapshot. This grants no dispatch authority and cannot renew the
+    /// snapshot's provider observation time.
+    pub(crate) fn retain_release_eligibility(
+        &self,
+        parent: &IssueKey,
+        eligibility: crate::release::VerifiedReleaseEligibility,
+    ) -> Result<()> {
+        let projection = self.observations.admission_snapshot()?;
+        let revision = self.configuration.snapshot()?.revision()?;
+        let fences = self.configuration.authority_fences()?;
+        let now = Utc::now();
+        if eligibility.checked_at() > now + Duration::seconds(5)
+            || now - eligibility.checked_at() > Duration::seconds(30)
+        {
+            return Err(Error::new(
+                "stale_result",
+                "release eligibility observation expired",
+            ));
+        }
+        let mut state = self.state.lock().map_err(|_| {
+            Error::new(
+                "runtime_unavailable",
+                "release eligibility cache lock failed",
+            )
+        })?;
+        let snapshot = state.delivery_snapshots.get_mut(parent).ok_or_else(|| {
+            Error::new(
+                "evidence_missing",
+                "release readiness needs the freshly hydrated parent snapshot",
+            )
+        })?;
+        let work = snapshot.work();
+        if work.child.is_some()
+            || IssueKey::new(&work.linear_endpoint, work.linear_workspace, work.parent)? != *parent
+            || !evidence_projection_current(
+                snapshot.authority(),
+                snapshot.observed_at(),
+                &projection,
+                &revision,
+                &fences,
+                now,
+            )
+        {
+            return Err(Error::new(
+                "stale_result",
+                "release readiness cannot update stale or permission-fenced evidence",
+            ));
+        }
+        snapshot.release(eligibility)?;
+        let delivery = snapshot.parent_delivery().clone();
+        state.delivery.insert(parent.clone(), delivery);
+        drop(state);
         self.services.wake.notify_one();
         Ok(())
     }
@@ -308,6 +667,12 @@ impl RuntimeCoordinator {
             return Ok(());
         }
         let parent = correction.record().parent.clone();
+        state.delivery_snapshots.remove(&parent);
+        let mut outcomes = DependencyOutcomes::default();
+        for proof in state.delivery_snapshots.values() {
+            outcomes.merge(proof.outcomes());
+        }
+        state.outcomes = outcomes;
         if let Some(prior) = state.delivery.remove(&parent) {
             let mut remaining = ParentDelivery::default();
             for child in prior.verified_children().values() {
@@ -538,6 +903,47 @@ impl RuntimeCoordinator {
             Ok(())
         })
     }
+    /// Advisory preflight before preparing an owned directory. It writes no
+    /// receipt and reserves no capacity; `admit_worker` still performs the final
+    /// serialized check against current authority and every admitted session.
+    pub fn check_worker_capacity(
+        &self,
+        workspace: Uuid,
+        account: &str,
+        phase: &crate::scheduler::PhaseKey,
+        normalized_state: &str,
+    ) -> Result<()> {
+        if phase.work.is_empty() || phase.phase.is_empty() {
+            return Err(Error::invalid(
+                "capacity preflight requires a canonical work phase",
+            ));
+        }
+        crate::evidence::validate_digest(&phase.generation)?;
+        self.configuration
+            .authority_fences()?
+            .check_workspace(workspace)?;
+        self.require_provider_session_clear(account, &phase.work)?;
+        let config = self.configuration.snapshot()?;
+        let active =
+            crate::runtime_schedule::occupying_runs(self.runtime_id, &self.control.operations()?)?;
+        let quota = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "quota state lock failed"))?
+            .quotas
+            .get(account)
+            .cloned();
+        crate::runtime_schedule::check_capacity(
+            &config,
+            &active,
+            crate::runtime_schedule::CapacityRequest {
+                workspace,
+                account,
+                normalized_state,
+            },
+            quota.as_ref(),
+        )
+    }
     pub fn admit_worker(
         &self,
         lease: &Lease,
@@ -563,10 +969,10 @@ impl RuntimeCoordinator {
         let active = self
             .observations
             .capture_active(workspace, revision, workflow)?;
-        let permit = self.control.admit_run_observed(lease, input, |snapshot| {
+        let permit = self.control.admit_run_observed(lease, input, |_snapshot| {
             self.registration.verify_active_owner(lease)?;
             self.require_provider_session_clear(&reference.account, &reference.phase.work)?;
-            self.current_authority(contract.authority())?;
+            self.current_admission_authority(contract.authority())?;
             let config = self.configuration.snapshot()?;
             let projection = self.observations.admission_snapshot()?;
             if let WorkerAuthority::Authorized(gate) = contract.authority() {
@@ -652,16 +1058,10 @@ impl RuntimeCoordinator {
                     "worker state changed before capacity reservation",
                 ));
             }
-            let active = snapshot
-                .active_operations
-                .iter()
-                .map(|permit| {
-                    RunReference::from_receipt(&self.control.operation(permit.operation_id)?)
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
+            let active = crate::runtime_schedule::occupying_runs(
+                self.runtime_id,
+                &self.control.operations()?,
+            )?;
             let quota = self
                 .state
                 .lock()
@@ -771,8 +1171,9 @@ impl RuntimeCoordinator {
         Ok(())
     }
     /// Join only finished tasks; never hold state/control locks over worker waits.
-    /// Returned checks remain sealed local observations, not child completion.
-    pub async fn collect_finished(&self) -> Result<Vec<RunCompletion>> {
+    /// Retains the actual sealed check handles before returning shared immutable
+    /// observations to the driver. No JSON roundtrip can recover these proofs.
+    pub async fn collect_finished(&self) -> Result<Vec<Arc<RunCompletion>>> {
         let finished = {
             let mut workers = self
                 .workers
@@ -793,9 +1194,7 @@ impl RuntimeCoordinator {
             match run.join().await {
                 Ok(completion) => {
                     let observed = completion.observation();
-                    if completion.local_exit_confirmed {
-                        self.control.retire_local(id, observed.clone())?;
-                    }
+                    let completion = Arc::new(completion);
                     let mut state = self.state.lock().map_err(|_| {
                         Error::new("runtime_unavailable", "worker state lock failed")
                     })?;
@@ -805,10 +1204,40 @@ impl RuntimeCoordinator {
                             "joined worker registration disappeared",
                         )
                     })?;
-                    tracked.last_observation = Some(observed);
+                    tracked.last_observation = Some(observed.clone());
                     tracked.joined = true;
+                    state.completions.insert(id, completion.clone());
+                    drop(state);
+                    // Persist/retain the actual joined capabilities first. A
+                    // failed receipt retirement must not drop this result or
+                    // prevent collection of other already finished workers.
                     if completion.local_exit_confirmed {
-                        tracked._active = None;
+                        let retired = self.control.retire_local(id, observed);
+                        let mut state = self.state.lock().map_err(|_| {
+                            Error::new("runtime_unavailable", "worker state lock failed")
+                        })?;
+                        match retired {
+                            Ok(_) => {
+                                if let Some(tracked) = state.runs.get_mut(&id) {
+                                    tracked._active = None;
+                                }
+                            }
+                            Err(error) => {
+                                state.completion_errors.insert(id, error);
+                            }
+                        }
+                    } else if let Err(error) = self
+                        .control
+                        .fence(id)
+                        .and_then(|()| self.executions.cancel_fenced(&self.control, id).map(|_| ()))
+                    {
+                        self.state
+                            .lock()
+                            .map_err(|_| {
+                                Error::new("runtime_unavailable", "completion error lock failed")
+                            })?
+                            .completion_errors
+                            .insert(id, error);
                     }
                     completed.push(completion);
                 }
@@ -828,13 +1257,37 @@ impl RuntimeCoordinator {
                         json!({"outcome":"uncertain","error":error,"joined":true,"local_exit_confirmed":false}),
                     );
                     tracked.joined = true;
+                    drop(state);
+                    if let Err(error) = self
+                        .control
+                        .fence(id)
+                        .and_then(|()| self.executions.cancel_fenced(&self.control, id).map(|_| ()))
+                    {
+                        self.state
+                            .lock()
+                            .map_err(|_| {
+                                Error::new("runtime_unavailable", "completion error lock failed")
+                            })?
+                            .completion_errors
+                            .insert(id, error);
+                    }
                 }
             }
         }
         Ok(completed)
     }
-    /// Re-observe handles after cancellation/timeout. A previously reported
-    /// uncertain task stays blocked until every actual registered handle exits.
+    pub fn retained_completion(&self, operation: Uuid) -> Result<Option<Arc<RunCompletion>>> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "completion proof lock failed"))?
+            .completions
+            .get(&operation)
+            .cloned())
+    }
+    /// Retry receipt retirement only when the actual joined adapter confirmed
+    /// complete local exit. Empty registries or group-only observations cannot
+    /// upgrade an uncertain completion into descendant-exit proof.
     pub fn observe_local_exits(&self) -> Result<()> {
         let candidates: Vec<_> = self
             .state
@@ -846,6 +1299,12 @@ impl RuntimeCoordinator {
             .map(|(id, run)| (*id, run.last_observation.clone()))
             .collect();
         for (id, observation) in candidates {
+            if self
+                .retained_completion(id)?
+                .is_none_or(|result| !result.local_exit_confirmed)
+            {
+                continue;
+            }
             self.executions.observe_exited(id)?;
             if self.executions.active_operations()?.contains(&id) {
                 continue;
@@ -859,7 +1318,9 @@ impl RuntimeCoordinator {
             {
                 self.control.retire_local(
                     id,
-                    json!({"owned_handles":"observed_exited","prior":observation}),
+                    observation.ok_or_else(|| {
+                        Error::new("record_corrupt", "joined completion observation is missing")
+                    })?,
                 )?;
                 if let Some(run) = self
                     .state
@@ -874,15 +1335,31 @@ impl RuntimeCoordinator {
         }
         Ok(())
     }
+    /// New sessions never inherit another operation's permission to drain.
+    /// Callers must supply a new-operation or coordination authority and the
+    /// complete current selection is checked again at serialized admission.
+    fn current_admission_authority(&self, expected: &WorkerAuthority) -> Result<WorkerAuthority> {
+        let config = self.configuration.snapshot()?;
+        let workspace = match expected {
+            WorkerAuthority::Authorized(g) => g.workspace_id(),
+            WorkerAuthority::Independent(g) => g.workspace_id(),
+        };
+        self.configuration
+            .authority_fences()?
+            .check_workspace(workspace)?;
+        let projection = self.observations.admission_snapshot()?;
+        if projection.config_revision != config.revision()? {
+            return Err(Error::new(
+                "stale_config",
+                "provider observation predates current configuration",
+            ));
+        }
+        fresh_admission_authority(expected, &projection, &self.dependency_outcomes()?)
+    }
     pub(crate) fn retained_authority(&self, expected: &WorkerAuthority) -> Result<WorkerAuthority> {
         match expected {
             WorkerAuthority::Authorized(gate) => {
-                let outcomes = self
-                    .state
-                    .lock()
-                    .map_err(|_| Error::new("runtime_unavailable", "dependency proof lock failed"))?
-                    .outcomes
-                    .clone();
+                let outcomes = self.dependency_outcomes()?;
                 self.observations
                     .active_gate(gate, &outcomes)
                     .map(WorkerAuthority::Authorized)
@@ -895,6 +1372,7 @@ impl RuntimeCoordinator {
     }
     pub fn inspection(&self) -> Result<RuntimeInspection> {
         let projection = self.observations.snapshot()?;
+        let revision = self.configuration.snapshot()?.revision()?;
         let active = self
             .control
             .snapshot()?
@@ -926,10 +1404,16 @@ impl RuntimeCoordinator {
                 WorkerAuthority::Independent(_) => None,
             })
             .collect();
+        let (delivery, outcomes) = effective_evidence(
+            &state,
+            &projection,
+            &revision,
+            &self.configuration.authority_fences()?,
+        );
         Ok(RuntimeInspection {
             projection,
-            delivery: state.delivery.clone(),
-            outcomes: state.outcomes.clone(),
+            delivery,
+            outcomes,
             activities,
             history: state.history.clone(),
             release_details: state.release_details.clone(),
@@ -942,12 +1426,33 @@ impl RuntimeCoordinator {
             .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
         let holds=state.provider_holds.iter().map(|(id,session)| json!({"operation_id":id,"account":session.binding.account_id,"work":session.binding.work_identity,"intervention":session.intervention,"input_required":session.input_required})).collect::<Vec<_>>();
         Ok(
-            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors}),
+            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"delivery":state.delivery_errors}),
         )
     }
     pub fn execution_registry(&self) -> Arc<ExecutionRegistry> {
         self.executions.clone()
     }
+}
+
+/// Failed provider reads revoke readiness in the same order as admission and
+/// successful hydration. Otherwise a final gate could inspect the old cache
+/// and commit admission after a concurrent invalidation was already published.
+fn invalidate_delivery(
+    control: &ControlHost,
+    state: &Mutex<State>,
+    parent: &IssueKey,
+    error: Error,
+) -> Result<()> {
+    let identity = parent.identity()?;
+    control.serialize_observation(|_| {
+        let mut state = state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "delivery proof cache lock failed"))?;
+        state.delivery_snapshots.remove(parent);
+        state.delivery.remove(parent);
+        state.delivery_errors.insert(identity, error);
+        Ok(())
+    })
 }
 impl OutcomeSink for RuntimeCoordinator {
     fn record(&self, outcome: &WorkerOutcome) -> Result<String> {
@@ -1022,8 +1527,12 @@ impl OutcomeSink for RuntimeCoordinator {
                 }
                 _ => {}
             }
-            let payload = serde_json::to_value(outcome)
-                .map_err(|_| Error::invalid("pending worker claim encoding failed"))?;
+            let authority = match run.contract.authority() {
+                WorkerAuthority::Authorized(gate) => serde_json::to_value(gate),
+                WorkerAuthority::Independent(gate) => serde_json::to_value(gate),
+            }
+            .map_err(|_| Error::invalid("pending worker authority encoding failed"))?;
+            let payload = json!({"schema_version":1,"outcome":outcome,"authority":authority});
             let signed = self.services.key.sign("pending_worker_claim", &payload)?;
             let bytes = serde_json::to_vec(&signed)
                 .map_err(|_| Error::invalid("pending worker claim encoding failed"))?;
@@ -1157,58 +1666,7 @@ impl WorkerHost for RuntimeCoordinator {
         if registered {
             return self.retained_authority(expected);
         }
-        let config = self.configuration.snapshot()?;
-        let workspace = match expected {
-            WorkerAuthority::Authorized(g) => g.workspace_id(),
-            WorkerAuthority::Independent(g) => g.workspace_id(),
-        };
-        self.configuration
-            .authority_fences()?
-            .check_workspace(workspace)?;
-        let projection = self.observations.admission_snapshot()?;
-        if projection.config_revision != config.revision()? {
-            return Err(Error::new(
-                "stale_config",
-                "provider observation predates current configuration",
-            ));
-        }
-        match expected {
-            WorkerAuthority::Authorized(g) => {
-                let outcomes = self
-                    .state
-                    .lock()
-                    .map_err(|_| Error::new("runtime_unavailable", "dependency proof lock failed"))?
-                    .outcomes
-                    .clone();
-                let purpose = if g.purpose() == GatePurpose::Coordination {
-                    GatePurpose::Coordination
-                } else {
-                    GatePurpose::DrainExisting
-                };
-                let current = projection
-                    .parent(g.workspace_id(), g.work().parent)?
-                    .fresh_gate(
-                        g.work().child,
-                        purpose,
-                        &outcomes,
-                        Utc::now(),
-                        Duration::seconds(30),
-                    )?;
-                g.compare_current(&current, Utc::now(), Duration::seconds(30))?;
-                Ok(WorkerAuthority::Authorized(current))
-            }
-            WorkerAuthority::Independent(g) => {
-                let current = projection.independent_gate(
-                    g.workspace_id(),
-                    g.repository_id(),
-                    g.pull_request().number,
-                    Utc::now(),
-                    Duration::seconds(30),
-                )?;
-                g.compare_current(&current, Utc::now(), Duration::seconds(30))?;
-                Ok(WorkerAuthority::Independent(current))
-            }
-        }
+        self.current_admission_authority(expected)
     }
     fn verify_owner(&self, lease: &Lease) -> Result<()> {
         self.registration.verify_active_owner(lease)
@@ -1224,11 +1682,10 @@ impl WorkerHost for RuntimeCoordinator {
                 "account rate observation exceeds 64KiB",
             ));
         }
-        let mut state = self
+        let account = self
             .state
             .lock()
-            .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
-        let account = state
+            .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?
             .runs
             .get(&operation)
             .ok_or_else(|| {
@@ -1240,12 +1697,7 @@ impl WorkerHost for RuntimeCoordinator {
             .contract
             .account_id()
             .to_owned();
-        let quota = observed_quota(observed, Utc::now());
-        state.quotas.insert(account.clone(), quota);
-        state
-            .rate_observations
-            .insert(account, json!({"observed_at":Utc::now(),"limits":observed}));
-        Ok(())
+        record_account_limits(&self.control, &self.state, &account, observed)
     }
     fn reconcile_prior(&self, operation: Uuid, prior: Option<&Value>) -> Result<()> {
         let state = self
@@ -1291,6 +1743,8 @@ impl WorkerHost for RuntimeCoordinator {
         Ok(reference.clone())
     }
     fn observed_state(&self, operation: Uuid) -> Result<Value> {
+        let projection = self.observations.admission_snapshot()?;
+        let revision = self.configuration.snapshot()?.revision()?;
         let state = self
             .state
             .lock()
@@ -1301,9 +1755,15 @@ impl WorkerHost for RuntimeCoordinator {
                 "state request has no registered worker",
             )
         })?;
+        let (delivery, _) = effective_evidence(
+            &state,
+            &projection,
+            &revision,
+            &self.configuration.authority_fences()?,
+        );
         let evidence = if let Some(work) = run.contract.authority().work() {
             let parent = IssueKey::new(&work.linear_endpoint, work.linear_workspace, work.parent)?;
-            state.delivery.get(&parent).and_then(|delivery|work.child.and_then(|child|delivery.verified_children().get(&child))).filter(|proof|&proof.evidence().work==work).map(|proof|json!({"verified":true,"digest":proof.digest(),"evidence":proof.evidence()}))
+            delivery.get(&parent).and_then(|delivery|work.child.and_then(|child|delivery.verified_children().get(&child))).filter(|proof|&proof.evidence().work==work).map(|proof|json!({"verified":true,"digest":proof.digest(),"evidence":proof.evidence()}))
         } else {
             None
         };
@@ -1311,6 +1771,141 @@ impl WorkerHost for RuntimeCoordinator {
             json!({"operation_id":operation,"phase":run.budget.phase.phase,"attempt":run.budget.attempt,"attempt_bound":run.budget.max_attempts,"completed":evidence.is_some(),"evidence":evidence,"last_observation":run.last_observation}),
         )
     }
+}
+fn evidence_projection_current(
+    gate: &crate::reconcile::FreshGate,
+    observed_at: chrono::DateTime<Utc>,
+    projection: &crate::reconcile::RuntimeProjection,
+    revision: &str,
+    fences: &crate::configuration::AuthorityFences,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    if fences.check_workspace(gate.workspace_id()).is_err()
+        || projection.config_revision != revision
+        || gate.config_revision() != revision
+        || observed_at > now + Duration::seconds(5)
+        || now - observed_at > Duration::seconds(30)
+    {
+        return false;
+    }
+    projection
+        .workspaces
+        .get(&gate.workspace_id())
+        .filter(|w| w.complete)
+        .and_then(|w| w.parents.get(&gate.work().parent))
+        .is_some_and(|parent| {
+            parent.work.as_ref() == Some(gate.work())
+                && parent.authorization_published
+                && parent.source_digest == gate.sources_digest()
+                && parent.required_children == *gate.required_children()
+                && parent
+                    .corrections
+                    .gates_current(gate.correction_watermark())
+                && parent.blockers.iter().all(|b| b.code == "excluded")
+                && parent.observed_at <= now + Duration::seconds(5)
+                && now - parent.observed_at <= Duration::seconds(30)
+        })
+}
+fn effective_evidence(
+    state: &State,
+    projection: &crate::reconcile::RuntimeProjection,
+    revision: &str,
+    fences: &crate::configuration::AuthorityFences,
+) -> (BTreeMap<IssueKey, ParentDelivery>, DependencyOutcomes) {
+    let mut delivery = BTreeMap::new();
+    let mut outcomes = DependencyOutcomes::default();
+    let now = Utc::now();
+    for (parent, proof) in &state.delivery_snapshots {
+        if evidence_projection_current(
+            proof.authority(),
+            proof.observed_at(),
+            projection,
+            revision,
+            fences,
+            now,
+        ) {
+            delivery.insert(parent.clone(), proof.parent_delivery().clone());
+            outcomes.merge(proof.outcomes());
+        }
+    }
+    (delivery, outcomes)
+}
+fn fresh_admission_authority(
+    expected: &WorkerAuthority,
+    projection: &crate::reconcile::RuntimeProjection,
+    outcomes: &DependencyOutcomes,
+) -> Result<WorkerAuthority> {
+    let workspace = match expected {
+        WorkerAuthority::Authorized(gate) => gate.workspace_id(),
+        WorkerAuthority::Independent(gate) => gate.workspace_id(),
+    };
+    if !projection
+        .workspaces
+        .get(&workspace)
+        .is_some_and(|w| w.complete)
+    {
+        return Err(Error::new(
+            "incomplete_snapshot",
+            "new admission requires a complete selected workspace observation",
+        ));
+    }
+    match expected {
+        WorkerAuthority::Authorized(gate) => {
+            if gate.purpose() == GatePurpose::DrainExisting {
+                return Err(Error::new(
+                    "scope_violation",
+                    "a draining operation cannot authorize a new session",
+                ));
+            }
+            let parent = projection.parent(gate.workspace_id(), gate.work().parent)?;
+            if !parent.included {
+                return Err(Error::new(
+                    "excluded",
+                    "parent no longer matches selection for a new session",
+                ));
+            }
+            let current = parent.fresh_gate(
+                gate.work().child,
+                gate.purpose(),
+                outcomes,
+                Utc::now(),
+                Duration::seconds(30),
+            )?;
+            gate.compare_current(&current, Utc::now(), Duration::seconds(30))?;
+            Ok(WorkerAuthority::Authorized(current))
+        }
+        WorkerAuthority::Independent(gate) => {
+            let current = projection.independent_gate(
+                gate.workspace_id(),
+                gate.repository_id(),
+                gate.pull_request().number,
+                Utc::now(),
+                Duration::seconds(30),
+            )?;
+            gate.compare_current(&current, Utc::now(), Duration::seconds(30))?;
+            Ok(WorkerAuthority::Independent(current))
+        }
+    }
+}
+fn record_account_limits(
+    control: &ControlHost,
+    state: &Mutex<State>,
+    account: &str,
+    observed: &Value,
+) -> Result<()> {
+    control.serialize_observation(|_| {
+        let mut state = state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
+        state
+            .quotas
+            .insert(account.into(), observed_quota(observed, Utc::now()));
+        state.rate_observations.insert(
+            account.into(),
+            json!({"observed_at":Utc::now(),"limits":observed}),
+        );
+        Ok(())
+    })
 }
 fn observed_quota(value: &Value, now: chrono::DateTime<Utc>) -> Quota {
     let limits = value
@@ -1365,6 +1960,325 @@ fn observed_quota(value: &Value, now: chrono::DateTime<Utc>) -> Quota {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn admission_host() -> (tempfile::TempDir, Arc<ControlHost>, Lease) {
+        // This fixture exercises actual serialized admission and durable
+        // receipts, without claiming native orchestration/process ownership.
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = Uuid::from_u128(1);
+        let host = Arc::new(
+            ControlHost::setup(
+                PrivateDir::create(&temp.path().canonicalize().unwrap().join("control")).unwrap(),
+                runtime,
+                Uuid::new_v4(),
+            )
+            .unwrap(),
+        );
+        host.lifecycle(
+            crate::control::MutationRequest {
+                request_id: Uuid::new_v4(),
+                runtime_id: runtime,
+                actor: crate::control::Actor {
+                    identity: "fixture".into(),
+                    principal: None,
+                    roles: ["lifecycle".into()].into(),
+                },
+                kind: "lifecycle".into(),
+                canonical_targets: vec![runtime.to_string()],
+                expected: BTreeMap::new(),
+                payload: Value::Null,
+            },
+            crate::control::Lifecycle::Start,
+            0,
+        )
+        .unwrap();
+        let lease = Lease {
+            runtime_id: runtime,
+            owner_generation: 1,
+            owner_id: Uuid::new_v4(),
+        };
+        host.attach_reconciled(lease.clone()).unwrap();
+        (temp, host, lease)
+    }
+    #[test]
+    fn filter_exclusion_drains_only_existing_admission_and_never_creates_another() {
+        let (_temp, host, lease) = admission_host();
+        let (mut projection, coordination) = cache_projection_fixture();
+        let outcomes = DependencyOutcomes::default();
+        let original = projection
+            .parent(coordination.workspace_id(), coordination.work().parent)
+            .unwrap()
+            .fresh_gate(
+                None,
+                GatePurpose::NewOperation,
+                &outcomes,
+                Utc::now(),
+                Duration::seconds(30),
+            )
+            .unwrap();
+        let authority = WorkerAuthority::Authorized(original.clone());
+        let scope = canonical_digest(1, &"fixture scope").unwrap();
+        let admitted = host
+            .admit_observed(
+                &lease,
+                Uuid::new_v4(),
+                authority.work_key().unwrap(),
+                scope.clone(),
+                |_| fresh_admission_authority(&authority, &projection, &outcomes).map(|_| ()),
+            )
+            .unwrap();
+        let parent = projection
+            .workspaces
+            .get_mut(&original.workspace_id())
+            .unwrap()
+            .parents
+            .get_mut(&original.work().parent)
+            .unwrap();
+        parent.included = false;
+        parent.blockers.push(crate::reconcile::Blocker {
+            code: "excluded".into(),
+            reason: "actual parent selector changed".into(),
+            affected: parent.key.clone(),
+            impacted_gates: vec!["admission".into()],
+            last_verified_evidence: None,
+            attempted_recovery: "fresh provider read".into(),
+            next_action: "preserve current work and drain".into(),
+            prerequisite: None,
+        });
+        // The config and work generation did not change, and the existing
+        // admitted operation still has its legitimate bounded drain path.
+        host.validate_permit(&admitted, || {
+            parent
+                .retain_active_gate(&original, &outcomes, Utc::now(), Duration::seconds(30))
+                .map(|_| ())
+        })
+        .unwrap();
+        host.retire_local(
+            admitted.operation_id,
+            json!({"fixture":"no subprocess launched"}),
+        )
+        .unwrap();
+        for expected in [authority, WorkerAuthority::Authorized(coordination)] {
+            let request = Uuid::new_v4();
+            let error = host
+                .admit_observed(
+                    &lease,
+                    request,
+                    expected.work_key().unwrap(),
+                    scope.clone(),
+                    |_| fresh_admission_authority(&expected, &projection, &outcomes).map(|_| ()),
+                )
+                .unwrap_err();
+            assert_eq!(error.code, "excluded");
+            assert_eq!(host.operation(request).unwrap_err().code, "record_missing");
+        }
+        let draining = projection
+            .parent(original.workspace_id(), original.work().parent)
+            .unwrap()
+            .fresh_gate(
+                None,
+                GatePurpose::DrainExisting,
+                &outcomes,
+                Utc::now(),
+                Duration::seconds(30),
+            )
+            .unwrap();
+        assert_eq!(
+            fresh_admission_authority(
+                &WorkerAuthority::Authorized(draining),
+                &projection,
+                &outcomes
+            )
+            .unwrap_err()
+            .code,
+            "scope_violation"
+        );
+        assert!(host.snapshot().unwrap().active_operations.is_empty());
+    }
+    #[test]
+    fn failed_delivery_observation_cannot_overtake_serialized_admission() {
+        let (_temp, host, lease) = admission_host();
+        let state = Arc::new(Mutex::new(State::default()));
+        let parent = IssueKey::new(
+            "https://api.linear.app/graphql",
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+        )
+        .unwrap();
+        let identity = parent.identity().unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let admission = {
+            let host = host.clone();
+            let state = state.clone();
+            let identity = identity.clone();
+            let lease = lease.clone();
+            std::thread::spawn(move || {
+                host.admit_observed(
+                    &lease,
+                    Uuid::new_v4(),
+                    identity,
+                    canonical_digest(1, &"fixture scope").unwrap(),
+                    |_| {
+                        assert!(state.lock().unwrap().delivery_errors.is_empty());
+                        entered_tx.send(()).unwrap();
+                        continue_rx
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .unwrap();
+                        // No provider evidence is synthesized here: this test
+                        // checks actual cache/admission ordering only.
+                        Ok(())
+                    },
+                )
+            })
+        };
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (attempt_tx, attempt_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let invalidation = {
+            let host = host.clone();
+            let state = state.clone();
+            std::thread::spawn(move || {
+                attempt_tx.send(()).unwrap();
+                let result = invalidate_delivery(
+                    &host,
+                    &state,
+                    &parent,
+                    Error::new("provider_unavailable", "fixture provider read failed"),
+                );
+                done_tx.send(()).unwrap();
+                result
+            })
+        };
+        attempt_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(
+            done_rx.recv_timeout(std::time::Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(state.lock().unwrap().delivery_errors.is_empty());
+        continue_tx.send(()).unwrap();
+        let permit = admission.join().unwrap().unwrap();
+        invalidation.join().unwrap().unwrap();
+        host.retire_local(permit.operation_id, json!({"fixture":"no process"}))
+            .unwrap();
+        let request = Uuid::new_v4();
+        let error = host
+            .admit_observed(
+                &lease,
+                request,
+                identity.clone(),
+                canonical_digest(1, &"fixture scope").unwrap(),
+                |_| Err(state.lock().unwrap().delivery_errors[&identity].clone()),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "provider_unavailable");
+        assert_eq!(host.operation(request).unwrap_err().code, "record_missing");
+        assert!(host.snapshot().unwrap().active_operations.is_empty());
+    }
+    #[test]
+    fn quota_observation_and_admission_have_one_serialized_order() {
+        let (_temp, host, lease) = admission_host();
+        let state = Arc::new(Mutex::new(State::default()));
+        record_account_limits(
+            &host,
+            &state,
+            "fixture-account",
+            &json!({"rateLimits":{"primary":{"usedPercent":20}}}),
+        )
+        .unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let first = {
+            let host = host.clone();
+            let state = state.clone();
+            let lease = lease.clone();
+            std::thread::spawn(move || {
+                host.admit_observed(
+                    &lease,
+                    Uuid::new_v4(),
+                    "fixture-first".into(),
+                    canonical_digest(1, &"scope").unwrap(),
+                    |_| {
+                        assert!(matches!(
+                            state.lock().unwrap().quotas["fixture-account"],
+                            Quota::Available { .. }
+                        ));
+                        entered_tx.send(()).unwrap();
+                        continue_rx
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .unwrap();
+                        Ok(())
+                    },
+                )
+            })
+        };
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (attempt_tx, attempt_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let observation = {
+            let host = host.clone();
+            let state = state.clone();
+            std::thread::spawn(move || {
+                attempt_tx.send(()).unwrap();
+                let result = record_account_limits(
+                    &host,
+                    &state,
+                    "fixture-account",
+                    &json!({"rateLimits":{"primary":{"usedPercent":100}}}),
+                );
+                done_tx.send(()).unwrap();
+                result
+            })
+        };
+        attempt_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(
+            done_rx.recv_timeout(std::time::Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(matches!(
+            state.lock().unwrap().quotas["fixture-account"],
+            Quota::Available { .. }
+        ));
+        continue_tx.send(()).unwrap();
+        first.join().unwrap().unwrap();
+        observation.join().unwrap().unwrap();
+        assert!(matches!(
+            state.lock().unwrap().quotas["fixture-account"],
+            Quota::Exhausted { .. }
+        ));
+        let request = Uuid::new_v4();
+        let error = host
+            .admit_observed(
+                &lease,
+                request,
+                "fixture-second".into(),
+                canonical_digest(1, &"scope").unwrap(),
+                |_| {
+                    if matches!(
+                        state.lock().unwrap().quotas["fixture-account"],
+                        Quota::Exhausted { .. }
+                    ) {
+                        Err(Error::new(
+                            "quota_wait",
+                            "observed exhaustion precedes admission",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "quota_wait");
+        assert_eq!(host.operation(request).unwrap_err().code, "record_missing");
+        assert_eq!(host.snapshot().unwrap().active_operations.len(), 1);
+    }
     #[test]
     fn provider_hold_cannot_be_cleared_by_later_success_or_transplanted_binding() {
         use crate::codex::{CodexProfile, ProviderIntervention, SessionBinding, SessionState};
@@ -1446,5 +2360,195 @@ mod tests {
             ),
             Quota::Available { .. }
         ));
+    }
+    fn cache_projection_fixture() -> (
+        crate::reconcile::RuntimeProjection,
+        crate::reconcile::FreshGate,
+    ) {
+        use crate::{
+            authority::Corrections,
+            config::{Profile, ReleaseMode, Speed},
+            digest::bytes_digest,
+            evidence::{Generation, WorkIdentity},
+            reconcile::{ParentProjection, RuntimeProjection, WorkspaceProjection},
+        };
+        let runtime = Uuid::from_u128(1);
+        let workspace = Uuid::from_u128(2);
+        let parent_id = Uuid::from_u128(3);
+        let digest = bytes_digest(b"synthetic current provider projection");
+        let corrections = Corrections::default();
+        let work = WorkIdentity {
+            linear_endpoint: "https://linear.invalid/graphql".into(),
+            linear_workspace: Uuid::from_u128(4),
+            parent: parent_id,
+            child: None,
+            generation: Generation {
+                authorization: digest.clone(),
+                definition: digest.clone(),
+                scope: digest.clone(),
+                correction: corrections.generation().unwrap(),
+            },
+        };
+        let profile = Profile {
+            tool: "codex".into(),
+            model: "fixture-model".into(),
+            reasoning: "high".into(),
+            speed: Speed::Standard,
+        };
+        let now = Utc::now();
+        let parent = ParentProjection {
+            workspace_id: workspace,
+            workspace_name: "fixture".into(),
+            parent_reference: "fixture:TEST-3".into(),
+            key: IssueKey::new(&work.linear_endpoint, work.linear_workspace, parent_id).unwrap(),
+            issue: None,
+            included: true,
+            observed_at: now,
+            required_children: std::collections::BTreeSet::from([Uuid::from_u128(6)]),
+            children: BTreeMap::new(),
+            observations: BTreeMap::new(),
+            metadata: None,
+            authorization_candidate: None,
+            authorization_published: true,
+            corrections,
+            observation_revision: 1,
+            disappeared_children: BTreeMap::new(),
+            work: Some(work),
+            blockers: vec![],
+            prerequisites: Default::default(),
+            source_digest: digest.clone(),
+            config_revision: digest.clone(),
+            workflow_digest: digest.clone(),
+            coordination_profile: profile,
+            drain_config_revision: digest.clone(),
+            release_mode: ReleaseMode::Manual,
+        };
+        let gate = parent
+            .fresh_gate(
+                None,
+                GatePurpose::Coordination,
+                &DependencyOutcomes::default(),
+                now,
+                Duration::seconds(30),
+            )
+            .unwrap();
+        let projection = RuntimeProjection {
+            runtime_id: runtime,
+            config_revision: digest.clone(),
+            observed_at: now,
+            workspaces: BTreeMap::from([(
+                workspace,
+                WorkspaceProjection {
+                    workspace_id: workspace,
+                    workspace_name: "fixture".into(),
+                    complete: true,
+                    observed_at: now,
+                    parents: BTreeMap::from([(parent_id, parent)]),
+                    repositories: BTreeMap::new(),
+                    independent_jobs: vec![],
+                    error: None,
+                    config_revision: digest.clone(),
+                    workflow_digest: digest,
+                    independent_review_profile: None,
+                },
+            )]),
+        };
+        (projection, gate)
+    }
+    #[test]
+    fn current_permission_fence_revokes_cached_dependency_before_refresh_or_revision_change() {
+        let (projection, gate) = cache_projection_fixture();
+        let now = Utc::now();
+        let mut fences = crate::configuration::AuthorityFences::default();
+        assert!(evidence_projection_current(
+            &gate,
+            now,
+            &projection,
+            &projection.config_revision,
+            &fences,
+            now
+        ));
+        fences.workspaces.insert(Uuid::from_u128(99));
+        assert!(evidence_projection_current(
+            &gate,
+            now,
+            &projection,
+            &projection.config_revision,
+            &fences,
+            now
+        ));
+        fences.workspaces.insert(gate.workspace_id());
+        // Identical last-good config and complete snapshot cannot restore a
+        // separately persisted permission restriction on this prerequisite.
+        assert!(!evidence_projection_current(
+            &gate,
+            now,
+            &projection,
+            &projection.config_revision,
+            &fences,
+            now
+        ));
+    }
+    #[test]
+    fn stale_or_incomplete_delivery_observations_cannot_satisfy_current_evidence() {
+        let (projection, gate) = cache_projection_fixture();
+        let now = Utc::now();
+        let fences = crate::configuration::AuthorityFences::default();
+        for scenario in [
+            "expired_proof",
+            "future_proof",
+            "incomplete",
+            "stale_parent",
+            "source_changed",
+            "authorization_removed",
+            "pending_correction",
+            "inventory_changed",
+            "config_changed",
+        ] {
+            let mut current = projection.clone();
+            let mut observed = now;
+            let mut revision = projection.config_revision.clone();
+            let workspace = current.workspaces.get_mut(&gate.workspace_id()).unwrap();
+            let parent = workspace.parents.get_mut(&gate.work().parent).unwrap();
+            match scenario {
+                "expired_proof" => observed = now - Duration::seconds(31),
+                "future_proof" => observed = now + Duration::seconds(6),
+                "incomplete" => workspace.complete = false,
+                "stale_parent" => parent.observed_at = now - Duration::seconds(31),
+                "source_changed" => {
+                    parent.source_digest = crate::digest::bytes_digest(b"edited native record")
+                }
+                "authorization_removed" => parent.authorization_published = false,
+                "pending_correction" => {
+                    let actor = Uuid::from_u128(5);
+                    parent
+                        .corrections
+                        .observe(
+                            crate::authority::CommentRevision {
+                                id: Uuid::from_u128(7),
+                                author: Some(actor),
+                                body_digest: crate::digest::bytes_digest(
+                                    b"pending native feedback",
+                                ),
+                                edited_at: None,
+                                observed_revision: 2,
+                            },
+                            &std::collections::BTreeSet::from([actor]),
+                            &Default::default(),
+                            None,
+                        )
+                        .unwrap();
+                }
+                "inventory_changed" => {
+                    parent.required_children.insert(Uuid::from_u128(8));
+                }
+                "config_changed" => revision = crate::digest::bytes_digest(b"new configuration"),
+                _ => unreachable!(),
+            }
+            assert!(
+                !evidence_projection_current(&gate, observed, &current, &revision, &fences, now),
+                "{scenario}"
+            );
+        }
     }
 }

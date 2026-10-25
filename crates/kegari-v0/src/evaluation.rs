@@ -3,8 +3,8 @@
 //! Live execution requires a host authority lease and the real production broker.
 //! Recorded/replayed observations exercise graders only and cannot qualify behavior.
 use crate::codex::{
-    CodexProfile, EventKind, PermissionConfiguration, RpcClient, SessionBinding, SessionState,
-    ToolBroker, ToolCall,
+    CodexProfile, EventKind, PermissionConfiguration, SessionBinding, SessionState, ToolBroker,
+    ToolCall,
 };
 use crate::config::Profile;
 use crate::digest::{bytes_digest, canonical_digest};
@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -156,9 +155,19 @@ impl SuiteManifest {
         Ok(result)
     }
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != SUITE_SCHEMA
-            || self.grader_version != GRADER_VERSION
+        if self.grader_version != GRADER_VERSION
             || self.codex_version != instructions::SUPPORTED_CODEX_VERSION
+        {
+            return Err(Error::invalid("unsupported evaluation execution versions"));
+        }
+        self.validate_archive()
+    }
+    /// Read-only comparison can inspect older declared versions. This is never
+    /// execution authorization; live paths still require `validate` above.
+    pub(crate) fn validate_archive(&self) -> Result<()> {
+        if self.schema_version != SUITE_SCHEMA
+            || self.grader_version.is_empty()
+            || self.codex_version.is_empty()
             || self.suite_version.is_empty()
             || self.max_trials == 0
             || self.max_trials > 10000
@@ -250,6 +259,10 @@ impl SuiteManifest {
     }
     pub fn plan(&self) -> Result<Vec<TrialKey>> {
         self.validate()?;
+        self.archive_plan()
+    }
+    pub(crate) fn archive_plan(&self) -> Result<Vec<TrialKey>> {
+        self.validate_archive()?;
         Ok(self
             .variants
             .iter()
@@ -895,6 +908,45 @@ pub struct ObservedCheck {
     /// Host-captured command/service receipt. Worker prose is never a receipt.
     pub receipt_digest: Option<String>,
 }
+/// Project an actual host check against the currently observed candidate. Old
+/// successful checks retain their original candidate digest and become unknown
+/// for this candidate; observation must never relabel them as a new test run.
+pub(crate) fn observed_check(
+    record: &crate::execution::CheckExecutionRecord,
+    current: &BTreeMap<String, FileSnapshot>,
+    revision: &str,
+) -> Result<ObservedCheck> {
+    let after = record
+        .after
+        .files
+        .iter()
+        .map(|(path, file)| {
+            (
+                path.clone(),
+                FileSnapshot {
+                    digest: file.digest.clone(),
+                    mode: file.mode & 0o777,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let current = record.schema_version == 1
+        && record.before == record.after
+        && record.after.revision.commit == revision
+        && after == *current
+        && record.after.files.values().all(|file| !file.symlink);
+    Ok(ObservedCheck {
+        status: if !current {
+            CheckStatus::Unknown
+        } else if record.successful {
+            CheckStatus::Passed
+        } else {
+            CheckStatus::Failed
+        },
+        candidate_digest: canonical_digest(1, &after)?,
+        receipt_digest: Some(canonical_digest(1, record)?),
+    })
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Finding {
@@ -1418,8 +1470,35 @@ pub struct TrialOperation<'a> {
     pub permissions: &'a PermissionConfiguration,
     pub tools: &'a BoundToolContracts,
     pub executable: &'a Path,
+    /// Issued by this actual admitted ScopedWorker; a caller cannot supply an
+    /// unjournaled subprocess or substitute a separate provider authority.
+    pub provider: &'a crate::worker_run::WorkerProviderLaunch,
     pub host: &'a mut crate::worker::ScopedWorker,
     pub report_root: &'a Path,
+}
+
+/// Future cancellation must fence the actual operation before dropping its
+/// provider handles. The outer suite deadline can interrupt any awaited stage,
+/// including startup or orderly shutdown, before explicit cleanup is reached.
+struct CancelTrialOnDrop<F: FnOnce()> {
+    cancel: Option<F>,
+}
+impl<F: FnOnce()> CancelTrialOnDrop<F> {
+    fn new(cancel: F) -> Self {
+        Self {
+            cancel: Some(cancel),
+        }
+    }
+    fn disarm(&mut self) {
+        self.cancel = None;
+    }
+}
+impl<F: FnOnce()> Drop for CancelTrialOnDrop<F> {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel();
+        }
+    }
 }
 /// Invoked explicitly, once per fresh trial. There is no retry-until-pass loop.
 pub async fn run_live_trial(
@@ -1530,6 +1609,20 @@ pub async fn run_live_trial(
         }
     };
     lease.check()?;
+    if variant.bounds.max_turns > operation.provider.max_turns() {
+        return Err(Error::new(
+            "admission_budget",
+            "evaluation turn bound exceeds its original admitted worker budget",
+        ));
+    }
+    operation.provider.verify_binding(
+        operation.work_identity,
+        operation.assembled,
+        operation.isolation,
+        operation.permissions,
+        operation.executable,
+        &operation.fixture.codex_home,
+    )?;
     report.authority_reference = Some(lease.authority_reference().into());
     report.profile = Some(profile.clone());
     report.instruction_manifest = Some(
@@ -1582,14 +1675,19 @@ pub async fn run_live_trial(
     }
     let corrections = correction_timeline(operation.fixture)?;
     let mut client = None;
+    // Declared after `client`, so cancellation runs first when this future is
+    // dropped. A failed fence keeps the original receipt unresolved; the outer
+    // suite reports interruption and never treats handle drop as confirmed exit.
+    let mut cancellation = CancelTrialOnDrop::new(|| {
+        let _ = operation.provider.cancel();
+    });
     let mut audited = AuditedHost {
         host: operation.host,
         lease: lease.as_ref(),
         trace: vec![],
     };
     let execution=tokio::time::timeout(limit,async {
-        RpcClient::verify_version(operation.executable,Duration::from_secs(10)).await?;
-        let spawned=RpcClient::spawn(operation.executable,&operation.fixture.codex_home,operation.permissions,Duration::from_secs(30)).await?;
+        let spawned=operation.provider.launch().await?;
         client=Some(spawned);
         let client=client.as_mut().ok_or_else(||Error::invalid("adapter unavailable"))?;
         client.initialize().await?;
@@ -1642,6 +1740,11 @@ pub async fn run_live_trial(
             if matches!(event.kind,EventKind::TurnCancelled|EventKind::ProcessExit) { return Err(Error::new("interrupted","worker was interrupted")); }
         }
     }).await;
+    let cancel_error = if !matches!(&execution, Ok(Ok(()))) {
+        operation.provider.cancel().err()
+    } else {
+        None
+    };
     let checkpoint = audited.host.checkpoint(
         &state,
         if execution.as_ref().is_err() {
@@ -1650,8 +1753,6 @@ pub async fn run_live_trial(
             None
         },
     );
-    report.elapsed_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
-    report.ended_at = Utc::now().to_rfc3339();
     report.turns_started = state.turns_started;
     report.earlier_usage_unknown = !state.usage.earlier_usage_unknown.is_empty();
     report.usage_tokens = state
@@ -1693,6 +1794,14 @@ pub async fn run_live_trial(
         report.reason = "session checkpoint failed; reconcile unknown provider effects".into();
         report.unresolved_remote_effects = true;
     }
+    if let Some(error) = cancel_error {
+        report.outcome = TrialOutcome::Interrupted;
+        report.reason = format!(
+            "owned evaluation cancellation requires reconciliation: {}",
+            error.code
+        );
+        report.unresolved_remote_effects = true;
+    }
     if let Some(client) = client.as_mut() {
         for event in client.drain_events() {
             if report.trace.len() >= MAX_FILES {
@@ -1715,7 +1824,25 @@ pub async fn run_live_trial(
             report.reason = "owned adapter termination was not confirmed".into();
         }
     }
-    if let Ok(facts) = audited.host.observe() {
+    if let Err(error) = operation.provider.finish() {
+        let cancellation_error = operation.provider.cancel().err();
+        report.unresolved_remote_effects = true;
+        report.outcome = TrialOutcome::Interrupted;
+        report.reason = format!(
+            "owned evaluation process exit requires reconciliation: {}",
+            error.code
+        );
+        if let Some(error) = cancellation_error {
+            report
+                .reason
+                .push_str(&format!("; cancellation failed: {}", error.code));
+        }
+    }
+    // Owned termination has been observed, or cancellation was explicitly
+    // attempted and the unknown result retained in the report above.
+    cancellation.disarm();
+    let observed = audited.host.observe();
+    if let Ok(facts) = observed {
         report.artifacts = facts.artifacts.clone();
         report.evidence_references = facts.evidence_references.clone();
         let scorer = Scorer::load(
@@ -1746,14 +1873,23 @@ pub async fn run_live_trial(
             .into();
         }
         report.grade = Some(result);
+    } else if let Err(error) = observed {
+        report.reason = format!(
+            "{}; verified final observation unavailable: {}: {}",
+            report.reason, error.code, error.message
+        );
     }
+    // Include owned shutdown and final evidence collection in the observed
+    // duration; a completed turn is not yet a completed evaluation attempt.
+    report.elapsed_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    report.ended_at = Utc::now().to_rfc3339();
     Ok(report)
 }
 
 /// Creates an append-only run directory. Attempts have a durable started record before
 /// dispatch; after a crash, missing result files mean interrupted/unknown, never passed.
 pub struct ReportStore {
-    root: PathBuf,
+    directory: crate::storage::PrivateDir,
 }
 impl ReportStore {
     pub fn create(root: &Path, suite: &SuiteManifest) -> Result<Self> {
@@ -1761,23 +1897,19 @@ impl ReportStore {
         if !root.is_absolute() {
             return Err(Error::invalid("report root must be absolute"));
         }
-        std::fs::create_dir(root).map_err(|e| Error::io("create exclusive report directory", e))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
-                .map_err(|e| Error::io("protect reports", e))?;
-        }
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root)
+            .map_err(|e| Error::io("create exclusive report directory", e))?;
         let store = Self {
-            root: root
-                .canonicalize()
-                .map_err(|e| Error::io("resolve report root", e))?,
+            directory: crate::storage::PrivateDir::open(root)?,
         };
         store.write("suite.json", suite)?;
         Ok(store)
     }
     pub fn root(&self) -> &Path {
-        &self.root
+        self.directory.path()
     }
     fn write(&self, name: &str, value: &impl Serialize) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(value)
@@ -1785,19 +1917,7 @@ impl ReportStore {
         if bytes.len() > MAX_EVIDENCE_BYTES {
             return Err(Error::new("evidence_limit", "report exceeds bounded size"));
         }
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(self.root.join(relative(name)?))
-            .map_err(|e| Error::io("create immutable evaluation record", e))?;
-        file.write_all(&bytes)
-            .map_err(|e| Error::io("write evaluation record", e))?;
-        file.sync_all()
-            .map_err(|e| Error::io("sync evaluation record", e))?;
-        std::fs::File::open(&self.root)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|e| Error::io("sync evaluation directory", e))?;
-        Ok(())
+        self.directory.create_bytes_exclusive(name, &bytes)
     }
     pub fn started(&self, key: &TrialKey) -> Result<()> {
         self.write(&format!("{}.started.json",key.name()?),&serde_json::json!({"trial":key,"started_at":Utc::now().to_rfc3339(),"outcome":"interrupted_unless_result_present","remote_effects":"unknown_until_reconciled"}))
@@ -1806,34 +1926,24 @@ impl ReportStore {
         self.write(&format!("{}.result.json", report.trial.name()?), report)
     }
     pub fn interrupted(&self, suite: &SuiteManifest) -> Result<Vec<TrialReport>> {
-        let mut reports = Vec::new();
-        for key in suite.plan()? {
-            if self
-                .root
-                .join(format!("{}.started.json", key.name()?))
-                .exists()
-                && !self
-                    .root
-                    .join(format!("{}.result.json", key.name()?))
-                    .exists()
-            {
-                let variant = suite
-                    .variants
-                    .iter()
-                    .find(|variant| variant.id == key.variant && variant.case_id == key.case_id)
-                    .ok_or_else(|| Error::invalid("missing variant"))?;
-                let mut report = TrialReport::unrun(
-                    suite,
-                    variant,
-                    key,
-                    TrialOutcome::Interrupted,
-                    "recorded dispatch has no durable outcome; reconcile before any replacement trial",
-                )?;
-                report.unresolved_remote_effects = true;
-                reports.push(report);
-            }
+        let archive = crate::evaluation_reports::ReportArchive::open(self.root())?;
+        if archive.suite().digest()? != suite.digest()? {
+            return Err(Error::new(
+                "evaluation_record_conflict",
+                "recovery manifest differs from original report archive",
+            ));
         }
-        Ok(reports)
+        Ok(archive
+            .reports()
+            .iter()
+            .filter(|r| {
+                r.outcome == TrialOutcome::Interrupted
+                    && r.trial
+                        .name()
+                        .is_ok_and(|name| archive.reconstructed().contains(&name))
+            })
+            .cloned()
+            .collect())
     }
 }
 /// Executes each declared attempt at most once. A caller supplies the production admission,
@@ -1935,7 +2045,7 @@ pub struct SuiteAssessment {
 /// This layer never certifies human review. Runtime acceptance remains a separate gate.
 /// All reports are considered; failures cannot disappear by presenting a later success.
 pub fn assess(suite: &SuiteManifest, reports: &[TrialReport]) -> Result<SuiteAssessment> {
-    let planned = suite.plan()?;
+    let planned = suite.archive_plan()?;
     let mut counts = BTreeMap::new();
     let mut variability: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut blocking = Vec::new();
@@ -1997,4 +2107,111 @@ pub fn assess(suite: &SuiteManifest, reports: &[TrialReport]) -> Result<SuiteAss
         }
     }
     Ok(SuiteAssessment {planned_trials:planned.len(),actual_agent_trials:actual,outcome_counts:counts,blocking_trials:blocking,case_variability:variability,human_review:"pending; human review/calibration records are required and cannot be generated by an agent".into(),qualified:false})
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use crate::control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest, Permit};
+    use crate::storage::PrivateDir;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    struct CheckFenceOnHandleDrop {
+        control: Arc<ControlHost>,
+        permit: Permit,
+    }
+    impl Drop for CheckFenceOnHandleDrop {
+        fn drop(&mut self) {
+            // This stand-in checks destruction order only. It neither starts a
+            // provider nor claims native process-containment qualification.
+            assert!(
+                self.control
+                    .snapshot()
+                    .unwrap()
+                    .fenced_operations
+                    .contains(&self.permit.operation_id)
+            );
+            assert!(
+                self.control
+                    .validate_permit(&self.permit, || Ok(()))
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn outer_trial_deadline_fences_before_provider_handle_drop() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = Uuid::new_v4();
+        let control = Arc::new(
+            ControlHost::setup(
+                PrivateDir::create(&root.path().canonicalize().unwrap().join("control")).unwrap(),
+                runtime,
+                Uuid::new_v4(),
+            )
+            .unwrap(),
+        );
+        control
+            .lifecycle(
+                MutationRequest {
+                    request_id: Uuid::new_v4(),
+                    runtime_id: runtime,
+                    actor: Actor {
+                        identity: "fixture-operator".into(),
+                        principal: None,
+                        roles: BTreeSet::from(["lifecycle".into()]),
+                    },
+                    kind: "lifecycle".into(),
+                    canonical_targets: vec![runtime.to_string()],
+                    expected: BTreeMap::new(),
+                    payload: Value::Null,
+                },
+                Lifecycle::Start,
+                0,
+            )
+            .unwrap();
+        let lease = Lease {
+            runtime_id: runtime,
+            owner_generation: 1,
+            owner_id: Uuid::new_v4(),
+        };
+        control.attach_reconciled(lease.clone()).unwrap();
+        let permit = control
+            .admit(
+                &lease,
+                Uuid::new_v4(),
+                "evaluation-fixture".into(),
+                canonical_digest(1, &"scope").unwrap(),
+                || Ok(()),
+            )
+            .unwrap();
+        let waiting = async {
+            let _handle = CheckFenceOnHandleDrop {
+                control: control.clone(),
+                permit: permit.clone(),
+            };
+            let _cancellation = CancelTrialOnDrop::new(|| {
+                control.fence(permit.operation_id).unwrap();
+            });
+            std::future::pending::<()>().await;
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), waiting)
+                .await
+                .is_err()
+        );
+        assert!(
+            control
+                .snapshot()
+                .unwrap()
+                .fenced_operations
+                .contains(&permit.operation_id)
+        );
+        // A dropped task is not a verified local exit or a reconciled effect.
+        assert_ne!(
+            control.operation(permit.operation_id).unwrap().phase,
+            crate::control::ReceiptPhase::Reconciled
+        );
+    }
 }

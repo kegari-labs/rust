@@ -449,17 +449,8 @@ impl SupervisorDriver for SwitchableBackend {
     ) -> SupervisorFuture<'a, DrainState> {
         Box::pin(async move { self.backend()?.driver.maintain(lease, snapshot).await })
     }
-    fn cancel_fenced<'a>(
-        &'a self,
-        lease: &'a crate::control::Lease,
-        operations: &'a [Uuid],
-    ) -> SupervisorFuture<'a, ()> {
-        Box::pin(async move {
-            self.backend()?
-                .driver
-                .cancel_fenced(lease, operations)
-                .await
-        })
+    fn cancel_fenced<'a>(&'a self, operations: &'a [Uuid]) -> SupervisorFuture<'a, ()> {
+        Box::pin(async move { self.backend()?.driver.cancel_fenced(operations).await })
     }
     fn exited<'a>(&'a self, lease: &'a crate::control::Lease) -> SupervisorFuture<'a, DrainState> {
         Box::pin(async move { self.backend()?.driver.exited(lease).await })

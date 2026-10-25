@@ -1,4 +1,4 @@
-# Correction, continuation and recovery — version 1
+# Correction, continuation and recovery — version 2
 
 Use the host's current reconciliation findings, correction revisions and actual
 progress. Earlier thread memory is historical context, not current gate truth.

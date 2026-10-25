@@ -20,6 +20,10 @@ pub const GITHUB_API_VERSION: &str = "2026-03-10";
 pub const LINEAR_SCHEMA_REVISION: &str = "618a737a4e6aa279b7853c650f79f209a5142bbc";
 const MAX_BODY: usize = 8 * 1024 * 1024;
 const PAGE_SIZE: usize = 100;
+const MAX_VIDEO_BYTES: usize = 256 * 1024 * 1024;
+#[path = "linear_assets.rs"]
+mod linear_assets;
+pub use linear_assets::{LinearAssetReference, VerifiedLinearAsset, linear_video_markdown};
 
 /// Never serializable; Debug cannot expose a credential.
 pub struct Credential(String);
@@ -100,6 +104,14 @@ impl ReqwestTransport {
         if timeout.is_zero() || max_body == 0 || max_body > MAX_BODY {
             return Err(Error::invalid(
                 "HTTP bounds must be positive and at most 8 MiB per response",
+            ));
+        }
+        Self::bounded(timeout, max_body)
+    }
+    fn bounded(timeout: Duration, max_body: usize) -> Result<Self> {
+        if timeout.is_zero() || max_body == 0 || max_body > MAX_VIDEO_BYTES {
+            return Err(Error::invalid(
+                "binary HTTP bounds must be positive and at most 256 MiB",
             ));
         }
         let client = reqwest::Client::builder()
@@ -627,6 +639,7 @@ pub struct LinearClient {
     workspace_id: Uuid,
     selection: LinearSelection,
     uploads: Arc<Mutex<BTreeMap<Uuid, UploadGrant>>>,
+    asset_transport: Arc<dyn HttpTransport>,
 }
 fn graph_data(value: Value, headers: &HeaderMap) -> Result<Value> {
     if let Some(errors) = value.get("errors") {
@@ -685,7 +698,12 @@ impl LinearClient {
         selection.teams.validate()?;
         selection.projects.validate()?;
         selection.users.validate()?;
+        let asset_transport = match &transport {
+            Some(transport) => transport.clone(),
+            None => Arc::new(ReqwestTransport::bounded(policy.timeout, MAX_VIDEO_BYTES)?),
+        };
         Ok(Self {
+            asset_transport,
             http: HttpCore::new(policy, credential, false, transport)?,
             workspace_id,
             selection,
@@ -1284,7 +1302,11 @@ fn optional_time(
 fn validated_url(value: &str) -> Result<String> {
     let url = Url::parse(value)
         .map_err(|_| Error::new("provider_response", "provider reference URL is malformed"))?;
-    validate_https(&url).map_err(|_| {
+    // Native GitHub comment references include an issuecomment fragment. These
+    // URLs are references, never authenticated request endpoints.
+    let mut endpoint = url.clone();
+    endpoint.set_fragment(None);
+    validate_https(&endpoint).map_err(|_| {
         Error::new(
             "provider_response",
             "provider reference URL is not safe HTTPS",
@@ -2247,6 +2269,7 @@ pub enum ProviderMutation {
         reference: String,
         workflow_sha: String,
         source_sha: String,
+        expected_production: Option<crate::git::Revision>,
         source_input: String,
         operation_input: String,
         inputs: BTreeMap<String, String>,
@@ -2413,6 +2436,43 @@ impl ProviderBroker {
                 "provider_principal".into(),
                 canonical_digest(1, &request.actor.principal)?,
             );
+        }
+        match &command {
+            ProviderMutation::LinearUploadRequest {
+                filename,
+                content_type,
+                size,
+                ..
+            } => {
+                request.expected.extend(BTreeMap::from([
+                    (
+                        "provider_writer".into(),
+                        self.linear()?.http.policy.account_id.clone(),
+                    ),
+                    ("provider_upload_size".into(), size.to_string()),
+                    ("provider_upload_filename".into(), filename.clone()),
+                    ("provider_upload_content_type".into(), content_type.clone()),
+                ]));
+            }
+            ProviderMutation::LinearUploadBytes {
+                grant_operation,
+                asset_url,
+                content_digest,
+                bytes,
+                ..
+            } => {
+                request.expected.extend(BTreeMap::from([
+                    (
+                        "provider_writer".into(),
+                        self.linear()?.http.policy.account_id.clone(),
+                    ),
+                    ("provider_upload_grant".into(), grant_operation.to_string()),
+                    ("provider_asset_url".into(), asset_url.clone()),
+                    ("provider_content_digest".into(), content_digest.clone()),
+                    ("provider_upload_size".into(), bytes.len().to_string()),
+                ]));
+            }
+            _ => {}
         }
         request.kind = kind;
         request.canonical_targets = targets;
@@ -2759,6 +2819,7 @@ impl ProviderBroker {
                 reference,
                 workflow_sha,
                 source_sha,
+                expected_production,
                 source_input,
                 operation_input,
                 inputs,
@@ -2776,6 +2837,21 @@ impl ProviderBroker {
                     ));
                 }
                 sha(source_sha)?;
+                if let Some(production) = expected_production {
+                    production.validate()?;
+                    if production.commit != *source_sha
+                        || client.reference(repository, "heads/main").await? != production.commit
+                        || text_at(
+                            &client.commit(repository, &production.commit).await?,
+                            "/tree/sha",
+                        )? != production.tree
+                    {
+                        return Err(Error::new(
+                            "stale_generation",
+                            "production main/source tree changed before exact deployment dispatch",
+                        ));
+                    }
+                }
                 if source_input.is_empty()
                     || operation_input.is_empty()
                     || source_input == operation_input
@@ -2967,6 +3043,10 @@ impl ProviderBroker {
                     .map_err(|_| Error::new("provider_response", "upload URL invalid"))?;
                 safe_upload_url(&upload_url)?;
                 let asset_url = validated_url(text_at(grant, "/assetUrl")?)?;
+                validate_https(
+                    &Url::parse(&asset_url)
+                        .map_err(|_| Error::new("provider_response", "upload asset URL invalid"))?,
+                )?;
                 if text_at(grant, "/contentType")? != content_type
                     || text_at(grant, "/filename")? != filename
                     || grant.get("size").and_then(Value::as_u64) != Some(*size as u64)

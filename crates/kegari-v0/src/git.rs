@@ -631,8 +631,24 @@ fn raw_source_file(path: &Path, metadata: &fs::Metadata) -> Result<(String, Vec<
 #[derive(Clone)]
 pub struct Git {
     executable: PathBuf,
-    version: String,
+    version: std::sync::Arc<std::sync::OnceLock<String>>,
+    binary: crate::platform::BinaryIdentity,
     operation: Option<std::sync::Arc<GitOperationState>>,
+    scope: Option<std::sync::Arc<GitExecutionScope>>,
+    host_scope: Option<std::sync::Arc<HostGitExecutionScope>>,
+}
+#[derive(Clone)]
+pub struct GitExecutionScope {
+    pub limits: GitLimits,
+    pub start_gate: GitStartGate,
+    pub processes: std::sync::Arc<crate::process_records::ProcessJournal>,
+    pub permit: crate::control::Permit,
+    pub executions: std::sync::Arc<crate::worker::ExecutionRegistry>,
+}
+#[derive(Clone)]
+pub struct HostGitExecutionScope {
+    pub limits: GitLimits,
+    pub authority: std::sync::Arc<crate::host_process::LocalProcessPermit>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -687,6 +703,80 @@ pub struct IndependentCloneIdentity {
     pub repository_path: PathBuf,
     pub operator_checkout: PathBuf,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct CloneDirectoryStamp {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+    uid: u32,
+    mode: u32,
+}
+fn clone_directory_stamp(path: &Path) -> Result<CloneDirectoryStamp> {
+    use std::os::unix::fs::MetadataExt;
+    let canonical =
+        fs::canonicalize(path).map_err(|e| Error::io("resolve retained clone path", e))?;
+    let meta =
+        fs::symlink_metadata(path).map_err(|e| Error::io("inspect retained clone path", e))?;
+    if canonical != path || !meta.is_dir() {
+        return Err(Error::new(
+            "execution_ownership",
+            "retained clone path was linked or replaced",
+        ));
+    }
+    Ok(CloneDirectoryStamp {
+        path: canonical,
+        device: meta.dev(),
+        inode: meta.ino(),
+        uid: meta.uid(),
+        mode: meta.mode(),
+    })
+}
+#[derive(Clone, Debug)]
+pub struct VerifiedIndependentClone {
+    identity: IndependentCloneIdentity,
+    root: PathBuf,
+    paths: Vec<CloneDirectoryStamp>,
+    marker_digest: String,
+}
+impl VerifiedIndependentClone {
+    pub fn identity(&self) -> &IndependentCloneIdentity {
+        &self.identity
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    pub fn digest(&self) -> Result<String> {
+        canonical_digest(
+            1,
+            &serde_json::json!({"identity":self.identity,"root":self.root,"paths":self.paths,"marker":self.marker_digest}),
+        )
+    }
+    /// Rechecks owned filesystem identities without launching repository tools.
+    /// The caller must still exclude active writers before preserving/removing.
+    pub fn revalidate_filesystem(&self) -> Result<()> {
+        for path in &self.paths {
+            if clone_directory_stamp(&path.path)? != *path {
+                return Err(Error::new(
+                    "execution_ownership",
+                    "retained clone filesystem identity changed",
+                ));
+            }
+        }
+        let marker = self.root.join(format!(
+            "prepared-clone-{}.json",
+            self.identity.directory_id
+        ));
+        let record = read_clone_record(&marker)?;
+        if canonical_digest(1, &record)? != self.marker_digest {
+            return Err(Error::new(
+                "execution_ownership",
+                "retained clone owner marker changed",
+            ));
+        }
+        Ok(())
+    }
+}
 impl std::fmt::Debug for Git {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Git")
@@ -698,6 +788,92 @@ impl std::fmt::Debug for Git {
 }
 
 impl Git {
+    /// Recover the exact host-created source object from immutable Git bytes.
+    /// Retained JSON supplies an expectation, never the object proof itself.
+    pub fn inspect_committed_source(
+        &self,
+        source: &Path,
+        base: &Revision,
+        head: &Revision,
+        scope: &WriteScope,
+        metadata: SourceCommitMetadata,
+    ) -> Result<CommittedSource> {
+        metadata.validate()?;
+        scope.validate()?;
+        if self.exact_revision(source, &base.commit)? != *base
+            || self.exact_revision(source, &head.commit)? != *head
+            || base == head
+        {
+            return Err(Error::new(
+                "provenance_mismatch",
+                "retained source revisions differ from actual Git objects",
+            ));
+        }
+        self.single_parent(source, &head.commit, &base.commit)?;
+        let expected = format!(
+            "tree {}\nparent {}\nauthor {} <{}> {} +0000\ncommitter {} <{}> {} +0000\n\n{}",
+            head.tree,
+            base.commit,
+            metadata.identity.name,
+            metadata.identity.email,
+            metadata.timestamp.timestamp(),
+            metadata.identity.name,
+            metadata.identity.email,
+            metadata.timestamp.timestamp(),
+            metadata.message
+        );
+        if self.run(source, &["cat-file", "commit", &head.commit], None)? != expected.as_bytes() {
+            return Err(Error::new(
+                "provenance_mismatch",
+                "retained source commit metadata or message changed",
+            ));
+        }
+        let original = self.source_tree(source, &base.commit)?;
+        let current = self.source_tree(source, &head.commit)?;
+        let mut entries = Vec::new();
+        let mut blobs = BTreeMap::new();
+        for path in original
+            .keys()
+            .chain(current.keys())
+            .collect::<BTreeSet<_>>()
+        {
+            if original.get(path) == current.get(path) {
+                continue;
+            }
+            if !scope.permits(path) {
+                return Err(Error::new(
+                    "scope_violation",
+                    "retained source commit contains an unauthorized path",
+                ));
+            }
+            let old = original.get(path);
+            let new = current.get(path);
+            if let Some((_, oid)) = new {
+                blobs.insert(
+                    oid.clone(),
+                    self.run(source, &["cat-file", "blob", oid], None)?,
+                );
+            }
+            entries.push(SourceTreeEntry {
+                path: path.clone(),
+                mode: new.or(old).expect("changed path exists").0.clone(),
+                object: new.map(|(_, oid)| oid.clone()),
+            });
+        }
+        if entries.is_empty() {
+            return Err(Error::new(
+                "no_change",
+                "retained source commit manufactured an empty change",
+            ));
+        }
+        Ok(CommittedSource {
+            base: base.clone(),
+            revision: head.clone(),
+            metadata,
+            entries,
+            blobs,
+        })
+    }
     /// Commit stopped child implementation bytes in its owned clone. The host
     /// must fence further writer activity first, execute this inside its owned
     /// Git effect, and obtain a fresh admission for the returned revision.
@@ -709,6 +885,12 @@ impl Git {
         scope: &WriteScope,
         metadata: SourceCommitMetadata,
     ) -> Result<Option<CommittedSource>> {
+        if self.host_scope.is_some() {
+            return Err(Error::new(
+                "scope_violation",
+                "host metadata authority cannot mutate local repository or execution files",
+            ));
+        }
         ownership.verify(binding, boundary)?;
         binding.validate(boundary)?;
         scope.validate()?;
@@ -1036,6 +1218,12 @@ impl Git {
         identity: &crate::execution::DirectoryIdentity,
         revision: &Revision,
     ) -> Result<PathBuf> {
+        if self.host_scope.is_some() {
+            return Err(Error::new(
+                "scope_violation",
+                "host metadata authority cannot mutate local repository or execution files",
+            ));
+        }
         identity.work.validate()?;
         identity.repository.validate()?;
         revision.validate()?;
@@ -1065,6 +1253,12 @@ impl Git {
         execution_root: &Path,
         identity: &IndependentCloneIdentity,
     ) -> Result<PathBuf> {
+        if self.host_scope.is_some() {
+            return Err(Error::new(
+                "scope_violation",
+                "host metadata authority cannot mutate local repository or execution files",
+            ));
+        }
         validate_independent_clone_identity(identity)?;
         if self.exact_revision(source, &identity.base.commit)? != identity.base {
             return Err(Error::new(
@@ -1087,7 +1281,7 @@ impl Git {
         &self,
         execution_root: &Path,
         identity: &IndependentCloneIdentity,
-    ) -> Result<()> {
+    ) -> Result<VerifiedIndependentClone> {
         validate_independent_clone_identity(identity)?;
         self.prepare_owned_clone(
             &identity.operator_checkout,
@@ -1102,7 +1296,25 @@ impl Git {
                 "retained review clone lost its exact base object",
             ));
         }
-        Ok(())
+        let root = owner_directory(execution_root)?;
+        let paths = [
+            root.as_path(),
+            identity.repository_path.as_path(),
+            identity.operator_checkout.as_path(),
+            &identity.repository_path.join(".git"),
+        ]
+        .into_iter()
+        .map(clone_directory_stamp)
+        .collect::<Result<_>>()?;
+        let marker = root.join(format!("prepared-clone-{}.json", identity.directory_id));
+        let proof = VerifiedIndependentClone {
+            identity: identity.clone(),
+            root,
+            paths,
+            marker_digest: canonical_digest(1, &read_clone_record(&marker)?)?,
+        };
+        proof.revalidate_filesystem()?;
+        Ok(proof)
     }
 
     fn prepare_owned_clone(
@@ -1129,7 +1341,7 @@ impl Git {
         }
         let mut expected = ExecutionCloneRecord {
             schema_version: 1,
-            git_version: self.version.clone(),
+            git_version: self.version().to_owned(),
             source: source.clone(),
             identity: identity.clone(),
             revision: revision.clone(),
@@ -1137,38 +1349,7 @@ impl Git {
         };
         let marker = root.join(format!("prepared-clone-{}.json", identity.directory_id()));
         if marker.symlink_metadata().is_ok() {
-            let metadata = marker
-                .symlink_metadata()
-                .map_err(|e| Error::io("inspect clone receipt", e))?;
-            if !metadata.is_file() || metadata.len() > 64 * 1024 {
-                return Err(Error::new(
-                    "ownership_conflict",
-                    "clone receipt is linked or invalid",
-                ));
-            }
-            let mut options = OpenOptions::new();
-            options.read(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-                if metadata.nlink() != 1 {
-                    return Err(Error::new(
-                        "ownership_conflict",
-                        "clone receipt must not be hardlinked",
-                    ));
-                }
-                options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-            }
-            use std::io::Read;
-            let mut bytes = Vec::new();
-            options
-                .open(&marker)
-                .map_err(|e| Error::io("open clone receipt", e))?
-                .take(64 * 1024 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|e| Error::io("read clone receipt", e))?;
-            let record: ExecutionCloneRecord = serde_json::from_slice(&bytes)
-                .map_err(|_| Error::new("ownership_conflict", "clone receipt is malformed"))?;
+            let record = read_clone_record(&marker)?;
             expected.prepared = true;
             if record != expected || !record.prepared {
                 return Err(Error::new(
@@ -1295,21 +1476,56 @@ impl Git {
         Ok(())
     }
 
-    pub fn new(executable: impl AsRef<Path>) -> Result<Self> {
+    /// Inspect a pinned local executable without launching it. Repository commands
+    /// remain unavailable until an owned operation verifies the supported version.
+    pub fn from_pinned_executable(executable: impl AsRef<Path>) -> Result<Self> {
         let executable =
             fs::canonicalize(executable).map_err(|e| Error::io("resolve Git executable", e))?;
-        let mut command = Command::new(&executable);
-        command.env_clear().arg("--version");
-        let output = GitOperationState::new(
-            GitLimits {
-                command_timeout: std::time::Duration::from_secs(3),
-                operation_timeout: std::time::Duration::from_secs(5),
-                output_bytes: 1024,
-                ..GitLimits::default()
-            },
-            None,
-        )?
-        .run(command, None)?;
+        let binary = crate::platform::BinaryIdentity::inspect(&executable, false)?;
+        Ok(Self {
+            executable,
+            binary,
+            version: std::sync::Arc::new(std::sync::OnceLock::new()),
+            operation: None,
+            scope: None,
+            host_scope: None,
+        })
+    }
+    /// Bounded metadata convenience for explicit local fixtures and operator
+    /// preflight. Production helper phases use from_pinned_executable followed
+    /// by start_journaled_operation, which gates and journals the probe.
+    pub fn new(executable: impl AsRef<Path>) -> Result<Self> {
+        let git = Self::from_pinned_executable(executable)?;
+        git.verify_version()?;
+        Ok(git)
+    }
+    fn verify_version(&self) -> Result<()> {
+        self.binary.revalidate(false)?;
+        let mut command = Command::new(&self.executable);
+        command
+            .env_clear()
+            .current_dir(
+                self.executable
+                    .parent()
+                    .ok_or_else(|| Error::invalid("Git binary has no parent"))?,
+            )
+            .arg("--version");
+        let output = match &self.operation {
+            Some(operation) => operation.run(command, None)?,
+            None if self.scope.is_some() => self.scoped_command(command, None)?,
+            None if self.host_scope.is_some() => self.host_scoped_command(command, None)?,
+            None => GitOperationState::new(
+                GitLimits {
+                    command_timeout: std::time::Duration::from_secs(3),
+                    operation_timeout: std::time::Duration::from_secs(5),
+                    output_bytes: 1024,
+                    ..GitLimits::default()
+                },
+                None,
+            )?
+            .run(command, None)?,
+        };
+        self.binary.revalidate(false)?;
         let version = String::from_utf8(output.stdout)
             .map_err(|_| Error::new("unsupported_git_version", "Git version is not UTF-8"))?
             .trim()
@@ -1320,15 +1536,196 @@ impl Git {
                 format!("supported Git profile is {SUPPORTED_GIT_VERSION}; observed {version}"),
             ));
         }
-        Ok(Self {
-            executable,
-            version,
-            operation: None,
+        let _ = self.version.set(version);
+        Ok(())
+    }
+    pub fn version(&self) -> &str {
+        self.version.get().map(String::as_str).unwrap_or("")
+    }
+    pub fn executable(&self) -> &Path {
+        &self.executable
+    }
+    /// Structured trusted reads never run repository hooks, filters, shell or
+    /// external diff/textconv drivers. Scoped runtime handles gate and journal
+    /// these commands exactly like all their other metadata subprocesses.
+    pub fn inspect_read_only(
+        &self,
+        cwd: &Path,
+        inspection: &crate::execution::GitInspection,
+    ) -> Result<crate::isolation::CommandOutcome> {
+        let mut args: Vec<String> = Vec::new();
+        match inspection {
+            crate::execution::GitInspection::Status => args
+                .extend(["status", "--porcelain=v1", "--untracked-files=all"].map(str::to_owned)),
+            crate::execution::GitInspection::Diff { staged } => {
+                args.extend(
+                    [
+                        "diff",
+                        "--binary",
+                        "--full-index",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--no-renames",
+                    ]
+                    .map(str::to_owned),
+                );
+                if *staged {
+                    args.push("--cached".into());
+                }
+                args.push("--".into());
+            }
+            crate::execution::GitInspection::ShowFile { commit, path } => {
+                validate_oid(commit)?;
+                validate_repo_path(path)?;
+                args.extend([
+                    "show".into(),
+                    "--no-ext-diff".into(),
+                    "--no-textconv".into(),
+                    format!("{commit}:{path}"),
+                ]);
+            }
+        }
+        let mut command = self.command(cwd);
+        command.args(&args);
+        let argv = std::iter::once(command.get_program().to_string_lossy().into_owned())
+            .chain(command.get_args().map(|a| a.to_string_lossy().into_owned()))
+            .collect();
+        let started = std::time::Instant::now();
+        let output = self.finish_command(command, None)?;
+        Ok(crate::isolation::CommandOutcome {
+            schema_version: 1,
+            argv,
+            cwd: cwd.to_owned(),
+            isolation_digest: String::new(),
+            exit_code: output.status.code(),
+            timed_out: false,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            output_truncated: false,
+            elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         })
     }
-
-    pub fn version(&self) -> &str {
-        &self.version
+    /// Fixed read-only inventory queries for explicit cleanup eligibility.
+    pub fn cleanup_read(&self, root: &Path, query: CleanupRead) -> Result<String> {
+        self.text(root, query.args())
+    }
+    pub fn with_execution_scope(&self, scope: GitExecutionScope) -> Result<Self> {
+        scope.limits.validate()?;
+        let mut owned = self.clone();
+        owned.operation = None;
+        owned.scope = Some(std::sync::Arc::new(scope));
+        owned.host_scope = None;
+        owned.verify_version()?;
+        Ok(owned)
+    }
+    /// Host-local metadata is a distinct authenticated control effect and works
+    /// while STOPPED. Its command grammar cannot launch mutating Git operations.
+    pub fn with_host_execution_scope(&self, scope: HostGitExecutionScope) -> Result<Self> {
+        scope.limits.validate()?;
+        if self.binary != *scope.authority.binary() {
+            return Err(Error::new(
+                "ownership_conflict",
+                "host metadata authority names another Git binary",
+            ));
+        }
+        let mut owned = self.clone();
+        owned.operation = None;
+        owned.scope = None;
+        owned.host_scope = Some(std::sync::Arc::new(scope));
+        owned.verify_version()?;
+        Ok(owned)
+    }
+    fn host_scoped_command(&self, command: Command, input: Option<&[u8]>) -> Result<Output> {
+        if input.is_some_and(|bytes| !bytes.is_empty()) {
+            return Err(Error::new(
+                "scope_violation",
+                "host metadata Git accepts no stdin instructions",
+            ));
+        }
+        let scope = self
+            .host_scope
+            .as_ref()
+            .ok_or_else(|| Error::new("process_journal_required", "host metadata scope missing"))?
+            .clone();
+        let cwd = command
+            .get_current_dir()
+            .ok_or_else(|| Error::invalid("host Git cwd missing"))?
+            .to_path_buf();
+        let argv = command
+            .get_args()
+            .map(|arg| {
+                arg.to_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| Error::invalid("host Git argument is not UTF-8"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut initial = GitOperationState::new(scope.limits.clone(), None)?;
+        let authority = scope.authority.clone();
+        let state = std::sync::Arc::new_cyclic(|weak: &std::sync::Weak<GitOperationState>| {
+            let weak = weak.clone();
+            initial.gate = Some(std::sync::Arc::new(move |spawn| {
+                let state = weak.upgrade().ok_or_else(|| {
+                    Error::new("ownership_conflict", "host Git waiter disappeared")
+                })?;
+                let cancellation = std::sync::Arc::new(GitCancellation {
+                    state: state.clone(),
+                });
+                authority.start(&cwd, &argv, cancellation, |guard| {
+                    *state.provided_guard.lock().map_err(|_| {
+                        Error::new("ownership_conflict", "host Git guard unavailable")
+                    })? = Some(guard);
+                    spawn()
+                })
+            }));
+            initial
+        });
+        let result = state.run(command, input);
+        state
+            .closed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        result
+    }
+    fn scoped_command(&self, command: Command, input: Option<&[u8]>) -> Result<Output> {
+        let scope = self
+            .scope
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    "process_journal_required",
+                    "Git command has no admitted scope",
+                )
+            })?
+            .clone();
+        let effect = Uuid::new_v4();
+        let mut initial = GitOperationState::new(scope.limits.clone(), None)?;
+        initial.journal = Some((scope.processes.clone(), scope.permit.clone()));
+        let registration = scope.clone();
+        let state = std::sync::Arc::new_cyclic(|weak: &std::sync::Weak<GitOperationState>| {
+            let weak = weak.clone();
+            initial.gate = Some(std::sync::Arc::new(move |spawn| {
+                (registration.start_gate)(&mut || {
+                    let state = weak.upgrade().ok_or_else(|| {
+                        Error::new("ownership_conflict", "Git waiter disappeared during spawn")
+                    })?;
+                    registration.executions.register(
+                        registration.permit.operation_id,
+                        effect,
+                        std::sync::Arc::new(GitCancellation { state }),
+                    )?;
+                    spawn()
+                })
+            }));
+            initial
+        });
+        let result = state.run(command, input);
+        state
+            .closed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let cancellation = GitCancellation { state };
+        if cancellation.exited()? {
+            scope.executions.remove(scope.permit.operation_id, effect)?;
+        }
+        result
     }
 
     fn command(&self, cwd: &Path) -> Command {
@@ -1377,8 +1774,17 @@ impl Git {
         self.finish_command(command, input)
     }
     fn finish_command(&self, command: Command, input: Option<&[u8]>) -> Result<Output> {
+        if self.version() != SUPPORTED_GIT_VERSION {
+            return Err(Error::new(
+                "unsupported_git_version",
+                "Git version has not been verified by an owned probe",
+            ));
+        }
+        self.binary.revalidate(false)?;
         match &self.operation {
             Some(operation) => operation.run(command, input),
+            None if self.scope.is_some() => self.scoped_command(command, input),
+            None if self.host_scope.is_some() => self.host_scoped_command(command, input),
             None => GitOperationState::new(GitLimits::default(), None)?.run(command, input),
         }
     }
@@ -1624,7 +2030,7 @@ impl Git {
         Ok(ProposedDelta {
             review: ReviewDelta {
                 schema_version: 1,
-                git_version: self.version.clone(),
+                git_version: self.version().to_owned(),
                 repository: request.repository,
                 parent_id: request.parent_id,
                 child_id: request.child_id,
@@ -1685,7 +2091,7 @@ impl Git {
         }
         let manifest = DeltaManifest {
             schema_version: DELTA_SCHEMA,
-            git_version: self.version.clone(),
+            git_version: self.version().to_owned(),
             repository: request.repository,
             parent_id: request.parent_id,
             child_id: request.child_id,
@@ -1706,7 +2112,7 @@ impl Git {
     pub fn verify_delta(&self, source: &Path, delta: &DeltaArtifact) -> Result<()> {
         let m = &delta.manifest;
         if m.schema_version != DELTA_SCHEMA
-            || m.git_version != self.version
+            || m.git_version != self.version()
             || m.patch_digest != bytes_digest(&delta.patch)
         {
             return Err(Error::new(
@@ -1835,7 +2241,7 @@ impl Git {
         }
         let manifest = DeltaManifest {
             schema_version: DELTA_SCHEMA,
-            git_version: self.version.clone(),
+            git_version: self.version().to_owned(),
             repository: request.repository,
             parent_id: request.parent_id,
             child_id: request.child_id,
@@ -2135,6 +2541,12 @@ impl Git {
         execution_root: &Path,
         request: CandidateRequest<'_>,
     ) -> Result<Candidate> {
+        if self.host_scope.is_some() {
+            return Err(Error::new(
+                "scope_violation",
+                "host metadata authority cannot mutate local repository or execution files",
+            ));
+        }
         request.repository.validate()?;
         request.identity.validate()?;
         let source =
@@ -2283,7 +2695,7 @@ impl Git {
             parent_id: request.parent_id,
             work_generation: request.work_generation.into(),
             correction_generation: request.correction_generation.into(),
-            git_version: self.version.clone(),
+            git_version: self.version().to_owned(),
             production: production.clone(),
             ordered_delta_digests,
             ordered_patch_digests,
@@ -2405,7 +2817,7 @@ impl Git {
             .map_err(|_| Error::new("corrupt_record", "candidate manifest is invalid"))?;
         if manifest.schema_version != 1
             || manifest.operation_id != operation_id
-            || manifest.git_version != self.version
+            || manifest.git_version != self.version()
         {
             return Err(Error::new(
                 "ownership_conflict",
@@ -2476,6 +2888,42 @@ fn owner_directory(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(canonical)
+}
+
+fn read_clone_record(path: &Path) -> Result<ExecutionCloneRecord> {
+    let metadata = path
+        .symlink_metadata()
+        .map_err(|e| Error::io("inspect clone receipt", e))?;
+    if !metadata.is_file() || metadata.len() > 64 * 1024 {
+        return Err(Error::new(
+            "ownership_conflict",
+            "clone receipt is linked or invalid",
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        if metadata.nlink() != 1 {
+            return Err(Error::new(
+                "ownership_conflict",
+                "clone receipt must not be hardlinked",
+            ));
+        }
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    options
+        .open(path)
+        .map_err(|e| Error::io("open clone receipt", e))?
+        .take(64 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| Error::io("read clone receipt", e))?;
+    let record: ExecutionCloneRecord = serde_json::from_slice(&bytes)
+        .map_err(|_| Error::new("ownership_conflict", "clone receipt is malformed"))?;
+    Ok(record)
 }
 
 fn write_clone_record(path: &Path, record: &ExecutionCloneRecord, exclusive: bool) -> Result<()> {
@@ -2592,6 +3040,7 @@ struct ActiveGitChild {
     child: std::process::Child,
     group: Option<crate::process_group::OwnedGroup>,
     terminal: Option<std::process::ExitStatus>,
+    guard: Option<crate::process_records::SpawnGuard>,
 }
 impl ActiveGitChild {
     fn observe(&mut self) -> Result<Option<std::process::ExitStatus>> {
@@ -2606,6 +3055,12 @@ impl ActiveGitChild {
                 .try_wait()
                 .map_err(|error| Error::io("reap owned Git after group cleanup", error))?;
         }
+        if let Some(status) = self.terminal
+            && let Some(guard) = self.guard.as_mut()
+        {
+            guard.group_exited(status)?;
+            self.guard = None;
+        }
         Ok(self.terminal)
     }
 }
@@ -2614,9 +3069,14 @@ struct GitOperationState {
     closed: std::sync::atomic::AtomicBool,
     uncertain_descendants: std::sync::atomic::AtomicBool,
     active: std::sync::Mutex<Option<ActiveGitChild>>,
+    provided_guard: std::sync::Mutex<Option<crate::process_records::SpawnGuard>>,
     deadline: std::time::Instant,
     limits: GitLimits,
     gate: Option<GitStartGate>,
+    journal: Option<(
+        std::sync::Arc<crate::process_records::ProcessJournal>,
+        crate::control::Permit,
+    )>,
 }
 impl GitOperationState {
     fn new(limits: GitLimits, gate: Option<GitStartGate>) -> Result<Self> {
@@ -2626,9 +3086,11 @@ impl GitOperationState {
             closed: false.into(),
             uncertain_descendants: false.into(),
             active: std::sync::Mutex::new(None),
+            provided_guard: std::sync::Mutex::new(None),
             deadline: std::time::Instant::now() + limits.operation_timeout,
             limits,
             gate,
+            journal: None,
         })
     }
     fn current(&self) -> Result<()> {
@@ -2700,7 +3162,70 @@ impl GitOperationState {
                 ));
             }
             self.current()?;
-            let (mut child, group) = crate::process_group::OwnedGroup::spawn_std(&mut command)?;
+            let mut guard = self
+                .journal
+                .as_ref()
+                .map(|(journal, permit)| {
+                    use std::os::unix::ffi::OsStrExt;
+                    let executable = crate::platform::BinaryIdentity::inspect(
+                        Path::new(command.get_program()),
+                        false,
+                    )?;
+                    let cwd = command
+                        .get_current_dir()
+                        .ok_or_else(|| Error::invalid("journaled Git needs explicit cwd"))?
+                        .canonicalize()
+                        .map_err(|e| Error::io("resolve journaled Git cwd", e))?;
+                    journal.begin(crate::process_records::SpawnBinding {
+                        operation_id: permit.operation_id,
+                        effect_id: Uuid::new_v4(),
+                        lease: Some(permit.lease.clone()),
+                        control_owner: None,
+                        work_key: permit.work_key.clone(),
+                        scope_digest: permit.scope_digest.clone(),
+                        cwd,
+                        observed_executables: vec![],
+                        executable,
+                        argv_digest: canonical_digest(
+                            1,
+                            &command
+                                .get_args()
+                                .map(|a| a.as_bytes().to_vec())
+                                .collect::<Vec<_>>(),
+                        )?,
+                        kind: "trusted_git".into(),
+                    })
+                })
+                .transpose()?;
+            if let Some(provided) = self
+                .provided_guard
+                .lock()
+                .map_err(|_| Error::new("ownership_conflict", "host Git guard unavailable"))?
+                .take()
+            {
+                if guard.is_some() {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "Git process has two distinct authorities",
+                    ));
+                }
+                guard = Some(provided);
+            }
+            if let Some(guard) = &guard {
+                guard.configure_std(&mut command)?;
+            }
+            let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_std(&mut command)?;
+            let capture_error = guard
+                .as_mut()
+                .and_then(|guard| guard.spawned_std(&child).err());
+            let capture_error = match capture_error {
+                Some(error) => match group.observe_exit_before_reap() {
+                    Ok(true) => None,
+                    Ok(false) => Some(error),
+                    Err(error) => Some(error),
+                },
+                None => None,
+            };
             pipes = Some((
                 child.stdin.take().expect("piped stdin"),
                 child.stdout.take().expect("piped stdout"),
@@ -2710,8 +3235,12 @@ impl GitOperationState {
                 child,
                 group: Some(group),
                 terminal: None,
+                guard,
             });
-            Ok(())
+            match capture_error {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }
         };
         let gated = if let Some(gate) = &self.gate {
             gate(&mut start)
@@ -2954,7 +3483,37 @@ impl Git {
         start_gate: GitStartGate,
         work: impl FnOnce(Git) -> Result<T> + Send + 'static,
     ) -> Result<RunningGitOperation<T>> {
-        let state = std::sync::Arc::new(GitOperationState::new(limits, Some(start_gate))?);
+        self.start_operation_inner(limits, start_gate, None, work)
+    }
+    pub fn start_journaled_operation<T: Send + 'static>(
+        &self,
+        limits: GitLimits,
+        start_gate: GitStartGate,
+        journal: std::sync::Arc<crate::process_records::ProcessJournal>,
+        permit: crate::control::Permit,
+        work: impl FnOnce(Git) -> Result<T> + Send + 'static,
+    ) -> Result<RunningGitOperation<T>> {
+        self.start_operation_inner(limits, start_gate, Some((journal, permit)), work)
+    }
+    fn start_operation_inner<T: Send + 'static>(
+        &self,
+        limits: GitLimits,
+        start_gate: GitStartGate,
+        journal: Option<(
+            std::sync::Arc<crate::process_records::ProcessJournal>,
+            crate::control::Permit,
+        )>,
+        work: impl FnOnce(Git) -> Result<T> + Send + 'static,
+    ) -> Result<RunningGitOperation<T>> {
+        if self.host_scope.is_some() {
+            return Err(Error::new(
+                "scope_violation",
+                "read-only host Git authority cannot start a mutating worker operation",
+            ));
+        }
+        let mut state = GitOperationState::new(limits, Some(start_gate))?;
+        state.journal = journal;
+        let state = std::sync::Arc::new(state);
         let mut owned = self.clone();
         owned.operation = Some(state.clone());
         let finished = state.clone();
@@ -2970,6 +3529,14 @@ impl Git {
                     }
                 }
                 let _closed = Closed(finished);
+                if owned.version().is_empty()
+                    || owned
+                        .operation
+                        .as_ref()
+                        .is_some_and(|s| s.journal.is_some())
+                {
+                    owned.verify_version()?;
+                }
                 work(owned)
             })
             .map_err(|e| Error::io("start owned Git operation", e))?;
@@ -3051,4 +3618,480 @@ fn validate_independent_clone_identity(identity: &IndependentCloneIdentity) -> R
         ));
     }
     Ok(())
+}
+
+/// Read-only source roots admitted by typed host configuration or authenticated
+/// candidate retention. This capability never permits Git writes or execution
+/// of repository scripts; host_process additionally checks the fixed grammar.
+#[derive(Clone, Debug)]
+pub struct VerifiedHostReadRoot {
+    repository: RepositoryId,
+    root: PathBuf,
+    configuration_digest: String,
+    lineage_digest: String,
+    stamps: Vec<HostReadStamp>,
+    marker_digest: Option<(PathBuf, String)>,
+}
+#[derive(Clone, Debug, Serialize)]
+struct HostReadStamp {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+    uid: u32,
+    mode: u32,
+    directory: bool,
+}
+fn host_read_stamp(path: &Path) -> Result<HostReadStamp> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|e| Error::io("inspect host Git read root", e))?;
+    if metadata.file_type().is_symlink() || !(metadata.is_dir() || metadata.is_file()) {
+        return Err(Error::new(
+            "execution_ownership",
+            "host Git read path is redirected or special",
+        ));
+    }
+    Ok(HostReadStamp {
+        path: path.to_path_buf(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        uid: metadata.uid(),
+        mode: metadata.mode(),
+        directory: metadata.is_dir(),
+    })
+}
+impl VerifiedHostReadRoot {
+    pub fn config_revision(&self) -> &str {
+        &self.configuration_digest
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    pub fn repository(&self) -> &RepositoryId {
+        &self.repository
+    }
+    pub fn digest(&self) -> Result<String> {
+        canonical_digest(
+            1,
+            &serde_json::json!({"repository":self.repository,"root":self.root,
+        "configuration":self.configuration_digest,"lineage":self.lineage_digest,"stamps":self.stamps,"marker":self.marker_digest}),
+        )
+    }
+    pub fn revalidate_filesystem(&self) -> Result<()> {
+        for expected in &self.stamps {
+            if canonical_digest(1, expected)?
+                != canonical_digest(1, &host_read_stamp(&expected.path)?)?
+            {
+                return Err(Error::new(
+                    "execution_ownership",
+                    "host Git read path identity changed",
+                ));
+            }
+        }
+        if let Some((path, digest)) = &self.marker_digest
+            && bytes_digest(&bounded_host_marker(path)?) != *digest
+        {
+            return Err(Error::new(
+                "execution_ownership",
+                "host Git retained marker changed",
+            ));
+        }
+        Ok(())
+    }
+}
+fn bounded_host_marker(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| Error::io("read host Git identity marker", e))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| Error::io("inspect host Git identity marker", e))?;
+    if !meta.is_file() || meta.len() > 1024 * 1024 {
+        return Err(Error::new(
+            "bounded_input",
+            "Git identity marker is not a bounded file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| Error::io("read bounded Git marker", e))?;
+    if bytes.len() > 1024 * 1024 {
+        return Err(Error::new(
+            "bounded_input",
+            "Git identity marker grew beyond limit",
+        ));
+    }
+    Ok(bytes)
+}
+fn host_read_root(
+    repository: RepositoryId,
+    path: &Path,
+    configuration_digest: String,
+    lineage_digest: String,
+    marker: Option<PathBuf>,
+) -> Result<VerifiedHostReadRoot> {
+    repository.validate()?;
+    let root = path
+        .canonicalize()
+        .map_err(|e| Error::io("resolve configured Git read root", e))?;
+    if root != path {
+        return Err(Error::new(
+            "execution_ownership",
+            "Git read root must be its configured canonical path",
+        ));
+    }
+    let mut stamps = vec![host_read_stamp(&root)?];
+    if !stamps[0].directory {
+        return Err(Error::new(
+            "execution_ownership",
+            "Git source root is not a directory",
+        ));
+    }
+    let metadata = root.join(".git");
+    if metadata
+        .try_exists()
+        .map_err(|e| Error::io("inspect Git metadata presence", e))?
+    {
+        stamps.push(host_read_stamp(&metadata)?);
+    }
+    let marker_digest = marker
+        .map(|path| Ok((path.clone(), bytes_digest(&bounded_host_marker(&path)?))))
+        .transpose()?;
+    Ok(VerifiedHostReadRoot {
+        repository,
+        root,
+        configuration_digest,
+        lineage_digest,
+        stamps,
+        marker_digest,
+    })
+}
+#[derive(Clone, Copy, Debug)]
+pub enum CleanupRead {
+    Status,
+    Heads,
+    Head,
+    Fsck,
+}
+impl CleanupRead {
+    pub fn args(self) -> &'static [&'static str] {
+        match self {
+            Self::Status => &["status", "--porcelain=v1", "--untracked-files=all"],
+            Self::Heads => &["for-each-ref", "--format=%(objectname)", "refs/heads"],
+            Self::Head => &["rev-parse", "--verify", "HEAD"],
+            Self::Fsck => &["fsck", "--full", "--no-reflogs"],
+        }
+    }
+}
+pub fn cleanup_host_read_root(
+    proof: &crate::housekeeping::VerifiedCleanupReadRoot,
+    configuration: &crate::config::Config,
+) -> Result<VerifiedHostReadRoot> {
+    proof.revalidate_filesystem()?;
+    if proof.runtime_id() != configuration.runtime.id {
+        return Err(Error::new(
+            "identity_mismatch",
+            "cleanup read belongs to another runtime",
+        ));
+    }
+    host_read_root(
+        proof.repository().clone(),
+        proof.root(),
+        configuration.revision()?,
+        proof.digest()?,
+        None,
+    )
+}
+/// This constructor performs only filesystem/configuration reads. Provider
+/// repository identity still requires its ordinary current account/scope check.
+pub fn configured_host_read_root(
+    configuration: &crate::config::Config,
+    workspace: Uuid,
+    contract: &crate::delivery::RepositoryContract,
+) -> Result<VerifiedHostReadRoot> {
+    let selected = configuration
+        .workspaces
+        .values()
+        .find(|w| w.id == workspace)
+        .and_then(|w| w.repositories.get(&contract.configuration_name))
+        .ok_or_else(|| {
+            Error::new(
+                "scope_violation",
+                "Git read repository is not configured in this workspace",
+            )
+        })?;
+    if canonical_digest(1, selected)? != canonical_digest(1, &contract.configuration)?
+        || contract.repository.id != contract.provider.id.to_string()
+    {
+        return Err(Error::new(
+            "scope_violation",
+            "Git read source differs from exact repository contract",
+        ));
+    }
+    let root = Path::new(&selected.source);
+    let marker = root.join(".git");
+    host_read_root(
+        contract.repository.clone(),
+        root,
+        configuration.revision()?,
+        contract.digest()?,
+        marker.is_file().then_some(marker),
+    )
+}
+/// Only the delivery adapter calls this after authenticating the complete
+/// retained slice and its exact acknowledged local effect.
+pub(crate) fn retained_candidate_read_root(
+    repository: RepositoryId,
+    path: &Path,
+    config_revision: String,
+    record_digest: String,
+    expected: &CandidateManifest,
+) -> Result<VerifiedHostReadRoot> {
+    let root = owner_directory(path)?;
+    let actual: CandidateManifest = serde_json::from_slice(&bounded_host_marker(
+        &root.join(".git/kegari-candidate.json"),
+    )?)
+    .map_err(|_| Error::new("record_corrupt", "candidate marker invalid"))?;
+    if &actual != expected {
+        return Err(Error::new(
+            "provenance_mismatch",
+            "candidate marker differs from authenticated slice",
+        ));
+    }
+    host_read_root(
+        repository,
+        &root,
+        config_revision,
+        record_digest,
+        Some(root.join(".git/kegari-candidate.json")),
+    )
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GitCommitIdentity {
+    pub name: String,
+    pub email: String,
+    pub date: String,
+}
+/// Exact source object bytes exported for the configured provider's Git data
+/// API. The returned SHA must still equal this actual Git commit after creation.
+pub struct GitPublicationObjects {
+    base: Revision,
+    revision: Revision,
+    author: GitCommitIdentity,
+    committer: GitCommitIdentity,
+    message: String,
+    entries: Vec<SourceTreeEntry>,
+    blobs: BTreeMap<String, Vec<u8>>,
+}
+impl GitPublicationObjects {
+    pub fn base(&self) -> &Revision {
+        &self.base
+    }
+    pub fn revision(&self) -> &Revision {
+        &self.revision
+    }
+    pub fn author(&self) -> &GitCommitIdentity {
+        &self.author
+    }
+    pub fn committer(&self) -> &GitCommitIdentity {
+        &self.committer
+    }
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+    pub fn entries(&self) -> &[SourceTreeEntry] {
+        &self.entries
+    }
+    pub fn blobs(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.blobs
+    }
+}
+fn commit_object_identity(line: &str, prefix: &str) -> Result<GitCommitIdentity> {
+    let text = line
+        .strip_prefix(prefix)
+        .ok_or_else(|| Error::new("unsupported_repository", "commit identity header missing"))?;
+    let (identity, date) = text
+        .rsplit_once("> ")
+        .ok_or_else(|| Error::new("unsupported_repository", "commit identity is malformed"))?;
+    let (name, email) = identity
+        .split_once(" <")
+        .ok_or_else(|| Error::new("unsupported_repository", "commit identity is malformed"))?;
+    let identity = CommitIdentity {
+        name: name.into(),
+        email: email.into(),
+    };
+    identity.validate()?;
+    let (seconds, offset) = date
+        .split_once(' ')
+        .ok_or_else(|| Error::new("unsupported_repository", "commit date is malformed"))?;
+    let seconds: i64 = seconds
+        .parse()
+        .map_err(|_| Error::new("unsupported_repository", "commit timestamp is invalid"))?;
+    if offset == "-0000" {
+        return Err(Error::new(
+            "unsupported_repository",
+            "negative-zero commit timezone cannot be reproduced by the provider date contract",
+        ));
+    }
+    if offset.len() != 5
+        || !matches!(offset.as_bytes()[0], b'+' | b'-')
+        || !offset.as_bytes()[1..].iter().all(u8::is_ascii_digit)
+    {
+        return Err(Error::new(
+            "unsupported_repository",
+            "commit timezone is invalid",
+        ));
+    }
+    let hour: i32 = offset[1..3]
+        .parse()
+        .map_err(|_| Error::new("unsupported_repository", "commit timezone is invalid"))?;
+    let minute: i32 = offset[3..5]
+        .parse()
+        .map_err(|_| Error::new("unsupported_repository", "commit timezone is invalid"))?;
+    if hour > 23 || minute > 59 {
+        return Err(Error::new(
+            "unsupported_repository",
+            "commit timezone is invalid",
+        ));
+    }
+    let zone = chrono::FixedOffset::east_opt(
+        (hour * 3600 + minute * 60) * if offset.starts_with('-') { -1 } else { 1 },
+    )
+    .ok_or_else(|| Error::new("unsupported_repository", "commit timezone is invalid"))?;
+    let date = chrono::DateTime::from_timestamp(seconds, 0)
+        .ok_or_else(|| {
+            Error::new(
+                "unsupported_repository",
+                "commit date outside supported range",
+            )
+        })?
+        .with_timezone(&zone)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    Ok(GitCommitIdentity {
+        name: identity.name,
+        email: identity.email,
+        date,
+    })
+}
+impl Git {
+    /// Read only the explicitly configured repository-local human identity.
+    /// No global or inferred provider identity can satisfy source signoff.
+    pub fn configured_commit_identity(&self, source: &Path) -> Result<CommitIdentity> {
+        let read = |name: &str| -> Result<String> {
+            let output = self
+                .run(source, &["config", "--local", "--get", name], None)
+                .map_err(|error| {
+                    Error::new(
+                        "commit_identity_required",
+                        "configure repository-local user.name and user.email before source commits",
+                    )
+                    .detail(serde_json::json!({"field":name,"cause":error.code}))
+                })?;
+            let value = String::from_utf8(output).map_err(|_| {
+                Error::new(
+                    "commit_identity_required",
+                    "local commit identity is not UTF-8",
+                )
+            })?;
+            Ok(value.strip_suffix('\n').unwrap_or(&value).to_owned())
+        };
+        let identity = CommitIdentity {
+            name: read("user.name")?,
+            email: read("user.email")?,
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+    /// Read-only object export. Only a plain one-parent commit is supported;
+    /// signatures/extra headers are never silently dropped to create a new SHA.
+    pub fn publication_objects(
+        &self,
+        source: &Path,
+        base: &Revision,
+        head: &Revision,
+    ) -> Result<GitPublicationObjects> {
+        if self.exact_revision(source, &base.commit)? != *base
+            || self.exact_revision(source, &head.commit)? != *head
+            || base.tree == head.tree
+        {
+            return Err(Error::new(
+                "provenance_mismatch",
+                "publication object revisions are missing or unchanged",
+            ));
+        }
+        self.single_parent(source, &head.commit, &base.commit)?;
+        let raw =
+            String::from_utf8(self.run(source, &["cat-file", "commit", &head.commit], None)?)
+                .map_err(|_| Error::new("unsupported_repository", "commit object is not UTF-8"))?;
+        let (headers, message) = raw.split_once("\n\n").ok_or_else(|| {
+            Error::new(
+                "unsupported_repository",
+                "commit object has no message boundary",
+            )
+        })?;
+        let headers: Vec<_> = headers.split('\n').collect();
+        if headers.len() != 4
+            || headers[0] != format!("tree {}", head.tree)
+            || headers[1] != format!("parent {}", base.commit)
+            || message.is_empty()
+            || message.len() > 65536
+            || message.contains('\0')
+        {
+            return Err(Error::new(
+                "unsupported_repository",
+                "commit contains unsupported headers or message",
+            ));
+        }
+        let author = commit_object_identity(headers[2], "author ")?;
+        let committer = commit_object_identity(headers[3], "committer ")?;
+        let original = self.source_tree(source, &base.commit)?;
+        let current = self.source_tree(source, &head.commit)?;
+        let mut entries = Vec::new();
+        let mut blobs = BTreeMap::new();
+        let mut blob_bytes = 0usize;
+        for path in original
+            .keys()
+            .chain(current.keys())
+            .collect::<BTreeSet<_>>()
+        {
+            if original.get(path) == current.get(path) {
+                continue;
+            }
+            let old = original.get(path);
+            let new = current.get(path);
+            if let Some((_, oid)) = new
+                && !blobs.contains_key(oid)
+            {
+                let bytes = self.run(source, &["cat-file", "blob", oid], None)?;
+                blob_bytes = blob_bytes
+                    .checked_add(bytes.len())
+                    .filter(|n| *n <= 256 * 1024 * 1024)
+                    .ok_or_else(|| {
+                        Error::new("bounded_input", "Git publication objects exceed 256 MiB")
+                    })?;
+                blobs.insert(oid.clone(), bytes);
+            }
+            entries.push(SourceTreeEntry {
+                path: path.clone(),
+                mode: new.or(old).expect("changed path exists").0.clone(),
+                object: new.map(|(_, oid)| oid.clone()),
+            });
+        }
+        Ok(GitPublicationObjects {
+            base: base.clone(),
+            revision: head.clone(),
+            author,
+            committer,
+            message: message.into(),
+            entries,
+            blobs,
+        })
+    }
 }

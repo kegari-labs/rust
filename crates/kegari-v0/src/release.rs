@@ -47,6 +47,14 @@ pub enum StepKind {
         expected_tree: String,
         expected_artifact: Option<String>,
     },
+    /// Observe an already-serving accepted unchanged repository target.
+    /// This step never authorizes a merge, deployment or workflow dispatch.
+    VerifyExisting {
+        repository: RepositoryId,
+        target: ResourceKey,
+        source: Revision,
+        artifact_digest: String,
+    },
     Verify {
         repository: RepositoryId,
         target: ResourceKey,
@@ -62,7 +70,8 @@ impl StepKind {
         match self {
             Self::Merge { repository, .. }
             | Self::Deploy { repository, .. }
-            | Self::Verify { repository, .. } => repository,
+            | Self::Verify { repository, .. }
+            | Self::VerifyExisting { repository, .. } => repository,
         }
     }
 }
@@ -134,6 +143,7 @@ impl ReleasePlan {
         let mut step_map = BTreeMap::new();
         let mut merge_repositories = BTreeSet::new();
         let mut deployment_targets = BTreeSet::new();
+        let mut verification_targets = BTreeSet::new();
         let mut required_resources = BTreeSet::new();
         for step in &self.steps {
             if step.id.trim().is_empty() || step_map.insert(step.id.clone(), step).is_some() {
@@ -201,6 +211,24 @@ impl ReleasePlan {
                         validate_digest(artifact)?;
                     }
                 }
+                StepKind::VerifyExisting {
+                    target,
+                    source,
+                    artifact_digest,
+                    ..
+                } => {
+                    validate_target(target)?;
+                    source.validate()?;
+                    validate_digest(artifact_digest)?;
+                    if !deployment_targets.insert(target.clone())
+                        || !verification_targets.insert(target.clone())
+                    {
+                        return Err(Error::invalid(
+                            "existing target must have one exclusive verification",
+                        ));
+                    }
+                    required_resources.insert(target.clone());
+                }
                 StepKind::Verify {
                     target,
                     expected_tree,
@@ -209,12 +237,22 @@ impl ReleasePlan {
                 } => {
                     validate_target(target)?;
                     validate_oid(expected_tree)?;
+                    if !verification_targets.insert(target.clone()) {
+                        return Err(Error::invalid(
+                            "target must have exactly one terminal verification",
+                        ));
+                    }
                     required_resources.insert(target.clone());
                     if let Some(artifact) = expected_artifact {
                         validate_digest(artifact)?;
                     }
                 }
             }
+        }
+        if deployment_targets != verification_targets {
+            return Err(Error::invalid(
+                "every target requires its exact terminal verification",
+            ));
         }
         if self.resources != required_resources
             || !self.deployment_free.is_subset(&merge_repositories)
@@ -249,6 +287,11 @@ impl ReleasePlan {
                         && (!ancestors[&step.id].contains(deployment_step)
                             || !step_map.get(deployment_step).is_some_and(|s| matches!(&s.kind, StepKind::Deploy { target: t, repository: r, .. } if t == target && r == repository))) {
                         return Err(Error::invalid("verification must follow its matching deployment"));
+                    }
+                }
+                StepKind::VerifyExisting { repository, .. } => {
+                    if merge_repositories.contains(repository) || self.deployment_free.contains(repository) {
+                        return Err(Error::invalid("existing target verification cannot share a changed or deployment-free repository"));
                     }
                 }
                 StepKind::Merge { repository, .. } => {
@@ -525,12 +568,16 @@ pub struct RecoveryDecision<'a> {
 /// this proof may truthfully report that the release command is still awaited.
 #[derive(Clone, Debug)]
 pub struct VerifiedReleaseEligibility {
+    acceptance_digest: String,
     plan_digest: String,
     evidence_token: String,
     checked_at: DateTime<Utc>,
     awaiting_manual_command: bool,
 }
 impl VerifiedReleaseEligibility {
+    pub fn acceptance_digest(&self) -> &str {
+        &self.acceptance_digest
+    }
     pub fn plan_digest(&self) -> &str {
         &self.plan_digest
     }
@@ -557,8 +604,10 @@ pub fn verify_release_eligibility(
         facts.manual_mode && (facts.explicit_manual_request.is_none() || !facts.actor_may_release);
     // The evaluated draft is not returned or persisted and grants no dispatch
     // capability. All ordinary admission predicates remain identical.
+    let acceptance_digest = evidence.acceptance.digest().to_owned();
     ReleaseAttempt::evaluate(plan.clone(), evidence, facts, now, false)?;
     Ok(VerifiedReleaseEligibility {
+        acceptance_digest,
         plan_digest: plan.digest()?,
         evidence_token: plan.evidence_token.clone(),
         checked_at: now,
@@ -708,6 +757,7 @@ impl ReleaseAttempt {
                         && &c.ordered_delta_digests == selected_delta_digests
                 }) || !production.iter().any(|p| {
                     p.work() == &parent.manifest().work
+                        && !p.is_existing_production()
                         && p.revision().repository == *repository
                         && p.revision().base == production_base.commit
                         && p.revision().head == candidate.commit
@@ -718,6 +768,47 @@ impl ReleaseAttempt {
                     "scope_violation",
                     "production merge lacks its accepted isolated candidate and full verified production validation",
                 ));
+            }
+        }
+        for step in &plan.steps {
+            if let StepKind::VerifyExisting {
+                repository,
+                target,
+                source,
+                artifact_digest,
+            } = &step.kind
+            {
+                let ResourceKey::Target { id, .. } = target else {
+                    unreachable!("validated target")
+                };
+                let candidate_matches = parent.manifest().candidates.iter().any(|candidate| {
+                    &candidate.repository == repository
+                        && candidate.ordered_delta_digests.is_empty()
+                        && &candidate.production == source
+                        && candidate.result.as_ref() == Some(source)
+                });
+                let baseline_matches = parent.manifest().baselines.iter().any(|baseline| {
+                    &baseline.repository == repository
+                        && &baseline.production == source
+                        && !baseline.deployment_free
+                        && baseline.deployed_revision.as_ref() == Some(&source.commit)
+                        && baseline.target_artifacts.get(id) == Some(artifact_digest)
+                });
+                let validation_matches = production.iter().any(|proof| {
+                    proof.is_existing_production()
+                        && proof.work() == &parent.manifest().work
+                        && &proof.revision().repository == repository
+                        && proof.revision().head == source.commit
+                        && proof.revision().base == source.commit
+                        && proof.revision().tested_commit == source.commit
+                        && proof.revision().tested_tree == source.tree
+                });
+                if !candidate_matches || !baseline_matches || !validation_matches {
+                    return Err(Error::new(
+                        "scope_violation",
+                        "existing target verification lacks its exact accepted unchanged source, artifact and production validation",
+                    ));
+                }
             }
         }
         let steps = plan
@@ -840,6 +931,16 @@ impl ReleaseAttempt {
                     ));
                 }
             }
+            StepKind::VerifyExisting {
+                repository, source, ..
+            } => {
+                if facts.current_revisions.get(repository) != Some(source) {
+                    return Err(Error::new(
+                        "stale_result",
+                        "already-serving target source moved since acceptance",
+                    ));
+                }
+            }
             StepKind::Deploy {
                 repository,
                 source_merge_step,
@@ -873,6 +974,7 @@ impl ReleaseAttempt {
     fn source_commit(&self, step: &ReleaseStep) -> Result<Option<String>> {
         let id = match &step.kind {
             StepKind::Merge { .. } => return Ok(None),
+            StepKind::VerifyExisting { source, .. } => return Ok(Some(source.commit.clone())),
             StepKind::Deploy {
                 source_merge_step, ..
             }
@@ -1098,6 +1200,29 @@ impl ReleaseAttempt {
                         .as_ref()
                         .is_none_or(|expected| expected == artifact_digest)
                     && matches!(self.steps.get(deployment_step), Some(StepState::Succeeded { effect, .. }) if matches!(effect.as_ref(), ObservedEffect::Deployment { artifact_digest: deployed, .. } if deployed == artifact_digest))
+            }
+            (
+                StepKind::VerifyExisting {
+                    repository,
+                    target,
+                    source,
+                    artifact_digest: expected,
+                },
+                ObservedEffect::Verification {
+                    repository: actual_repo,
+                    target: actual_target,
+                    source_commit,
+                    tree,
+                    artifact_digest,
+                    evidence_digest,
+                },
+            ) => {
+                validate_digest(evidence_digest)?;
+                repository == actual_repo
+                    && target == actual_target
+                    && source.commit == *source_commit
+                    && source.tree == *tree
+                    && expected == artifact_digest
             }
             _ => false,
         };

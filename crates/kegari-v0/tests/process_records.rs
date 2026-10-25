@@ -79,11 +79,12 @@ fn setup() -> (
     let binding = SpawnBinding {
         operation_id: Uuid::new_v4(),
         effect_id: Uuid::new_v4(),
-        lease: Lease {
+        lease: Some(Lease {
             runtime_id: runtime,
             owner_id: Uuid::new_v4(),
             owner_generation: 1,
-        },
+        }),
+        control_owner: None,
         work_key: bytes_digest(b"canonical work"),
         scope_digest: bytes_digest(b"exact scope"),
         cwd: root,
@@ -168,4 +169,91 @@ fn quick_exit_can_record_actual_owned_group_cleanup_without_live_identity_guess(
     );
     assert!(observed[0].process.is_none());
     assert!(!observed[0].all_descendants_exited);
+}
+
+#[test]
+fn replaced_or_missing_guard_cannot_erase_retained_process_identity() {
+    use std::os::unix::fs::PermissionsExt;
+    let (temp, journal, _probe, binding) = setup();
+    let guard = journal.begin(binding.clone()).unwrap();
+    let path = temp
+        .path()
+        .join("processes")
+        .join(binding.operation_id.to_string())
+        .join(format!("{}.guard", binding.effect_id));
+    // Retain the old inode to prevent allocator reuse while replacing its name.
+    std::fs::rename(&path, path.with_extension("old")).unwrap();
+    std::fs::write(&path, b"").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::remove_file(path.with_extension("old")).unwrap();
+    assert_eq!(
+        journal.observe(binding.operation_id).unwrap_err().code,
+        "unsafe_storage"
+    );
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        journal.observe(binding.operation_id).unwrap_err().code,
+        "record_missing"
+    );
+    assert!(!path.exists(), "recovery must not create a new guard");
+    drop(guard);
+}
+
+#[test]
+fn oversized_or_foreign_recovery_entries_fail_before_unbounded_record_parsing() {
+    let (temp, journal, _probe, binding) = setup();
+    drop(journal.begin(binding.clone()).unwrap());
+    let directory = PrivateDir::open(
+        &temp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("processes")
+            .join(binding.operation_id.to_string()),
+    )
+    .unwrap();
+    directory
+        .write(&format!("{}.json", binding.effect_id), &"x".repeat(65_537))
+        .unwrap();
+    assert_eq!(
+        journal.observe(binding.operation_id).unwrap_err().code,
+        "record_corrupt"
+    );
+    std::fs::write(directory.path().join("unexpected-entry"), b"unknown").unwrap();
+    assert_eq!(
+        journal.observe(binding.operation_id).unwrap_err().code,
+        "record_corrupt"
+    );
+}
+
+#[test]
+fn concurrent_claims_cannot_rewrite_a_prior_effect_after_guard_release() {
+    let (_temp, journal, _probe, binding) = setup();
+    let barrier = Arc::new(std::sync::Barrier::new(16));
+    let mut threads = Vec::new();
+    for _ in 0..16 {
+        let journal = journal.clone();
+        let binding = binding.clone();
+        let barrier = barrier.clone();
+        threads.push(std::thread::spawn(move || {
+            barrier.wait();
+            journal.begin(binding).map(drop)
+        }));
+    }
+    let results: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    assert_eq!(
+        results.iter().filter(|result| result.is_ok()).count(),
+        1,
+        "{results:?}"
+    );
+    // Competing OS opens/locks may fail conservatively before duplicate lookup.
+    // The observable invariant is one durable claimant, never an accepted replay.
+    assert_eq!(journal.observe(binding.operation_id).unwrap().len(), 1);
+    assert_eq!(
+        journal.begin(binding).err().unwrap().code,
+        "operation_uncertain"
+    );
 }

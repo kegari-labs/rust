@@ -44,11 +44,7 @@ pub trait SupervisorDriver: Send + Sync {
     ) -> SupervisorFuture<'a, DrainState>;
     /// Called once per generation/operation after durable fencing. Cancellation
     /// results must remain pending/unknown until actually observed.
-    fn cancel_fenced<'a>(
-        &'a self,
-        lease: &'a Lease,
-        operations: &'a [Uuid],
-    ) -> SupervisorFuture<'a, ()>;
+    fn cancel_fenced<'a>(&'a self, operations: &'a [Uuid]) -> SupervisorFuture<'a, ()>;
     fn exited<'a>(&'a self, lease: &'a Lease) -> SupervisorFuture<'a, DrainState>;
 }
 #[derive(Clone, Copy, Debug)]
@@ -313,11 +309,15 @@ impl Supervisor {
     pub async fn run(self) -> Result<()> {
         let mut blocked_command = None;
         let mut prerequisite_failure = false;
+        let mut cancelled = BTreeSet::new();
         loop {
             if self.shutdown.requested() {
                 return Ok(());
             }
             let snapshot = self.control.snapshot()?;
+            if let Err(error) = self.cancel_new_fences(&mut cancelled).await {
+                self.publish(SupervisorState::Blocked, None, 0, Some(error));
+            }
             if prerequisite_failure
                 && self
                     .shutdown
@@ -385,7 +385,6 @@ impl Supervisor {
             };
             let lease = process.lease().clone();
             self.publish(SupervisorState::Recovering, Some(&lease), 0, None);
-            let mut cancelled = BTreeSet::new();
             let activated = tokio::select! { _=self.shutdown.notified()=>Err(Error::new("host_shutdown", "control host interruption requires owned work reconciliation")), result=timeout(
                 self.limits.driver_step,
                 process.activate(self.driver.recover(&lease)),
@@ -443,7 +442,7 @@ impl Supervisor {
                     "owned orchestration exited unexpectedly; preserved work requires reconciliation",
                 ));
             }
-            self.cancel_new_fences(&lease, cancelled).await?;
+            self.cancel_new_fences(cancelled).await?;
             let observed = self
                 .with_heartbeats(process, self.driver.maintain(&lease, &snapshot), cancelled)
                 .await?;
@@ -509,7 +508,6 @@ impl Supervisor {
         cancelled: &mut BTreeSet<(u64, Uuid)>,
     ) -> Result<T> {
         let mut future = future;
-        let lease = process.lease().clone();
         let deadline = Instant::now() + self.limits.driver_step;
         let mut heartbeat = tokio::time::interval(self.limits.heartbeat);
         heartbeat.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -518,8 +516,8 @@ impl Supervisor {
                 _=self.shutdown.notified()=>return Err(Error::new("host_shutdown", "control host interruption requires owned work reconciliation")),
                 result=&mut future=>return result,
                 _=tokio::time::sleep_until(deadline)=>return Err(Error::new("timeout","supervisor driver step exceeded its bound; retain unknown effects")),
-                _=self.wake.notified()=>{process.refresh().await?;self.cancel_new_fences(&lease,cancelled).await?;},
-                _=heartbeat.tick()=>{process.refresh().await?;self.cancel_new_fences(&lease,cancelled).await?;},
+                _=self.wake.notified()=>{process.refresh().await?;self.cancel_new_fences(cancelled).await?;},
+                _=heartbeat.tick()=>{process.refresh().await?;self.cancel_new_fences(cancelled).await?;},
             }
         }
     }
@@ -530,7 +528,7 @@ impl Supervisor {
         failed_command: Uuid,
     ) -> Result<()> {
         let lease = process.lease().clone();
-        if let Err(error) = self.cancel_new_fences(&lease, cancelled).await {
+        if let Err(error) = self.cancel_new_fences(cancelled).await {
             self.publish(SupervisorState::Blocked, Some(&lease), 0, Some(error));
         }
         // This retires only the scheduling child after admission is closed; it
@@ -560,7 +558,7 @@ impl Supervisor {
                 ));
             }
             let snapshot = self.control.snapshot()?;
-            if let Err(error) = self.cancel_new_fences(&lease, cancelled).await {
+            if let Err(error) = self.cancel_new_fences(cancelled).await {
                 self.publish(SupervisorState::Blocked, Some(&lease), 0, Some(error));
             }
             if process.exited()? {
@@ -604,17 +602,12 @@ impl Supervisor {
             }
         }
     }
-    async fn cancel_new_fences(
-        &self,
-        lease: &Lease,
-        cancelled: &mut BTreeSet<(u64, Uuid)>,
-    ) -> Result<()> {
+    async fn cancel_new_fences(&self, cancelled: &mut BTreeSet<(u64, Uuid)>) -> Result<()> {
         let snapshot = self.control.snapshot()?;
         let pending: Vec<_> = snapshot
-            .active_operations
+            .fenced_operations
             .iter()
-            .filter(|permit| snapshot.fenced_operations.contains(&permit.operation_id))
-            .map(|permit| (snapshot.intent.generation, permit.operation_id))
+            .map(|operation| (snapshot.intent.generation, *operation))
             .filter(|key| !cancelled.contains(key))
             .collect();
         if pending.is_empty() {
@@ -630,7 +623,7 @@ impl Supervisor {
         let ids: Vec<_> = pending.into_iter().map(|(_, id)| id).collect();
         timeout(
             self.limits.driver_step.min(Duration::from_secs(5)),
-            self.driver.cancel_fenced(lease, &ids),
+            self.driver.cancel_fenced(&ids),
         )
         .await
         .map_err(|_| {

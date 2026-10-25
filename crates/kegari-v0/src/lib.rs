@@ -12,10 +12,13 @@ pub mod config;
 pub mod configuration;
 pub mod connections;
 pub mod control;
+pub mod corrections;
 pub mod delivery;
+pub mod deployment;
 pub mod digest;
 pub mod error;
 pub mod evaluation;
+pub mod evaluation_reports;
 pub mod evidence;
 pub mod execution;
 pub mod git;
@@ -34,6 +37,12 @@ pub mod providers;
 pub mod reconcile;
 pub mod release;
 pub mod runtime;
+mod runtime_actions;
+mod runtime_claims;
+pub mod runtime_delivery;
+pub mod runtime_driver;
+#[cfg(test)]
+mod runtime_fixture;
 pub mod runtime_schedule;
 pub mod runtime_workers;
 pub mod runtime_workflow;
@@ -48,3 +57,5 @@ pub mod worker_run;
 pub mod workflow;
 
 pub mod decisions;
+
+pub mod host_process;

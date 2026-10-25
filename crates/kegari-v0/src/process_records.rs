@@ -27,7 +27,9 @@ use uuid::Uuid;
 pub struct SpawnBinding {
     pub operation_id: Uuid,
     pub effect_id: Uuid,
-    pub lease: Lease,
+    pub lease: Option<Lease>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_owner: Option<crate::host_process::HostProcessIdentity>,
     pub work_key: String,
     pub scope_digest: String,
     pub cwd: PathBuf,
@@ -35,6 +37,24 @@ pub struct SpawnBinding {
     pub observed_executables: Vec<BinaryIdentity>,
     pub argv_digest: String,
     pub kind: String,
+}
+impl SpawnBinding {
+    fn runtime_id(&self) -> Result<Uuid> {
+        match (&self.lease, &self.control_owner) {
+            (Some(lease), None) => Ok(lease.runtime_id),
+            (None, Some(owner))
+                if owner.operation_id == self.operation_id
+                    && owner.work_key == self.work_key
+                    && owner.scope_digest == self.scope_digest =>
+            {
+                Ok(owner.runtime_id)
+            }
+            _ => Err(Error::new(
+                "scope_violation",
+                "process record needs exactly one worker or control-host authority",
+            )),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
@@ -55,6 +75,8 @@ pub struct ProcessRecord {
     pub binding: SpawnBinding,
     pub host: ProcessIdentity,
     pub guard: String,
+    pub guard_device: u64,
+    pub guard_inode: u64,
     pub state: ProcessState,
 }
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -70,6 +92,7 @@ pub enum RecoveryState {
 pub struct ProcessRecovery {
     pub operation_id: Uuid,
     pub effect_id: Uuid,
+    pub binding: SpawnBinding,
     pub state: RecoveryState,
     pub process: Option<ProcessIdentity>,
     /// This journal does not prove containment of detached descendants.
@@ -101,9 +124,26 @@ impl ProcessJournal {
     /// Persist before native spawn while holding the operation's current gate.
     /// Any record already present means recovery, never permission to replay.
     pub fn begin(self: &Arc<Self>, binding: SpawnBinding) -> Result<SpawnGuard> {
+        if binding.control_owner.is_some() || binding.lease.is_none() {
+            return Err(Error::new(
+                "access_denied",
+                "host-local process requires a sealed host permit",
+            ));
+        }
+        self.begin_owned(binding)
+    }
+    pub(crate) fn begin_control(
+        self: &Arc<Self>,
+        binding: SpawnBinding,
+        permit: &crate::host_process::LocalProcessPermit,
+    ) -> Result<SpawnGuard> {
+        permit.validate_journal_binding(&binding)?;
+        self.begin_owned(binding)
+    }
+    fn begin_owned(self: &Arc<Self>, binding: SpawnBinding) -> Result<SpawnGuard> {
         if binding.operation_id.is_nil()
             || binding.effect_id.is_nil()
-            || binding.lease.runtime_id != self.runtime
+            || binding.runtime_id()? != self.runtime
             || binding.work_key.is_empty()
             || binding.kind.is_empty()
             || binding.kind.len() > 128
@@ -148,23 +188,54 @@ impl ProcessJournal {
             Err(error) if error.code == "record_missing" => {}
             Err(error) => return Err(error),
         }
-        if operation.records()?.len() >= 4096 {
+        if bounded_records(&operation)?.len() >= 4096 {
             return Err(Error::new(
                 "process_limit",
                 "operation exhausted bounded process records",
             ));
         }
         let guard_name = format!("{}.guard", binding.effect_id);
-        let lock = operation.lock(&guard_name)?;
+        let lock = operation
+            .lock(&guard_name)
+            .map_err(|error| error.detail(serde_json::json!({"stage":"acquire_guard"})))?;
+        // A previous claimant may have completed between the first read and
+        // acquiring this lock. The durable record is authoritative even after
+        // its process released the guard; an existing effect is never replayed.
+        match operation.read::<ProcessRecord>(&record_name) {
+            Ok(_) => {
+                return Err(Error::new(
+                    "operation_uncertain",
+                    "process effect already has a durable identity record",
+                ));
+            }
+            Err(error) if error.code == "record_missing" => {}
+            Err(error) => return Err(error),
+        }
+        let (guard_device, guard_inode) = lock.identity()?;
         let inherited = lock.inherited_file()?;
+        let host = self.probe.current()?;
+        if binding
+            .control_owner
+            .as_ref()
+            .is_some_and(|owner| owner.process != host)
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "host-local process belongs to another actual control process",
+            ));
+        }
         let record = ProcessRecord {
             schema_version: 1,
-            host: self.probe.current()?,
+            host,
             guard: guard_name,
+            guard_device,
+            guard_inode,
             binding,
             state: ProcessState::Starting,
         };
-        operation.write(&record_name, &record)?;
+        operation
+            .write(&record_name, &record)
+            .map_err(|error| error.detail(serde_json::json!({"stage":"persist_starting"})))?;
         Ok(SpawnGuard {
             journal: self.clone(),
             directory: operation,
@@ -187,13 +258,18 @@ impl ProcessJournal {
         }
         let operation = PrivateDir::open(&path)?;
         let mut observed = Vec::new();
-        for leaf in operation.records()? {
-            let record: ProcessRecord = operation.read(&leaf)?;
+        for leaf in bounded_records(&operation)? {
+            let record: ProcessRecord = operation.read_bounded(&leaf, 64 * 1024)?;
             if record.schema_version != 1
-                || record.binding.lease.runtime_id != self.runtime
+                || record.binding.runtime_id()? != self.runtime
                 || record.binding.operation_id != operation_id
                 || leaf != format!("{}.json", record.binding.effect_id)
                 || record.guard != format!("{}.guard", record.binding.effect_id)
+                || record
+                    .binding
+                    .control_owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.process != record.host)
             {
                 return Err(Error::new(
                     "record_corrupt",
@@ -205,20 +281,11 @@ impl ProcessJournal {
                 ProcessState::GroupExited { process, .. } => process.clone(),
                 ProcessState::Starting => None,
             };
-            let guard_metadata = std::fs::symlink_metadata(operation.path().join(&record.guard))
-                .map_err(|error| Error::io("inspect retained process guard", error))?;
-            use std::os::unix::fs::MetadataExt;
-            if !guard_metadata.is_file()
-                || guard_metadata.uid() != unsafe { libc::geteuid() }
-                || guard_metadata.mode() & 0o077 != 0
-                || guard_metadata.nlink() != 1
-            {
-                return Err(Error::new(
-                    "unsafe_storage",
-                    "retained process guard is not an owned private regular file",
-                ));
-            }
-            let state = match operation.lock(&record.guard) {
+            let state = match operation.lock_existing(
+                &record.guard,
+                record.guard_device,
+                record.guard_inode,
+            ) {
                 Err(error) if error.code == "ownership_conflict" => RecoveryState::GuardHeld,
                 Err(error) => return Err(error),
                 Ok(_guard) => match &record.state {
@@ -245,6 +312,7 @@ impl ProcessJournal {
             observed.push(ProcessRecovery {
                 operation_id,
                 effect_id: record.binding.effect_id,
+                binding: record.binding,
                 state,
                 process,
                 all_descendants_exited: false,
@@ -257,6 +325,12 @@ impl ProcessJournal {
         for entry in std::fs::read_dir(self.directory.path())
             .map_err(|error| Error::io("enumerate process operation references", error))?
         {
+            if operations.len() >= 65_536 {
+                return Err(Error::new(
+                    "process_limit",
+                    "retained process operations exceed bounded recovery inventory",
+                ));
+            }
             let entry =
                 entry.map_err(|error| Error::io("read process operation reference", error))?;
             let id = entry
@@ -367,10 +441,12 @@ impl SpawnGuard {
             .into_iter()
             .next()
             .ok_or_else(|| Error::new("operation_uncertain", "owned child identity disappeared"))?;
-        self.record.state = ProcessState::Running {
+        let mut next = self.record.clone();
+        next.state = ProcessState::Running {
             process: process.clone(),
         };
-        self.directory.write(&self.record_name, &self.record)?;
+        self.directory.write(&self.record_name, &next)?;
+        self.record = next;
         Ok(process)
     }
     /// Call only after the actual owned Child was reaped and its owned group was
@@ -400,4 +476,40 @@ impl SpawnGuard {
     pub fn binding_digest(&self) -> Result<String> {
         canonical_digest(1, &self.record.binding)
     }
+}
+
+fn bounded_records(directory: &PrivateDir) -> Result<Vec<String>> {
+    let mut records = Vec::new();
+    for (index, entry) in std::fs::read_dir(directory.path())
+        .map_err(|error| Error::io("enumerate process records", error))?
+        .enumerate()
+    {
+        if index >= 8192 {
+            return Err(Error::new(
+                "process_limit",
+                "retained process records exceed bounded recovery inventory",
+            ));
+        }
+        let entry = entry.map_err(|error| Error::io("read process record entry", error))?;
+        let leaf = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| Error::new("record_corrupt", "non-UTF8 process record entry"))?;
+        if leaf.ends_with(".json") {
+            if records.len() >= 4096 {
+                return Err(Error::new(
+                    "process_limit",
+                    "retained process records exceed bounded recovery inventory",
+                ));
+            }
+            records.push(leaf);
+        } else if !leaf.ends_with(".guard") {
+            return Err(Error::new(
+                "record_corrupt",
+                "unexpected retained process record entry",
+            ));
+        }
+    }
+    records.sort();
+    Ok(records)
 }

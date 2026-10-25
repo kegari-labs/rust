@@ -235,3 +235,31 @@ manually reconciled or allow service shutdown. Failure after dispatch leaves the
 receipt and target hold unresolved; it never authorizes a resend. Completed
 observations publish under the same lock so a newly observed correction cannot
 race between the final check and launch.
+
+## Private Linear recording readback
+
+`LinearClient::download_uploaded_asset` accepts IDs of actual protected grant,
+upload and association receipts. Before any download it verifies their immutable
+account, issue, size, content type, grant and content digest bindings and their
+actual acknowledgements. It rereads the complete native comment set and requires
+the exact acknowledged comment ID, full dispatched body digest, native writer
+and canonical recording Markdown prefix. It reads the comment again after the
+bytes to detect an association changed during download. A URL mentioned inside
+arbitrary comment text is insufficient.
+
+The supported private-storage route is the canonical
+`https://api.linear.app/graphql` API and `https://uploads.linear.app` on port 443.
+Only the exact acknowledged asset URL receives the configured Linear credential.
+Queries, fragments, userinfo, alternate storage hosts, Markdown URL delimiters and
+redirects are rejected. A dedicated bounded streaming transport permits recording
+bodies up to 256 MiB; ordinary JSON/provider bodies remain limited to 8 MiB. Actual
+content type, byte count and SHA-256 must match the upload. Its opaque result
+proves byte identity and current association, not media decoding, browser playback
+or parent acceptance. The delivery layer verifies the actual MP4 separately.
+
+This follows Linear's official
+[file-storage authentication contract](https://linear.app/developers/file-storage-authentication)
+and [manual upload/Markdown association contract](https://linear.app/developers/how-to-upload-a-file-to-linear),
+checked 2026-10-25. Compatible custom GraphQL endpoints have no inferred storage
+authentication contract; that path reports an explicit prerequisite blocker.
+Synthetic wire tests do not establish real-account storage access or playback.

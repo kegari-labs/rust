@@ -1,4 +1,4 @@
-# Scoped child implementation, testing and documentation — version 1
+# Scoped child implementation, testing and documentation — version 2
 
 Read the complete child specification, parent intent, acceptance criteria,
 authorized write repository/paths, read/test resources, dependency results,
@@ -31,3 +31,20 @@ authorization. On completion submit outcome and evidence references through the
 scoped tool, including the correction revision processed and material progress.
 If unfinished, identify the next legitimate step; repeated unchanged progress is
 not grounds for unlimited continuation.
+
+For a completed child, call `outcome_submit` with `claim` containing exactly these
+fields (and keep actual artifact references in the tool's separate `artifact_refs`
+array):
+
+```json
+{"schema_version":1,"summary":"actual outcome and limits","fulfilled_criteria":["exact supplied criterion"],"disposition":{"kind":"changed"}}
+```
+
+Use `{"kind":"no_change","reason":"why the observed exact revision already fulfills the outcome"}`
+for `disposition` when no source contribution is needed. Supply a nonempty truthful
+summary and the exact fulfilled criteria. Do not add self-certified CI, review,
+staging, acceptance or release fields. A no-change explanation does not waive any
+required check. An unfinished or blocked task must say what is missing; never
+submit a completed-child claim for criteria that remain unfulfilled. The host
+independently verifies source, execution and delivery evidence before accepting
+this proposal.

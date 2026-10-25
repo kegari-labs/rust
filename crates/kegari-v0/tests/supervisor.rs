@@ -168,11 +168,7 @@ impl SupervisorDriver for Driver {
             })
         })
     }
-    fn cancel_fenced<'a>(
-        &'a self,
-        _: &'a Lease,
-        operations: &'a [Uuid],
-    ) -> SupervisorFuture<'a, ()> {
+    fn cancel_fenced<'a>(&'a self, operations: &'a [Uuid]) -> SupervisorFuture<'a, ()> {
         Box::pin(async move {
             let snapshot = self.host.snapshot()?;
             assert!(snapshot.persistence_error.is_none());
@@ -528,4 +524,25 @@ async fn restored_prerequisite_retries_only_before_any_owner_was_started() {
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn stopped_control_owner_cancels_fenced_local_handles_without_a_scheduler_lease() {
+    let f = fixture(Duration::from_secs(1));
+    f.driver.defer_cancel.store(true, Ordering::SeqCst);
+    let operation = Uuid::new_v4();
+    f.host.fence(operation).unwrap();
+    lifecycle(&f, Lifecycle::ForceStop);
+    count(&f.driver.cancels, 1).await;
+    assert_eq!(f.probe.spawns.load(Ordering::SeqCst), 0);
+    assert_eq!(f.host.snapshot().unwrap().intent.desired, Intent::Stopped);
+    assert!(
+        f.host
+            .snapshot()
+            .unwrap()
+            .fenced_operations
+            .contains(&operation)
+    );
+    f.shutdown.request();
+    f.task.await.unwrap().unwrap();
 }

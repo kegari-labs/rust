@@ -4,7 +4,7 @@ use kegari_v0::{
     control::{Receipt, ReceiptPhase, RunReference},
     digest::canonical_digest,
     error::Error,
-    runtime_schedule::{plan, require_provider_clear},
+    runtime_schedule::{occupying_runs, plan, require_provider_clear},
     scheduler::{PhaseKey, Trigger},
 };
 use serde_json::json;
@@ -57,6 +57,47 @@ fn receipt(ordinal: u32, outcome: &str, code: &str) -> Receipt {
         cancellation: "none".into(),
         updated_at: Utc::now() - Duration::seconds(60),
     }
+}
+#[test]
+fn recovered_unknown_admissions_keep_capacity_without_live_permit_handles() {
+    let mut retained = Vec::new();
+    for (index, phase) in [
+        ReceiptPhase::Prepared,
+        ReceiptPhase::Sent,
+        ReceiptPhase::Acknowledged,
+        ReceiptPhase::Reconciled,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut old = receipt(1, "completed", "");
+        old.operation_id = Uuid::from_u128(200 + index as u128);
+        old.request_id = old.operation_id;
+        let mut run = RunReference::from_receipt(&old).unwrap().unwrap();
+        run.phase.work = digest(&format!("held-child-{index}"));
+        old.canonical_targets = vec![run.phase.work.clone()];
+        old.expected
+            .insert("run".into(), serde_json::to_string(&run).unwrap());
+        // Fixture represents protected records after losing every in-memory
+        // handle. Protocol completion has never established local tree exit.
+        old.phase = phase;
+        old.observed_result =
+            Some(json!({"observation":{"outcome":"completed"},"local_exit_confirmed":false}));
+        retained.push(old);
+    }
+    assert_eq!(occupying_runs(config().id, &retained).unwrap().len(), 4);
+    retained[3].observed_result =
+        Some(json!({"local_execution":"exited","unresolved_effects":[Uuid::from_u128(44)]}));
+    // External uncertainty continues holding work independently, but an actual
+    // host-recorded local exit frees exactly this one model-session slot.
+    assert_eq!(occupying_runs(config().id, &retained).unwrap().len(), 3);
+    retained[0].observed_result = Some(json!({"local_execution":"exited"}));
+    assert_eq!(occupying_runs(config().id, &retained).unwrap().len(), 3);
+    retained[0].runtime_id = Uuid::from_u128(999);
+    assert_eq!(
+        occupying_runs(config().id, &retained).unwrap_err().code,
+        "record_corrupt"
+    );
 }
 #[test]
 fn retries_are_timed_from_actual_exit_and_honor_longer_provider_wait() {

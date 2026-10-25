@@ -1,5 +1,7 @@
 //! Decision commands through production provider parsers. All provider facts
 //! and process observations below are labeled deterministic fixtures.
+#[path = "support/pinned_git.rs"]
+mod pinned_git;
 use chrono::Utc;
 use kegari_v0::{
     config::Config, digest::canonical_digest, error::Result, evidence::AttestationKey,
@@ -411,14 +413,6 @@ impl DecisionEvidence for Evidence {
         Box::pin(async { Err(Error::new("fixture", "no synthetic reconciliation success")) })
     }
 }
-fn git_path() -> PathBuf {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|p| p.join("git"))
-        .find(|p| p.is_file())
-        .unwrap()
-        .canonicalize()
-        .unwrap()
-}
 struct DecisionFixture {
     _tmp: tempfile::TempDir,
     root: PathBuf,
@@ -484,7 +478,7 @@ impl DecisionFixture {
                 PrivateDir::open(&root.join("control")).unwrap(),
                 control.clone(),
                 Arc::new(NoProcesses),
-                git_path(),
+                pinned_git::prepare(&root),
             )
             .unwrap(),
         );

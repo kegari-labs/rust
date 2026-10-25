@@ -20,7 +20,10 @@ host must expose through its independent status path; it does not panic or
 authorize a failed receipt write.
 
 Construct `Housekeeping` with the real control root, shared `ControlHost`, process
-probe and pinned supported Git executable. At directory creation, call
+probe and pinned supported Git executable. Construction pins the executable without
+launching it. The native factory installs `NativeCleanupProcesses` once, using the
+same registered control owner, process journal and cancellation registry as the
+runtime. Replacement adapters are rejected. At directory creation, call
 `register_execution` with the actual `ExecutionBinding`, validated isolation,
 `OwnedDirectory` capability and exact workflow. Record owned process identities
 and actual hook ledgers as their lifecycle changes. These records contain small
@@ -40,12 +43,34 @@ ownership and inventories above 100,000 entries or 1 GiB also require preservati
 The returned `CleanupPlan` contains exact paths, file/directory identities and
 digests, retained location, receipt/workflow references and a token. Applying it
 requires the unchanged token and a callback that checks the current authenticated
-operator's `recover` mapping and unchanged configuration revision. `ControlHost::mutate_observed` serializes the final
-admission and effect. The helper refreshes provider and local facts inside that
-gate, runs a configured `before_remove` through the production confined local
-executor, then repeats all preservation checks. It writes a retained-copy
-tombstone before descriptor-relative, no-follow deletion. Unknown outcomes stay
-Sent and are never replayed. Exact request replay returns the original receipt.
+operator's `recover` mapping and unchanged configuration revision. A short serialized
+admission records Sent and a runtime-wide hold, then releases the control mutex.
+Provider/Git reads, inventory hashing, hook waits and filesystem traversal run
+outside that mutex. Each actual unlink uses a short serialized authority check
+and effect, so a force fence prevents subsequent deletions without blocking status
+behind a provider response or a complete tree scan.
+
+Native Git reads use only fixed status, branch/HEAD and object-connectivity
+commands through sealed registration-derived source/retention roots. Every child
+has a durable process record, inherited guard and actual cancellation handle;
+cleanup does not manufacture an orchestration lease. Post-admission reads and the
+configured `before_remove` use the exact opaque cleanup effect. The hook command,
+working directory, binaries, workflow and timeout must match that sealed plan.
+Current native repository-command containment is unqualified, so a configured
+removal hook fails its prerequisite **before** creating a cleanup effect receipt
+or spawning the hook. The supported no-hook cleanup path is exercised with real
+owned Git subprocesses in a disposable fixture.
+
+After repeating preservation checks, cleanup writes a retained-copy tombstone
+before descriptor-relative, no-follow deletion. Each regular file is hashed again
+through its opened descriptor and must match the retained bytes and mode. Hashing
+runs outside the control mutex; the unlink gate then compares descriptor and path
+identity, size, mode, link count, owner and modification/change timestamps. Edits
+observed after preservation or hashing stop removal and retain the remaining files.
+Unknown outcomes stay Sent and
+are never replayed. Exact request replay returns the original receipt. A canceled
+or fenced partial deletion retains the tombstone, remaining files and complete
+recovery copy; it does not claim a completed removal.
 
 Recovery and future correction callers must use `retained_directory(operation)`
 after explicit cleanup. It checks the complete retained content digest before
@@ -112,3 +137,13 @@ preservation state. These records do not fabricate Linear work for independent
 reviews and do not grant cleanup permission. Explicit safe cleanup for these
 read-only preparation classes remains a separate integration requirement; preserve
 the directories and records meanwhile.
+
+The deterministic cleanup regressions cover provider-read suspension with
+responsive status/force-stop, preservation after that force fence, immutable
+process-adapter binding, native journaled Git reads using the same cleanup
+receipt, and the unsupported-hook prerequisite producing no cleanup receipt.
+The focused `cleanup_unlink_tests` additionally change same-inode, same-length
+bytes and file modes after inventory and after the final hash; each change prevents
+unlink and preserves both the edited source and the original retained bytes.
+These fixtures do not qualify native descendant containment, live credentials,
+launchd installation or real provider mutations.

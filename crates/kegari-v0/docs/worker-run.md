@@ -71,3 +71,25 @@ RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clip
 Native sandbox enforcement, live account/model behavior and required human
 evaluation calibration remain unqualified. This module does not clear those
 gates or authorize coordinator activation.
+
+Worker services now require the host's durable process journal. Both the bounded
+version probe and app-server start are gated and registered before the control
+mutex is released. A separate owned probe handle must have exited before the
+app-server handle is installed. The provider starts in the exact admitted private
+cwd. See [process recovery](process-recovery.md) for crash/identity semantics and
+the remaining whole-tree containment limitation.
+
+Live evaluation and native scheduling share `launch_provider` through the sealed
+`WorkerProviderLaunch` capability obtained from an actual `ScopedWorker`.
+Construction validates without registering a fictitious active process; launch
+registers ownership under the current serialized permit before the first native
+probe. Probe and app-server starts each inherit a protected journal guard, and
+all subsequent requests use the same durable protocol gate. The capability binds
+the complete permission configuration, exact assembly, source isolation, account,
+canonical work and original turn budget. Closing before launch prevents later
+spawn; cancellation fences before invoking owned handles. Returning a process
+error or dropping a trial does not release an unknown process hold.
+
+Actual joined runs retain their original `WorkerContract` and optional
+`WorkerExecution` capabilities for separately admitted delivery phases. A
+historical JSON session record cannot manufacture checkout ownership.

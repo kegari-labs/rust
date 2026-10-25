@@ -1,4 +1,4 @@
-# Kegari runtime authority contract — version 1
+# Kegari runtime authority contract — version 2
 
 You are executing one admitted Kegari operation. The host owns authorization,
 scope, generations, budgets, gate decisions, integration, release and recovery.

@@ -40,9 +40,36 @@ pub fn canonical_digest<T: Serialize + ?Sized>(schema: u32, value: &T) -> Result
     if schema == 0 {
         return Err(Error::invalid("digest schema must be positive"));
     }
-    let bytes = canonical_bytes(&serde_json::json!({"schema_version": schema, "value": value}))?;
+    #[derive(Serialize)]
+    struct Identity<'a, T: ?Sized> {
+        schema_version: u32,
+        value: &'a T,
+    }
+    let bytes = canonical_bytes(&Identity {
+        schema_version: schema,
+        value,
+    })?;
     Ok(format!(
         "sha256:v{schema}:{}",
         hex::encode(Sha256::digest(bytes))
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn invalid_serialization_returns_error_and_valid_digest_bytes_stay_unchanged() {
+        let invalid = std::collections::BTreeMap::from([(vec![1u8, 2], 3)]);
+        assert_eq!(
+            canonical_digest(1, &invalid).unwrap_err().code,
+            "invalid_config"
+        );
+        let value = serde_json::json!({"b":[1,"two"],"a":true});
+        let old = canonical_bytes(&serde_json::json!({"schema_version":1,"value":value})).unwrap();
+        assert_eq!(
+            canonical_digest(1, &value).unwrap(),
+            format!("sha256:v1:{}", hex::encode(Sha256::digest(old)))
+        );
+    }
 }

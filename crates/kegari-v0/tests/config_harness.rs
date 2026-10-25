@@ -858,3 +858,17 @@ fn tailscale_operator_mapping_uses_stable_numeric_identity_not_login_text() {
     config.control.tailscale_users = std::collections::BTreeMap::from([("42".into(), operator)]);
     config.validate().unwrap();
 }
+
+#[test]
+fn deployment_environment_ids_are_canonical_provider_ids_not_names() {
+    for environment in ["production", "0", "088", "+88", "18446744073709551616"] {
+        let mut value = serde_json::to_value(configured()).unwrap();
+        let repository = &mut value["workspaces"]["example"]["repositories"]["101"];
+        repository["deployment"] = json!({"steps":[{"id":"deploy","target_id":"production-target","environment_id":environment,"workflow":repository["no_change_validation"]}]});
+        let config: Config = serde_json::from_value(value).unwrap();
+        assert!(
+            config.validate().is_err(),
+            "accepted noncanonical environment {environment}"
+        );
+    }
+}

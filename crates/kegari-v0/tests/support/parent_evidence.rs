@@ -1,5 +1,6 @@
 //! Synthetic provider/check facts passed through production evidence validators.
 //! Actual Git candidate bytes are created only in an owned disposable repository.
+use crate::pinned_git;
 use chrono::{Duration, Utc};
 use kegari_v0::{digest::canonical_digest, evidence::*, git::*};
 use std::{
@@ -257,7 +258,7 @@ pub fn parent(
     git_run(&source, &["init", "-b", "main"]);
     fs::write(source.join("behavior.txt"), "known production fixture\n").unwrap();
     let production = commit(&source, "test: create owned production fixture");
-    let git = Git::new(git_binary()).unwrap();
+    let git = Git::new(pinned_git::prepare(tmp.path())).unwrap();
     let repository = RepositoryId {
         hostname: "github.invalid".into(),
         id: "42".into(),

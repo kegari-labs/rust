@@ -1,0 +1,1604 @@
+//! Finite child progression over actual completed run capabilities. Persisted
+//! phase references are recovery facts, never replacements for execution proof.
+use super::*;
+use crate::{
+    control::{Lease, Permit, RunReference},
+    delivery::*,
+    digest::canonical_digest,
+    evidence::RevisionBinding,
+    git::{GitExecutionScope, SourceCommitMetadata},
+    runtime::VerifiedAuthorizedOutcome,
+    scheduler::PhaseKey,
+    worker::WorkerAuthority,
+    worker_run::RunCompletion,
+};
+use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
+
+pub(super) struct ActivePhase {
+    pub(super) admission: DeliveryAdmission,
+    pub(super) permit: Permit,
+    pub(super) coordinator: Arc<DeliveryCoordinator>,
+    pub(super) git: Arc<Git>,
+    pub(super) workspace: Arc<WorkspaceDelivery>,
+    pub(super) _active: crate::observations::ActiveSnapshot,
+}
+struct PhaseSetup {
+    runtime: Arc<RuntimeCoordinator>,
+    permit: Permit,
+    armed: bool,
+    failed: Arc<std::sync::atomic::AtomicBool>,
+}
+impl Drop for PhaseSetup {
+    fn drop(&mut self) {
+        if self.armed && self.runtime.control.fence(self.permit.operation_id).is_ok() {
+            let _ = self
+                .runtime
+                .executions
+                .cancel_fenced(&self.runtime.control, self.permit.operation_id);
+        }
+        if self.armed {
+            self.failed
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        // The retained permit and durable process journal remain in the host;
+        // failed cancellation never becomes an exit or retirement assertion.
+    }
+}
+pub(super) struct PhaseRequest {
+    pub operation: Uuid,
+    pub scope: DeliveryScope,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Stage {
+    Seal,
+    LaunchValidation,
+    Validate,
+    PublishBranch,
+    PullRequest,
+    Hosted,
+    LaunchReview,
+    Review,
+    IntegrateStaging,
+    ObserveStaging,
+    Publish,
+    Close,
+    Complete,
+    Blocked,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChildReference {
+    schema_version: u32,
+    runtime: Uuid,
+    operation: Uuid,
+    proposal: Uuid,
+    claim_digest: String,
+    work: crate::evidence::WorkIdentity,
+    stage: Stage,
+    phase_operation: Option<Uuid>,
+    validation: Option<Uuid>,
+    review: Option<Uuid>,
+    observed_at: chrono::DateTime<Utc>,
+    error: Option<Error>,
+}
+struct ChildPipeline {
+    reference: ChildReference,
+    claim: Arc<CompletedChildClaim>,
+    completion: Arc<RunCompletion>,
+    source: Option<SealedChildSource>,
+    local: Option<LocalPassed>,
+    branch: Option<PublishedChildBranch>,
+    pr: Option<ChildPullRequest>,
+    hosted: Option<HostedPassed>,
+    exact_pending: Option<PendingExactValidation>,
+    exact: Option<ExactValidationPassed>,
+    assignment: Option<ChildReviewAssignment>,
+    review: Option<PublishedReview>,
+    pending: Option<PendingStaging>,
+    staged: Option<StagedDelta>,
+    published: Option<Box<PublishedChild>>,
+    phase: Option<ActivePhase>,
+}
+pub(super) struct CandidateChild {
+    pub(super) child: Uuid,
+    pub(super) published: Option<PublishedChild>,
+    pub(super) staged: Option<StagedDelta>,
+}
+#[derive(Default)]
+pub(super) struct Children {
+    pipelines: Mutex<BTreeMap<Uuid, Arc<tokio::sync::Mutex<ChildPipeline>>>>,
+    advancing: tokio::sync::Mutex<()>,
+}
+impl RuntimeDelivery {
+    fn persist_child(&self, child: &ChildPipeline) -> Result<()> {
+        self.records.write(
+            &format!("child-pipeline-{}.json", child.reference.operation),
+            &self
+                .runtime
+                .services
+                .key
+                .sign("runtime_child_pipeline", &child.reference)?,
+        )
+    }
+    pub(super) fn completed_claim(
+        &self,
+        operation: Uuid,
+    ) -> Result<Option<(VerifiedAuthorizedOutcome, Arc<RunCompletion>)>> {
+        let Some(completion) = self.runtime.retained_completion(operation)? else {
+            return Ok(None);
+        };
+        let receipt = self.runtime.control.operation(operation)?;
+        let records = PrivateDir::open(
+            &self
+                .runtime
+                .registration
+                .root()
+                .path()
+                .join("worker-records")
+                .join(operation.to_string()),
+        )?;
+        let ids = crate::runtime_claims::proposal_ids(&records, &receipt)?;
+        if ids.len() != 1 {
+            return Err(Error::new(
+                "worker_claim",
+                "delivery requires exactly one final completed outcome proposal",
+            ));
+        }
+        let outcome = self.runtime.authorized_outcome(operation, ids[0])?;
+        let contract=completion.contract.as_ref().ok_or_else(||Error::new("reconciliation_required","actual original worker contract is unavailable; retained JSON is not execution authority"))?;
+        if contract.instructions().manifest_digest != outcome.outcome().instruction_digest
+            || canonical_digest(1, &contract.instructions().manifest)?
+                != canonical_digest(1, &outcome.outcome().instructions)?
+            || contract.authority().digest()?
+                != WorkerAuthority::Authorized(outcome.original_authority().clone()).digest()?
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "retained completion differs from its original authorized contract",
+            ));
+        }
+        Ok(Some((outcome, completion)))
+    }
+    fn discover_children(&self, projection: &RuntimeProjection) -> Result<()> {
+        for receipt in self.runtime.control.operations()? {
+            let Some(run) = RunReference::from_receipt(&receipt)? else {
+                continue;
+            };
+            if run.phase.phase != "implementation"
+                || !matches!(
+                    receipt.phase,
+                    crate::control::ReceiptPhase::Reconciled
+                        | crate::control::ReceiptPhase::Acknowledged
+                )
+            {
+                continue;
+            }
+            if self
+                .children
+                .pipelines
+                .lock()
+                .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+                .contains_key(&receipt.operation_id)
+            {
+                continue;
+            }
+            let (outcome, completion) = match self.completed_claim(receipt.operation_id) {
+                Ok(Some(completed)) => completed,
+                Ok(None) => continue,
+                Err(error) => {
+                    if let Some(parent) =
+                        projection
+                            .workspaces
+                            .get(&run.workspace)
+                            .and_then(|workspace| {
+                                workspace.parents.values().find(|parent| {
+                                    parent.children.values().any(|child| {
+                                        child.key.identity().is_ok_and(|key| key == run.phase.work)
+                                    })
+                                })
+                            })
+                    {
+                        self.runtime.invalidate_delivery(&parent.key, error)?;
+                    }
+                    continue;
+                }
+            };
+            let work = outcome.original_authority().work();
+            let Some(child) = work.child else { continue };
+            let parent = match projection.parent(run.workspace, work.parent) {
+                Ok(parent) => parent,
+                Err(_) => continue,
+            };
+            if self
+                .runtime
+                .current_delivery(&parent.key)?
+                .verified_children()
+                .contains_key(&child)
+            {
+                continue;
+            }
+            let result = (|| {
+                let gate = parent.fresh_gate(
+                    Some(child),
+                    GatePurpose::NewOperation,
+                    &self.runtime.dependency_outcomes()?,
+                    Utc::now(),
+                    Duration::seconds(30),
+                )?;
+                let workspace = self.workspace(projection, run.workspace)?;
+                let claim = workspace.coordinator.accept_child_completion(
+                    &gate,
+                    outcome.clone(),
+                    completion.clone(),
+                )?;
+                if completion.execution.is_none() {
+                    return Err(Error::new(
+                        "reconciliation_required",
+                        "original owned execution capability is unavailable for child source sealing",
+                    ));
+                }
+                let leaf = format!("child-pipeline-{}.json", receipt.operation_id);
+                if self.records.path().join(&leaf).exists() {
+                    let prior: crate::evidence::Signed<ChildReference> =
+                        self.records.read(&leaf)?;
+                    self.runtime
+                        .services
+                        .key
+                        .verify("runtime_child_pipeline", &prior)?;
+                    return Err(Error::new("reconciliation_required","retained child progression requires exact phase recovery before another mutation").detail(json!({"operation":receipt.operation_id,"stage":prior.payload.stage})));
+                }
+                let pipeline = ChildPipeline {
+                    reference: ChildReference {
+                        schema_version: 1,
+                        runtime: receipt.runtime_id,
+                        operation: receipt.operation_id,
+                        proposal: outcome.outcome().proposal_id,
+                        claim_digest: outcome.digest().into(),
+                        work: work.clone(),
+                        stage: Stage::Seal,
+                        phase_operation: None,
+                        validation: None,
+                        review: None,
+                        observed_at: Utc::now(),
+                        error: None,
+                    },
+                    claim: Arc::new(claim),
+                    completion,
+                    source: None,
+                    local: None,
+                    branch: None,
+                    pr: None,
+                    hosted: None,
+                    exact_pending: None,
+                    exact: None,
+                    assignment: None,
+                    review: None,
+                    pending: None,
+                    staged: None,
+                    published: None,
+                    phase: None,
+                };
+                self.persist_child(&pipeline)?;
+                self.children
+                    .pipelines
+                    .lock()
+                    .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+                    .insert(
+                        receipt.operation_id,
+                        Arc::new(tokio::sync::Mutex::new(pipeline)),
+                    );
+                Ok(())
+            })();
+            if let Err(error) = result {
+                self.runtime.invalidate_delivery(&parent.key, error)?;
+            }
+        }
+        Ok(())
+    }
+    async fn phase(
+        &self,
+        workspace: &WorkspaceDelivery,
+        gate: &FreshGate,
+        lease: &Lease,
+        child: &mut ChildPipeline,
+        phase: DeliveryPhase,
+    ) -> Result<()> {
+        if child.phase.is_some() {
+            return Ok(());
+        }
+        let execution = child.completion.execution.as_ref().ok_or_else(|| {
+            Error::new(
+                "execution_ownership",
+                "original execution capability unavailable",
+            )
+        })?;
+        let contract = workspace
+            .contracts
+            .iter()
+            .find(|c| c.repository == execution.binding.repository)
+            .ok_or_else(|| {
+                Error::new(
+                    "scope_violation",
+                    "child repository is no longer configured",
+                )
+            })?;
+        let revision = child
+            .source
+            .as_ref()
+            .map(|source| source.revision().clone())
+            .unwrap_or_else(|| RevisionBinding {
+                repository: execution.binding.repository.clone(),
+                head: execution.binding.revision.commit.clone(),
+                base: execution.binding.revision.commit.clone(),
+                tested_commit: execution.binding.revision.commit.clone(),
+                tested_tree: execution.binding.revision.tree.clone(),
+            });
+        let scope = DeliveryScope {
+            schema_version: 1,
+            runtime_id: lease.runtime_id,
+            phase,
+            work: gate.work().clone(),
+            repository: contract.repository.clone(),
+            revision,
+            fresh_gate_digest: gate.digest()?,
+            contract_digest: contract.digest()?,
+            candidate_vector_digest: None,
+        };
+        let operation = child.reference.phase_operation.unwrap_or_else(Uuid::new_v4);
+        child.reference.phase_operation = Some(operation);
+        self.persist_child(child)?;
+        child.phase = Some(
+            self.admit_delivery_phase(workspace, gate, lease, PhaseRequest { operation, scope })
+                .await?,
+        );
+        Ok(())
+    }
+    pub(super) async fn admit_delivery_phase(
+        &self,
+        workspace: &WorkspaceDelivery,
+        gate: &FreshGate,
+        lease: &Lease,
+        request: PhaseRequest,
+    ) -> Result<ActivePhase> {
+        let PhaseRequest { operation, scope } = request;
+        let broker = self.provider_broker(&workspace.configuration, gate.workspace_id())?;
+        let active = self.runtime.observations.capture_active(
+            gate.workspace_id(),
+            gate.config_revision(),
+            gate.workflow_digest(),
+        )?;
+        let current = self.current_gate();
+        let permit = self.runtime.control.admit(
+            lease,
+            operation,
+            gate.work_key()?,
+            scope.digest()?,
+            || {
+                self.runtime.registration.verify_active_owner(lease)?;
+                current(gate)
+            },
+        )?;
+        let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.phase_holds
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(operation, (permit.clone(), failed.clone()));
+        let mut setup = PhaseSetup {
+            runtime: self.runtime.clone(),
+            permit: permit.clone(),
+            armed: true,
+            failed,
+        };
+        let admission = DeliveryAdmission::bind(permit.clone(), gate.clone(), scope)?;
+        let host = self.runtime.control.clone();
+        let registration = self.runtime.registration.clone();
+        let expected = gate.clone();
+        let held = permit.clone();
+        let current = self.retained_gate();
+        let gate_fn = Arc::new(move |launch: &mut dyn FnMut() -> Result<()>| {
+            host.validate_permit(&held, || {
+                registration.verify_active_owner(&held.lease)?;
+                current(&expected)?;
+                launch()
+            })
+        });
+        let git = workspace.git.clone();
+        let scoped = GitExecutionScope {
+            limits: GitLimits::default(),
+            start_gate: gate_fn,
+            processes: self.processes.clone(),
+            permit: permit.clone(),
+            executions: self.runtime.executions.clone(),
+        };
+        let result = tokio::task::spawn_blocking(move || git.with_execution_scope(scoped))
+            .await
+            .map_err(|_| {
+                Error::new(
+                    "operation_uncertain",
+                    "delivery Git phase setup did not join",
+                )
+            })?;
+        let git = match result {
+            Ok(git) => Arc::new(git),
+            Err(error) => {
+                self.runtime.control.fence(operation)?;
+                self.runtime
+                    .executions
+                    .cancel_fenced(&self.runtime.control, operation)?;
+                return Err(error);
+            }
+        };
+        let coordinator = Arc::new(DeliveryCoordinator::new(
+            DeliveryServices {
+                host: self.runtime.control.clone(),
+                broker,
+                records: workspace.records.clone(),
+                key: self.runtime.services.key.clone(),
+                git: git.clone(),
+                retained_git_sources: workspace
+                    .contracts
+                    .iter()
+                    .map(|c| (c.repository.clone(), PathBuf::from(&c.configuration.source)))
+                    .collect(),
+                current_gate: self.retained_gate(),
+                executions: self.runtime.executions.clone(),
+                processes: self.processes.clone(),
+            },
+            workspace.contracts.clone(),
+        )?);
+        setup.armed = false;
+        self.phase_holds
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&operation);
+        let mut retained_workspace = workspace.clone();
+        retained_workspace.coordinator = coordinator.clone();
+        Ok(ActivePhase {
+            admission,
+            permit,
+            coordinator,
+            git,
+            workspace: Arc::new(retained_workspace),
+            _active: active,
+        })
+    }
+    fn finish_child_phase(&self, child: &mut ChildPipeline, next: Stage) -> Result<()> {
+        if let Some(phase) = &child.phase {
+            self.retire_delivery_phase(
+                phase,
+                json!({"delivery_phase":phase.admission.scope().phase,"next":next}),
+            )?;
+        }
+        child.phase = None;
+        child.reference.phase_operation = None;
+        child.reference.stage = next;
+        child.reference.error = None;
+        child.reference.observed_at = Utc::now();
+        self.persist_child(child)
+    }
+    pub(super) fn retire_delivery_phase(
+        &self,
+        phase: &ActivePhase,
+        observation: serde_json::Value,
+    ) -> Result<()> {
+        self.retire_phase_permit(&phase.permit, observation)
+    }
+    pub(super) fn retire_phase_permit(
+        &self,
+        permit: &Permit,
+        observation: serde_json::Value,
+    ) -> Result<()> {
+        self.runtime
+            .executions
+            .observe_exited(permit.operation_id)?;
+        if self
+            .runtime
+            .executions
+            .active_operations()?
+            .contains(&permit.operation_id)
+        {
+            return Err(Error::new(
+                "operation_uncertain",
+                "delivery phase still owns an unconfirmed local process",
+            ));
+        }
+        self.runtime
+            .control
+            .retire_local(permit.operation_id, observation)?;
+        let snapshot = self.runtime.control.snapshot()?;
+        if snapshot
+            .unresolved_operations
+            .values()
+            .any(|targets| targets.contains(&permit.work_key))
+        {
+            return Err(Error::new(
+                "operation_uncertain",
+                "delivery phase retains an unresolved provider effect",
+            ));
+        }
+        Ok(())
+    }
+    pub(super) fn worker_launch_admitted(&self, operation: Uuid) -> Result<bool> {
+        match self.runtime.control.operation(operation) {
+            Ok(receipt) => {
+                if RunReference::from_receipt(&receipt)?.is_none() {
+                    return Err(Error::new(
+                        "operation_conflict",
+                        "launch identity belongs to another operation",
+                    ));
+                }
+                if !self
+                    .runtime
+                    .control
+                    .snapshot()?
+                    .active_operations
+                    .iter()
+                    .any(|p| p.operation_id == operation)
+                    && self.runtime.retained_completion(operation)?.is_none()
+                {
+                    return Err(Error::new(
+                        "reconciliation_required",
+                        "worker admission has no retained live or completed owned run",
+                    ));
+                }
+                return Ok(true);
+            }
+            Err(error) if error.code == "record_missing" => {}
+            Err(error) => return Err(error),
+        }
+        let preparation = crate::runtime_workers::preparation_operation(operation)?;
+        match self.runtime.control.operation(preparation) {
+            Ok(_) => Err(Error::new(
+                "reconciliation_required",
+                "launch preparation already has effects; recover its original operation before retrying",
+            )),
+            Err(error) if error.code == "record_missing" => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+    pub(super) async fn launch_assignment(
+        &self,
+        lease: &Lease,
+        operation_id: Uuid,
+        assignment: DeliveryWorkerAssignment,
+    ) -> Result<Uuid> {
+        let authority = WorkerAuthority::Authorized(assignment.authority().clone());
+        let phase = PhaseKey {
+            work: authority.work_key()?,
+            generation: canonical_digest(1, &assignment.authority().work().generation)?,
+            phase: assignment.phase().into(),
+            retry_grant: None,
+        };
+        let config = self.runtime.configuration.snapshot()?;
+        let workspace = config
+            .workspaces
+            .values()
+            .find(|w| w.id == assignment.authority().workspace_id())
+            .ok_or_else(|| Error::new("scope_violation", "assignment workspace disappeared"))?;
+        let schedule = self.runtime.next_attempt(
+            &phase,
+            workspace.id,
+            &config.connections[&workspace.codex_connection].account_id,
+        )?;
+        if schedule.not_before > Utc::now() {
+            return Err(Error::new(
+                "operation_pending",
+                "delivery worker phase retry spacing has not elapsed",
+            ));
+        }
+        crate::runtime_workers::launch(
+            self.runtime.clone(),
+            crate::runtime_workers::LaunchRequest {
+                lease: lease.clone(),
+                operation_id,
+                authority,
+                phase,
+                source: None,
+                delivery: Some(assignment),
+                max_seconds: 3600,
+                max_turns: schedule.max_turns,
+            },
+        )
+        .await
+    }
+    pub(super) async fn candidate_children(
+        &self,
+        work: &crate::evidence::WorkIdentity,
+        e2e: Uuid,
+    ) -> Result<Vec<CandidateChild>> {
+        let retained: Vec<_> = self
+            .children
+            .pipelines
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+            .values()
+            .cloned()
+            .collect();
+        let mut result = Vec::new();
+        for retained in retained {
+            let child = retained.lock().await;
+            if child.reference.work.linear_endpoint != work.linear_endpoint
+                || child.reference.work.linear_workspace != work.linear_workspace
+                || child.reference.work.parent != work.parent
+                || child.reference.work.generation != work.generation
+            {
+                continue;
+            }
+            let id = child
+                .reference
+                .work
+                .child
+                .ok_or_else(|| Error::invalid("child identity missing"))?;
+            let complete = child.reference.stage == Stage::Complete && child.published.is_some();
+            let changed = matches!(
+                child.claim.claim().disposition,
+                ChildClaimDisposition::Changed
+            );
+            let prepared_e2e = id == e2e
+                && matches!(
+                    child.reference.stage,
+                    Stage::Publish | Stage::Close | Stage::Complete
+                )
+                && child.source.is_some()
+                && child.local.is_some()
+                && child.review.is_some()
+                && if changed {
+                    child.staged.is_some() && child.hosted.is_some()
+                } else {
+                    child.exact.is_some()
+                };
+            if complete || prepared_e2e {
+                result.push(CandidateChild {
+                    child: id,
+                    published: child.published.as_deref().cloned(),
+                    staged: child.staged.clone(),
+                });
+            }
+        }
+        Ok(result)
+    }
+    pub(super) async fn delivered_children(
+        &self,
+        work: &crate::evidence::WorkIdentity,
+    ) -> Result<Vec<(PublishedChild, Option<StagedDelta>)>> {
+        let pipelines: Vec<_> = self
+            .children
+            .pipelines
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+            .values()
+            .cloned()
+            .collect();
+        let mut result = Vec::new();
+        for retained in pipelines {
+            let child = retained.lock().await;
+            if child.reference.stage == Stage::Complete
+                && child.reference.work.parent == work.parent
+                && child.reference.work.linear_workspace == work.linear_workspace
+                && child.reference.work.generation == work.generation
+                && let Some(published) = &child.published
+            {
+                result.push(((**published).clone(), child.staged.clone()));
+            }
+        }
+        Ok(result)
+    }
+    fn block_terminal_child(&self, child: &mut ChildPipeline, error: &Error) -> Result<()> {
+        if !terminal_gate_failure(error) {
+            return Ok(());
+        }
+        let Some(phase) = &child.phase else {
+            return Ok(());
+        };
+        self.retire_delivery_phase(phase, json!({"delivery_phase":phase.admission.scope().phase,"outcome":"failed","error":error}))?;
+        child.phase = None;
+        child.reference.stage = Stage::Blocked;
+        // Keep original phase_operation plus exact error as immutable failure
+        // lineage. Blocked never creates a new run or grants a retry budget.
+        Ok(())
+    }
+    pub(super) fn maintain_phase_setups(&self) -> Result<()> {
+        let retained: Vec<_> = self
+            .phase_holds
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "phase setup lock failed"))?
+            .values()
+            .cloned()
+            .collect();
+        for (permit, failed) in retained {
+            if !failed.load(std::sync::atomic::Ordering::Acquire) {
+                continue;
+            }
+            // A failed drop-time fence is not authority to retire. Close every
+            // future spawn gate before observing an otherwise empty registry.
+            self.runtime.control.fence(permit.operation_id)?;
+            self.runtime
+                .executions
+                .observe_exited(permit.operation_id)?;
+            // A never-spawned setup can retire immediately. Once a process
+            // journal exists, only its original live capability can prove exit;
+            // group-only recovery observations never clear ownership here.
+            if !self
+                .runtime
+                .executions
+                .active_operations()?
+                .contains(&permit.operation_id)
+                && self.processes.observe(permit.operation_id)?.is_empty()
+            {
+                self.runtime.control.retire_local(
+                    permit.operation_id,
+                    json!({"setup":"failed_before_spawn","local_exit":"no_spawn_record"}),
+                )?;
+                self.phase_holds
+                    .lock()
+                    .map_err(|_| Error::new("runtime_unavailable", "phase setup lock failed"))?
+                    .remove(&permit.operation_id);
+            }
+        }
+        Ok(())
+    }
+    pub(super) async fn maintain_child_phases(&self, projection: &RuntimeProjection) -> Result<()> {
+        let _serial = self.children.advancing.lock().await;
+        let retained: Vec<_> = self
+            .children
+            .pipelines
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+            .values()
+            .cloned()
+            .collect();
+        let mut reporting_error = None;
+        for retained in retained {
+            let mut child = retained.lock().await;
+            let Some(phase) = &child.phase else {
+                continue;
+            };
+            let lease = phase.permit.lease.clone();
+            let result = if matches!(
+                child.reference.stage,
+                Stage::LaunchValidation | Stage::LaunchReview
+            ) {
+                let stage = child.reference.stage;
+                self.finish_child_phase(&mut child, stage)
+            } else {
+                self.advance_one_child(&lease, projection, &mut child).await
+            };
+            if let Err(error) = result {
+                if let Err(retirement) = self.block_terminal_child(&mut child, &error) {
+                    reporting_error.get_or_insert(retirement);
+                }
+                child.reference.error = Some(error);
+                if let Err(error) = self.persist_child(&child) {
+                    reporting_error.get_or_insert(error);
+                }
+            }
+        }
+        reporting_error.map_or(Ok(()), Err)
+    }
+    pub(super) async fn advance_children(
+        &self,
+        lease: &Lease,
+        projection: &RuntimeProjection,
+    ) -> Result<()> {
+        let _serial = self.children.advancing.lock().await;
+        self.discover_children(projection)?;
+        let retained: Vec<_> = self
+            .children
+            .pipelines
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+            .values()
+            .cloned()
+            .collect();
+        let mut reporting_error = None;
+        for retained in retained {
+            let mut child = retained.lock().await;
+            let result = self.advance_one_child(lease, projection, &mut child).await;
+            if let Err(error) = result {
+                if let Err(retirement) = self.block_terminal_child(&mut child, &error) {
+                    reporting_error.get_or_insert(retirement);
+                }
+                child.reference.error = Some(error.clone());
+                let reported = (|| {
+                    self.persist_child(&child)?;
+                    let key = crate::authority::IssueKey::new(
+                        &child.reference.work.linear_endpoint,
+                        child.reference.work.linear_workspace,
+                        child.reference.work.parent,
+                    )?;
+                    self.runtime.invalidate_delivery(&key, error)
+                })();
+                if let Err(error) = reported {
+                    reporting_error.get_or_insert(error);
+                }
+            }
+        }
+        reporting_error.map_or(Ok(()), Err)
+    }
+    async fn advance_one_child(
+        &self,
+        lease: &Lease,
+        projection: &RuntimeProjection,
+        child: &mut ChildPipeline,
+    ) -> Result<()> {
+        if matches!(child.reference.stage, Stage::Complete | Stage::Blocked) {
+            return Ok(());
+        }
+        let workspace_id = child
+            .completion
+            .contract
+            .as_ref()
+            .ok_or_else(|| Error::new("worker_binding", "original worker contract missing"))?
+            .instructions()
+            .manifest
+            .workspace_id;
+        let parent = projection.parent(workspace_id, child.reference.work.parent)?;
+        let gate = if let Some(phase) = &child.phase {
+            self.runtime.observations.active_gate(
+                phase.admission.fresh_gate(),
+                &self.runtime.dependency_outcomes()?,
+            )?
+        } else {
+            parent.fresh_gate(
+                child.reference.work.child,
+                GatePurpose::NewOperation,
+                &self.runtime.dependency_outcomes()?,
+                Utc::now(),
+                Duration::seconds(30),
+            )?
+        };
+        if gate.work() != &child.reference.work {
+            return Err(Error::new(
+                "stale_result",
+                "child delivery generation changed",
+            ));
+        }
+        let workspace = match &child.phase {
+            Some(phase) => (*phase.workspace).clone(),
+            None => self.workspace(projection, workspace_id)?,
+        };
+        let changed = matches!(
+            child.claim.claim().disposition,
+            ChildClaimDisposition::Changed
+        );
+        let phase = match child.reference.stage {
+            Stage::Seal => DeliveryPhase::SourceSealing,
+            Stage::LaunchValidation | Stage::Validate => DeliveryPhase::LocalValidation,
+            Stage::PublishBranch | Stage::PullRequest => DeliveryPhase::PublishChild,
+            Stage::Hosted => {
+                if changed {
+                    DeliveryPhase::HostedValidation
+                } else {
+                    DeliveryPhase::NoChange
+                }
+            }
+            Stage::LaunchReview | Stage::Review => {
+                if changed {
+                    DeliveryPhase::ReviewPublication
+                } else {
+                    DeliveryPhase::NoChange
+                }
+            }
+            Stage::IntegrateStaging | Stage::ObserveStaging | Stage::Publish | Stage::Close => {
+                if changed {
+                    DeliveryPhase::Staging
+                } else {
+                    DeliveryPhase::NoChange
+                }
+            }
+            Stage::Complete | Stage::Blocked => return Ok(()),
+        };
+        if child.reference.stage == Stage::Validate || child.reference.stage == Stage::Review {
+            let operation = if child.reference.stage == Stage::Validate {
+                child.reference.validation
+            } else {
+                child.reference.review
+            };
+            let operation = operation.ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "worker phase lacks its persisted launch identity",
+                )
+            })?;
+            if self.completed_claim(operation)?.is_none() {
+                return Ok(());
+            }
+        }
+        let pending_launch = match child.reference.stage {
+            Stage::LaunchValidation => child.reference.validation.map(|id| (id, Stage::Validate)),
+            Stage::LaunchReview => child.reference.review.map(|id| (id, Stage::Review)),
+            _ => None,
+        };
+        if let Some((operation, next)) = pending_launch
+            && self.worker_launch_admitted(operation)?
+        {
+            child.reference.stage = next;
+            return self.persist_child(child);
+        }
+        // The E2E responsibility can prepare/stage its test code before the
+        // isolated vector exists, but its final completion waits for that vector.
+        if child.reference.stage == Stage::Publish
+            && parent
+                .metadata
+                .as_ref()
+                .is_some_and(|m| Some(m.e2e_child) == child.reference.work.child)
+            && !self
+                .integrated_responsibility_ready(&workspace, parent, &gate)
+                .await?
+        {
+            return Ok(());
+        }
+        self.phase(&workspace, &gate, lease, child, phase).await?;
+        let current = child
+            .phase
+            .as_ref()
+            .ok_or_else(|| Error::new("ownership_conflict", "delivery phase was not retained"))?;
+        let coordinator = current.coordinator.clone();
+        let admission = current.admission.clone();
+        match child.reference.stage {
+            Stage::Seal => {
+                let execution = child.completion.execution.as_ref().ok_or_else(|| {
+                    Error::new("worker_binding", "child execution is unavailable")
+                })?;
+                let isolation = child
+                    .completion
+                    .contract
+                    .as_ref()
+                    .unwrap()
+                    .isolation()
+                    .clone();
+                let contract = workspace
+                    .contracts
+                    .iter()
+                    .find(|c| c.repository == execution.binding.repository)
+                    .unwrap();
+                let git = current.git.clone();
+                let source = PathBuf::from(&contract.configuration.source);
+                let identity =
+                    tokio::task::spawn_blocking(move || git.configured_commit_identity(&source))
+                        .await
+                        .map_err(|_| {
+                            Error::new(
+                                "operation_uncertain",
+                                "commit identity observation did not join",
+                            )
+                        })??;
+                let model = &child
+                    .completion
+                    .contract
+                    .as_ref()
+                    .unwrap()
+                    .instructions()
+                    .manifest
+                    .profile
+                    .model;
+                let message = format!(
+                    "feat: fulfill child responsibility\n\n{}\n\nInstruction-digest: {}\nAssisted-by: Codex ({})\nSigned-off-by: {} <{}>\n",
+                    child.claim.claim().summary,
+                    child
+                        .completion
+                        .contract
+                        .as_ref()
+                        .unwrap()
+                        .instructions()
+                        .manifest_digest,
+                    model,
+                    identity.name,
+                    identity.email
+                );
+                let timestamp = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+                    .ok_or_else(|| Error::invalid("source commit time is outside range"))?;
+                child.source = Some(
+                    coordinator
+                        .seal_child_source(
+                            &admission,
+                            &child.claim,
+                            execution,
+                            &isolation,
+                            SourceCommitMetadata {
+                                identity,
+                                timestamp,
+                                message,
+                            },
+                        )
+                        .await?,
+                );
+                self.finish_child_phase(child, Stage::LaunchValidation)?;
+            }
+            Stage::LaunchValidation => {
+                let assignment=coordinator.child_validation_assignment(&admission,&child.claim,required(&child.source,"sealed source")?,&child.completion,json!({"claim":child.claim.claim(),"purpose":"validate the exact sealed child source using configured local checks"}))?;
+                self.finish_child_phase(child, Stage::LaunchValidation)?;
+                let operation = child.reference.validation.unwrap_or_else(Uuid::new_v4);
+                child.reference.validation = Some(operation);
+                self.persist_child(child)?;
+                self.launch_assignment(lease, operation, assignment).await?;
+                child.reference.stage = Stage::Validate;
+                self.persist_child(child)?;
+            }
+            Stage::Validate => {
+                let (outcome, completion) = self
+                    .completed_claim(child.reference.validation.unwrap())?
+                    .ok_or_else(|| {
+                        Error::new("operation_pending", "local validation remains owned")
+                    })?;
+                let result = coordinator
+                    .advance_child(
+                        &admission,
+                        &child.claim,
+                        &workspace.workflow,
+                        ChildDeliveryAction::ValidateLocal {
+                            validation: &outcome,
+                            completion: &completion,
+                        },
+                    )
+                    .await?;
+                let ChildDeliveryProgress::Local(local) = result else {
+                    return Err(Error::new(
+                        "delivery_protocol",
+                        "local validation returned another phase",
+                    ));
+                };
+                child.local = Some(local);
+                self.finish_child_phase(
+                    child,
+                    if changed {
+                        Stage::PublishBranch
+                    } else {
+                        Stage::Hosted
+                    },
+                )?;
+            }
+            Stage::PublishBranch => {
+                let issue = parent
+                    .children
+                    .get(&child.reference.work.child.unwrap())
+                    .and_then(|c| c.issue.as_ref())
+                    .ok_or_else(|| Error::new("incomplete_snapshot", "child metadata missing"))?;
+                let title = &parent
+                    .issue
+                    .as_ref()
+                    .ok_or_else(|| Error::new("incomplete_snapshot", "parent metadata missing"))?
+                    .title;
+                let git = current.git.clone();
+                let identifier = issue.identifier.clone();
+                let title = title.clone();
+                let branch =
+                    tokio::task::spawn_blocking(move || git.branch_name(&identifier, &title, 255))
+                        .await
+                        .map_err(|_| {
+                            Error::new("operation_uncertain", "branch validation did not join")
+                        })??;
+                let result = coordinator
+                    .advance_child(
+                        &admission,
+                        &child.claim,
+                        &workspace.workflow,
+                        ChildDeliveryAction::PublishBranch {
+                            source: required(&child.source, "sealed source")?,
+                            local: required(&child.local, "local checks")?,
+                            branch: &branch,
+                            previous: None,
+                        },
+                    )
+                    .await?;
+                let ChildDeliveryProgress::Branch(branch) = result else {
+                    return Err(Error::new(
+                        "delivery_protocol",
+                        "branch publication returned another phase",
+                    ));
+                };
+                child.branch = Some(branch);
+                self.finish_child_phase(child, Stage::PullRequest)?;
+            }
+            Stage::PullRequest => {
+                let title = &parent
+                    .issue
+                    .as_ref()
+                    .ok_or_else(|| Error::new("incomplete_snapshot", "parent metadata missing"))?
+                    .title;
+                let result = coordinator
+                    .advance_child(
+                        &admission,
+                        &child.claim,
+                        &workspace.workflow,
+                        ChildDeliveryAction::OpenPullRequest {
+                            branch: required(&child.branch, "published branch")?,
+                            local: required(&child.local, "local checks")?,
+                            title,
+                        },
+                    )
+                    .await?;
+                let ChildDeliveryProgress::PullRequest(pr) = result else {
+                    return Err(Error::new(
+                        "delivery_protocol",
+                        "PR publication returned another phase",
+                    ));
+                };
+                child.pr = Some(pr);
+                self.finish_child_phase(child, Stage::Hosted)?;
+            }
+            Stage::Hosted => {
+                let verifier = self.hosted_verifier(&workspace.configuration).await?;
+                let result = if changed {
+                    coordinator
+                        .acquire_child_validation(&admission, &verifier)
+                        .await
+                        .map(|hosted| child.hosted = Some(hosted))
+                } else {
+                    if child.exact_pending.is_none() {
+                        child.exact_pending =
+                            Some(coordinator.dispatch_exact_validation(&admission).await?);
+                    }
+                    coordinator
+                        .acquire_exact_validation(
+                            &admission,
+                            child.exact_pending.as_ref().unwrap(),
+                            &verifier,
+                        )
+                        .await
+                        .map(|exact| child.exact = Some(exact))
+                };
+                match result {
+                    Ok(()) => self.finish_child_phase(child, Stage::LaunchReview)?,
+                    Err(error) if error.code == "operation_pending" => return Ok(()),
+                    Err(error) => return Err(error),
+                }
+            }
+            Stage::LaunchReview => {
+                let target = if changed {
+                    ChildReviewTarget::Changed {
+                        change: required(&child.source, "sealed source")?
+                            .change()
+                            .ok_or_else(|| {
+                                Error::new(
+                                    "candidate_provenance",
+                                    "changed claim has no actual patch",
+                                )
+                            })?,
+                        pull_request: required(&child.pr, "pull request")?,
+                    }
+                } else {
+                    ChildReviewTarget::NoChange {
+                        source: required(&child.source, "sealed source")?,
+                    }
+                };
+                let review=coordinator.prepare_child_review(&admission,&child.claim,target,json!({"claim":child.claim.claim(),"purpose":"review the exact isolated child contribution and prepared criteria"}))?;
+                let assignment = coordinator.child_review_worker_assignment(
+                    &admission,
+                    &child.claim,
+                    required(&child.source, "sealed source")?,
+                    &child.completion,
+                    &review,
+                )?;
+                child.assignment = Some(review);
+                self.finish_child_phase(child, Stage::LaunchReview)?;
+                let operation = child.reference.review.unwrap_or_else(Uuid::new_v4);
+                child.reference.review = Some(operation);
+                self.persist_child(child)?;
+                self.launch_assignment(lease, operation, assignment).await?;
+                child.reference.stage = Stage::Review;
+                self.persist_child(child)?;
+            }
+            Stage::Review => {
+                let (outcome, completion) = self
+                    .completed_claim(child.reference.review.unwrap())?
+                    .ok_or_else(|| Error::new("operation_pending", "Codex review remains owned"))?;
+                child.review = Some(
+                    coordinator
+                        .publish_completed_review(
+                            &admission,
+                            required(&child.assignment, "review assignment")?,
+                            &outcome,
+                            &completion,
+                        )
+                        .await?,
+                );
+                self.finish_child_phase(
+                    child,
+                    if changed {
+                        Stage::IntegrateStaging
+                    } else {
+                        Stage::Publish
+                    },
+                )?;
+            }
+            Stage::IntegrateStaging => {
+                let source = required(&child.source, "sealed source")?;
+                child.pending = Some(
+                    coordinator
+                        .request_staging_merge(
+                            &admission,
+                            StagingGates {
+                                proposal: source.change().ok_or_else(|| {
+                                    Error::new(
+                                        "candidate_provenance",
+                                        "staging needs actual changed source",
+                                    )
+                                })?,
+                                pull_request: required(&child.pr, "pull request")?,
+                                local: required(&child.local, "local checks")?,
+                                hosted: required(&child.hosted, "hosted checks")?,
+                                review: required(&child.review, "published Codex review")?,
+                            },
+                        )
+                        .await?,
+                );
+                // Retain the same live admission across actual merge observation.
+                child.reference.stage = Stage::ObserveStaging;
+                self.persist_child(child)?;
+            }
+            Stage::ObserveStaging => {
+                let source = required(&child.source, "sealed source")?;
+                let repository = workspace
+                    .contracts
+                    .iter()
+                    .find(|c| c.repository == admission.scope().repository)
+                    .unwrap();
+                child.staged = Some(
+                    coordinator
+                        .observe_staging_merge(
+                            &admission,
+                            PathBuf::from(&repository.configuration.source).as_path(),
+                            source.change().ok_or_else(|| {
+                                Error::new("candidate_provenance", "staging lacks patch")
+                            })?,
+                            required(&child.pr, "pull request")?,
+                            required(&child.pending, "pending staging receipt")?,
+                        )
+                        .await?,
+                );
+                self.finish_child_phase(child, Stage::Publish)?;
+            }
+            Stage::Publish => {
+                let action = if changed {
+                    ChildDeliveryAction::PublishChanged {
+                        local: required(&child.local, "local checks")?,
+                        hosted: required(&child.hosted, "hosted checks")?,
+                        review: required(&child.review, "review")?,
+                        staged: required(&child.staged, "staging")?,
+                    }
+                } else {
+                    ChildDeliveryAction::PublishNoChange {
+                        local: required(&child.local, "local checks")?,
+                        exact: required(&child.exact, "exact validation")?,
+                        review: required(&child.review, "review")?,
+                    }
+                };
+                let result = coordinator
+                    .advance_child(&admission, &child.claim, &workspace.workflow, action)
+                    .await?;
+                let ChildDeliveryProgress::Published(published) = result else {
+                    return Err(Error::new(
+                        "delivery_protocol",
+                        "completion returned another phase",
+                    ));
+                };
+                child.published = Some(published);
+                self.finish_child_phase(child, Stage::Close)?;
+            }
+            Stage::Close => {
+                coordinator
+                    .close_child(
+                        &admission,
+                        required(&child.published, "canonical child publication")?,
+                        &workspace.configuration,
+                    )
+                    .await?;
+                self.finish_child_phase(child, Stage::Complete)?;
+            }
+            Stage::Complete | Stage::Blocked => {}
+        }
+        Ok(())
+    }
+    pub(super) async fn hosted_verifier(
+        &self,
+        configuration: &Config,
+    ) -> Result<crate::providers::HostedProofVerifier> {
+        let timeout = std::time::Duration::from_millis(configuration.runtime.request_timeout_ms);
+        if let Some(transport) = self.runtime.services.inputs.transport("github_oidc") {
+            crate::providers::HostedProofVerifier::fetch_with_transport(timeout, transport.as_ref())
+                .await
+        } else {
+            crate::providers::HostedProofVerifier::fetch(timeout).await
+        }
+    }
+}
+pub(super) fn terminal_gate_failure(error: &Error) -> bool {
+    matches!(
+        error.code.as_str(),
+        "validation_failed"
+            | "validation_gate"
+            | "review_failed"
+            | "review_gate"
+            | "integrated_gate"
+    )
+}
+fn required<'a, T>(value: &'a Option<T>, name: &str) -> Result<&'a T> {
+    value.as_ref().ok_or_else(|| {
+        Error::new(
+            "reconciliation_required",
+            format!("delivery phase lacks actual retained {name}"),
+        )
+    })
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    #[tokio::test]
+    async fn failed_never_spawned_setup_retires_after_guard_drop_but_live_setup_is_preserved() {
+        let (_root, fixture, service) = super::super::tests::fixture().await;
+        let lease = super::super::tests::start_control(&fixture.runtime);
+        let operation = Uuid::new_v4();
+        let permit = fixture
+            .runtime
+            .control
+            .admit(
+                &lease,
+                operation,
+                "setup-fixture".into(),
+                canonical_digest(1, &"setup").unwrap(),
+                || Ok(()),
+            )
+            .unwrap();
+        let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        service
+            .phase_holds
+            .lock()
+            .unwrap()
+            .insert(operation, (permit.clone(), failed.clone()));
+        let guard = PhaseSetup {
+            runtime: fixture.runtime.clone(),
+            permit,
+            armed: true,
+            failed,
+        };
+        service.maintain_phase_setups().unwrap();
+        assert_eq!(
+            fixture
+                .runtime
+                .control
+                .snapshot()
+                .unwrap()
+                .active_operations
+                .len(),
+            1
+        );
+        drop(guard);
+        assert!(
+            fixture
+                .runtime
+                .control
+                .snapshot()
+                .unwrap()
+                .fenced_operations
+                .contains(&operation)
+        );
+        service.maintain_phase_setups().unwrap();
+        assert!(
+            fixture
+                .runtime
+                .control
+                .snapshot()
+                .unwrap()
+                .active_operations
+                .is_empty()
+        );
+        assert!(service.phase_holds.lock().unwrap().is_empty());
+        assert!(fixture.processes.operations().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn failed_setup_maintenance_fences_before_observing_any_owned_exit() {
+        struct Probe {
+            host: Arc<crate::control::ControlHost>,
+            operation: Uuid,
+            checked: Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl crate::execution::CommandCancellation for Probe {
+            fn cancel(&self) -> Result<()> {
+                Ok(())
+            }
+            fn exited(&self) -> Result<bool> {
+                if !self
+                    .host
+                    .snapshot()?
+                    .fenced_operations
+                    .contains(&self.operation)
+                {
+                    return Err(Error::new(
+                        "fixture_order",
+                        "exit observed before durable fence",
+                    ));
+                }
+                self.checked
+                    .store(true, std::sync::atomic::Ordering::Release);
+                Ok(true)
+            }
+        }
+        let (_root, fixture, service) = super::super::tests::fixture().await;
+        let lease = super::super::tests::start_control(&fixture.runtime);
+        let operation = Uuid::new_v4();
+        let permit = fixture
+            .runtime
+            .control
+            .admit(
+                &lease,
+                operation,
+                "failed-fence-fixture".into(),
+                canonical_digest(1, &"setup").unwrap(),
+                || Ok(()),
+            )
+            .unwrap();
+        let checked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        fixture
+            .runtime
+            .executions
+            .register(
+                operation,
+                Uuid::new_v4(),
+                Arc::new(Probe {
+                    host: fixture.runtime.control.clone(),
+                    operation,
+                    checked: checked.clone(),
+                }),
+            )
+            .unwrap();
+        service.phase_holds.lock().unwrap().insert(
+            operation,
+            (permit, Arc::new(std::sync::atomic::AtomicBool::new(true))),
+        );
+        assert!(
+            !fixture
+                .runtime
+                .control
+                .snapshot()
+                .unwrap()
+                .fenced_operations
+                .contains(&operation)
+        );
+        service.maintain_phase_setups().unwrap();
+        assert!(checked.load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            fixture
+                .runtime
+                .control
+                .snapshot()
+                .unwrap()
+                .active_operations
+                .is_empty()
+        );
+    }
+    #[tokio::test]
+    async fn reporting_failure_keeps_actual_child_claim_and_completion_in_pipeline() {
+        let (_root, fixture, service) = super::super::tests::fixture().await;
+        let projection = fixture.runtime.observations.snapshot().unwrap();
+        let parent = projection
+            .workspaces
+            .values()
+            .next()
+            .unwrap()
+            .parents
+            .values()
+            .next()
+            .unwrap();
+        let mut work = parent.work.clone().unwrap();
+        work.child = Some(*parent.required_children.iter().next().unwrap());
+        let (_claim_root, outcome, completion) = crate::runtime_claims::test_fixture_with_claim(
+            crate::instructions::AgentRole::Implementation,
+            work.clone(),
+            json!({"task":"retention fault fixture"}),
+            None,
+            json!({"schema_version":1,"summary":"fixture claim","fulfilled_criteria":["fixture criterion"],"disposition":{"kind":"no_change","reason":"fixture responsibility requires no source change"}}),
+        );
+        let gate = outcome.original_authority().clone();
+        let workspace = service.workspace(&projection, parent.workspace_id).unwrap();
+        let coordinator = DeliveryCoordinator::new(
+            DeliveryServices {
+                host: service.runtime.control.clone(),
+                broker: service
+                    .provider_broker(&workspace.configuration, parent.workspace_id)
+                    .unwrap(),
+                records: workspace.records.clone(),
+                key: service.runtime.services.key.clone(),
+                git: workspace.git.clone(),
+                retained_git_sources: BTreeMap::new(),
+                current_gate: Arc::new(|_| Ok(())),
+                executions: service.runtime.executions.clone(),
+                processes: service.processes.clone(),
+            },
+            workspace.contracts.clone(),
+        )
+        .unwrap();
+        let claim = Arc::new(
+            coordinator
+                .accept_child_completion(&gate, outcome.clone(), completion.clone())
+                .unwrap(),
+        );
+        let operation = claim.operation_id();
+        let pipeline = Arc::new(tokio::sync::Mutex::new(ChildPipeline {
+            reference: ChildReference {
+                schema_version: 1,
+                runtime: service.runtime.configuration.snapshot().unwrap().runtime.id,
+                operation,
+                proposal: outcome.outcome().proposal_id,
+                claim_digest: claim.digest().into(),
+                work,
+                stage: Stage::Seal,
+                phase_operation: None,
+                validation: None,
+                review: None,
+                observed_at: Utc::now(),
+                error: None,
+            },
+            claim: claim.clone(),
+            completion: completion.clone(),
+            source: None,
+            local: None,
+            branch: None,
+            pr: None,
+            hosted: None,
+            exact_pending: None,
+            exact: None,
+            assignment: None,
+            review: None,
+            pending: None,
+            staged: None,
+            published: None,
+            phase: None,
+        }));
+        service
+            .children
+            .pipelines
+            .lock()
+            .unwrap()
+            .insert(operation, pipeline.clone());
+        // Replace only this test's owned protected directory. The immutable
+        // PrivateDir detects its changed inode when reporting the phase failure.
+        let path = service.records.path();
+        let displaced = path.with_extension("retained");
+        std::fs::rename(path, &displaced).unwrap();
+        std::fs::create_dir(path).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let lease = Lease {
+            runtime_id: fixture.runtime.configuration.snapshot().unwrap().runtime.id,
+            owner_generation: 1,
+            owner_id: Uuid::new_v4(),
+        };
+        assert_eq!(
+            service
+                .advance_children(&lease, &projection)
+                .await
+                .unwrap_err()
+                .code,
+            "ownership_conflict"
+        );
+        let retained = service
+            .children
+            .pipelines
+            .lock()
+            .unwrap()
+            .get(&operation)
+            .unwrap()
+            .clone();
+        assert!(Arc::ptr_eq(&retained, &pipeline));
+        let retained = retained.lock().await;
+        assert!(Arc::ptr_eq(&retained.claim, &claim));
+        assert!(Arc::ptr_eq(&retained.completion, &completion));
+        assert_eq!(
+            retained.reference.error.as_ref().unwrap().code,
+            "worker_binding"
+        );
+        assert!(
+            fixture
+                .runtime
+                .control
+                .snapshot()
+                .unwrap()
+                .active_operations
+                .is_empty()
+        );
+    }
+}

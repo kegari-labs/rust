@@ -293,3 +293,55 @@ fn incomplete_attempt_history_cannot_restore_a_fresh_budget() {
     };
     assert!(Attempts::restore(vec![record], 3, 20, 3).is_err());
 }
+
+#[test]
+fn pending_phase_and_correction_generation_ignore_local_poll_counters() {
+    let author = Uuid::from_u128(901);
+    let comment = Uuid::from_u128(902);
+    let mut left = Corrections::default();
+    let mut right = Corrections::default();
+    for (book, counter) in [(&mut left, 1), (&mut right, 999)] {
+        book.observe(
+            CommentRevision {
+                id: comment,
+                author: Some(author),
+                body_digest: "native-content-digest".into(),
+                edited_at: None,
+                observed_revision: counter,
+            },
+            &BTreeSet::from([author]),
+            &BTreeSet::new(),
+            None,
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        left.pending_revision_digest().unwrap(),
+        right.pending_revision_digest().unwrap()
+    );
+    left.classify(comment, "native-content-digest", CommentClass::Corrective)
+        .unwrap();
+    right
+        .classify(comment, "native-content-digest", CommentClass::Corrective)
+        .unwrap();
+    assert_eq!(left.generation().unwrap(), right.generation().unwrap());
+    right
+        .observe(
+            CommentRevision {
+                id: comment,
+                author: Some(author),
+                body_digest: "edited-content".into(),
+                edited_at: None,
+                observed_revision: 1000,
+            },
+            &BTreeSet::from([author]),
+            &BTreeSet::new(),
+            None,
+        )
+        .unwrap();
+    assert_ne!(
+        left.pending_revision_digest().unwrap(),
+        right.pending_revision_digest().unwrap()
+    );
+    assert_ne!(left.generation().unwrap(), right.generation().unwrap());
+}

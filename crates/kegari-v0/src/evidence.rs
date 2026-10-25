@@ -195,12 +195,19 @@ pub struct Signed<T> {
 
 impl<T: Serialize> Signed<T> {
     fn signing_bytes(&self) -> Result<Vec<u8>> {
-        canonical_bytes(&serde_json::json!({
-            "schema_version": self.schema_version,
-            "key_id": self.key_id,
-            "purpose": self.purpose,
-            "payload": self.payload,
-        }))
+        #[derive(Serialize)]
+        struct Envelope<'a, T> {
+            schema_version: u32,
+            key_id: &'a str,
+            purpose: &'a str,
+            payload: &'a T,
+        }
+        canonical_bytes(&Envelope {
+            schema_version: self.schema_version,
+            key_id: &self.key_id,
+            purpose: &self.purpose,
+            payload: &self.payload,
+        })
     }
 
     pub fn digest(&self) -> Result<String> {
@@ -1869,8 +1876,9 @@ pub fn verify_production(
     })
 }
 
-/// Exact validation of an already-produced accepted contribution for a
-/// deployment-only successor. There is no new patch, PR or invented review.
+/// Exact validation of an unchanged accepted production candidate. Prior
+/// contributions require their verified integration provenance; a no-change
+/// candidate has no prior contribution to invent. Neither path creates a PR.
 pub fn verify_existing_production(
     parent: &VerifiedParent,
     revision: &RevisionBinding,
@@ -1885,8 +1893,7 @@ pub fn verify_existing_production(
             && candidate.production.commit==revision.head && revision.base==revision.head
             && revision.tested_commit==revision.head && candidate.production.tree==revision.tested_tree
     ).ok_or_else(||Error::new("production_validation", "existing-source validation needs the unchanged exact accepted production candidate"))?;
-    if candidate.production_integrations.is_empty()
-        || requirements.is_empty()
+    if requirements.is_empty()
         || requirements
             .iter()
             .any(|r| r.kind != CheckKind::ProductionCi)

@@ -504,7 +504,7 @@ fn status() -> ProviderMutation {
         head: HEAD.into(),
         state: StatusState::Success,
         description: "Reviewed exact delta".into(),
-        target_url: "https://github.invalid/fixture/repo/pull/1".into(),
+        target_url: "https://github.invalid/fixture/repo/pull/1#issuecomment-90".into(),
     }
 }
 fn commit_response() -> Result<HttpResponse> {
@@ -541,7 +541,7 @@ async fn broker_posts_exact_status_once_and_replay_binds_actual_command() {
     assert_eq!(wire.len(), 4);
     assert_eq!(
         wire.body(3),
-        json!({"state":"success","context":"kegari/codex-review","description":"Reviewed exact delta","target_url":"https://github.invalid/fixture/repo/pull/1"})
+        json!({"state":"success","context":"kegari/codex-review","description":"Reviewed exact delta","target_url":"https://github.invalid/fixture/repo/pull/1#issuecomment-90"})
     );
     assert_eq!(
         wire.requests.lock().unwrap()[3].url.path(),
@@ -896,6 +896,7 @@ async fn dispatch_is_revision_checked_and_cancel_requires_exact_owned_attempt() 
         reference: "heads/validation".into(),
         workflow_sha: HEAD.into(),
         source_sha: BASE.into(),
+        expected_production: None,
         source_input: "source_sha".into(),
         operation_input: "operation_id".into(),
         inputs: BTreeMap::from([("suite".into(), "full".into())]),
@@ -1274,4 +1275,338 @@ async fn provider_response_survives_caller_abort_replay_and_refuses_premature_re
             .unresolved_operations
             .contains_key(&operation)
     );
+}
+
+#[test]
+fn hosted_audience_binds_optional_target_context_without_accepting_source_only_tokens() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory =
+        PrivateDir::create(&temp.path().canonicalize().unwrap().join("proofs")).unwrap();
+    let now = chrono::DateTime::from_timestamp(1800000001, 0).unwrap();
+    let plain = expectation();
+    let mut target = plain.clone();
+    target.context_digest = Some(bytes_digest(
+        b"exact target/environment/deployment/source/artifact",
+    ));
+    assert_ne!(plain.audience().unwrap(), target.audience().unwrap());
+    let verifier = verifier();
+    assert_eq!(
+        verifier
+            .verify_and_record(&token(proof_claims(&plain)), &target, now, &directory)
+            .unwrap_err()
+            .code,
+        "invalid_hosted_proof"
+    );
+    let jwt = token(proof_claims(&target));
+    verifier
+        .verify_and_record(&jwt, &target, now, &directory)
+        .unwrap();
+    target.context_digest = Some(bytes_digest(b"another deployed artifact"));
+    assert_eq!(
+        verifier
+            .verify_and_record(&jwt, &target, now, &directory)
+            .unwrap_err()
+            .code,
+        "invalid_hosted_proof"
+    );
+}
+
+async fn uploaded_video_fixture(
+    asset: &str,
+    inline: bool,
+) -> (
+    tempfile::TempDir,
+    Arc<ControlHost>,
+    LinearClient,
+    Arc<Wire>,
+    LinearAssetReference,
+    Vec<u8>,
+    Value,
+) {
+    let bytes = b"synthetic-video-bytes-not-playback-evidence".to_vec();
+    let body = if inline {
+        format!("![Kegari validation recording]({asset})\n\nfixture signed publication placeholder")
+    } else {
+        format!("Incidental URL in text: {asset}")
+    };
+    let comment = json!({"id":id(51),"body":body,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","editedAt":null,"url":"https://linear.app/comment/fixture","user":{"id":id(1)},"onBehalfOf":null,"botActor":null,"issue":{"id":id(20)}});
+    let issue_read = || response(json!({"data":{"issue":issue(20)}}));
+    let wire = Wire::fixture(vec![
+        linear_identity(),
+        issue_read(),
+        labels(),
+        response(
+            json!({"data":{"fileUpload":{"success":true,"uploadFile":{"uploadUrl":"https://blob.invalid/upload?signature=private","assetUrl":asset,"headers":[],"contentType":"video/mp4","filename":"recording.mp4","size":bytes.len()}}}}),
+        ),
+        linear_identity(),
+        issue_read(),
+        labels(),
+        Ok(HttpResponse {
+            status: 200,
+            headers: HeaderMap::new(),
+            body: vec![],
+        }),
+        linear_identity(),
+        issue_read(),
+        labels(),
+        response(
+            json!({"data":{"commentCreate":{"success":true,"comment":{"id":id(51),"issue":{"id":id(20)},"user":{"id":id(1)}}}}}),
+        ),
+    ]);
+    let client = LinearClient::with_transport(
+        HttpPolicy::new(
+            "https://api.linear.app/graphql",
+            id(1).to_string(),
+            Duration::from_secs(2),
+        )
+        .unwrap(),
+        id(2),
+        LinearSelection {
+            teams: Selector::All("all".into()),
+            projects: Selector::All("all".into()),
+            users: Selector::All("all".into()),
+            authorization_label_id: id(3),
+            states: BTreeMap::new(),
+        },
+        Credential::new("test-linear-secret".into()).unwrap(),
+        Some(wire.clone()),
+    )
+    .unwrap();
+    let broker = ProviderBroker {
+        linear: Some(client.clone()),
+        github: None,
+    };
+    let (temp, host, runtime) = control_fixture();
+    let reference = LinearAssetReference {
+        issue: id(20),
+        grant_operation: Uuid::new_v4(),
+        upload_operation: Uuid::new_v4(),
+        association_operation: Uuid::new_v4(),
+    };
+    let grant = broker
+        .mutate(
+            host.clone(),
+            request(runtime, reference.grant_operation),
+            None,
+            Some("provider".into()),
+            ProviderMutation::LinearUploadRequest {
+                issue: id(20),
+                filename: "recording.mp4".into(),
+                content_type: "video/mp4".into(),
+                size: bytes.len() as u32,
+            },
+            || Ok(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        grant.expected["provider_upload_size"],
+        bytes.len().to_string()
+    );
+    assert_eq!(grant.expected["provider_upload_filename"], "recording.mp4");
+    assert_eq!(grant.expected["provider_upload_content_type"], "video/mp4");
+    let uploaded = broker
+        .mutate(
+            host.clone(),
+            request(runtime, reference.upload_operation),
+            None,
+            Some("provider".into()),
+            ProviderMutation::LinearUploadBytes {
+                issue: id(20),
+                grant_operation: reference.grant_operation,
+                asset_url: asset.into(),
+                content_digest: bytes_digest(&bytes),
+                bytes: bytes.clone(),
+            },
+            || Ok(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        uploaded.expected["provider_upload_grant"],
+        reference.grant_operation.to_string()
+    );
+    assert_eq!(
+        uploaded.expected["provider_content_digest"],
+        bytes_digest(&bytes)
+    );
+    assert_eq!(uploaded.expected["provider_asset_url"], asset);
+    assert_eq!(uploaded.expected["provider_writer"], id(1).to_string());
+    broker
+        .mutate(
+            host.clone(),
+            request(runtime, reference.association_operation),
+            None,
+            Some("provider".into()),
+            ProviderMutation::LinearComment {
+                issue: id(20),
+                body,
+            },
+            || Ok(()),
+        )
+        .await
+        .unwrap();
+    (temp, host, client, wire, reference, bytes, comment)
+}
+fn recording_reads(
+    wire: &Wire,
+    bytes: Vec<u8>,
+    before: Vec<Value>,
+    after: Vec<Value>,
+    status: u16,
+    mime: &str,
+) {
+    let page = |comments| {
+        response(
+            json!({"data":{"issue":{"comments":{"nodes":comments,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        )
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_str(mime).unwrap());
+    headers.insert(
+        "content-length",
+        HeaderValue::from_str(&bytes.len().to_string()).unwrap(),
+    );
+    wire.responses.lock().unwrap().extend([
+        linear_identity(),
+        response(json!({"data":{"issue":issue(20)}})),
+        labels(),
+        linear_identity(),
+        page(before),
+        Ok(HttpResponse {
+            status,
+            headers,
+            body: bytes,
+        }),
+        linear_identity(),
+        page(after),
+    ]);
+}
+#[tokio::test]
+async fn private_video_readback_binds_owned_receipts_and_exact_native_association() {
+    let asset = "https://uploads.linear.app/fixture/recording.mp4";
+    let (_temp, host, client, wire, reference, bytes, comment) =
+        uploaded_video_fixture(asset, true).await;
+    recording_reads(
+        &wire,
+        bytes.clone(),
+        vec![comment.clone()],
+        vec![comment],
+        200,
+        "video/mp4",
+    );
+    let proof = client
+        .download_uploaded_asset(&host, &reference)
+        .await
+        .unwrap();
+    assert_eq!(proof.bytes(), bytes);
+    assert_eq!(proof.digest(), bytes_digest(&bytes));
+    assert_eq!(proof.comment().id, id(51));
+    assert_eq!(proof.issue(), id(20));
+    assert_eq!(proof.grant_operation(), reference.grant_operation);
+    let requests = wire.requests.lock().unwrap();
+    let download = requests.iter().find(|r| r.url.as_str() == asset).unwrap();
+    assert_eq!(download.method, Method::Get);
+    assert_eq!(download.headers["authorization"], "test-linear-secret");
+    assert!(!format!("{proof:?}").contains("synthetic-video-bytes"));
+}
+#[tokio::test]
+async fn asset_readback_rejects_untrusted_hosts_and_non_owned_operation_references_before_get() {
+    for asset in [
+        "https://uploads.linear.app.evil.invalid/file.mp4",
+        "https://uploads.linear.app:8443/file.mp4",
+        "https://blob.invalid/file.mp4",
+    ] {
+        let (_temp, host, client, wire, reference, _, _) =
+            uploaded_video_fixture(asset, true).await;
+        let before = wire.len();
+        assert!(
+            client
+                .download_uploaded_asset(&host, &reference)
+                .await
+                .is_err(),
+            "{asset}"
+        );
+        assert_eq!(wire.len(), before);
+    }
+    let (_temp, host, client, wire, mut reference, _, _) =
+        uploaded_video_fixture("https://uploads.linear.app/fixture/file.mp4", true).await;
+    reference.upload_operation = reference.grant_operation;
+    let before = wire.len();
+    assert!(
+        client
+            .download_uploaded_asset(&host, &reference)
+            .await
+            .is_err()
+    );
+    assert_eq!(wire.len(), before);
+}
+#[tokio::test]
+async fn asset_readback_rejects_missing_edited_duplicated_association_and_wrong_bytes() {
+    for variant in [
+        "missing",
+        "edited",
+        "duplicate",
+        "incidental",
+        "later_edit",
+        "bytes",
+        "mime",
+        "redirect",
+        "writer",
+    ] {
+        let (_temp, host, client, wire, reference, mut bytes, comment) = uploaded_video_fixture(
+            "https://uploads.linear.app/fixture/file.mp4",
+            variant != "incidental",
+        )
+        .await;
+        let mut before = vec![comment.clone()];
+        let mut after = vec![comment.clone()];
+        let mut status = 200;
+        let mut mime = "video/mp4";
+        match variant {
+            "missing" => before.clear(),
+            "edited" => before[0]["body"] = json!("edited"),
+            "duplicate" => {
+                let mut copy = comment.clone();
+                copy["id"] = json!(id(52));
+                before.push(copy);
+            }
+            "later_edit" => after[0]["body"] = json!("changed during readback"),
+            "bytes" => bytes[0] ^= 1,
+            "mime" => mime = "text/html",
+            "redirect" => status = 302,
+            "writer" => before[0]["user"]["id"] = json!(id(99)),
+            "incidental" => {}
+            _ => unreachable!(),
+        }
+        recording_reads(&wire, bytes, before, after, status, mime);
+        assert!(
+            client
+                .download_uploaded_asset(&host, &reference)
+                .await
+                .is_err(),
+            "{variant}"
+        );
+        assert!(
+            wire.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|r| r.url.host_str() == Some("api.linear.app")
+                    || r.url.host_str() == Some("uploads.linear.app")
+                    || r.url.host_str() == Some("blob.invalid"))
+        );
+    }
+}
+
+#[test]
+fn video_association_markup_rejects_credentials_query_and_markdown_injection() {
+    for url in [
+        "https://user@uploads.linear.app/file.mp4",
+        "https://uploads.linear.app/file.mp4?token=x",
+        "https://uploads.linear.app/file).mp4",
+        "http://uploads.linear.app/file.mp4",
+    ] {
+        assert!(linear_video_markdown(url).is_err());
+    }
 }

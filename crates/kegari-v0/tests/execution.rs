@@ -1,5 +1,7 @@
 //! Deterministic host/boundary fixtures. These deliberately do not establish
 //! live sandbox or media qualification; no provider/network actions occur.
+#[path = "support/pinned_git.rs"]
+mod pinned_git;
 use kegari_v0::digest::bytes_digest;
 use kegari_v0::error::{Error, Result};
 use kegari_v0::evidence::{CheckKind, Generation, WorkIdentity};
@@ -138,7 +140,7 @@ impl Fixture {
         }
         .validate()
         .unwrap();
-        let git = Git::new(git_path()).unwrap();
+        let git = Git::new(pinned_git::prepare(temp.path())).unwrap();
         let work = WorkIdentity {
             linear_endpoint: "https://api.linear.app/graphql".into(),
             linear_workspace: Uuid::new_v4(),
@@ -243,6 +245,52 @@ fn trusted_source_commit_preserves_binary_mode_and_shared_checkout() {
     assert_eq!(committed.entries().len(), 1);
     assert_eq!(committed.entries()[0].mode, "100755");
     assert_eq!(committed.blobs().values().next().unwrap(), &bytes);
+    let recovered = f
+        .git
+        .inspect_committed_source(
+            root,
+            committed.base(),
+            committed.revision(),
+            &scope,
+            source_metadata(),
+        )
+        .unwrap();
+    assert_eq!(recovered.entries(), committed.entries());
+    assert_eq!(recovered.blobs(), committed.blobs());
+    let mut changed_metadata = source_metadata();
+    changed_metadata
+        .message
+        .insert_str(0, "unreviewed message\n");
+    assert_eq!(
+        f.git
+            .inspect_committed_source(
+                root,
+                committed.base(),
+                committed.revision(),
+                &scope,
+                changed_metadata
+            )
+            .err()
+            .unwrap()
+            .code,
+        "provenance_mismatch"
+    );
+    assert_eq!(
+        f.git
+            .inspect_committed_source(
+                root,
+                committed.base(),
+                committed.revision(),
+                &kegari_v0::git::WriteScope {
+                    paths: vec!["unrelated/".into()]
+                },
+                source_metadata()
+            )
+            .err()
+            .unwrap()
+            .code,
+        "scope_violation"
+    );
     assert_eq!(fs::read(root.join("a.txt")).unwrap(), bytes);
     assert_eq!(
         fs::read_to_string(f.source.join("a.txt")).unwrap(),

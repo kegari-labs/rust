@@ -182,3 +182,33 @@ permit/hold. An actual descendant containment or tracking mechanism remains
 required before native repository commands can complete safely. The deterministic
 execution boundary continues to test the surrounding workflow without claiming
 that missing native guarantee.
+
+Native execution now requires `JournaledSandboxBoundary`, bound to the current
+operation permit. Every actual subprocess persists Starting and an inherited
+locked guard before spawn, captures its native child identity when available,
+and records GroupExited only after owned group cleanup and reap. Recovery never
+adopts the stored PID and still reports all-descendants-exited as false. Plain
+`SandboxBoundary` rejects native starts without this journal.
+
+`Git::from_pinned_executable` inspects tool bytes without launching a process;
+`start_journaled_operation` performs its version probe under the same current
+gate and journal. `GitExecutionScope` covers trusted metadata reads during check
+preparation/completion and structured Git inspection. Each read registers a
+cancellation handle within the spawn gate, waits outside ControlHost, and removes
+that handle only after its owned process has exited. Preparation and model runs
+use different immutable permits even when reusing one owned directory.
+
+The observed Homebrew Git path has a group-writable ancestor and is rejected by
+the strict executable ownership check. Tests use an exact-byte Git copy under
+their own disposable protected directory, not a host installation. Native boot
+identity remains unavailable in the outer development sandbox; journaled Git
+fixtures explicitly inject a synthetic boot UUID while observing their actual
+owned PID/start/path and Git effects. Neither fixture arrangement qualifies the
+native production process-identity boundary.
+
+Repository commands now fail the `process_tree_unverified` prerequisite before
+native spawn. A known inability to prove descendant containment must not create
+an avoidable permanent unknown operation. The prebuilt host cleanup guard uses
+the same prerequisite and exact executable/profile/argument binding. Trusted
+fixed Git metadata remains a separate journaled operation. A passing fixture
+boundary does not remove this native production prerequisite.

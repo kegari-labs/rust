@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result},
     execution::{
         ExecutionBinding, ExecutionLimits, HookInvocation, HookLedger, HookPhase, LocalExecutor,
-        OwnedDirectory, SandboxBoundary,
+        OwnedDirectory,
     },
     git::Git,
     isolation::IsolationPlan,
@@ -36,7 +36,7 @@ use std::{
         },
     },
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 use uuid::Uuid;
@@ -366,11 +366,204 @@ impl CleanupPlan {
         &self.token
     }
 }
+/// Opaque authority for one exact explicit cleanup. Display plans and receipt
+/// JSON cannot construct this capability or authorize a hook/removal.
+pub struct VerifiedCleanupExecution {
+    plan: CleanupPlan,
+    receipt: Receipt,
+    token: Arc<crate::control::HostProcessToken>,
+    control: Arc<ControlHost>,
+    actor: Actor,
+    current_actor: CurrentOperator,
+    generation: u64,
+    parent_command: Option<Uuid>,
+    directory: PrivateDir,
+}
+impl VerifiedCleanupExecution {
+    pub fn plan(&self) -> &CleanupPlan {
+        &self.plan
+    }
+    pub fn receipt(&self) -> &Receipt {
+        &self.receipt
+    }
+    pub(crate) fn command_identity(
+        &self,
+    ) -> Result<(crate::isolation::ValidatedIsolation, Vec<String>, Duration)> {
+        let registration: ExecutionRegistration = self
+            .directory
+            .read(&format!("{}.json", self.plan.operation_id))?;
+        if canonical_digest(1, &registration)? != self.plan.registration_digest {
+            return Err(Error::new(
+                "stale_cleanup_plan",
+                "cleanup command registration changed",
+            ));
+        }
+        let workflow = Workflow::load(&registration.workflow_path)?;
+        if workflow.digest != self.plan.workflow_digest {
+            return Err(Error::new(
+                "stale_config",
+                "cleanup command workflow changed",
+            ));
+        }
+        let script = workflow
+            .front_matter
+            .hooks
+            .before_remove
+            .as_ref()
+            .ok_or_else(|| Error::new("scope_violation", "sealed cleanup has no removal hook"))?;
+        let isolation = registration.isolation.validate()?;
+        OwnedDirectory::reopen(
+            &registration.marker,
+            &registration.directory_digest,
+            &isolation,
+        )?;
+        Ok((
+            isolation,
+            vec!["/bin/sh".into(), "-c".into(), script.clone()],
+            Duration::from_millis(workflow.front_matter.hooks.timeout_ms),
+        ))
+    }
+    pub(crate) fn token(&self) -> Arc<crate::control::HostProcessToken> {
+        self.token.clone()
+    }
+    pub(crate) fn validate_snapshot(&self, state: &ControlSnapshot) -> Result<()> {
+        (self.current_actor)(&self.actor)?;
+        if state.intent.generation != self.generation
+            || self
+                .parent_command
+                .is_some_and(|id| !state.background_commands.contains(&id))
+        {
+            return Err(Error::new(
+                "stale_generation",
+                "cleanup authority or command lineage changed",
+            ));
+        }
+        cleanup_control_clear(state, Some(self.receipt.operation_id), self.parent_command)
+    }
+    fn apply_effect(&self, effect: impl FnOnce() -> Result<()>) -> Result<()> {
+        self.control
+            .with_host_process(&self.token, |state| self.validate_snapshot(state), effect)
+    }
+    pub(crate) fn validate_current(&self) -> Result<()> {
+        self.control.with_host_process(
+            &self.token,
+            |state| self.validate_snapshot(state),
+            || Ok(()),
+        )
+    }
+}
+fn cleanup_control_clear(
+    control: &ControlSnapshot,
+    cleanup_request: Option<Uuid>,
+    parent_command: Option<Uuid>,
+) -> Result<()> {
+    if !control.active_operations.is_empty()
+        || !control.pending_external_effects.is_empty()
+        || control
+            .unresolved_operations
+            .keys()
+            .any(|id| Some(*id) != cleanup_request)
+        || control
+            .pending_local_processes
+            .iter()
+            .any(|id| Some(*id) != cleanup_request)
+        || control
+            .background_commands
+            .iter()
+            .any(|id| Some(*id) != parent_command)
+        || (control.intent.desired == crate::control::Intent::Stopped
+            && control.orchestration_alive)
+        || control.service_stopping
+        || control.persistence_error.is_some()
+    {
+        return Err(Error::new(
+            "cleanup_blocked",
+            "active, queued, uncertain or draining work must be reconciled before cleanup",
+        ));
+    }
+    Ok(())
+}
+/// Read authority derived from a protected cleanup registration and a verified
+/// complete retention snapshot. A public display plan cannot mint this proof.
+#[derive(Clone)]
+pub struct VerifiedCleanupReadRoot {
+    directory: Arc<PrivateDir>,
+    registration: ExecutionRegistration,
+    registration_digest: String,
+    root: PathBuf,
+    identity: (u64, u64, u32, u32),
+}
+impl VerifiedCleanupReadRoot {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    pub fn repository(&self) -> &crate::git::RepositoryId {
+        &self.registration.binding.repository
+    }
+    pub fn runtime_id(&self) -> Uuid {
+        self.registration.binding.runtime_id
+    }
+    pub fn operation_id(&self) -> Uuid {
+        self.registration.binding.operation_id
+    }
+    pub fn digest(&self) -> Result<String> {
+        canonical_digest(
+            1,
+            &json!({"registration":self.registration_digest,"root":self.root,"identity":self.identity}),
+        )
+    }
+    pub fn revalidate_filesystem(&self) -> Result<()> {
+        let actual: ExecutionRegistration = self
+            .directory
+            .read(&format!("{}.json", self.operation_id()))?;
+        if canonical_digest(1, &actual)? != self.registration_digest {
+            return Err(Error::new(
+                "stale_cleanup_plan",
+                "cleanup registration changed",
+            ));
+        }
+        let boundary = actual.isolation.validate()?;
+        OwnedDirectory::reopen(&actual.marker, &actual.directory_digest, &boundary)?;
+        let dir = PrivateDir::open(&self.root)?;
+        let meta = std::fs::symlink_metadata(dir.path())
+            .map_err(|e| Error::io("inspect cleanup Git root", e))?;
+        if (meta.dev(), meta.ino(), meta.uid(), meta.mode()) != self.identity {
+            return Err(Error::new(
+                "ownership_conflict",
+                "cleanup Git root was replaced",
+            ));
+        }
+        Ok(())
+    }
+}
+pub type CleanupFuture<'a, T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'a>>;
+/// A trusted host adapter. Production uses NativeCleanupProcesses; fixture
+/// adapters are explicit and cannot issue host-local process capabilities.
+pub trait CleanupProcesses: Send + Sync {
+    fn read<'a>(
+        &'a self,
+        root: VerifiedCleanupReadRoot,
+        query: crate::git::CleanupRead,
+        cleanup: Option<Arc<VerifiedCleanupExecution>>,
+    ) -> CleanupFuture<'a, String>;
+    fn before_remove<'a>(&'a self, request: CleanupHook<'a>) -> CleanupFuture<'a, ()>;
+}
+pub struct CleanupHook<'a> {
+    pub proof: Arc<VerifiedCleanupExecution>,
+    pub root: VerifiedCleanupReadRoot,
+    pub binding: &'a ExecutionBinding,
+    pub isolation: &'a crate::isolation::ValidatedIsolation,
+    pub ownership: &'a OwnedDirectory,
+    pub workflow: &'a Workflow,
+    pub directory: PrivateDir,
+}
 #[derive(Clone)]
 pub struct Housekeeping {
     root: Arc<PrivateDir>,
     control: Arc<ControlHost>,
     probe: Arc<dyn ProcessProbe>,
+    processes: Arc<OnceLock<Arc<dyn CleanupProcesses>>>,
     git_executable: PathBuf,
 }
 pub type CurrentOperator = Arc<dyn Fn(&Actor) -> Result<()> + Send + Sync>;
@@ -381,14 +574,59 @@ impl Housekeeping {
         probe: Arc<dyn ProcessProbe>,
         git_executable: PathBuf,
     ) -> Result<Self> {
-        Git::new(&git_executable)?;
+        Git::from_pinned_executable(&git_executable)?;
         root.child("cleanup")?;
         Ok(Self {
             root: Arc::new(root),
             control,
             probe,
+            processes: Arc::new(OnceLock::new()),
             git_executable,
         })
+    }
+    pub(crate) fn git_executable(&self) -> &Path {
+        &self.git_executable
+    }
+    pub fn install_processes(&self, processes: Arc<dyn CleanupProcesses>) -> Result<()> {
+        self.processes.set(processes).map_err(|_| {
+            Error::new(
+                "authority_already_bound",
+                "cleanup process authority cannot be replaced",
+            )
+        })
+    }
+    pub fn with_processes(self, processes: Arc<dyn CleanupProcesses>) -> Result<Self> {
+        self.install_processes(processes)?;
+        Ok(self)
+    }
+    fn read_root(
+        &self,
+        registration: &ExecutionRegistration,
+        path: &Path,
+    ) -> Result<VerifiedCleanupReadRoot> {
+        if path != registration.isolation.repository
+            && registration
+                .retention
+                .as_ref()
+                .is_none_or(|r| r.directory != path)
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "cleanup read root is not a registered source or retention copy",
+            ));
+        }
+        let directory = PrivateDir::open(path)?;
+        let meta = std::fs::symlink_metadata(directory.path())
+            .map_err(|e| Error::io("inspect cleanup root identity", e))?;
+        let proof = VerifiedCleanupReadRoot {
+            directory: Arc::new(self.root.child("cleanup")?),
+            registration: registration.clone(),
+            registration_digest: canonical_digest(1, registration)?,
+            root: path.into(),
+            identity: (meta.dev(), meta.ino(), meta.uid(), meta.mode()),
+        };
+        proof.revalidate_filesystem()?;
+        Ok(proof)
     }
     /// Called at actual host-owned directory creation, before any execution.
     pub fn register_execution(
@@ -500,7 +738,7 @@ impl Housekeeping {
     }
     pub async fn inspect(&self, operation: Uuid, github: &GithubClient) -> Result<CleanupPlan> {
         let snapshot = self.control.snapshot()?;
-        self.inspect_observed(operation, github, &snapshot, None, None)
+        self.inspect_observed(operation, github, &snapshot, None, None, None)
             .await
     }
     async fn inspect_observed(
@@ -510,26 +748,16 @@ impl Housekeeping {
         control: &ControlSnapshot,
         cleanup_request: Option<Uuid>,
         parent_command: Option<Uuid>,
+        cleanup: Option<Arc<VerifiedCleanupExecution>>,
     ) -> Result<CleanupPlan> {
         let registration = self.registration(operation)?;
-        if control.intent.runtime_id != registration.binding.runtime_id
-            || !control.active_operations.is_empty()
-            || !control.pending_external_effects.is_empty()
-            || control
-                .unresolved_operations
-                .keys()
-                .any(|id| Some(*id) != cleanup_request)
-            || control
-                .background_commands
-                .iter()
-                .any(|id| Some(*id) != parent_command)
-            || control.draining
-        {
+        if control.intent.runtime_id != registration.binding.runtime_id {
             return Err(Error::new(
-                "cleanup_blocked",
-                "active, queued, uncertain or draining work must be reconciled before cleanup",
+                "identity_mismatch",
+                "cleanup runtime differs from registration",
             ));
         }
+        cleanup_control_clear(control, cleanup_request, parent_command)?;
         for process in &registration.processes {
             if self.probe.observe(process)? == ProcessObservation::Running {
                 return Err(Error::new(
@@ -624,8 +852,9 @@ impl Housekeeping {
         }
         let status = self
             .git_read(
-                source,
-                &["status", "--porcelain=v1", "--untracked-files=all"],
+                self.read_root(&registration, source)?,
+                crate::git::CleanupRead::Status,
+                cleanup.clone(),
             )
             .await?;
         if !status.is_empty() {
@@ -636,12 +865,17 @@ impl Housekeeping {
         }
         let heads = self
             .git_read(
-                source,
-                &["for-each-ref", "--format=%(objectname)", "refs/heads"],
+                self.read_root(&registration, source)?,
+                crate::git::CleanupRead::Heads,
+                cleanup.clone(),
             )
             .await?;
         let head = self
-            .git_read(source, &["rev-parse", "--verify", "HEAD"])
+            .git_read(
+                self.read_root(&registration, source)?,
+                crate::git::CleanupRead::Head,
+                cleanup.clone(),
+            )
             .await?;
         let commits: BTreeSet<_> = heads
             .lines()
@@ -676,7 +910,11 @@ impl Housekeeping {
             ));
         }
         let fsck = self
-            .git_read(source, &["fsck", "--full", "--no-reflogs"])
+            .git_read(
+                self.read_root(&registration, source)?,
+                crate::git::CleanupRead::Fsck,
+                cleanup.clone(),
+            )
             .await?;
         if fsck.lines().any(|line| {
             line.starts_with("dangling commit ") || line.starts_with("unreachable commit ")
@@ -686,8 +924,12 @@ impl Housekeeping {
                 "unreferenced commit history must be published or explicitly reconciled before cleanup",
             ));
         }
-        self.git_read(&retained.directory, &["fsck", "--full", "--no-reflogs"])
-            .await?;
+        self.git_read(
+            self.read_root(&registration, &retained.directory)?,
+            crate::git::CleanupRead::Fsck,
+            cleanup,
+        )
+        .await?;
         let mut plan = CleanupPlan {
             schema_version: 1,
             runtime_id: registration.binding.runtime_id,
@@ -786,6 +1028,7 @@ impl Housekeeping {
         let registration = self.registration(operation)?;
         request.kind = "cleanup".into();
         request.canonical_targets = vec![
+            request.runtime_id.to_string(),
             operation.to_string(),
             registration
                 .isolation
@@ -834,6 +1077,7 @@ impl Housekeeping {
                 &self.control.snapshot()?,
                 None,
                 parent_command,
+                None,
             )
             .await?;
         if initial.token != token {
@@ -842,8 +1086,18 @@ impl Housekeeping {
                 "cleanup plan differs from current exact eligibility",
             ));
         }
-        let runtime = tokio::runtime::Handle::current();
-        let expected_generation = request
+        if Workflow::load(&registration.workflow_path)?
+            .front_matter
+            .hooks
+            .before_remove
+            .is_some()
+        {
+            crate::isolation::repository_command_prerequisite()?;
+        }
+        let actor = request.actor.clone();
+        let state = self.control.snapshot()?;
+        let generation = state.intent.generation;
+        if request
             .expected
             .get("control_generation")
             .map(|value| {
@@ -851,77 +1105,117 @@ impl Housekeeping {
                     .parse::<u64>()
                     .map_err(|_| Error::invalid("expected control generation is malformed"))
             })
-            .transpose()?;
-        tokio::task::spawn_blocking(move||{
-            let current=Mutex::new(None);let actor=request.actor.clone();let request_id=request.request_id;
-            self.control.mutate_observed(request,None,Some("recover"),|state|{
-                current_actor(&actor)?;
-                if expected_generation.is_some_and(|generation|generation!=state.intent.generation){return Err(Error::new("stale_generation","control intent changed before cleanup"));}
-                if parent_command.is_some_and(|id|!state.background_commands.contains(&id)){return Err(Error::new("request_conflict","cleanup background command is no longer owned"));}
-                let fresh=runtime.block_on(self.inspect_observed(operation,&github,state,Some(request_id),parent_command))?;
-                if fresh.token!=token{return Err(Error::new("stale_cleanup_plan","cleanup predicates changed before removal admission"));}*current.lock().map_err(|_|Error::new("cleanup_blocked","cleanup observation lock unavailable"))?=Some(state.clone());Ok(())
-            },|_|{
-                let registration=self.registration(operation)?;let workflow=Workflow::load(&registration.workflow_path)?;
-                if workflow.front_matter.hooks.before_remove.is_some(){runtime.block_on(self.before_remove(&registration,&workflow,&token))?;}
-                current_actor(&actor)?;let state=current.lock().map_err(|_|Error::new("cleanup_blocked","cleanup observation lock unavailable"))?.clone().ok_or_else(||Error::new("cleanup_blocked","cleanup has no serialized observation"))?;
-                let fresh=runtime.block_on(self.inspect_observed(operation,&github,&state,Some(request_id),parent_command))?;
-                if fresh.token!=token{return Err(Error::new("stale_cleanup_plan","hook or intervening observation changed preservation predicates"));}
-                // The retained copy is an authoritative recovery artifact, linked
-                // before any deletion. A crash leaves a Sent receipt, never replay.
-                let tombstone=CleanupTombstone{schema_version:1,runtime_id:fresh.runtime_id,operation_id:operation,cleanup_request:request_id,plan_token:token.clone(),retained:fresh.retained.clone(),content_digest:canonical_digest(1,&content_inventory(&fresh.files))?,removed:false};
-                let directory=self.root.child("cleanup")?;directory.write(&format!("retained-{operation}.json"),&tombstone)?;
-                remove_checked_tree(&fresh.source,&fresh.files)?;
-                directory.write(&format!("retained-{operation}.json"),&CleanupTombstone{removed:true,..tombstone})?;
-                Ok((BTreeMap::from([("retained_directory".into(),fresh.retained.to_string_lossy().into_owned())]),json!({"cleanup_plan":token,"source_operation":operation,"removed_path":fresh.source,"retained_recovery":fresh.retained})))
-            })
-        }).await.map_err(|_|Error::new("operation_uncertain","cleanup task ended without a verified completion"))?
+            .transpose()?
+            .is_some_and(|expected| expected != generation)
+        {
+            return Err(Error::new(
+                "stale_generation",
+                "control intent changed before cleanup",
+            ));
+        }
+        let (owned, receipt) = self.control.begin_cleanup_effect(request, |state| {
+            current_actor(&actor)?;
+            if state.intent.generation != generation
+                || parent_command.is_some_and(|id| !state.background_commands.contains(&id))
+            {
+                return Err(Error::new(
+                    "stale_generation",
+                    "cleanup control intent or command lineage changed",
+                ));
+            }
+            cleanup_control_clear(state, None, parent_command)?;
+            let current = self.registration(operation)?;
+            if canonical_digest(1, &current)? != initial.registration_digest
+                || Workflow::load(&current.workflow_path)?.digest != initial.workflow_digest
+            {
+                return Err(Error::new(
+                    "stale_cleanup_plan",
+                    "cleanup source registration or workflow changed before admission",
+                ));
+            }
+            Ok(())
+        })?;
+        let proof = Arc::new(VerifiedCleanupExecution {
+            plan: initial,
+            receipt,
+            token: Arc::new(owned),
+            control: self.control.clone(),
+            actor,
+            current_actor,
+            generation,
+            parent_command,
+            directory: self.root.child("cleanup")?,
+        });
+        proof.validate_current()?;
+        let registration = self.registration(operation)?;
+        let workflow = Workflow::load(&registration.workflow_path)?;
+        if workflow.front_matter.hooks.before_remove.is_some() {
+            self.before_remove(&registration, &workflow, proof.clone())
+                .await?;
+        }
+        proof.validate_current()?;
+        let fresh = self
+            .inspect_observed(
+                operation,
+                &github,
+                &self.control.snapshot()?,
+                Some(proof.receipt.operation_id),
+                parent_command,
+                Some(proof.clone()),
+            )
+            .await?;
+        if fresh.token != token {
+            return Err(Error::new(
+                "stale_cleanup_plan",
+                "hook or intervening observation changed preservation predicates",
+            ));
+        }
+        proof.validate_current()?;
+        let cleanup = self.clone();
+        let action = proof.clone();
+        let observation=tokio::task::spawn_blocking(move|| {
+            action.validate_current()?;
+            let tombstone=CleanupTombstone{schema_version:1,runtime_id:fresh.runtime_id,operation_id:operation,cleanup_request:action.receipt.operation_id,plan_token:token.clone(),retained:fresh.retained.clone(),content_digest:canonical_digest(1,&content_inventory(&fresh.files))?,removed:false};
+            let directory=cleanup.root.child("cleanup")?;
+            directory.write(&format!("retained-{operation}.json"),&tombstone)?;
+            remove_checked_tree(&fresh.source,&fresh.files,&action)?;
+            directory.write(&format!("retained-{operation}.json"),&CleanupTombstone{removed:true,..tombstone})?;
+            Ok::<_,Error>(json!({"cleanup_plan":token,"source_operation":operation,"removed_path":fresh.source,"retained_recovery":fresh.retained}))
+        }).await.map_err(|_|Error::new("operation_uncertain","cleanup task ended without a verified completion"))??;
+        self.control
+            .complete_host_process(&proof.token, || Ok(()), observation)
     }
     async fn before_remove(
         &self,
         registration: &ExecutionRegistration,
         workflow: &Workflow,
-        token: &str,
+        proof: Arc<VerifiedCleanupExecution>,
     ) -> Result<()> {
+        proof.validate_current()?;
         let boundary = registration.isolation.clone().validate()?;
-        let owned = OwnedDirectory::reopen(
+        let ownership = OwnedDirectory::reopen(
             &registration.marker,
             &registration.directory_digest,
             &boundary,
         )?;
-        let git = Git::new(&self.git_executable)?;
-        let executor = LocalExecutor {
-            isolation: &boundary,
-            git: &git,
-            boundary: &SandboxBoundary,
-            limits: ExecutionLimits {
-                output_bytes: 16 * 1024,
-                ..Default::default()
-            },
-            ownership: &owned,
-        };
-        let directory = self.root.child("cleanup")?;
-        let name = format!("hooks-{}.json", registration.binding.operation_id);
-        let mut ledger: HookLedger = directory.read(&name)?;
-        let outcome = executor
-            .run_hook(
-                &mut ledger,
-                HookInvocation {
-                    binding: &registration.binding,
-                    workflow,
-                    phase: HookPhase::BeforeRemove,
-                    session: None,
-                    eligible_cleanup_plan: Some(token),
-                },
-                |next| directory.write(&name, next),
-            )
-            .await?;
-        if !outcome.allows_next_phase || outcome.diagnostic_only {
-            return Err(Error::new(
-                "cleanup_blocked",
-                "before_remove hook did not succeed",
-            ));
-        }
-        Ok(())
+        self.processes
+            .get()
+            .ok_or_else(|| {
+                Error::new(
+                    "process_authority_required",
+                    "cleanup requires the native owned process adapter",
+                )
+            })?
+            .before_remove(CleanupHook {
+                proof,
+                root: self.read_root(registration, &registration.isolation.repository)?,
+                binding: &registration.binding,
+                isolation: &boundary,
+                ownership: &ownership,
+                workflow,
+                directory: self.root.child("cleanup")?,
+            })
+            .await
     }
     /// Recovery/correction callers resolve an explicitly removed operation to its
     /// complete retained copy, checking its content before using the new path.
@@ -948,63 +1242,184 @@ impl Housekeeping {
         }
         Ok(record.retained)
     }
-    async fn git_read(&self, cwd: &Path, args: &[&str]) -> Result<String> {
-        use tokio::io::AsyncReadExt;
-        let mut command = tokio::process::Command::new(&self.git_executable);
-        command
-            .current_dir(cwd)
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("LC_ALL", "C")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("GIT_NO_REPLACE_OBJECTS", "1")
-            .args([
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "core.fsmonitor=false",
-                "-c",
-                "protocol.allow=never",
-            ])
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-        let mut child = command
-            .spawn()
-            .map_err(|e| Error::io("inspect retained Git state", e))?;
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::new("cleanup_blocked", "Git observation output unavailable"))?
-            .take(4 * 1024 * 1024 + 1);
-        let mut bytes = vec![];
-        let observed = tokio::time::timeout(Duration::from_secs(30), async {
-            stdout
-                .read_to_end(&mut bytes)
-                .await
-                .map_err(|e| Error::io("read bounded Git observation", e))?;
-            let status = child
-                .wait()
-                .await
-                .map_err(|e| Error::io("wait Git observation", e))?;
-            if !status.success() || bytes.len() > 4 * 1024 * 1024 {
+    async fn git_read(
+        &self,
+        root: VerifiedCleanupReadRoot,
+        query: crate::git::CleanupRead,
+        cleanup: Option<Arc<VerifiedCleanupExecution>>,
+    ) -> Result<String> {
+        self.processes
+            .get()
+            .ok_or_else(|| {
+                Error::new(
+                    "process_authority_required",
+                    "cleanup requires a journaled host process adapter",
+                )
+            })?
+            .read(root, query, cleanup)
+            .await
+    }
+}
+
+/// Actual control-owned cleanup adapter. All metadata and hook starts retain the
+/// same process journal and cancellation registry used by the runtime driver.
+pub struct NativeCleanupProcesses {
+    services: crate::host_process::HostProcessServices,
+    git: Git,
+    binary: BinaryIdentity,
+}
+impl NativeCleanupProcesses {
+    pub fn for_housekeeping(
+        services: crate::host_process::HostProcessServices,
+        housekeeping: &Housekeeping,
+    ) -> Result<Self> {
+        Self::new(services, housekeeping.git_executable())
+    }
+    pub fn new(
+        services: crate::host_process::HostProcessServices,
+        executable: &Path,
+    ) -> Result<Self> {
+        Ok(Self {
+            services,
+            git: Git::from_pinned_executable(executable)?,
+            binary: BinaryIdentity::inspect(executable, true)?,
+        })
+    }
+    fn scope(
+        &self,
+        root: VerifiedCleanupReadRoot,
+        cleanup: Option<Arc<VerifiedCleanupExecution>>,
+    ) -> Result<Arc<crate::host_process::LocalProcessPermit>> {
+        if let Some(cleanup) = cleanup {
+            crate::host_process::LocalProcessPermit::cleanup(
+                self.services.clone(),
+                cleanup,
+                root,
+                self.binary.clone(),
+            )
+        } else {
+            let selected = crate::git::cleanup_host_read_root(
+                &root,
+                &self.services.configuration.snapshot()?,
+            )?;
+            crate::host_process::LocalProcessPermit::metadata(
+                self.services.clone(),
+                crate::host_process::MetadataRequest {
+                    request_id: Uuid::new_v4(),
+                    work_key: format!("cleanup-read:{}", root.operation_id()),
+                    roots: vec![selected],
+                    git_binary: self.binary.clone(),
+                },
+            )
+        }
+    }
+}
+impl CleanupProcesses for NativeCleanupProcesses {
+    fn read<'a>(
+        &'a self,
+        root: VerifiedCleanupReadRoot,
+        query: crate::git::CleanupRead,
+        cleanup: Option<Arc<VerifiedCleanupExecution>>,
+    ) -> CleanupFuture<'a, String> {
+        Box::pin(async move {
+            let authority = self.scope(root.clone(), cleanup)?;
+            let git = self.git.clone();
+            let scope = authority.clone();
+            let observed = tokio::task::spawn_blocking(move || {
+                let git = git.with_host_execution_scope(crate::git::HostGitExecutionScope {
+                    limits: crate::git::GitLimits::default(),
+                    authority: scope,
+                })?;
+                git.cleanup_read(root.root(), query)
+            })
+            .await
+            .map_err(|_| {
+                Error::new(
+                    "operation_uncertain",
+                    "cleanup Git task ended without joining its owned children",
+                )
+            })?;
+            authority
+                .finish(json!({"cleanup_read":format!("{query:?}"),"success":observed.is_ok()}))?;
+            observed
+        })
+    }
+    fn before_remove<'a>(&'a self, request: CleanupHook<'a>) -> CleanupFuture<'a, ()> {
+        Box::pin(async move {
+            crate::isolation::repository_command_prerequisite()?;
+            let authority = self.scope(request.root, Some(request.proof.clone()))?;
+            let git = self.git.clone();
+            let scope = authority.clone();
+            let git = tokio::task::spawn_blocking(move || {
+                git.with_host_execution_scope(crate::git::HostGitExecutionScope {
+                    limits: crate::git::GitLimits::default(),
+                    authority: scope,
+                })
+            })
+            .await
+            .map_err(|_| {
+                Error::new("operation_uncertain", "cleanup Git preparation task ended")
+            })??;
+            let boundary = CleanupCommandBoundary {
+                authority: authority.clone(),
+            };
+            let executor = LocalExecutor {
+                isolation: request.isolation,
+                git: &git,
+                boundary: &boundary,
+                limits: ExecutionLimits {
+                    output_bytes: 16 * 1024,
+                    ..Default::default()
+                },
+                ownership: request.ownership,
+            };
+            let name = format!("hooks-{}.json", request.binding.operation_id);
+            let mut ledger: HookLedger = request.directory.read(&name)?;
+            let outcome = executor
+                .run_hook(
+                    &mut ledger,
+                    HookInvocation {
+                        binding: request.binding,
+                        workflow: request.workflow,
+                        phase: HookPhase::BeforeRemove,
+                        session: None,
+                        eligible_cleanup_plan: Some(request.proof.plan().digest()),
+                    },
+                    |next| request.directory.write(&name, next),
+                )
+                .await;
+            authority.finish(json!({"before_remove_observed":outcome.is_ok()}))?;
+            let outcome = outcome?;
+            if !outcome.allows_next_phase || outcome.diagnostic_only {
                 return Err(Error::new(
                     "cleanup_blocked",
-                    "Git observation failed or exceeded its output bound",
+                    "before_remove hook did not succeed",
                 ));
             }
-            String::from_utf8(bytes)
-                .map_err(|_| Error::new("cleanup_blocked", "Git observation is not UTF-8"))
+            Ok(())
         })
-        .await;
-        if observed.is_err() {
-            let _ = child.kill().await;
-        }
-        observed.map_err(|_| Error::new("timeout", "Git cleanup observation timed out"))?
+    }
+}
+struct CleanupCommandBoundary {
+    authority: Arc<crate::host_process::LocalProcessPermit>,
+}
+impl crate::execution::CommandBoundary for CleanupCommandBoundary {
+    fn evidence_class(&self) -> crate::execution::ExecutionEvidenceClass {
+        crate::execution::ExecutionEvidenceClass::ConfinedExecution
+    }
+    fn start(
+        &self,
+        isolation: &crate::isolation::ValidatedIsolation,
+        argv: &[String],
+        timeout: Duration,
+        output_limit: usize,
+    ) -> Result<Box<dyn crate::execution::StartedCommand>> {
+        Ok(Box::new(self.authority.start_cleanup_command(
+            isolation,
+            argv,
+            timeout,
+            output_limit,
+        )?))
     }
 }
 
@@ -1021,7 +1436,12 @@ struct CleanupTombstone {
     removed: bool,
 }
 
-fn remove_checked_tree(root: &Path, expected: &[RetainedFile]) -> Result<()> {
+fn remove_checked_tree(
+    root: &Path,
+    expected: &[RetainedFile],
+    authority: &VerifiedCleanupExecution,
+) -> Result<()> {
+    authority.validate_current()?;
     if inventory(root)? != expected {
         return Err(Error::new(
             "stale_cleanup_plan",
@@ -1073,13 +1493,13 @@ fn remove_checked_tree(root: &Path, expected: &[RetainedFile]) -> Result<()> {
     for file in expected {
         entries.insert(file.relative.clone(), file);
     }
-    unlink_children(&directory, Path::new(""), &entries)?;
-    let mut current = std::mem::MaybeUninit::<libc::stat>::uninit();
+    unlink_children(&directory, Path::new(""), &entries, authority)?;
+    let mut current_stat = std::mem::MaybeUninit::<libc::stat>::uninit();
     if unsafe {
         libc::fstatat(
             parent_file.as_raw_fd(),
             leaf.as_ptr(),
-            current.as_mut_ptr(),
+            current_stat.as_mut_ptr(),
             libc::AT_SYMLINK_NOFOLLOW,
         )
     } != 0
@@ -1089,19 +1509,25 @@ fn remove_checked_tree(root: &Path, expected: &[RetainedFile]) -> Result<()> {
             std::io::Error::last_os_error(),
         ));
     }
-    let current = unsafe { current.assume_init() };
-    if current.st_dev as u64 != metadata.dev() || current.st_ino != metadata.ino() {
+    let current_metadata = unsafe { current_stat.assume_init() };
+    if current_metadata.st_dev as u64 != metadata.dev() || current_metadata.st_ino != metadata.ino()
+    {
         return Err(Error::new(
             "ownership_conflict",
             "cleanup root was replaced; retained remaining directory",
         ));
     }
-    if unsafe { libc::unlinkat(parent_file.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
-        return Err(Error::io(
-            "remove verified cleanup directory",
-            std::io::Error::last_os_error(),
-        ));
-    }
+    authority.apply_effect(|| {
+        if unsafe { libc::unlinkat(parent_file.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR) }
+            != 0
+        {
+            return Err(Error::io(
+                "remove verified cleanup directory",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        Ok(())
+    })?;
     parent_file
         .sync_all()
         .map_err(|e| Error::io("persist cleanup removal", e))
@@ -1110,6 +1536,7 @@ fn unlink_children(
     directory: &File,
     prefix: &Path,
     expected: &BTreeMap<PathBuf, &RetainedFile>,
+    authority: &VerifiedCleanupExecution,
 ) -> Result<()> {
     // fdopendir owns its duplicated descriptor; readdir names never escape this
     // parent because every open/unlink remains descriptor-relative and no-follow.
@@ -1130,6 +1557,7 @@ fn unlink_children(
     }
     let result = (|| {
         loop {
+            authority.validate_current()?;
             let entry = unsafe { libc::readdir(stream) };
             if entry.is_null() {
                 break;
@@ -1198,7 +1626,7 @@ fn unlink_children(
                         "cleanup child changed while opening",
                     ));
                 }
-                unlink_children(&child, &relative, expected)?;
+                unlink_children(&child, &relative, expected, authority)?;
                 let mut latest = std::mem::MaybeUninit::<libc::stat>::uninit();
                 if unsafe {
                     libc::fstatat(
@@ -1221,15 +1649,18 @@ fn unlink_children(
                         "cleanup child replaced before unlink",
                     ));
                 }
-                if unsafe {
-                    libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR)
-                } != 0
-                {
-                    return Err(Error::io(
-                        "remove cleanup child directory",
-                        std::io::Error::last_os_error(),
-                    ));
-                }
+                authority.apply_effect(|| {
+                    if unsafe {
+                        libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR)
+                    } != 0
+                    {
+                        return Err(Error::io(
+                            "remove cleanup child directory",
+                            std::io::Error::last_os_error(),
+                        ));
+                    }
+                    Ok(())
+                })?;
             } else {
                 let proof = expected.get(&relative).ok_or_else(|| {
                     Error::new(
@@ -1243,24 +1674,216 @@ fn unlink_children(
                     || st.st_ino != proof.inode
                     || st.st_size as u64 != proof.bytes
                     || st.st_nlink != 1
+                    || u32::from(st.st_mode) & 0o7777 != proof.mode
                 {
                     return Err(Error::new(
                         "stale_cleanup_plan",
                         "cleanup file identity changed; preserve remaining files",
                     ));
                 }
-                if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
-                    return Err(Error::io(
-                        "remove verified cleanup file",
-                        std::io::Error::last_os_error(),
-                    ));
-                }
+                // Hash through the opened descriptor outside the control gate.
+                // The short unlink gate then checks that neither the descriptor
+                // nor its directory entry changed since that exact hash.
+                let removal = PreparedFileRemoval::inspect(directory, name, proof)?;
+                authority.apply_effect(|| removal.unlink(directory, name))?;
             }
         }
         Ok(())
     })();
     unsafe { libc::closedir(stream) };
     result
+}
+
+#[derive(PartialEq, Eq)]
+struct CleanupFileState {
+    device: u64,
+    inode: u64,
+    bytes: u64,
+    mode: u32,
+    uid: u32,
+    links: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+impl CleanupFileState {
+    fn read(file: &File) -> Result<Self> {
+        let metadata = file
+            .metadata()
+            .map_err(|e| Error::io("recheck cleanup file descriptor", e))?;
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            bytes: metadata.len(),
+            mode: metadata.mode(),
+            uid: metadata.uid(),
+            links: metadata.nlink(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        })
+    }
+}
+struct PreparedFileRemoval {
+    file: File,
+    state: CleanupFileState,
+}
+impl PreparedFileRemoval {
+    fn open(directory: &File, name: &std::ffi::CStr) -> Result<File> {
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            return Err(Error::io(
+                "open cleanup file for final verification",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+    fn inspect(directory: &File, name: &std::ffi::CStr, proof: &RetainedFile) -> Result<Self> {
+        let mut file = Self::open(directory, name)?;
+        validate_file(&file, false)?;
+        let state = CleanupFileState::read(&file)?;
+        if proof.directory
+            || state.device != proof.device
+            || state.inode != proof.inode
+            || state.bytes != proof.bytes
+            || state.bytes > MAX_TREE_BYTES
+            || state.mode & 0o7777 != proof.mode
+        {
+            return Err(Error::new(
+                "stale_cleanup_plan",
+                "cleanup file differs from retained identity or mode",
+            ));
+        }
+        let mut hash = Sha256::new();
+        let mut bytes = 0u64;
+        let mut buffer = [0u8; 65536];
+        loop {
+            let count = file
+                .read(&mut buffer)
+                .map_err(|e| Error::io("verify retained cleanup bytes before unlink", e))?;
+            if count == 0 {
+                break;
+            }
+            bytes += count as u64;
+            if bytes > proof.bytes {
+                return Err(Error::new(
+                    "stale_cleanup_plan",
+                    "cleanup file grew after preservation",
+                ));
+            }
+            hash.update(&buffer[..count]);
+        }
+        if bytes != proof.bytes
+            || format!("sha256:{}", hex::encode(hash.finalize())) != proof.digest
+            || CleanupFileState::read(&file)? != state
+        {
+            return Err(Error::new(
+                "stale_cleanup_plan",
+                "cleanup file bytes or metadata changed after preservation",
+            ));
+        }
+        Ok(Self { file, state })
+    }
+    fn unlink(self, directory: &File, name: &std::ffi::CStr) -> Result<()> {
+        let entry = Self::open(directory, name)?;
+        if CleanupFileState::read(&self.file)? != self.state
+            || CleanupFileState::read(&entry)? != self.state
+        {
+            return Err(Error::new(
+                "stale_cleanup_plan",
+                "cleanup file changed after final byte verification; preserve remaining files",
+            ));
+        }
+        if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+            return Err(Error::io(
+                "remove verified cleanup file",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod cleanup_unlink_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn edits_between_inventory_hash_and_unlink_preserve_unretained_work() {
+        for after_hash in [false, true] {
+            for mode_only in [false, true] {
+                let fixture = tempfile::tempdir().unwrap();
+                std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+                let root = fixture.path().canonicalize().unwrap();
+                let source = root.join("source");
+                let retained = root.join("retained");
+                std::fs::create_dir(&source).unwrap();
+                std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o700)).unwrap();
+                let path = source.join("file");
+                std::fs::write(&path, b"retained").unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+                std::fs::copy(&path, &retained).unwrap();
+                let expected = inventory(&source).unwrap();
+                let proof = expected.iter().find(|entry| !entry.directory).unwrap();
+                let directory = File::open(&source).unwrap();
+                let name = std::ffi::CString::new("file").unwrap();
+                let prepared = after_hash
+                    .then(|| PreparedFileRemoval::inspect(&directory, &name, proof).unwrap());
+                if mode_only {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))
+                        .unwrap();
+                } else {
+                    // An in-place edit of exactly the retained length defeats
+                    // inode/size-only validation, even though the bytes differ.
+                    std::fs::write(&path, b"modified").unwrap();
+                }
+                let current = std::fs::metadata(&path).unwrap();
+                assert_eq!(current.ino(), proof.inode);
+                assert_eq!(current.len(), proof.bytes);
+                let result = match prepared {
+                    Some(prepared) => prepared.unlink(&directory, &name),
+                    None => PreparedFileRemoval::inspect(&directory, &name, proof)
+                        .and_then(|prepared| prepared.unlink(&directory, &name)),
+                };
+                assert_eq!(result.unwrap_err().code, "stale_cleanup_plan");
+                assert_eq!(std::fs::read(&retained).unwrap(), b"retained");
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    if mode_only { b"retained" } else { b"modified" }
+                );
+                assert_eq!(
+                    std::fs::metadata(&path).unwrap().mode() & 0o7777,
+                    if mode_only { 0o400 } else { 0o600 }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unchanged_descriptor_verified_file_is_removed() {
+        let fixture = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let path = root.join("file");
+        std::fs::write(&path, b"retained").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let expected = inventory(&root).unwrap();
+        let proof = expected.iter().find(|entry| !entry.directory).unwrap();
+        let directory = File::open(&root).unwrap();
+        let name = std::ffi::CString::new("file").unwrap();
+        PreparedFileRemoval::inspect(&directory, &name, proof)
+            .unwrap()
+            .unlink(&directory, &name)
+            .unwrap();
+        assert!(!path.exists());
+    }
 }
 
 fn validate_retained_path(registration: &ExecutionRegistration, path: &Path) -> Result<()> {
@@ -1330,7 +1953,7 @@ fn inventory(root: &Path) -> Result<Vec<RetainedFile>> {
                     .into(),
                 bytes: 0,
                 digest: bytes_digest(b"owned-directory"),
-                mode: m.mode() & 0o777,
+                mode: m.mode() & 0o7777,
                 device: m.dev(),
                 inode: m.ino(),
             });
@@ -1402,7 +2025,7 @@ fn inventory(root: &Path) -> Result<Vec<RetainedFile>> {
                     .into(),
                 bytes: count,
                 digest: format!("sha256:{}", hex::encode(hash.finalize())),
-                mode: m.mode() & 0o777,
+                mode: m.mode() & 0o7777,
                 device: m.dev(),
                 inode: m.ino(),
             });
@@ -1901,6 +2524,7 @@ pub struct ReadOnlyPreparation<'a> {
     pub operation: Uuid,
     pub authority: &'a crate::worker::WorkerAuthority,
     pub identity: ReadOnlyIdentity,
+    pub independent_clone: Option<&'a crate::git::VerifiedIndependentClone>,
     pub isolation: &'a crate::isolation::ValidatedIsolation,
     pub workflow: &'a Workflow,
 }
@@ -1933,6 +2557,7 @@ struct ReadOnlyRecord {
     root_inode: u64,
     repository_device: u64,
     repository_inode: u64,
+    clone_proof_digest: Option<String>,
 }
 impl Housekeeping {
     pub fn register_readonly_preparation(
@@ -1953,6 +2578,14 @@ impl Housekeeping {
             return Err(Error::new(
                 "scope_violation",
                 "read-only preservation requires exact operation authority, separate owned substrate and no repository execution/write grant",
+            ));
+        }
+        if !matches!(input.identity, ReadOnlyIdentity::IndependentReview(_))
+            && input.independent_clone.is_some()
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "non-review preservation cannot carry a clone authority",
             ));
         }
         let workflow_digest = match (&input.identity, input.authority) {
@@ -2002,8 +2635,19 @@ impl Housekeeping {
                     && identity.review_identity == gate.review_identity()
                     && identity.repository_path == plan.repository =>
             {
-                Git::new(&self.git_executable)?
-                    .observe_independent_review_clone(&plan.execution_root, identity)?;
+                let proof = input.independent_clone.ok_or_else(|| {
+                    Error::new(
+                        "execution_ownership",
+                        "independent preservation needs the guarded exact clone observation",
+                    )
+                })?;
+                if proof.identity() != identity || proof.root() != plan.execution_root {
+                    return Err(Error::new(
+                        "execution_ownership",
+                        "independent clone proof belongs to another substrate",
+                    ));
+                }
+                proof.revalidate_filesystem()?;
                 gate.workflow_digest()
             }
             _ => {
@@ -2050,6 +2694,10 @@ impl Housekeeping {
             root_inode: root_meta.ino(),
             repository_device: repository_meta.dev(),
             repository_inode: repository_meta.ino(),
+            clone_proof_digest: input
+                .independent_clone
+                .map(|proof| proof.digest())
+                .transpose()?,
         };
         let digest = canonical_digest(1, &record)?;
         self.control.validate_permit(input.preparation, || {

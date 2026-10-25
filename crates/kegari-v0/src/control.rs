@@ -210,6 +210,60 @@ pub struct RunAdmission {
     pub reference: RunReference,
 }
 
+/// Finite host preparation budget. It never represents a model session or an
+/// orchestration lease; the actual lease is separately required at admission.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataReference {
+    pub purpose: String,
+    pub generation: String,
+    pub attempt: u32,
+    pub max_attempts: u32,
+}
+impl MetadataReference {
+    pub fn from_receipt(receipt: &Receipt) -> Result<Option<Self>> {
+        receipt
+            .expected
+            .get("metadata")
+            .map(|encoded| {
+                if receipt.kind != "admission" || receipt.expected.contains_key("run") {
+                    return Err(Error::new(
+                        "record_corrupt",
+                        "metadata budget is attached to another operation kind",
+                    ));
+                }
+                let reference: Self = serde_json::from_str(encoded).map_err(|_| {
+                    Error::new("record_corrupt", "metadata budget reference is invalid")
+                })?;
+                reference.validate()?;
+                Ok(reference)
+            })
+            .transpose()
+    }
+    fn validate(&self) -> Result<()> {
+        if self.purpose != "parent_authorization"
+            || self.attempt == 0
+            || self.attempt > self.max_attempts
+        {
+            return Err(Error::new(
+                "record_corrupt",
+                "metadata purpose or finite attempt budget is invalid",
+            ));
+        }
+        crate::evidence::validate_digest(&self.generation)
+    }
+}
+pub struct MetadataAdmission {
+    pub request_id: Uuid,
+    pub work_key: String,
+    pub scope_digest: String,
+    pub reference: MetadataReference,
+}
+enum AdmissionReference {
+    Run(RunReference),
+    Metadata(MetadataReference),
+}
+
 /// Only created after a durable Sent receipt and a synchronous owned launch.
 /// A worker cannot deserialize or synthesize this acknowledgement capability.
 pub(crate) enum RemoteReservation {
@@ -413,6 +467,7 @@ pub struct ControlSnapshot {
     pub service_stopping: bool,
     pub background_commands: Vec<Uuid>,
     pub pending_external_effects: Vec<Uuid>,
+    pub pending_local_processes: Vec<Uuid>,
 }
 
 struct State {
@@ -428,6 +483,7 @@ struct State {
     service_stopping: bool,
     background_commands: BTreeSet<Uuid>,
     pending_external_effects: BTreeSet<Uuid>,
+    local_processes: BTreeSet<Uuid>,
     suspension: Option<Uuid>,
 }
 
@@ -438,7 +494,8 @@ impl State {
             admission_open: self.open,
             reconciled: self.reconciled,
             orchestration_alive: self.alive,
-            draining: (self.intent.desired != Intent::Running && !self.permits.is_empty())
+            draining: (self.intent.desired != Intent::Running
+                && (!self.permits.is_empty() || !self.local_processes.is_empty()))
                 || (self.intent.desired == Intent::Stopped && self.alive),
             active_operations: self.permits.values().cloned().collect(),
             fenced_operations: self.fenced.iter().copied().collect(),
@@ -447,6 +504,7 @@ impl State {
             service_stopping: self.service_stopping,
             background_commands: self.background_commands.iter().copied().collect(),
             pending_external_effects: self.pending_external_effects.iter().copied().collect(),
+            pending_local_processes: self.local_processes.iter().copied().collect(),
         }
     }
 }
@@ -563,6 +621,7 @@ impl ControlHost {
                 service_stopping: false,
                 background_commands: BTreeSet::new(),
                 pending_external_effects: BTreeSet::new(),
+                local_processes: BTreeSet::new(),
                 suspension: None,
             }),
         })
@@ -588,6 +647,7 @@ impl ControlHost {
         let receipts = ReceiptStore::new(root.child("receipts")?);
         // Parse every receipt before permitting any work. A corrupt record cannot vanish.
         let mut holds = BTreeMap::new();
+        let mut local_processes = BTreeSet::new();
         for receipt in receipts.all()? {
             if receipt.runtime_id != runtime_id {
                 return Err(Error::new(
@@ -596,6 +656,12 @@ impl ControlHost {
                 ));
             }
             if matches!(receipt.phase, ReceiptPhase::Prepared | ReceiptPhase::Sent) {
+                if matches!(
+                    receipt.kind.as_str(),
+                    "host_metadata" | "host_cleanup" | "cleanup"
+                ) {
+                    local_processes.insert(receipt.operation_id);
+                }
                 let mut targets = receipt.canonical_targets;
                 if let Some(work) = receipt.expected.get("admitted_work") {
                     targets.push(work.clone());
@@ -620,6 +686,7 @@ impl ControlHost {
                 service_stopping: false,
                 background_commands: BTreeSet::new(),
                 pending_external_effects: BTreeSet::new(),
+                local_processes,
                 suspension: None,
             }),
         })
@@ -757,9 +824,14 @@ impl ControlHost {
                     "requires_start",
                     "resume preserves STOPPED; explicitly start",
                 )),
-                (Lifecycle::Start, Intent::Stopped) if s.alive || !s.permits.is_empty() => Some(
-                    Error::new("stop_in_progress", "owned operations are still draining"),
-                ),
+                (Lifecycle::Start, Intent::Stopped)
+                    if s.alive || !s.permits.is_empty() || !s.local_processes.is_empty() =>
+                {
+                    Some(Error::new(
+                        "stop_in_progress",
+                        "owned operations are still draining",
+                    ))
+                }
                 _ => None,
             }
         };
@@ -778,7 +850,12 @@ impl ControlHost {
         // Fence admission before any durability boundary, including a failed fsync.
         s.open = false;
         if command == Lifecycle::ForceStop {
-            let ids: Vec<_> = s.permits.keys().copied().collect();
+            let ids: Vec<_> = s
+                .permits
+                .keys()
+                .chain(s.local_processes.iter())
+                .copied()
+                .collect();
             s.fenced.extend(ids);
         }
         let mut next = s.intent.clone();
@@ -814,9 +891,21 @@ impl ControlHost {
         scope_digest: String,
         fresh_gate: impl FnOnce() -> Result<()>,
     ) -> Result<Permit> {
-        self.admit_inner(lease, request_id, work_key, scope_digest, None, |_| {
-            fresh_gate()
-        })
+        self.admit_observed(lease, request_id, work_key, scope_digest, |_| fresh_gate())
+    }
+
+    /// Inspect the exact current control generation inside the admission gate.
+    /// The callback must not reenter control, perform network I/O or infer that
+    /// a Permit exists before this method returns successfully.
+    pub fn admit_observed(
+        &self,
+        lease: &Lease,
+        request_id: Uuid,
+        work_key: String,
+        scope_digest: String,
+        fresh_gate: impl FnOnce(&ControlSnapshot) -> Result<()>,
+    ) -> Result<Permit> {
+        self.admit_inner(lease, request_id, work_key, scope_digest, None, fresh_gate)
     }
 
     pub fn admit_run(
@@ -841,8 +930,25 @@ impl ControlHost {
             input.request_id,
             input.work_key,
             input.scope_digest,
-            Some(input.reference),
+            Some(AdmissionReference::Run(input.reference)),
             fresh_gate,
+        )
+    }
+
+    pub fn admit_metadata(
+        &self,
+        lease: &Lease,
+        input: MetadataAdmission,
+        fresh_gate: impl FnOnce() -> Result<()>,
+    ) -> Result<Permit> {
+        input.reference.validate()?;
+        self.admit_inner(
+            lease,
+            input.request_id,
+            input.work_key,
+            input.scope_digest,
+            Some(AdmissionReference::Metadata(input.reference)),
+            |_| fresh_gate(),
         )
     }
 
@@ -852,7 +958,7 @@ impl ControlHost {
         request_id: Uuid,
         work_key: String,
         scope_digest: String,
-        reference: Option<RunReference>,
+        reference: Option<AdmissionReference>,
         fresh_gate: impl FnOnce(&ControlSnapshot) -> Result<()>,
     ) -> Result<Permit> {
         let mut s = self
@@ -879,7 +985,7 @@ impl ControlHost {
                 "work identity already has an active operation",
             ));
         }
-        if let Some(reference) = &reference {
+        if let Some(AdmissionReference::Run(reference)) = &reference {
             let mut prior = BTreeMap::new();
             let mut cap = reference.max_attempts;
             for receipt in self.receipts.all()? {
@@ -910,6 +1016,40 @@ impl ControlHost {
                 ));
             }
         }
+        if let Some(AdmissionReference::Metadata(reference)) = &reference {
+            let mut prior = BTreeMap::new();
+            let mut cap = reference.max_attempts;
+            for receipt in self.receipts.all()? {
+                if let Some(old) = MetadataReference::from_receipt(&receipt)?
+                    && old.purpose == reference.purpose
+                    && old.generation == reference.generation
+                    && receipt.canonical_targets == vec![work_key.clone()]
+                {
+                    if prior.insert(old.attempt, receipt.operation_id).is_some() {
+                        return Err(Error::new(
+                            "record_corrupt",
+                            "metadata budget contains duplicate attempts",
+                        ));
+                    }
+                    cap = cap.min(old.max_attempts);
+                }
+            }
+            if prior.keys().copied().ne(1..=prior.len() as u32) {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "metadata attempt history has a gap",
+                ));
+            }
+            if reference.attempt != prior.len() as u32 + 1
+                || reference.attempt > cap
+                || reference.max_attempts > cap
+            {
+                return Err(Error::new(
+                    "attempts_exhausted",
+                    "metadata admission would reset, duplicate or exceed its durable budget",
+                ));
+            }
+        }
         fresh_gate(&s.snapshot())?;
         let permit = Permit {
             operation_id: request_id,
@@ -924,11 +1064,18 @@ impl ControlHost {
             ("scope".into(), permit.scope_digest.clone()),
             ("control".into(), permit.control_generation.to_string()),
         ]);
-        if let Some(reference) = reference {
+        if let Some(AdmissionReference::Run(reference)) = &reference {
             expected.insert(
                 "run".into(),
                 serde_json::to_string(&reference)
                     .map_err(|_| Error::invalid("run reference encoding"))?,
+            );
+        }
+        if let Some(AdmissionReference::Metadata(reference)) = reference {
+            expected.insert(
+                "metadata".into(),
+                serde_json::to_string(&reference)
+                    .map_err(|_| Error::invalid("metadata reference encoding"))?,
             );
         }
         let request = MutationRequest {
@@ -1179,6 +1326,14 @@ impl ControlHost {
         expected: &Receipt,
         observation: Reconciliation,
     ) -> Result<Receipt> {
+        self.reconcile_owned_checked(expected, observation, || Ok(()))
+    }
+    pub(crate) fn reconcile_owned_checked(
+        &self,
+        expected: &Receipt,
+        observation: Reconciliation,
+        current_owner: impl FnOnce() -> Result<()>,
+    ) -> Result<Receipt> {
         let mut s = self
             .state
             .lock()
@@ -1203,6 +1358,7 @@ impl ControlHost {
                 "recovery observation differs from immutable receipt",
             ));
         }
+        current_owner()?;
         let receipt = self
             .receipts
             .reconcile(expected.operation_id, observation)?;
@@ -1857,6 +2013,7 @@ impl ControlHost {
             || !s.permits.is_empty()
             || !s.background_commands.is_empty()
             || !s.pending_external_effects.is_empty()
+            || !s.local_processes.is_empty()
         {
             Err(Error::new(
                 "stop_in_progress",
@@ -1886,21 +2043,221 @@ impl ControlHost {
         id: Uuid,
         read_provider: impl FnOnce(&Receipt) -> Result<Reconciliation>,
     ) -> Result<Receipt> {
+        self.reconcile_operation_observed(actor, id, |receipt, _| read_provider(receipt))
+    }
+    /// Apply a previously collected provider observation only after rechecking
+    /// the current actor/configuration/lifecycle against this serialized snapshot.
+    /// The callback must not wait for provider I/O or reacquire ControlHost.
+    pub fn reconcile_operation_observed(
+        &self,
+        actor: &Actor,
+        id: Uuid,
+        observe: impl FnOnce(&Receipt, &ControlSnapshot) -> Result<Reconciliation>,
+    ) -> Result<Receipt> {
         actor.require("recover")?;
         let mut s = self
             .state
             .lock()
             .map_err(|_| Error::new("control_failed", "control serialization failed"))?;
-        if s.background_commands.contains(&id) || s.pending_external_effects.contains(&id) {
+        if s.background_commands.contains(&id)
+            || s.pending_external_effects.contains(&id)
+            || s.local_processes.contains(&id)
+        {
             return Err(Error::new(
                 "operation_active",
                 "wait for the owned background command to reach a terminal observation before reconciliation",
             ));
         }
         let receipt = self.receipts.get(id)?;
-        let observation = read_provider(&receipt)?;
+        let observation = observe(&receipt, &s.snapshot())?;
         let reconciled = self.receipts.reconcile(id, observation)?;
         s.holds.remove(&id);
         Ok(reconciled)
+    }
+}
+
+/// Host-local process capability. It is neither a scheduler lease nor an agent
+/// permit, and cannot be reconstructed from its retained identity-only receipt.
+pub(crate) struct HostProcessToken {
+    pub(crate) operation: Uuid,
+    digest: String,
+    owner_generation: u64,
+}
+impl ControlHost {
+    /// Own the explicit operator cleanup across asynchronous inspection/hooks.
+    /// The runtime target hold prevents new model/preparation admissions while
+    /// the control mutex remains available to status and force-stop requests.
+    pub(crate) fn begin_cleanup_effect(
+        &self,
+        request: MutationRequest,
+        current: impl FnOnce(&ControlSnapshot) -> Result<()>,
+    ) -> Result<(HostProcessToken, Receipt)> {
+        request.actor.require("recover")?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("control_failed", "cleanup serialization failed"))?;
+        if request.kind != "cleanup"
+            || request.runtime_id != state.intent.runtime_id
+            || !request
+                .canonical_targets
+                .contains(&request.runtime_id.to_string())
+            || state.service_stopping
+            || state.error.is_some()
+        {
+            return Err(Error::new(
+                "admission_closed",
+                "cleanup cannot enter this runtime",
+            ));
+        }
+        current(&state.snapshot())?;
+        let (mut receipt, fresh) = self.receipts.prepare(&request, state.intent.generation)?;
+        if !fresh {
+            return Err(Error::new(
+                "operation_uncertain",
+                "cleanup already has a retained receipt; reconcile before any new action",
+            ));
+        }
+        self.receipts.mark_sent(&mut receipt)?;
+        state
+            .holds
+            .insert(receipt.operation_id, receipt.canonical_targets.clone());
+        state.local_processes.insert(receipt.operation_id);
+        let token = HostProcessToken {
+            operation: receipt.operation_id,
+            digest: receipt.payload_digest.clone(),
+            owner_generation: receipt.owner_generation,
+        };
+        Ok((token, receipt))
+    }
+    pub(crate) fn begin_host_process(
+        &self,
+        request: MutationRequest,
+        owner_generation: u64,
+        current: impl FnOnce(&ControlSnapshot) -> Result<()>,
+    ) -> Result<HostProcessToken> {
+        if !matches!(request.kind.as_str(), "host_metadata" | "host_cleanup")
+            || request.canonical_targets.is_empty()
+            || request.canonical_targets.len() > 128
+            || request.actor.principal.is_some()
+            || !request.actor.roles.is_empty()
+        {
+            return Err(Error::new(
+                "access_denied",
+                "invalid host process admission",
+            ));
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("control_failed", "host process serialization failed"))?;
+        if state.service_stopping
+            || state.error.is_some()
+            || request.runtime_id != state.intent.runtime_id
+        {
+            return Err(Error::new(
+                "admission_closed",
+                "host process admission is unavailable",
+            ));
+        }
+        current(&state.snapshot())?;
+        let (mut receipt, fresh) = self.receipts.prepare(&request, owner_generation)?;
+        if !fresh {
+            return Err(Error::new(
+                "operation_uncertain",
+                "host process already has a receipt; never relaunch the same ID",
+            ));
+        }
+        self.receipts.mark_sent(&mut receipt)?;
+        state
+            .holds
+            .insert(receipt.operation_id, receipt.canonical_targets.clone());
+        state.local_processes.insert(receipt.operation_id);
+        Ok(HostProcessToken {
+            operation: receipt.operation_id,
+            digest: receipt.payload_digest,
+            owner_generation,
+        })
+    }
+    /// Fence only the still-owned host effect. A rejected call after completion
+    /// must not recreate cancellation state for an already acknowledged receipt.
+    pub(crate) fn fence_host_process(&self, token: &HostProcessToken) -> Result<bool> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("control_failed", "host process serialization failed"))?;
+        if !state.local_processes.contains(&token.operation) {
+            return Ok(false);
+        }
+        let receipt = self.receipts.get(token.operation)?;
+        if receipt.phase != ReceiptPhase::Sent
+            || receipt.payload_digest != token.digest
+            || receipt.owner_generation != token.owner_generation
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "host cancellation differs from original process authority",
+            ));
+        }
+        state.fenced.insert(token.operation);
+        Ok(true)
+    }
+    pub(crate) fn with_host_process<T>(
+        &self,
+        token: &HostProcessToken,
+        current: impl FnOnce(&ControlSnapshot) -> Result<()>,
+        launch: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("control_failed", "host process serialization failed"))?;
+        let receipt = self.receipts.get(token.operation)?;
+        if !state.local_processes.contains(&token.operation)
+            || state.fenced.contains(&token.operation)
+            || state.service_stopping
+            || state.error.is_some()
+            || receipt.phase != ReceiptPhase::Sent
+            || receipt.payload_digest != token.digest
+            || receipt.owner_generation != token.owner_generation
+        {
+            return Err(Error::new(
+                "access_denied",
+                "host process receipt is stale or fenced",
+            ));
+        }
+        current(&state.snapshot())?;
+        launch()
+    }
+    /// Caller holds the original private token and has joined every actual
+    /// process launched through it. Recovered records never mint this token.
+    pub(crate) fn complete_host_process(
+        &self,
+        token: &HostProcessToken,
+        current_owner: impl FnOnce() -> Result<()>,
+        observed: Value,
+    ) -> Result<Receipt> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("control_failed", "host process serialization failed"))?;
+        current_owner()?;
+        let mut receipt = self.receipts.get(token.operation)?;
+        if !state.local_processes.contains(&token.operation)
+            || receipt.phase != ReceiptPhase::Sent
+            || receipt.payload_digest != token.digest
+            || receipt.owner_generation != token.owner_generation
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "host process completion differs from its owned admission",
+            ));
+        }
+        self.receipts
+            .acknowledge(&mut receipt, BTreeMap::new(), observed)?;
+        state.local_processes.remove(&token.operation);
+        state.holds.remove(&token.operation);
+        state.fenced.remove(&token.operation);
+        Ok(receipt)
     }
 }

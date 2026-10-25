@@ -21,6 +21,8 @@ use std::{
     time::Duration as StdDuration,
 };
 use uuid::Uuid;
+#[path = "support/pinned_git.rs"]
+mod pinned_git;
 fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
 }
@@ -65,6 +67,7 @@ struct Fixture {
     repository_available: bool,
     comment_response_lost: bool,
     duplicate_publication: bool,
+    fail_issue_once: bool,
 }
 impl Fixture {
     fn new() -> Arc<Mutex<Self>> {
@@ -90,6 +93,7 @@ impl Fixture {
             repository_available: true,
             comment_response_lost: false,
             duplicate_publication: false,
+            fail_issue_once: false,
         }))
     }
 }
@@ -151,6 +155,15 @@ impl HttpTransport for Wire {
                     }
                     json!({"commentCreate":{"success":true,"comment":{"id":comment,"issue":{"id":issue},"user":{"id":id(5)}}}})
                 } else if query.contains("KegariIssue(") {
+                    if f.fail_issue_once {
+                        f.fail_issue_once = false;
+                        let mut error = kegari_v0::error::Error::new(
+                            "provider_transport",
+                            "fixture preflight read failed before mutation",
+                        );
+                        error.retryable = true;
+                        return Err(error);
+                    }
                     json!({"issue":f.issues[&input_id.unwrap()]})
                 } else if query.contains("KegariParents") {
                     f.discovery_count += 1;
@@ -292,6 +305,7 @@ fn control(intent: Intent) -> ControlSnapshot {
         service_stopping: false,
         background_commands: vec![],
         pending_external_effects: vec![],
+        pending_local_processes: vec![],
         draining: false,
         active_operations: vec![],
         fenced_operations: vec![],
@@ -1241,12 +1255,25 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
         preparation::AuthorizationPublisher,
         storage::PrivateDir,
     };
-    for scenario in ["acknowledged", "lost_ack", "duplicates", "revoked"] {
+    for scenario in [
+        "acknowledged",
+        "lost_ack",
+        "lost_ack_missing",
+        "lost_ack_edited",
+        "lost_ack_owner_lost",
+        "duplicates",
+        "revoked",
+        "owner_lost_before_send",
+        "retryable_preflight",
+    ] {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().canonicalize().unwrap();
         let workflow = path.join("WORKFLOW.md");
         std::fs::write(&workflow,"---\nchecks:\n  local:\n    local:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/local.json'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/e2e.json'\n---\nUse prepared context\n").unwrap();
         let mut cfg = config();
+        if scenario == "retryable_preflight" {
+            cfg.runtime.retry_cap_ms = 1;
+        }
         cfg.workspaces.get_mut("example").unwrap().workflow = workflow.to_str().unwrap().into();
         let config = Arc::new(CacheConfiguration(cfg));
         let wire = Fixture::new();
@@ -1303,6 +1330,8 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
             owner_id: Uuid::new_v4(),
         };
         control.attach_reconciled(lease.clone()).unwrap();
+        let expected_owner = lease.clone();
+        let owner_checks = std::sync::atomic::AtomicUsize::new(0);
         let publisher = Arc::new(AuthorizationPublisher::with_inputs(
             config,
             control.clone(),
@@ -1310,11 +1339,25 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
             secrets,
             key,
             inputs,
+            Arc::new(move |observed| {
+                let check = owner_checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if observed != &expected_owner
+                    || (scenario == "owner_lost_before_send" && check >= 4)
+                {
+                    Err(kegari_v0::error::Error::new(
+                        "ownership_conflict",
+                        "fixture owner no longer owns its OS lease",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }),
         ));
         {
             let mut f = wire.lock().unwrap();
-            f.comment_response_lost = scenario == "lost_ack";
+            f.comment_response_lost = scenario.starts_with("lost_ack");
             f.duplicate_publication = scenario == "duplicates";
+            f.fail_issue_once = scenario == "retryable_preflight";
             if scenario == "revoked" {
                 f.issues.get_mut(&id(100)).unwrap()["labelIds"] = json!([]);
             }
@@ -1324,6 +1367,40 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
         }
         let first = publisher.publish(&lease, gate.clone()).await;
         match scenario {
+            "retryable_preflight" => {
+                assert_eq!(first.unwrap_err().code, "provider_transport");
+                let first_operation = control
+                    .operations()
+                    .unwrap()
+                    .into_iter()
+                    .find(|receipt| receipt.kind == "linear_comment")
+                    .unwrap();
+                assert_eq!(
+                    first_operation.observed_result.as_ref().unwrap()["effect"],
+                    "not_sent"
+                );
+                assert!(control.snapshot().unwrap().active_operations.is_empty());
+                assert!(control.snapshot().unwrap().unresolved_operations.is_empty());
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                assert_ne!(
+                    publisher.next_publication(&gate).unwrap(),
+                    first_operation.operation_id
+                );
+                publisher.publish(&lease, gate).await.unwrap();
+                let admissions = control
+                    .operations()
+                    .unwrap()
+                    .into_iter()
+                    .filter_map(|receipt| {
+                        kegari_v0::control::MetadataReference::from_receipt(&receipt).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(admissions.len(), 2);
+                assert_eq!(
+                    admissions.iter().map(|reference| reference.attempt).max(),
+                    Some(2)
+                );
+            }
             "acknowledged" => {
                 first.unwrap();
                 assert!(
@@ -1336,11 +1413,86 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
                 );
                 publisher.publish(&lease, gate).await.unwrap();
             }
-            "lost_ack" => {
+            "lost_ack" | "lost_ack_missing" | "lost_ack_edited" | "lost_ack_owner_lost" => {
                 assert_eq!(first.unwrap_err().code, "operation_uncertain");
                 assert!(!control.snapshot().unwrap().unresolved_operations.is_empty());
-                publisher.publish(&lease, gate).await.unwrap();
-                assert!(control.snapshot().unwrap().unresolved_operations.is_empty());
+                // Refresh observes the completed remote write; there is no new
+                // AuthorizationGate to drive the old publish/recover branch.
+                let refreshed = observations.refresh().await.unwrap();
+                assert_eq!(
+                    refreshed
+                        .parent(id(2), id(100))
+                        .unwrap()
+                        .authorization_gate(Utc::now(), Duration::seconds(30))
+                        .unwrap_err()
+                        .code,
+                    "already_published"
+                );
+                let operation = control
+                    .operations()
+                    .unwrap()
+                    .into_iter()
+                    .find(|r| {
+                        r.kind == "linear_comment"
+                            && r.expected.get("preparation").map(String::as_str)
+                                == Some("parent_authorization")
+                    })
+                    .unwrap()
+                    .operation_id;
+                let snapshot = control.snapshot().unwrap();
+                control
+                    .lifecycle(
+                        MutationRequest {
+                            request_id: Uuid::new_v4(),
+                            runtime_id: id(1),
+                            actor: Actor {
+                                identity: "fixture-operator".into(),
+                                roles: ["lifecycle".into()].into(),
+                                principal: None,
+                            },
+                            kind: "lifecycle".into(),
+                            canonical_targets: vec![id(1).to_string()],
+                            expected: BTreeMap::new(),
+                            payload: json!({}),
+                        },
+                        Lifecycle::Stop,
+                        snapshot.intent.generation,
+                    )
+                    .unwrap();
+                if scenario == "lost_ack_missing" {
+                    wire.lock().unwrap().comments.clear();
+                }
+                if scenario == "lost_ack_edited" {
+                    wire.lock().unwrap().comments.get_mut(&id(100)).unwrap()[0]["body"] =
+                        json!("edited after publication");
+                }
+                let recovered = publisher
+                    .recover_receipt(operation, || {
+                        if scenario == "lost_ack_owner_lost" {
+                            Err(kegari_v0::error::Error::new(
+                                "ownership_conflict",
+                                "fixture control owner lost",
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .await;
+                if scenario == "lost_ack" {
+                    recovered.unwrap();
+                    assert!(control.snapshot().unwrap().unresolved_operations.is_empty());
+                } else {
+                    assert_eq!(
+                        recovered.unwrap_err().code,
+                        if scenario == "lost_ack_owner_lost" {
+                            "ownership_conflict"
+                        } else {
+                            "operation_uncertain"
+                        }
+                    );
+                    assert!(!control.snapshot().unwrap().unresolved_operations.is_empty());
+                }
+                assert_eq!(control.snapshot().unwrap().intent.desired, Intent::Stopped);
             }
             "duplicates" => {
                 assert_eq!(first.unwrap_err().code, "ownership_conflict");
@@ -1349,7 +1501,7 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
                     "ownership_conflict"
                 );
             }
-            "revoked" => {
+            "revoked" | "owner_lost_before_send" => {
                 assert!(first.is_err());
             }
             _ => unreachable!(),
@@ -1368,7 +1520,7 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
             .count();
         assert_eq!(
             count,
-            usize::from(scenario != "revoked"),
+            usize::from(!matches!(scenario, "revoked" | "owner_lost_before_send")),
             "{scenario}: no duplicate provider write"
         );
     }
@@ -1775,12 +1927,7 @@ async fn coordination_preservation_binds_actual_opaque_authority_and_directory_i
     }
     .validate()
     .unwrap();
-    let git = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|p| p.join("git"))
-        .find(|p| p.is_file())
-        .unwrap()
-        .canonicalize()
-        .unwrap();
+    let git = pinned_git::prepare(&home);
     let house = Housekeeping::new(
         PrivateDir::open(&home.join("control")).unwrap(),
         f.control.clone(),
@@ -1795,6 +1942,7 @@ async fn coordination_preservation_binds_actual_opaque_authority_and_directory_i
             preparation: &permit,
             operation,
             authority: &authority,
+            independent_clone: None,
             identity: ReadOnlyIdentity::Coordination {
                 workspace: id(2),
                 parent: parent.key.clone(),
@@ -1828,6 +1976,7 @@ async fn coordination_preservation_binds_actual_opaque_authority_and_directory_i
                 operation,
                 authority: &authority,
                 identity: changed,
+                independent_clone: None,
                 isolation: &isolation,
                 workflow: &workflow
             })
@@ -1919,4 +2068,62 @@ async fn shared_corrective_publication_fence_blocks_cached_and_active_work_befor
     assert!(rejected.is_err());
     f.cache.refresh().await.unwrap();
     f.active().unwrap();
+}
+
+#[tokio::test]
+async fn historical_gate_recovery_requires_host_signature_exact_schema_and_embedded_bindings() {
+    let fixture = Fixture::new();
+    let cfg = config();
+    let mut refs = ReconcileRefs::new();
+    let first = refresh(&cfg, &fixture, &refs).await;
+    publish(&first, &mut refs);
+    let current = refresh(&cfg, &fixture, &refs).await;
+    let gate = current
+        .parent(id(2), id(100))
+        .unwrap()
+        .fresh_gate(
+            None,
+            GatePurpose::Coordination,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(60),
+        )
+        .unwrap();
+    let key = AttestationKey::new("historical-gate-fixture".into(), vec![13; 32]).unwrap();
+    let envelope = json!({"schema_version":1,"outcome":{"fixture":"opaque reader validates the actual completed outcome separately"},"authority":gate});
+    let signed = key.sign("pending_worker_claim", &envelope).unwrap();
+    let restored = FreshGate::recover_host_claim(&key, &signed, &gate.digest().unwrap()).unwrap();
+    assert_eq!(restored.digest().unwrap(), gate.digest().unwrap());
+    assert_eq!(restored.work(), gate.work());
+    let mut tampered = signed.clone();
+    tampered.payload["authority"]["work"]["parent"] = json!(id(999));
+    assert_eq!(
+        FreshGate::recover_host_claim(&key, &tampered, &gate.digest().unwrap())
+            .unwrap_err()
+            .code,
+        "invalid_attestation"
+    );
+    for change in ["legacy", "profile", "scope", "purpose", "unknown"] {
+        let mut value = envelope.clone();
+        match change {
+            "legacy" => {
+                value.as_object_mut().unwrap().remove("authority");
+            }
+            "profile" => value["authority"]["profile"]["model"] = json!("unbound-model"),
+            "scope" => {
+                value["authority"]["child_scope_digest"] =
+                    json!(kegari_v0::digest::bytes_digest(b"unbound scope"))
+            }
+            "purpose" => value["authority"]["purpose"] = json!("release-anything"),
+            "unknown" => value["authority"]["raw_permission"] = json!(true),
+            _ => unreachable!(),
+        }
+        let record = key.sign("pending_worker_claim", &value).unwrap();
+        assert!(
+            FreshGate::recover_host_claim(&key, &record, &gate.digest().unwrap()).is_err(),
+            "{change}"
+        );
+    }
+    let wrong_purpose = key.sign("worker_claim", &envelope).unwrap();
+    assert!(FreshGate::recover_host_claim(&key, &wrong_purpose, &gate.digest().unwrap()).is_err());
 }

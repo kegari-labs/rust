@@ -36,6 +36,8 @@ struct TrackedParent {
     parent: IssueKey,
     required_children: BTreeSet<Uuid>,
     disappeared_children: BTreeMap<Uuid, DateTime<Utc>>,
+    #[serde(default)]
+    correction_invalidations: crate::authority::CorrectionInvalidations,
 }
 /// No descriptions, prompts, result assertions or acceptance state are persisted.
 pub struct ReferenceStore {
@@ -94,6 +96,9 @@ impl ReferenceStore {
                 ParentRefs {
                     required_child_ids: record.required_children,
                     disappeared_children: record.disappeared_children,
+                    corrections: crate::authority::Corrections::from_invalidations(
+                        record.correction_invalidations,
+                    )?,
                     ..Default::default()
                 },
             );
@@ -117,6 +122,7 @@ impl ReferenceStore {
                         parent: parent.key.clone(),
                         required_children: parent.required_children.clone(),
                         disappeared_children: parent.disappeared_children.clone(),
+                        correction_invalidations: parent.corrections.invalidations(),
                     },
                 )?;
             }
@@ -301,7 +307,19 @@ impl ObservationCache {
         let (explicit_changed, explicit_errors) =
             restore_explicit_corrections(&config, &projection, &mut retained, self.key.as_ref())?;
         publication_errors.extend(explicit_errors);
-        if changed || explicit_changed || previous_host_ids != host_comment_revision(&retained)? {
+        let (classified_changed, classified_errors) = crate::corrections::restore_classifications(
+            &config,
+            &projection,
+            &mut retained,
+            &self.key,
+            &self.control,
+        )?;
+        publication_errors.extend(classified_errors);
+        if changed
+            || explicit_changed
+            || classified_changed
+            || previous_host_ids != host_comment_revision(&retained)?
+        {
             projection = Reconciler::default()
                 .refresh(&config, clients.clients(&config)?, &workflows, &retained)
                 .await?;
@@ -844,6 +862,21 @@ impl ObservationCache {
         expected: &crate::reconcile::FreshGate,
         outcomes: &crate::reconcile::DependencyOutcomes,
     ) -> Result<crate::reconcile::FreshGate> {
+        self.active_parent(expected, outcomes)?.retain_active_gate(
+            expected,
+            outcomes,
+            Utc::now(),
+            chrono::Duration::seconds(30),
+        )
+    }
+    /// The parent and its validation come from one retained observation. Callers
+    /// cannot relabel a new projection with the old configuration/workflow to
+    /// continue admitted work after an ordinary settings reload.
+    pub fn active_parent(
+        &self,
+        expected: &crate::reconcile::FreshGate,
+        outcomes: &crate::reconcile::DependencyOutcomes,
+    ) -> Result<crate::reconcile::ParentProjection> {
         let projection = self.active_projection(
             expected.workspace_id(),
             expected.config_revision(),
@@ -859,14 +892,14 @@ impl ObservationCache {
                 "active workspace provider observation is incomplete",
             ));
         }
-        projection
-            .parent(expected.workspace_id(), expected.work().parent)?
-            .retain_active_gate(
-                expected,
-                outcomes,
-                Utc::now(),
-                chrono::Duration::seconds(30),
-            )
+        let parent = projection.parent(expected.workspace_id(), expected.work().parent)?;
+        parent.retain_active_gate(
+            expected,
+            outcomes,
+            Utc::now(),
+            chrono::Duration::seconds(30),
+        )?;
+        Ok(parent.clone())
     }
     pub fn active_independent_gate(
         &self,
@@ -936,6 +969,14 @@ impl ObservationCache {
                 let (_, explicit) =
                     restore_explicit_corrections(&adjusted, &observed, &mut refs, &self.key)?;
                 errors.extend(explicit);
+                let (_, classified) = crate::corrections::restore_classifications(
+                    &adjusted,
+                    &observed,
+                    &mut refs,
+                    &self.key,
+                    &self.control,
+                )?;
+                errors.extend(classified);
                 observed = Reconciler::default()
                     .refresh(&adjusted, clients.clients(&adjusted)?, &pinned, &refs)
                     .await?;

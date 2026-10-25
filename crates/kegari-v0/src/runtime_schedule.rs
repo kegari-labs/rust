@@ -11,6 +11,35 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+/// An admitted run keeps its capacity through restart until the host recorded
+/// actual local exit. Losing the in-memory Permit map never frees a session slot.
+pub fn occupying_runs(runtime: Uuid, receipts: &[Receipt]) -> Result<Vec<RunReference>> {
+    let mut active = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for receipt in receipts {
+        let Some(run) = RunReference::from_receipt(receipt)? else {
+            continue;
+        };
+        if receipt.runtime_id != runtime || !seen.insert(receipt.operation_id) {
+            return Err(Error::new(
+                "record_corrupt",
+                "capacity history crosses runtime ownership or duplicates a run",
+            ));
+        }
+        let exited = receipt.phase == ReceiptPhase::Reconciled
+            && receipt
+                .observed_result
+                .as_ref()
+                .and_then(|value| value.get("local_execution"))
+                .and_then(Value::as_str)
+                == Some("exited");
+        if !exited {
+            active.push(run);
+        }
+    }
+    Ok(active)
+}
+
 /// Provider intervention belongs to its observed account/work, not to a phase
 /// budget. A correction, retry grant, account alias or later successful receipt
 /// cannot clear it. Only a separately verified provider resolution may do so;
@@ -243,6 +272,35 @@ pub fn ensure_capacity(
     next: &RunReference,
     quota: Option<&crate::scheduler::Quota>,
 ) -> Result<()> {
+    let state = next
+        .normalized_state
+        .as_deref()
+        .ok_or_else(|| Error::invalid("new session requires its normalized admission state"))?;
+    check_capacity(
+        config,
+        active,
+        CapacityRequest {
+            workspace: next.workspace,
+            account: &next.account,
+            normalized_state: state,
+        },
+        quota,
+    )
+}
+
+/// Prospective capacity facts do not contain or fabricate a worker admission.
+/// The same calculation is repeated against actual receipts at final admission.
+pub(crate) struct CapacityRequest<'a> {
+    pub workspace: Uuid,
+    pub account: &'a str,
+    pub normalized_state: &'a str,
+}
+pub(crate) fn check_capacity(
+    config: &crate::config::Config,
+    active: &[RunReference],
+    next: CapacityRequest<'_>,
+    quota: Option<&crate::scheduler::Quota>,
+) -> Result<()> {
     let workspace = config
         .workspaces
         .values()
@@ -253,7 +311,11 @@ pub fn ensure_capacity(
                 "capacity workspace is no longer configured",
             )
         })?;
-    if config.connections[&workspace.codex_connection].account_id != next.account {
+    if config
+        .connections
+        .get(&workspace.codex_connection)
+        .is_none_or(|connection| connection.account_id != next.account)
+    {
         return Err(Error::new(
             "identity_mismatch",
             "session capacity names another configured account",
@@ -267,14 +329,16 @@ pub fn ensure_capacity(
     }
     let account_limit = config
         .account_limits()
-        .get(&next.account)
+        .get(next.account)
         .copied()
         .ok_or_else(|| Error::invalid("selected account has no configured finite capacity"))?
         as usize;
-    let state = next
-        .normalized_state
-        .as_deref()
-        .ok_or_else(|| Error::invalid("new session requires its normalized admission state"))?;
+    let state = next.normalized_state;
+    if state.is_empty() || state != state.trim().to_lowercase() {
+        return Err(Error::invalid(
+            "capacity requires a normalized nonempty admission state",
+        ));
+    }
     if active.len() >= config.runtime.max_agents as usize
         || active
             .iter()

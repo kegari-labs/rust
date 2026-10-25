@@ -313,6 +313,140 @@ fn started() -> (TempDir, Arc<ControlHost>, Lease) {
 }
 
 #[test]
+fn metadata_free_admission_binds_the_current_serialized_generation() {
+    let (_temp, host, lease) = started();
+    let old = host.snapshot().unwrap().intent.generation;
+    host.lifecycle(
+        command(lease.runtime_id, Uuid::new_v4()),
+        Lifecycle::Pause,
+        old,
+    )
+    .unwrap();
+    host.lifecycle(
+        command(lease.runtime_id, Uuid::new_v4()),
+        Lifecycle::Resume,
+        old + 1,
+    )
+    .unwrap();
+    let rejected = Uuid::new_v4();
+    let result = host.admit_observed(
+        &lease,
+        rejected,
+        "release-parent".into(),
+        canonical_digest(1, &"plan").unwrap(),
+        |snapshot| {
+            if snapshot.intent.generation != old {
+                return Err(Error::new(
+                    "stale_control",
+                    "preflight generation is obsolete",
+                ));
+            }
+            Ok(())
+        },
+    );
+    assert_eq!(result.unwrap_err().code, "stale_control");
+    assert_eq!(host.operation(rejected).unwrap_err().code, "record_missing");
+    assert!(host.snapshot().unwrap().active_operations.is_empty());
+    let mut observed = None;
+    let permit = host
+        .admit_observed(
+            &lease,
+            Uuid::new_v4(),
+            "release-parent".into(),
+            canonical_digest(1, &"plan").unwrap(),
+            |snapshot| {
+                observed = Some(snapshot.intent.generation);
+                assert_eq!(snapshot.intent.desired, Intent::Running);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(observed, Some(old + 2));
+    assert_eq!(permit.control_generation, old + 2);
+    assert_eq!(
+        host.operation(permit.operation_id).unwrap().expected["control"],
+        (old + 2).to_string()
+    );
+}
+
+#[test]
+fn metadata_budget_is_atomic_and_survives_restart_without_model_claims() {
+    let (temp, host, lease) = started();
+    let admission = |attempt, max_attempts| MetadataAdmission {
+        request_id: Uuid::new_v4(),
+        work_key: "canonical-parent".into(),
+        scope_digest: canonical_digest(1, &"scope").unwrap(),
+        reference: MetadataReference {
+            purpose: "parent_authorization".into(),
+            generation: canonical_digest(1, &"authorization-snapshot").unwrap(),
+            attempt,
+            max_attempts,
+        },
+    };
+    let first = host
+        .admit_metadata(&lease, admission(1, 2), || Ok(()))
+        .unwrap();
+    let receipt = host.operation(first.operation_id).unwrap();
+    assert!(RunReference::from_receipt(&receipt).unwrap().is_none());
+    assert_eq!(
+        MetadataReference::from_receipt(&receipt)
+            .unwrap()
+            .unwrap()
+            .max_attempts,
+        2
+    );
+    host.retire_local(first.operation_id, json!({"known_no_effect":true}))
+        .unwrap();
+    assert_eq!(
+        host.admit_metadata(&lease, admission(1, 2), || Ok(()))
+            .unwrap_err()
+            .code,
+        "attempts_exhausted"
+    );
+    drop(host);
+    let recovered = ControlHost::recover(
+        PrivateDir::open(&temp.path().canonicalize().unwrap().join("state")).unwrap(),
+        lease.runtime_id,
+    )
+    .unwrap();
+    let renewed = Lease {
+        owner_generation: 2,
+        owner_id: Uuid::new_v4(),
+        ..lease
+    };
+    recovered.attach_reconciled(renewed.clone()).unwrap();
+    assert_eq!(
+        recovered
+            .admit_metadata(&renewed, admission(2, 99), || Ok(()))
+            .unwrap_err()
+            .code,
+        "attempts_exhausted"
+    );
+    let second = recovered
+        .admit_metadata(&renewed, admission(2, 2), || Ok(()))
+        .unwrap();
+    recovered
+        .retire_local(second.operation_id, json!({"known_no_effect":true}))
+        .unwrap();
+    assert_eq!(
+        recovered
+            .admit_metadata(&renewed, admission(3, 3), || Ok(()))
+            .unwrap_err()
+            .code,
+        "attempts_exhausted"
+    );
+    assert_eq!(
+        recovered
+            .operations()
+            .unwrap()
+            .iter()
+            .filter(|receipt| MetadataReference::from_receipt(receipt).unwrap().is_some())
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn v0_t08_each_write_boundary_recovers_old_or_new_valid_record() {
     for stop in [
         WriteBoundary::Created,
@@ -517,6 +651,97 @@ fn v0_t09_receipt_unknown_never_replays_and_identity_is_bound() {
         .unwrap();
     assert_eq!(reconciled.phase, ReceiptPhase::Reconciled);
     assert_eq!(store.all().unwrap().len(), 1);
+}
+
+#[test]
+fn recovery_rechecks_latest_serialized_state_and_preserves_rejected_unknown() {
+    let (_temp, host, lease) = started();
+    let permit = host
+        .admit(
+            &lease,
+            Uuid::new_v4(),
+            "parent-recovery".into(),
+            canonical_digest(1, &"scope").unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    let mut effect = command(lease.runtime_id, Uuid::new_v4());
+    effect.kind = "linear_comment".into();
+    effect.canonical_targets = vec!["parent-recovery".into()];
+    let id = effect.request_id;
+    assert_eq!(
+        host.mutate(
+            effect,
+            Some(&permit),
+            None,
+            || Ok(()),
+            |_| { Err(Error::new("timeout", "fixture lost acknowledgement")) }
+        )
+        .unwrap_err()
+        .code,
+        "operation_uncertain"
+    );
+    host.retire_local(permit.operation_id, json!({"owned_task":"joined"}))
+        .unwrap();
+    let before = host.snapshot().unwrap();
+    let retained = host.operation(id).unwrap();
+    host.lifecycle(
+        command(lease.runtime_id, Uuid::new_v4()),
+        Lifecycle::Stop,
+        before.intent.generation,
+    )
+    .unwrap();
+    let stopped = host.snapshot().unwrap();
+    let mut recover = actor();
+    recover.roles.insert("recover".into());
+    let error = host
+        .reconcile_operation_observed(&recover, id, |receipt, current| {
+            assert_eq!(receipt.request_id, id);
+            assert_eq!(current.intent.desired, stopped.intent.desired);
+            assert_eq!(current.intent.generation, stopped.intent.generation);
+            if current.intent.generation != before.intent.generation {
+                return Err(Error::new(
+                    "stale_generation",
+                    "fixture observation is stale",
+                ));
+            }
+            panic!("reconciliation must see the intervening lifecycle command")
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "stale_generation");
+    assert_eq!(
+        serde_json::to_value(host.operation(id).unwrap()).unwrap(),
+        serde_json::to_value(&retained).unwrap()
+    );
+    assert!(
+        host.snapshot()
+            .unwrap()
+            .unresolved_operations
+            .contains_key(&id)
+    );
+
+    // A fresh read-only proof can resolve the same unknown while STOPPED.
+    let reconciled = host
+        .reconcile_operation_observed(&recover, id, |receipt, current| {
+            assert_eq!(current.intent.desired, Intent::Stopped);
+            assert_eq!(current.intent.generation, stopped.intent.generation);
+            Ok(Reconciliation::UniqueVerified {
+                remote_ids: BTreeMap::from([("comment".into(), "exact-native-record".into())]),
+                result: json!({"observed":"published"}),
+                payload_digest: receipt.payload_digest.clone(),
+                actor: receipt.actor.clone(),
+            })
+        })
+        .unwrap();
+    assert_eq!(reconciled.phase, ReceiptPhase::Reconciled);
+    assert!(
+        !host
+            .snapshot()
+            .unwrap()
+            .unresolved_operations
+            .contains_key(&id)
+    );
+    assert_eq!(host.snapshot().unwrap().intent.desired, Intent::Stopped);
 }
 
 #[test]

@@ -1,5 +1,7 @@
 //! Production composition with deterministic provider/process observations only.
 //! Does not qualify OS confinement or launch any model/provider action.
+#[path = "support/pinned_git.rs"]
+mod pinned_git;
 use chrono::{Duration, Utc};
 use kegari_v0::{
     authority::*,
@@ -284,7 +286,8 @@ impl Fixture {
             ],
         );
         let workflow = Workflow::load(&repo.join("WORKFLOW.md")).unwrap();
-        let git = Arc::new(Git::new(git_path()).unwrap());
+        let pinned_git_path = pinned_git::prepare(temp.path());
+        let git = Arc::new(Git::new(&pinned_git_path).unwrap());
         let revision = git.revision(&repo, "HEAD").unwrap();
         let child = role.permits_source_writes();
         let work = WorkIdentity {
@@ -476,7 +479,7 @@ impl Fixture {
                 vec![
                     PathBuf::from("/usr/bin/true"),
                     PathBuf::from("/bin/sh"),
-                    git_path(),
+                    pinned_git_path.clone(),
                 ]
             } else {
                 vec![]
@@ -603,7 +606,7 @@ impl Fixture {
         let execution = if child {
             Some(Arc::new(WorkerExecution {
                 git: git.clone(),
-                git_executable: git_path(),
+                git_executable: pinned_git_path.clone(),
                 boundary: boundary.clone(),
                 ownership: Arc::new(
                     OwnedDirectory::register(
@@ -903,6 +906,73 @@ async fn configured_check_uses_executor_and_never_mints_fixture_production_proof
 }
 
 #[tokio::test]
+async fn evaluation_observation_cannot_relabel_old_checks_after_source_changes() {
+    let mut f = Fixture::new(AgentRole::Implementation);
+    let run = f.call("validation_run", json!({"name":"suite","kind":"local"}));
+    f.worker.call(&run).await.unwrap();
+    let before = f.worker.observe().unwrap();
+    assert_eq!(
+        before.checks["suite"].status,
+        kegari_v0::evaluation::CheckStatus::Passed
+    );
+    assert_eq!(
+        before.checks["suite"].candidate_digest,
+        before.candidate_digest
+    );
+    let edit = f.call("source_write", json!({"path":"a.txt","expected_digest":bytes_digest(b"original\n"),"content":"changed after validation\n","executable":false}));
+    f.worker.call(&edit).await.unwrap();
+    let after = f.worker.observe().unwrap();
+    assert_ne!(before.candidate_digest, after.candidate_digest);
+    assert_eq!(
+        after.checks["suite"].candidate_digest,
+        before.candidate_digest
+    );
+    assert_eq!(
+        after.checks["suite"].status,
+        kegari_v0::evaluation::CheckStatus::Unknown
+    );
+    let rerun = f.call("validation_run", json!({"name":"suite","kind":"local"}));
+    // Changed source requires the next host-sealed exact revision. A retry in
+    // this original binding must not invent passing validation for dirty files.
+    assert_eq!(
+        f.worker.call(&rerun).await.unwrap_err().code,
+        "dirty_execution"
+    );
+    let still_unverified = f.worker.observe().unwrap();
+    assert_eq!(
+        still_unverified.checks["suite"].status,
+        kegari_v0::evaluation::CheckStatus::Unknown
+    );
+    assert_eq!(
+        still_unverified.checks["suite"].candidate_digest,
+        before.candidate_digest
+    );
+    assert_eq!(still_unverified.candidate_digest, after.candidate_digest);
+}
+
+#[tokio::test]
+async fn evaluation_artifacts_require_intact_private_retained_bytes() {
+    let mut f = Fixture::new(AgentRole::Implementation);
+    let run = f.call("validation_run", json!({"name":"suite","kind":"local"}));
+    f.worker.call(&run).await.unwrap();
+    let observed = f.worker.observe().unwrap();
+    assert!(!observed.artifacts.is_empty());
+    let private = f._temp.path().join("control/worker");
+    let archived = std::fs::read_dir(&private)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("artifact-")
+        })
+        .unwrap();
+    std::fs::write(archived, b"altered retained fixture").unwrap();
+    assert_eq!(f.worker.observe().unwrap_err().code, "artifact_conflict");
+}
+
+#[tokio::test]
 async fn failed_check_is_retained_as_failed_and_corrected_rerun_keeps_old_bytes() {
     let mut f = Fixture::new(AgentRole::Implementation);
     f.boundary.fail.store(true, Ordering::SeqCst);
@@ -995,7 +1065,7 @@ fn changed_tools_profiles_or_authorized_write_paths_cannot_rebind_contract() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn force_is_durable_and_status_remains_responsive_during_long_check() {
     let mut f = Fixture::new(AgentRole::Implementation);
     f.boundary.block.store(true, Ordering::SeqCst);
@@ -1006,7 +1076,7 @@ async fn force_is_durable_and_status_remains_responsive_during_long_check() {
         let result = f.worker.call(&call).await;
         (f, result)
     });
-    tokio::time::timeout(StdDuration::from_secs(2), async {
+    tokio::time::timeout(StdDuration::from_secs(10), async {
         while executions.active_operations().unwrap().is_empty() {
             tokio::time::sleep(StdDuration::from_millis(5)).await;
         }
@@ -1382,6 +1452,58 @@ async fn unconfirmed_hook_exit_keeps_owned_handle_and_sent_receipt() {
     );
 }
 
+// Explicit fixture metadata: no native process identity qualification is claimed.
+struct FixtureProviderProbe {
+    marker: PathBuf,
+    boot: Uuid,
+}
+impl kegari_v0::platform::ProcessProbe for FixtureProviderProbe {
+    fn current(&self) -> Result<kegari_v0::platform::ProcessIdentity> {
+        Ok(kegari_v0::platform::ProcessIdentity {
+            pid: std::process::id(),
+            parent_pid: 1,
+            process_group: std::process::id(),
+            uid: unsafe { libc::geteuid() },
+            boot_id: self.boot,
+            started_seconds: 1,
+            started_microseconds: 1,
+            executable: "/fixture/host".into(),
+        })
+    }
+    fn observe(
+        &self,
+        _: &kegari_v0::platform::ProcessIdentity,
+    ) -> Result<kegari_v0::platform::ProcessObservation> {
+        Ok(kegari_v0::platform::ProcessObservation::Gone)
+    }
+    fn matching_executable(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<kegari_v0::platform::ProcessIdentity>> {
+        let deadline = std::time::Instant::now() + StdDuration::from_millis(100);
+        loop {
+            if let Some(pid) = std::fs::read_to_string(&self.marker)
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+            {
+                return Ok(vec![kegari_v0::platform::ProcessIdentity {
+                    pid,
+                    parent_pid: std::process::id(),
+                    process_group: pid,
+                    uid: unsafe { libc::geteuid() },
+                    boot_id: self.boot,
+                    started_seconds: 2,
+                    started_microseconds: 1,
+                    executable: path.into(),
+                }]);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(vec![]);
+            }
+            std::thread::sleep(StdDuration::from_millis(2));
+        }
+    }
+}
 fn native_fixture_run(
     f: &Fixture,
 ) -> (
@@ -1397,7 +1519,7 @@ fn native_fixture_run(
     let marker = base.join("fixture-provider-started");
     // A disposable protocol/process fixture, never the installed Codex binary.
     // It returns only version metadata and then waits without starting any turn.
-    std::fs::write(&executable,format!("#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{}'; exit 0; fi\nprintf 'started' > '{}'\nexec /bin/sleep 30\n",kegari_v0::codex::SUPPORTED_CODEX_VERSION,marker.display())).unwrap();
+    std::fs::write(&executable,format!("#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{}'; exit 0; fi\nprintf '%s' $$ > '{}'\nexec /bin/sleep 30\n",kegari_v0::codex::SUPPORTED_CODEX_VERSION,marker.display())).unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut input = run_preparation(f);
     Arc::make_mut(&mut input.config)
@@ -1459,6 +1581,20 @@ fn native_fixture_run(
         )
         .unwrap();
     let services = RunServices {
+        processes: Arc::new(
+            kegari_v0::process_records::ProcessJournal::with_probe(
+                PrivateDir::open(&base.join("control"))
+                    .unwrap()
+                    .child("worker-processes")
+                    .unwrap(),
+                f.permit.lease.runtime_id,
+                Arc::new(FixtureProviderProbe {
+                    marker: marker.clone(),
+                    boot: id(987),
+                }),
+            )
+            .unwrap(),
+        ),
         hooks: Arc::new(
             NonExecutingRunHooks::new(
                 prepared.contract().clone(),
@@ -1481,6 +1617,92 @@ fn native_fixture_run(
         },
     };
     (prepared, permit, services, marker)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_provider_launch_checks_exact_binding_and_closed_or_fenced_scope_before_spawn() {
+    for close in [false, true] {
+        let f = Fixture::new(AgentRole::Coordination);
+        let (prepared, permit, services, marker) = native_fixture_run(&f);
+        let processes = services.processes.clone();
+        let broker =
+            ScopedWorker::new(prepared.contract().clone(), permit.clone(), services.worker)
+                .unwrap();
+        let base = f._temp.path().canonicalize().unwrap();
+        let executable = base.join("deterministic-app-server");
+        let auth = base.join("auth");
+        let mut wrong = prepared.permissions().clone();
+        wrong.profile_id = "wrong".into();
+        assert_eq!(
+            broker
+                .provider_launch(
+                    processes.clone(),
+                    &executable,
+                    &auth,
+                    &wrong,
+                    StdDuration::from_secs(2)
+                )
+                .err()
+                .unwrap()
+                .code,
+            "worker_binding"
+        );
+        let launch = broker
+            .provider_launch(
+                processes.clone(),
+                &executable,
+                &auth,
+                prepared.permissions(),
+                StdDuration::from_secs(2),
+            )
+            .unwrap();
+        launch
+            .verify_binding(
+                &permit.work_key,
+                prepared.contract().instructions(),
+                prepared.isolation(),
+                prepared.permissions(),
+                &executable,
+                &auth,
+            )
+            .unwrap();
+        assert_eq!(
+            launch
+                .verify_binding(
+                    "another-work",
+                    prepared.contract().instructions(),
+                    prepared.isolation(),
+                    prepared.permissions(),
+                    &executable,
+                    &auth
+                )
+                .unwrap_err()
+                .code,
+            "worker_binding"
+        );
+        if close {
+            launch.finish().unwrap();
+        } else {
+            f.control.fence(permit.operation_id).unwrap();
+        }
+        let result = launch.launch().await.err().unwrap();
+        assert_eq!(
+            result.code,
+            if close {
+                "admission_closed"
+            } else {
+                "access_denied"
+            }
+        );
+        launch.finish().unwrap();
+        assert!(processes.observe(permit.operation_id).unwrap().is_empty());
+        assert!(f.executions.active_operations().unwrap().is_empty());
+        assert!(!marker.exists());
+        assert_eq!(
+            launch.launch().await.err().unwrap().code,
+            "operation_uncertain"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1532,6 +1754,8 @@ async fn worker_cannot_increase_original_admission_turn_budget() {
 async fn forced_worker_joins_actual_fixture_provider_before_confirming_local_exit() {
     let f = Fixture::new(AgentRole::Coordination);
     let (prepared, permit, services, marker) = native_fixture_run(&f);
+    let processes = services.processes.clone();
+    let operation = permit.operation_id;
     let mut run = kegari_v0::worker_run::run(
         prepared,
         permit,
@@ -1551,6 +1775,17 @@ async fn forced_worker_joins_actual_fixture_provider_before_confirming_local_exi
     })
     .await
     .unwrap();
+    let process_records = processes.observe(operation).unwrap();
+    assert_eq!(
+        process_records.len(),
+        2,
+        "both metadata probe and provider are durable"
+    );
+    assert!(
+        process_records
+            .iter()
+            .any(|p| p.state == kegari_v0::process_records::RecoveryState::GuardHeld)
+    );
     let snapshot = f.control.snapshot().unwrap();
     f.control
         .lifecycle(
@@ -1577,6 +1812,20 @@ async fn forced_worker_joins_actual_fixture_provider_before_confirming_local_exi
         .unwrap()
         .unwrap();
     assert!(completion.local_exit_confirmed);
+    assert!(
+        completion.contract.is_some(),
+        "actual run retains its immutable contract"
+    );
+    assert!(
+        completion.execution.is_none(),
+        "coordination never invents source execution ownership"
+    );
+    let records = processes.observe(operation).unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|p| p.state
+        == kegari_v0::process_records::RecoveryState::GroupExitRecordedTreeUnverified
+        && !p.all_descendants_exited));
+
     assert!(completion.error.is_some());
     assert!(completion.state.thread_id.is_none());
     assert_eq!(completion.state.turns_started, 0);
@@ -1624,6 +1873,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
             })
         };
         let mut request = LaunchRequest {
+            delivery: None,
             lease: f.permit.lease.clone(),
             operation_id: id(810),
             authority,
@@ -1856,6 +2106,18 @@ fn recovered_session_retains_earlier_intervention_and_rejects_wrong_account_or_m
         1,
     )
     .unwrap();
+    state.max_turns = 2;
+    assert_eq!(
+        broker.checkpoint(&state, None).unwrap_err().code,
+        "admission_budget"
+    );
+    state.max_turns = 1;
+    state.turns_started = 2;
+    assert_eq!(
+        broker.checkpoint(&state, None).unwrap_err().code,
+        "admission_budget"
+    );
+    state.turns_started = 0;
     state.thread_id = Some("actual-fixture-thread".into());
     state.input_required = true;
     state.intervention = Some(ProviderIntervention {
@@ -1899,5 +2161,181 @@ fn recovered_session_retains_earlier_intervention_and_rejects_wrong_account_or_m
             .unwrap_err()
             .code,
         "record_corrupt"
+    );
+}
+
+#[test]
+fn driver_preparation_identity_ignores_refresh_noise_without_resetting_phase_attempt() {
+    use kegari_v0::{
+        runtime::WorkerAction,
+        runtime_schedule::RunSchedule,
+        scheduler::{PhaseKey, ReadyWork, Trigger, WorkKind},
+    };
+    let f = Fixture::new(AgentRole::Implementation);
+    let gate = f
+        .parent
+        .fresh_gate(
+            Some(id(11)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    let authority = WorkerAuthority::Authorized(gate);
+    let work = authority.work_key().unwrap();
+    let generation = canonical_digest(1, &authority.work().unwrap().generation).unwrap();
+    let mut action = WorkerAction {
+        authority,
+        phase: PhaseKey {
+            work: work.clone(),
+            generation: generation.clone(),
+            phase: "implementation".into(),
+            retry_grant: None,
+        },
+        schedule: RunSchedule {
+            attempt: 1,
+            max_attempts: 2,
+            max_turns: 2,
+            max_review_rounds: 2,
+            trigger: Trigger::InitialAuthorization,
+            not_before: Utc::now(),
+        },
+        ready: ReadyWork {
+            canonical_key: work,
+            workspace: id(3),
+            account: "fixture-account".into(),
+            generation,
+            state: "in progress".into(),
+            priority: None,
+            created_at: None,
+            kind: WorkKind::Child,
+            trigger: Some(Trigger::InitialAuthorization),
+            not_before: Utc::now(),
+            gate_blockers: vec![],
+        },
+    };
+    let original = kegari_v0::runtime_driver::preparation_identity(&action).unwrap();
+    let mut refreshed = f.parent.clone();
+    refreshed.source_digest = bytes_digest(b"later provider timestamp and own comment");
+    refreshed.observed_at = Utc::now();
+    action.authority = WorkerAuthority::Authorized(
+        refreshed
+            .fresh_gate(
+                Some(id(11)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(30),
+            )
+            .unwrap(),
+    );
+    action.ready.not_before = Utc::now();
+    assert_eq!(
+        kegari_v0::runtime_driver::preparation_identity(&action).unwrap(),
+        original
+    );
+    action.phase.retry_grant = Some(id(991));
+    assert_ne!(
+        kegari_v0::runtime_driver::preparation_identity(&action).unwrap(),
+        original
+    );
+    action.phase.retry_grant = None;
+    action.schedule.attempt = 2;
+    assert_ne!(
+        kegari_v0::runtime_driver::preparation_identity(&action).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn correction_context_contains_exact_native_text_and_rejects_stale_or_missing_revisions() {
+    use kegari_v0::{
+        authority::{CommentRevision, CorrectionInvalidations},
+        providers::{Comment, Issue},
+        reconcile::IssueObservation,
+    };
+    let fixture = Fixture::new(AgentRole::Coordination);
+    let mut parent = fixture.parent.clone();
+    let body = "Please preserve the currently accepted behavior and test the corrected edge case.";
+    let comment = Comment {
+        id: id(501),
+        issue_id: parent.key.issue,
+        body: body.into(),
+        body_digest: bytes_digest(body.as_bytes()),
+        user_id: Some(id(502)),
+        delegated: false,
+        bot: false,
+        created_at: Some(Utc::now()),
+        updated_at: None,
+        edited_at: None,
+        url: "https://linear.invalid/comment/501".into(),
+    };
+    let issue:Issue=serde_json::from_value(json!({"id":parent.key.issue,"workspace_id":parent.key.workspace,"endpoint":parent.key.endpoint,"identifier":"FIX-10","title":"Parent","description":"Complete current parent specification","team_id":id(503),"project_id":null,"creator_id":id(502),"assignee_id":null,"parent_id":null,"state_id":id(504),"state_name":"In Progress","state_type":"started","labels":[],"priority":null,"created_at":null,"updated_at":null,"url":"https://linear.invalid/FIX-10","diagnostics":[]})).unwrap();
+    let observation = IssueObservation {
+        issue,
+        comments: vec![comment.clone()],
+        history: vec![],
+        dependencies: vec![],
+    };
+    parent
+        .observations
+        .insert(parent.key.issue, observation.clone());
+    let mut unrelated = observation;
+    unrelated.comments[0].body = "unrelated private source".into();
+    parent.observations.insert(id(999), unrelated);
+    parent.corrections = Corrections::from_invalidations(CorrectionInvalidations {
+        pending: BTreeMap::from([(
+            comment.id,
+            CommentRevision {
+                id: comment.id,
+                author: comment.user_id,
+                body_digest: comment.body_digest.clone(),
+                edited_at: None,
+                observed_revision: 0,
+            },
+        )]),
+        ..Default::default()
+    })
+    .unwrap();
+    let gate = parent
+        .fresh_gate(
+            None,
+            GatePurpose::Coordination,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .unwrap();
+    let context = kegari_v0::runtime_workers::native_context(&parent, &gate).unwrap();
+    assert_eq!(context["pending_correction_comments"][0]["body"], body);
+    assert_eq!(
+        context["pending_correction_comments"][0]["user_id"],
+        id(502).to_string()
+    );
+    assert!(!context.to_string().contains("unrelated private source"));
+    parent
+        .observations
+        .get_mut(&parent.key.issue)
+        .unwrap()
+        .comments[0]
+        .body = "edited after admission".into();
+    assert_eq!(
+        kegari_v0::runtime_workers::native_context(&parent, &gate)
+            .unwrap_err()
+            .code,
+        "stale_correction"
+    );
+    parent
+        .observations
+        .get_mut(&parent.key.issue)
+        .unwrap()
+        .comments
+        .clear();
+    assert_eq!(
+        kegari_v0::runtime_workers::native_context(&parent, &gate)
+            .unwrap_err()
+            .code,
+        "incompletely_observed"
     );
 }

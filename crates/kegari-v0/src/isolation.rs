@@ -490,7 +490,7 @@ pub fn execution_name(
     ))
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandOutcome {
     pub schema_version: u32,
@@ -531,6 +531,68 @@ async fn bounded_output<R: tokio::io::AsyncRead + Unpin>(
     Ok((bytes, truncated))
 }
 
+/// Exact process-free launch identity for an admitted repository command. The
+/// profile digest binds the resolved executable and full Seatbelt policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandLaunchIdentity {
+    pub cwd: PathBuf,
+    pub launcher: crate::platform::BinaryIdentity,
+    pub target: crate::platform::BinaryIdentity,
+    pub argv_digest: String,
+}
+pub fn command_launch_identity(
+    isolation: &ValidatedIsolation,
+    argv: &[String],
+) -> Result<CommandLaunchIdentity> {
+    isolation.revalidate()?;
+    if argv.is_empty() {
+        return Err(Error::invalid("command launch requires argv"));
+    }
+    let resolved = isolation.resolve_executable(&argv[0])?;
+    let profile = isolation.seatbelt_profile()?;
+    Ok(CommandLaunchIdentity {
+        cwd: isolation.plan.cwd.clone(),
+        launcher: crate::platform::BinaryIdentity::inspect(
+            Path::new("/usr/bin/sandbox-exec"),
+            false,
+        )?,
+        target: crate::platform::BinaryIdentity::inspect(&resolved, false)?,
+        argv_digest: canonical_digest(
+            1,
+            &serde_json::json!({"argv":argv,"profile":profile,"resolved":resolved}),
+        )?,
+    })
+}
+/// No supported native descendant-tree proof has been qualified. Reject before
+/// spawning repository code rather than creating a known permanent unknown hold.
+pub fn repository_command_prerequisite() -> Result<()> {
+    Err(process_tree_unverified())
+}
+enum CommandJournal {
+    Worker(
+        std::sync::Arc<crate::process_records::ProcessJournal>,
+        crate::control::Permit,
+    ),
+    Guard(Box<crate::process_records::SpawnGuard>),
+}
+pub fn start_guarded_command(
+    isolation: &ValidatedIsolation,
+    argv: &[String],
+    timeout: Duration,
+    output_limit: usize,
+    secret_values: &[String],
+    guard: crate::process_records::SpawnGuard,
+) -> Result<OwnedCommand> {
+    start_command_inner(
+        isolation,
+        argv,
+        timeout,
+        output_limit,
+        secret_values,
+        Some(CommandJournal::Guard(Box::new(guard))),
+    )
+}
+
 /// Run a check/hook only under the OS boundary. The caller persists its admitted
 /// operation before calling; outputs never establish revision provenance alone.
 pub fn start_command(
@@ -539,6 +601,34 @@ pub fn start_command(
     timeout: Duration,
     output_limit: usize,
     secret_values: &[String],
+) -> Result<OwnedCommand> {
+    start_command_inner(isolation, argv, timeout, output_limit, secret_values, None)
+}
+pub fn start_journaled_command(
+    isolation: &ValidatedIsolation,
+    argv: &[String],
+    timeout: Duration,
+    output_limit: usize,
+    secret_values: &[String],
+    journal: std::sync::Arc<crate::process_records::ProcessJournal>,
+    permit: crate::control::Permit,
+) -> Result<OwnedCommand> {
+    start_command_inner(
+        isolation,
+        argv,
+        timeout,
+        output_limit,
+        secret_values,
+        Some(CommandJournal::Worker(journal, permit)),
+    )
+}
+fn start_command_inner(
+    isolation: &ValidatedIsolation,
+    argv: &[String],
+    timeout: Duration,
+    output_limit: usize,
+    secret_values: &[String],
+    journal: Option<CommandJournal>,
 ) -> Result<OwnedCommand> {
     isolation.revalidate()?;
     if matches!(
@@ -562,12 +652,13 @@ pub fn start_command(
             "the supported local command boundary requires macOS sandbox-exec",
         ));
     }
+    repository_command_prerequisite()?;
     let executable = isolation.resolve_executable(&argv[0])?;
     let profile = isolation.seatbelt_profile()?;
     let mut command = Command::new("/usr/bin/sandbox-exec");
     command
         .args(["-p", &profile])
-        .arg(executable)
+        .arg(&executable)
         .args(&argv[1..]);
     command
         .current_dir(&isolation.plan.cwd)
@@ -585,7 +676,57 @@ pub fn start_command(
         command.process_group(0);
     }
     let started = std::time::Instant::now();
-    let (mut child, group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command)?;
+    let identity = command_launch_identity(isolation, argv)?;
+    let mut guard = match journal {
+        Some(CommandJournal::Worker(journal, permit)) => {
+            Some(journal.begin(crate::process_records::SpawnBinding {
+                operation_id: permit.operation_id,
+                effect_id: uuid::Uuid::new_v4(),
+                lease: Some(permit.lease),
+                control_owner: None,
+                work_key: permit.work_key,
+                scope_digest: permit.scope_digest,
+                cwd: identity.cwd.clone(),
+                executable: identity.launcher.clone(),
+                observed_executables: vec![identity.target.clone()],
+                argv_digest: identity.argv_digest.clone(),
+                kind: "repository_command".into(),
+            })?)
+        }
+        Some(CommandJournal::Guard(guard)) => {
+            let binding = guard.binding();
+            if binding.cwd != identity.cwd
+                || binding.executable != identity.launcher
+                || binding.observed_executables != vec![identity.target]
+                || binding.argv_digest != identity.argv_digest
+                || binding.kind != "repository_command"
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "provided process guard differs from exact repository command, executable or isolation policy",
+                ));
+            }
+            Some(*guard)
+        }
+        None => None,
+    };
+    if let Some(guard) = &guard {
+        guard.configure_tokio(&mut command)?;
+    }
+    let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command)?;
+    // A quick child can exit before native identity capture. Keep its actual
+    // handle and Starting journal until owned cleanup and reap establish exit.
+    let capture_error = guard
+        .as_mut()
+        .and_then(|guard| guard.spawned_tokio(&child).err());
+    let capture_error = match capture_error {
+        Some(error) => match group.observe_exit_before_reap() {
+            Ok(true) => None,
+            Ok(false) => Some(error),
+            Err(error) => Some(error),
+        },
+        None => None,
+    };
     let stdout = child
         .stdout
         .take()
@@ -611,6 +752,8 @@ pub fn start_command(
             terminal: None,
             out_eof,
             err_eof,
+            guard,
+            capture_error,
         })),
         out_task: tokio::spawn(async move {
             let result = bounded_output(stdout, output_limit).await;
@@ -635,6 +778,8 @@ struct CommandProcess {
     terminal: Option<std::process::ExitStatus>,
     out_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
     err_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    guard: Option<crate::process_records::SpawnGuard>,
+    capture_error: Option<Error>,
 }
 impl CommandProcess {
     fn observe(&mut self) -> Result<Option<std::process::ExitStatus>> {
@@ -643,6 +788,12 @@ impl CommandProcess {
                 .child
                 .try_wait()
                 .map_err(|e| Error::io("reap owned command after group cleanup", e))?;
+        }
+        if let Some(status) = self.terminal
+            && let Some(guard) = self.guard.as_mut()
+        {
+            guard.group_exited(status)?;
+            self.guard = None;
         }
         Ok(self.terminal)
     }
@@ -704,6 +855,15 @@ impl OwnedCommand {
     }
     pub async fn wait(self) -> Result<CommandOutcome> {
         let cancellation = self.cancellation();
+        if self
+            .process
+            .lock()
+            .map_err(|_| Error::new("process_error", "owned command lock failed"))?
+            .capture_error
+            .is_some()
+        {
+            cancellation.cancel()?;
+        }
         let mut timed_out = false;
         let status = loop {
             let status = {
@@ -760,6 +920,15 @@ impl OwnedCommand {
             String::from_utf8_lossy(&err).into_owned(),
             &self.secret_values,
         );
+        if let Some(error) = self
+            .process
+            .lock()
+            .map_err(|_| Error::new("process_error", "owned command lock failed"))?
+            .capture_error
+            .take()
+        {
+            return Err(error);
+        }
         if stderr.contains("sandbox-exec: sandbox_apply")
             || stderr.contains("sandbox-exec: sandbox_init")
         {
@@ -891,6 +1060,13 @@ pub fn artifact_digest(path: &Path, max_bytes: u64) -> Result<String> {
 #[cfg(test)]
 mod owned_exit_tests {
     use super::*;
+    #[test]
+    fn unqualified_repository_tree_is_rejected_before_native_launch() {
+        assert_eq!(
+            repository_command_prerequisite().unwrap_err().code,
+            "process_tree_unverified"
+        );
+    }
     #[tokio::test]
     async fn clean_group_and_streams_do_not_prove_arbitrary_command_tree_exit() {
         let mut command = Command::new("/usr/bin/true");
@@ -916,6 +1092,8 @@ mod owned_exit_tests {
                 terminal: None,
                 out_eof,
                 err_eof,
+                guard: None,
+                capture_error: None,
             })),
             out_task: tokio::spawn(async move {
                 let result = bounded_output(stdout, 1024).await;

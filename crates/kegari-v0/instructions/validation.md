@@ -1,4 +1,4 @@
-# Permitted validation and evidence preparation — version 1
+# Permitted validation and evidence preparation — version 2
 
 Validate the exact isolated candidate/repository tree vector, declared test
 resources and artifact identities supplied by the host. Do not validate a shared
@@ -20,3 +20,17 @@ MP4 encoding, upload and parent association; a local recording or upload alone i
 not publication. Nonvisual work needs a meaningful truthful summary and actual
 results, not an artificial video. Human acceptance remains a separate explicit
 operator decision on the evidence token.
+
+When the host requests the parent result, submit `outcome_submit` with a `claim`
+containing exactly these fields:
+
+```json
+{"schema_version":1,"executive_summary":"actual combined outcome and limits","touched_components":["observed component"],"fulfilled_criteria":["exact supplied criterion"],"caveats":[],"go":false}
+```
+
+List actual components and exact fulfilled criteria. Set `go` only when the
+observed evidence supports it, and explain remaining caveats truthfully. Keep
+actual artifact references in the tool's separate `artifact_refs` array. The
+summary cannot establish any missing execution, hosted, review, visual-publication
+or human-acceptance gate. Use the exact result schema in the supplied phase context
+for another validation phase; do not invent extra evidence or gate-success fields.

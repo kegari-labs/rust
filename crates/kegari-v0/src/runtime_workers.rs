@@ -9,9 +9,13 @@ use crate::{
     error::{Error, Result},
     execution::{
         DirectoryIdentity, ExecutionBinding, ExecutionLimits, HookInvocation, HookLedger,
-        HookPhase, LocalExecutor, OwnedDirectory, SandboxBoundary,
+        HookPhase, JournaledSandboxBoundary, LocalExecutor, OwnedDirectory,
     },
-    git::{Git, GitLimits, GitStartGate, IndependentCloneIdentity, RepositoryId, Revision},
+    git::{
+        Git, GitExecutionScope, GitLimits, GitStartGate, IndependentCloneIdentity, RepositoryId,
+        Revision,
+    },
+    housekeeping::{ReadOnlyIdentity, ReadOnlyPreparation},
     instructions::{AgentRole, ProviderDiscovery, RepositoryContext},
     isolation::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation},
     providers::ProviderBroker,
@@ -44,12 +48,171 @@ pub struct SourceSelection {
     pub repository: String,
     pub revision: Revision,
 }
+
+/// Resolve immutable source identities from the selected provider. This reads no
+/// operator checkout, fetches no objects and never treats a local branch as fresh.
+/// Preparation must subsequently verify that those exact Git objects are present.
+pub async fn resolve_source(
+    runtime: &RuntimeCoordinator,
+    authority: &WorkerAuthority,
+) -> Result<Option<SourceSelection>> {
+    authority.compare(&runtime.current_authority(authority)?)?;
+    let config = runtime.configuration.snapshot()?;
+    let workspace_id = match authority {
+        WorkerAuthority::Authorized(gate) => gate.workspace_id(),
+        WorkerAuthority::Independent(gate) => gate.workspace_id(),
+    };
+    let repository_id = match authority {
+        WorkerAuthority::Authorized(gate) => gate
+            .child_scope()
+            .and_then(|scope| scope.write_repository.clone()),
+        WorkerAuthority::Independent(gate) => Some(gate.repository_id().to_string()),
+    };
+    let Some(repository_id) = repository_id else {
+        return Ok(None);
+    };
+    let workspace = config
+        .workspaces
+        .values()
+        .find(|workspace| workspace.id == workspace_id)
+        .ok_or_else(|| Error::new("scope_violation", "source workspace is not configured"))?;
+    let configured = workspace.repositories.get(&repository_id).ok_or_else(|| {
+        Error::new(
+            "source_unavailable",
+            "source repository is not configured for owned preparation",
+        )
+    })?;
+    let number = repository_id
+        .parse::<u64>()
+        .map_err(|_| Error::invalid("source requires canonical repository identity"))?;
+    let projection = runtime.observations.admission_snapshot()?;
+    let repository = &projection
+        .workspaces
+        .get(&workspace_id)
+        .and_then(|workspace| workspace.repositories.get(&number))
+        .ok_or_else(|| {
+            Error::new(
+                "incompletely_observed",
+                "source repository lacks complete current provider identity",
+            )
+        })?
+        .identity;
+    let github = providers(runtime, &config, workspace_id)?
+        .github
+        .ok_or_else(|| Error::new("missing_secret", "source provider is unavailable"))?;
+    let bound = std::time::Duration::from_millis(config.runtime.request_timeout_ms)
+        .min(std::time::Duration::from_secs(30));
+    let target = match authority {
+        WorkerAuthority::Authorized(_) => ProviderSource::Staging(&configured.staging),
+        WorkerAuthority::Independent(gate) => ProviderSource::Review(gate.pull_request()),
+    };
+    let result = tokio::time::timeout(bound, provider_revision(&github, repository, target))
+        .await
+        .map_err(|_| {
+            Error::new(
+                "timeout",
+                "source identity resolution exceeded its finite bound",
+            )
+        })??;
+    if runtime.configuration.snapshot()?.revision()? != config.revision()? {
+        return Err(Error::new(
+            "stale_config",
+            "source configuration changed during provider observation",
+        ));
+    }
+    authority.compare(&runtime.current_authority(authority)?)?;
+    Ok(Some(SourceSelection {
+        repository: repository_id,
+        revision: result,
+    }))
+}
+
+enum ProviderSource<'a> {
+    Staging(&'a str),
+    Review(&'a crate::providers::PullRequest),
+}
+async fn provider_revision(
+    github: &crate::providers::GithubClient,
+    repository: &crate::providers::RepositoryIdentity,
+    target: ProviderSource<'_>,
+) -> Result<Revision> {
+    let commit = match &target {
+        ProviderSource::Staging(branch) => {
+            github
+                .reference(repository, &format!("heads/{branch}"))
+                .await?
+        }
+        ProviderSource::Review(expected) => {
+            require_current_review(
+                &github.pull_request(repository, expected.number).await?,
+                expected,
+            )?;
+            expected.head_sha.clone()
+        }
+    };
+    let observed = github.commit(repository, &commit).await?;
+    let revision = Revision {
+        commit,
+        tree: observed
+            .pointer("/tree/sha")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new("provider_response", "source commit tree is missing"))?
+            .into(),
+    };
+    revision.validate()?;
+    match target {
+        ProviderSource::Staging(branch)
+            if github
+                .reference(repository, &format!("heads/{branch}"))
+                .await?
+                != revision.commit =>
+        {
+            return Err(Error::new(
+                "stale_revision",
+                "configured staging moved during source resolution",
+            ));
+        }
+        ProviderSource::Review(expected) => require_current_review(
+            &github.pull_request(repository, expected.number).await?,
+            expected,
+        )?,
+        _ => {}
+    }
+    Ok(revision)
+}
+
+fn require_current_review(
+    actual: &crate::providers::PullRequest,
+    expected: &crate::providers::PullRequest,
+) -> Result<()> {
+    if actual.repository_id != expected.repository_id
+        || actual.id != expected.id
+        || actual.number != expected.number
+        || actual.head_sha != expected.head_sha
+        || actual.base_sha != expected.base_sha
+        || actual.head_repository_id != expected.head_repository_id
+        || actual.head_ref != expected.head_ref
+        || actual.base_ref != expected.base_ref
+        || actual.author_id != expected.author_id
+        || actual.state != "open"
+        || actual.draft
+        || actual.merged == Some(true)
+    {
+        return Err(Error::new(
+            "stale_revision",
+            "independent review source changed during resolution",
+        ));
+    }
+    Ok(())
+}
 pub struct LaunchRequest {
     pub lease: Lease,
     pub operation_id: Uuid,
     pub authority: WorkerAuthority,
     pub phase: PhaseKey,
     pub source: Option<SourceSelection>,
+    /// Opaque delivery assignment; cannot be constructed from worker/CLI JSON.
+    pub delivery: Option<crate::delivery::DeliveryWorkerAssignment>,
     pub max_seconds: u64,
     pub max_turns: u32,
 }
@@ -76,7 +239,33 @@ impl LaunchRequest {
         if let Some(source) = &self.source {
             source.revision.validate()?;
         }
-        validate_selection(&self.authority, self.source.as_ref())
+        if let Some(assignment) = &self.delivery {
+            let WorkerAuthority::Authorized(gate) = &self.authority else {
+                return Err(Error::new(
+                    "worker_binding",
+                    "delivery assignment cannot grant independent authority",
+                ));
+            };
+            assignment.verify_binding(gate, &self.phase.phase)?;
+            if let Some(selected) = &self.source
+                && !assignment.source().is_some_and(|source| {
+                    source.repository().id == selected.repository
+                        && source.revision() == &selected.revision
+                })
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "caller source differs from sealed delivery assignment",
+                ));
+            }
+            let selected = assignment.source().map(|source| SourceSelection {
+                repository: source.repository().id.clone(),
+                revision: source.revision().clone(),
+            });
+            validate_selection(&self.authority, selected.as_ref())
+        } else {
+            validate_selection(&self.authority, self.source.as_ref())
+        }
     }
 }
 struct Plan {
@@ -94,11 +283,27 @@ struct Plan {
     normalized_state: String,
 }
 struct Prepared {
+    processes: Arc<crate::process_records::ProcessJournal>,
     run: worker_run::PreparedRun,
     execution: Option<Arc<WorkerExecution>>,
     records: PrivateDir,
 }
 
+/// Stable linkage between a launch intent and its preparation effects. Presence
+/// of this receipt prohibits replaying preparation under a replacement identity.
+pub(crate) fn preparation_operation(worker: Uuid) -> Result<Uuid> {
+    let digest = canonical_digest(1, &json!({"purpose":"worker_preparation","worker":worker}))?;
+    let bytes = hex::decode(digest.rsplit(':').next().unwrap_or_default())
+        .map_err(|_| Error::invalid("preparation identity digest is invalid"))?;
+    let mut id: [u8; 16] = bytes
+        .get(..16)
+        .ok_or_else(|| Error::invalid("short preparation identity"))?
+        .try_into()
+        .map_err(|_| Error::invalid("preparation identity length"))?;
+    id[6] = (id[6] & 0x0f) | 0x80;
+    id[8] = (id[8] & 0x3f) | 0x80;
+    Ok(Uuid::from_bytes(id))
+}
 /// The caller retains its scheduler capacity claim throughout this future. A
 /// cancellation cannot be mistaken for completion: preparation handles remain in
 /// the shared owned-process registry and Sent receipts keep the canonical hold.
@@ -106,16 +311,30 @@ pub async fn launch(runtime: Arc<RuntimeCoordinator>, request: LaunchRequest) ->
     let mut plan = Plan::read(&runtime, request)?;
     let initial_schedule =
         runtime.next_attempt(&plan.request.phase, plan.workspace.id, &plan.account)?;
-    plan.context["attempt"] = json!(initial_schedule.attempt);
+    runtime.check_worker_capacity(
+        plan.workspace.id,
+        &plan.account,
+        &plan.request.phase,
+        &plan.normalized_state,
+    )?;
+    if initial_schedule.not_before > chrono::Utc::now() {
+        return Err(Error::new(
+            "operation_pending",
+            "worker retry spacing has not elapsed",
+        ));
+    }
+    if plan.request.delivery.is_none() {
+        plan.context["attempt"] = json!(initial_schedule.attempt);
+    }
     let _retained = runtime.observations.capture_active(
         plan.workspace.id,
         &plan.config.revision()?,
         &plan.workflow.digest,
     )?;
-    let prep_id = Uuid::new_v4();
+    let prep_id = preparation_operation(plan.request.operation_id)?;
     let prep_scope = canonical_digest(
         1,
-        &json!({"kind":"worker_preparation","operation":plan.request.operation_id,"authority":plan.request.authority.digest()?,"phase":plan.request.phase,"source":plan.source,"role":plan.role}),
+        &json!({"kind":"worker_preparation","operation":plan.request.operation_id,"authority":plan.request.authority.digest()?,"phase":plan.request.phase,"source":plan.source,"role":plan.role,"assignment":plan.request.delivery.as_ref().map(|assignment|assignment.digest()).transpose()?}),
     )?;
     let prep_permit = runtime.control.admit(
         &plan.request.lease,
@@ -153,7 +372,7 @@ pub async fn launch(runtime: Arc<RuntimeCoordinator>, request: LaunchRequest) ->
             Err(error) => json!({"phase":"worker_preparation","result":"blocked","error":error}),
         },
     )?;
-    let prepared = prepared?;
+    let mut prepared = prepared?;
     let schedule = runtime.next_attempt(&plan.request.phase, plan.workspace.id, &plan.account)?;
     if plan.request.max_turns > schedule.max_turns {
         return Err(Error::new(
@@ -185,7 +404,43 @@ pub async fn launch(runtime: Arc<RuntimeCoordinator>, request: LaunchRequest) ->
     )?;
     let start = (|| {
         runtime.register_run(permit.clone(), contract.clone())?;
-        let hooks: Arc<dyn RunHooks> = if let Some(execution) = &prepared.execution {
+        // Preparation and model execution have distinct permits. Reusing an
+        // owned checkout never transfers the preparation process authority.
+        prepared.execution = prepared
+            .execution
+            .as_ref()
+            .map(|execution| {
+                Ok(Arc::new(WorkerExecution {
+                    git: Arc::new(execution.git.with_execution_scope(GitExecutionScope {
+                        limits: GitLimits::default(),
+                        start_gate: scoped_git_gate(
+                            runtime.clone(),
+                            permit.clone(),
+                            plan.request.authority.clone(),
+                        ),
+                        processes: prepared.processes.clone(),
+                        permit: permit.clone(),
+                        executions: runtime.executions.clone(),
+                    })?),
+                    git_executable: execution.git_executable.clone(),
+                    boundary: Arc::new(JournaledSandboxBoundary::new(
+                        prepared.processes.clone(),
+                        permit.clone(),
+                    )),
+                    ownership: execution.ownership.clone(),
+                    binding: execution.binding.clone(),
+                    limits: execution.limits.clone(),
+                    check_outputs: execution.check_outputs.clone(),
+                }))
+            })
+            .transpose()?;
+        let hooks: Arc<dyn RunHooks> = if let Some(execution) = &prepared.execution
+            && contract
+                .instructions()
+                .manifest
+                .permissions
+                .repository_code_execution
+        {
             Arc::new(ExecutorRunHooks::new(ExecutorHookServices {
                 contract: contract.clone(),
                 control: runtime.control.clone(),
@@ -207,6 +462,7 @@ pub async fn launch(runtime: Arc<RuntimeCoordinator>, request: LaunchRequest) ->
             prepared.run,
             permit.clone(),
             RunServices {
+                processes: prepared.processes,
                 worker: WorkerServices {
                     control: runtime.control.clone(),
                     providers,
@@ -254,9 +510,18 @@ pub async fn launch(runtime: Arc<RuntimeCoordinator>, request: LaunchRequest) ->
 
 fn fresh(runtime: &RuntimeCoordinator, request: &LaunchRequest) -> Result<()> {
     runtime.verify_owner(&request.lease)?;
-    request
-        .authority
-        .compare(&runtime.current_authority(&request.authority)?)
+    let current = runtime.current_authority(&request.authority)?;
+    request.authority.compare(&current)?;
+    if let Some(assignment) = &request.delivery {
+        let WorkerAuthority::Authorized(gate) = &current else {
+            return Err(Error::new(
+                "worker_binding",
+                "delivery authority changed class",
+            ));
+        };
+        assignment.verify_binding(gate, &request.phase.phase)?;
+    }
+    Ok(())
 }
 impl Plan {
     fn read(runtime: &RuntimeCoordinator, request: LaunchRequest) -> Result<Self> {
@@ -280,7 +545,8 @@ impl Plan {
             })?;
         let workflow = Workflow::load(Path::new(&workspace.workflow))?;
         let projection = runtime.observations.admission_snapshot()?;
-        let (role, context, review, generation, normalized_state) = match &request.authority {
+        let (mut role, mut context, review, generation, normalized_state) = match &request.authority
+        {
             WorkerAuthority::Authorized(gate) => {
                 let parent = projection.parent(workspace.id, gate.work().parent)?;
                 let role = match gate.child_scope() {
@@ -299,7 +565,7 @@ impl Plan {
                 })?;
                 (
                     role,
-                    json!({"issue":issue,"parent":parent.issue,"children":parent.children,"scope":gate.child_scope(),"phase":request.phase.phase,"workspace":{"id":workspace.id,"name":parent.workspace_name,"repositories":workspace.repositories.keys().collect::<Vec<_>>()},"dependencies":parent.prerequisites,"corrections":parent.corrections,"evidence":scoped_evidence(runtime, &parent.key)?,"attempt":null,"profile":gate.profile(),"operation":{"id":request.operation_id,"work":gate.work()}}),
+                    json!({"issue":issue,"parent":parent.issue,"children":parent.children,"scope":gate.child_scope(),"phase":request.phase.phase,"workspace":{"id":workspace.id,"name":parent.workspace_name,"repositories":workspace.repositories.keys().collect::<Vec<_>>()},"dependencies":parent.prerequisites,"corrections":parent.corrections,"native_context":native_context(parent, gate)?,"evidence":scoped_evidence(runtime, &parent.key)?,"attempt":null,"profile":gate.profile(),"operation":{"id":request.operation_id,"work":gate.work()}}),
                     None,
                     canonical_digest(1, &gate.work().generation)?,
                     issue.state_name.trim().to_lowercase(),
@@ -337,8 +603,17 @@ impl Plan {
                 "phase budget does not identify the exact admitted work generation",
             ));
         }
-        validate_selection(&request.authority, request.source.as_ref())?;
-        let source = request.source.clone();
+        let source = if let Some(assignment) = &request.delivery {
+            role = assignment.role();
+            context = assignment.context().clone();
+            assignment.source().map(|source| SourceSelection {
+                repository: source.repository().id.clone(),
+                revision: source.revision().clone(),
+            })
+        } else {
+            request.source.clone()
+        };
+        validate_selection(&request.authority, source.as_ref())?;
         let (source_path, repository_id) = if let Some(source) = &source {
             source.revision.validate()?;
             let repository = workspace
@@ -363,9 +638,26 @@ impl Plan {
             }
             (
                 Some(
-                    Path::new(&repository.source)
-                        .canonicalize()
-                        .map_err(|error| Error::io("resolve configured source", error))?,
+                    if let Some(assigned) = request
+                        .delivery
+                        .as_ref()
+                        .and_then(|assignment| assignment.source())
+                    {
+                        if assigned.repository().hostname != repository.hostname
+                            || assigned.repository().id != source.repository
+                        {
+                            return Err(Error::new(
+                                "worker_binding",
+                                "delivery source repository identity differs from current configuration",
+                            ));
+                        }
+                        assigned.revalidate_filesystem()?;
+                        assigned.root().to_path_buf()
+                    } else {
+                        Path::new(&repository.source)
+                            .canonicalize()
+                            .map_err(|error| Error::io("resolve configured source", error))?
+                    },
                 ),
                 Some(RepositoryId {
                     hostname: repository.hostname.clone(),
@@ -548,18 +840,27 @@ async fn prepare_owned(
         }
         records.write("preparation.json", &json!({"runtime":plan.config.runtime.id,"operation":plan.request.operation_id,"preparation":permit.operation_id,"authority":plan.request.authority.digest()?,"work":permit.work_key,"source":plan.source,"phase":plan.request.phase,"role":plan.role,"root":root.path()}))?;
         let scratch = root.child("scratch")?.path().to_path_buf();
-        directories = Some((root, records, scratch));
+        let processes = Arc::new(crate::process_records::ProcessJournal::new(runtime.registration.root().child("worker-processes")?, plan.config.runtime.id)?);
+        directories = Some((root, records, scratch, processes));
         Ok(())
     })?;
-    let (root, records, scratch) = directories.ok_or_else(|| {
+    let (root, records, scratch, processes) = directories.ok_or_else(|| {
         Error::new(
             "ownership_conflict",
             "preparation directory gate did not run",
         )
     })?;
     let repository = root.path().join("repository");
-    let git_path = executable("git")?;
-    let git = Arc::new(Git::new(&git_path)?);
+    let git_path = plan
+        .source
+        .as_ref()
+        .map(|_| executable("git"))
+        .transpose()?;
+    let mut git = git_path
+        .as_ref()
+        .map(Git::from_pinned_executable)
+        .transpose()?
+        .map(Arc::new);
     let identity = match (
         &plan.request.authority,
         &plan.repository_id,
@@ -578,24 +879,30 @@ async fn prepare_owned(
         }
         _ => None,
     };
+    let mut independent_proof = None;
+    let mut read_clones = Vec::new();
     if let (Some(source), Some(source_path)) = (&plan.source, &plan.source_path) {
-        let current_runtime = runtime.clone();
-        let current_permit = permit.clone();
-        let authority = plan.request.authority.clone();
-        let lease = plan.request.lease.clone();
-        let start_gate: GitStartGate = Arc::new(move |spawn| {
-            current_runtime
-                .control
-                .validate_permit(&current_permit, || {
-                    current_runtime.verify_owner(&lease)?;
-                    authority.compare(&current_runtime.retained_authority(&authority)?)?;
-                    spawn()
-                })
-        });
+        let start_gate = scoped_git_gate(
+            runtime.clone(),
+            permit.clone(),
+            plan.request.authority.clone(),
+        );
+        git = Some(Arc::new(
+            git.as_ref()
+                .ok_or_else(|| Error::new("source_unavailable", "source Git adapter is missing"))?
+                .with_execution_scope(GitExecutionScope {
+                    limits: GitLimits::default(),
+                    start_gate: start_gate.clone(),
+                    processes: processes.clone(),
+                    permit: permit.clone(),
+                    executions: runtime.executions.clone(),
+                })?,
+        ));
         let owned_source = source_path.clone();
         let root_path = root.path().to_path_buf();
         let revision = source.revision.clone();
         let owned_identity = identity.clone();
+        let delivery = plan.request.delivery.clone();
         let independent = match &plan.request.authority {
             WorkerAuthority::Independent(gate) => Some((
                 gate.clone(),
@@ -618,8 +925,33 @@ async fn prepare_owned(
             permit,
             || fresh_preparation(runtime, &plan.request),
             |receipt| {
-                let running =
-                    git.start_operation(GitLimits::default(), start_gate, move |git| {
+                let running = git.as_ref().ok_or_else(|| Error::new("source_unavailable", "source Git adapter is missing"))?.start_journaled_operation(
+                    GitLimits::default(),
+                    start_gate,
+                    processes.clone(),
+                    permit.clone(),
+                    move |git| {
+                        if let Some(source)=delivery.as_ref().and_then(|assignment|assignment.source()) {source.verify_for_clone(&git)?;}
+                        let mut cloned_reads=Vec::new();
+                        if let Some(assignment)=&delivery {
+                            if assignment.read_sources().len()>64 {return Err(Error::new("record_limit","delivery assignment read source inventory exceeds limit"));}
+                            for (index,source) in assignment.read_sources().iter().enumerate() {
+                                source.verify_for_clone(&git)?;
+                                let clone_root=root_path.join(format!("read-source-{index}"));
+                                let clone_identity=DirectoryIdentity {schema_version:1,runtime_id,directory_id:Uuid::new_v4(),repository:source.repository().clone(),work:assignment.authority().work().clone(),repository_path:clone_root.join("repository"),operator_checkout:source.root().to_path_buf()};
+                                let path=git.prepare_execution_clone(source.root(),&clone_root,&clone_identity,source.revision())?;
+                                cloned_reads.push((source.repository().id.clone(),path));
+                            }
+                        }
+                        let actual = git
+                            .exact_revision(&owned_source, &revision.commit)
+                            .map_err(source_error)?;
+                        if actual != revision {
+                            return Err(Error::new(
+                                "source_unavailable",
+                                "local Git objects do not match the provider-selected commit/tree",
+                            ));
+                        }
                         if let Some(identity) = owned_identity {
                             git.prepare_execution_clone(
                                 &owned_source,
@@ -627,33 +959,40 @@ async fn prepare_owned(
                                 &identity,
                                 &revision,
                             )
+                            .map(|path| (path, None, cloned_reads))
                         } else if let Some((gate, repository_id, repository_path)) = independent {
-                            let base =
-                                git.exact_revision(&owned_source, &gate.pull_request().base_sha)?;
-                            git.prepare_independent_review_clone(
+                            let base = git
+                                .exact_revision(&owned_source, &gate.pull_request().base_sha)
+                                .map_err(source_error)?;
+                            let identity = IndependentCloneIdentity {
+                                schema_version: 1,
+                                runtime_id,
+                                workspace_id: gate.workspace_id(),
+                                directory_id: operation,
+                                repository: repository_id,
+                                pull_request: gate.pull_request().number,
+                                head: revision,
+                                base,
+                                review_identity: gate.review_identity().into(),
+                                repository_path,
+                                operator_checkout: owned_source.clone(),
+                            };
+                            let path = git.prepare_independent_review_clone(
                                 &owned_source,
                                 &root_path,
-                                &IndependentCloneIdentity {
-                                    schema_version: 1,
-                                    runtime_id,
-                                    workspace_id: gate.workspace_id(),
-                                    directory_id: operation,
-                                    repository: repository_id,
-                                    pull_request: gate.pull_request().number,
-                                    head: revision,
-                                    base,
-                                    review_identity: gate.review_identity().into(),
-                                    repository_path,
-                                    operator_checkout: owned_source.clone(),
-                                },
-                            )
+                                &identity,
+                            )?;
+                            let proof =
+                                git.observe_independent_review_clone(&root_path, &identity)?;
+                            Ok((path, Some(proof), cloned_reads))
                         } else {
                             Err(Error::new(
                                 "scope_violation",
                                 "clone lacks an authorized owned identity",
                             ))
                         }
-                    })?;
+                    },
+                )?;
                 runtime.executions.register(
                     permit.operation_id,
                     receipt.operation_id,
@@ -678,11 +1017,15 @@ async fn prepare_owned(
             permit,
             || fresh_preparation(runtime, &plan.request),
             match &result {
-                Ok(path) => json!({"clone":path,"revision":source.revision}),
+                Ok((path, _, reads)) => {
+                    json!({"clone":path,"revision":source.revision,"read_clones":reads})
+                }
                 Err(error) => json!({"error":error,"partial_files":"retained"}),
             },
         )?;
-        result?;
+        let (_, proof, reads) = result?;
+        independent_proof = proof;
+        read_clones = reads;
     } else {
         runtime.control.validate_permit(permit, || {
             fresh_preparation(runtime, &plan.request)?;
@@ -691,7 +1034,20 @@ async fn prepare_owned(
             records.write("coordination-substrate.json", &json!({"operation":plan.request.operation_id,"authority":plan.request.authority.digest()?,"path":substrate.path(),"source_writes":false,"repository_execution":false}))
         })?;
     }
-    let grants = grants(plan, &repository)?;
+    let mut grants = grants(plan, &repository)?;
+    for (id, path) in read_clones {
+        grants.reads.retain(|grant| !matches!(grants.resources.get(&grant.path),Some(ReadResource::Repository{id:prior}) if prior == &id));
+        grants.resources.retain(
+            |_, resource| !matches!(resource,ReadResource::Repository{id:prior} if prior == &id),
+        );
+        grants.reads.push(PathGrant {
+            path: path.clone(),
+            directory: true,
+        });
+        grants
+            .resources
+            .insert(path, ReadResource::Repository { id });
+    }
     let mut forbidden = forbidden_paths(runtime.registration.root().path(), &root, &plan.config)?;
     // The actual privileged journals are explicitly inaccessible, including when
     // execution_root is a child of the broader private host-state directory.
@@ -700,7 +1056,12 @@ async fn prepare_owned(
     forbidden.dedup();
     let mut executables = Vec::new();
     if plan.role.permits_repository_execution() && plan.repository_id.is_some() {
-        executables.extend([git_path.clone(), executable("/bin/sh")?]);
+        executables.extend([
+            git_path
+                .clone()
+                .ok_or_else(|| Error::invalid("executable source lacks Git"))?,
+            executable("/bin/sh")?,
+        ]);
         for check in plan
             .workflow
             .front_matter
@@ -730,6 +1091,8 @@ async fn prepare_owned(
         role: match plan.role {
             AgentRole::Coordination => ExecutionRole::Coordination,
             AgentRole::IndependentReview => ExecutionRole::IndependentReview,
+            AgentRole::Review => ExecutionRole::Review,
+            AgentRole::Validation => ExecutionRole::Validation,
             _ => ExecutionRole::Child,
         },
         execution_root: root.path().to_path_buf(),
@@ -743,6 +1106,55 @@ async fn prepare_owned(
         executables,
     };
     let boundary = isolation.validate()?;
+    if let Some(proof) = &independent_proof {
+        records.write(
+            "independent-clone-observation.json",
+            &json!({"identity":proof.identity(),"digest":proof.digest()?}),
+        )?;
+    }
+    if identity.is_none() {
+        let read_only = match &plan.request.authority {
+            WorkerAuthority::Authorized(gate) if gate.work().child.is_none() => {
+                ReadOnlyIdentity::Coordination {
+                    workspace: gate.workspace_id(),
+                    parent: crate::authority::IssueKey::new(
+                        &gate.work().linear_endpoint,
+                        gate.work().linear_workspace,
+                        gate.work().parent,
+                    )?,
+                }
+            }
+            WorkerAuthority::Authorized(gate) => ReadOnlyIdentity::ChildReasoning {
+                workspace: gate.workspace_id(),
+                work: gate.work().clone(),
+            },
+            WorkerAuthority::Independent(_) => ReadOnlyIdentity::IndependentReview(
+                independent_proof
+                    .as_ref()
+                    .ok_or_else(|| {
+                        Error::new(
+                            "execution_ownership",
+                            "review clone lacks its observed ownership capability",
+                        )
+                    })?
+                    .identity()
+                    .clone(),
+            ),
+        };
+        let preserved = runtime
+            .services
+            .housekeeping
+            .register_readonly_preparation(ReadOnlyPreparation {
+                preparation: permit,
+                operation: plan.request.operation_id,
+                authority: &plan.request.authority,
+                identity: read_only,
+                independent_clone: independent_proof.as_ref(),
+                isolation: &boundary,
+                workflow: &plan.workflow,
+            })?;
+        records.write("preserved-preparation.json", &json!({"operation":preserved.operation_id(),"digest":preserved.digest(),"cleanup_authorized":false}))?;
+    }
     let execution = if let (Some(identity), Some(source)) = (identity, &plan.source) {
         let owned = Arc::new(OwnedDirectory::register(identity, &boundary)?);
         let binding = ExecutionBinding {
@@ -759,7 +1171,12 @@ async fn prepare_owned(
                 .clone()
                 .ok_or_else(|| Error::invalid("executable repository missing"))?,
             revision: source.revision.clone(),
-            candidate_vector_digest: None,
+            candidate_vector_digest: plan
+                .request
+                .delivery
+                .as_ref()
+                .and_then(|assignment| assignment.candidate_vector_digest())
+                .map(str::to_owned),
             isolation_digest: boundary.digest().into(),
         };
         runtime.services.housekeeping.register_execution(
@@ -769,16 +1186,22 @@ async fn prepare_owned(
             &plan.workflow,
         )?;
         let execution = Arc::new(WorkerExecution {
-            git,
-            git_executable: git_path,
-            boundary: Arc::new(SandboxBoundary),
+            git: git.ok_or_else(|| Error::invalid("execution source lacks Git"))?,
+            git_executable: git_path
+                .ok_or_else(|| Error::invalid("execution source lacks pinned Git path"))?,
+            boundary: Arc::new(JournaledSandboxBoundary::new(
+                processes.clone(),
+                permit.clone(),
+            )),
             ownership: owned,
             binding,
             limits: ExecutionLimits::default(),
             check_outputs: BTreeMap::new(),
         });
         let hook_records = records.child("hooks")?;
-        after_create(runtime, plan, permit, &boundary, &execution, &hook_records).await?;
+        if plan.role.permits_repository_execution() {
+            after_create(runtime, plan, permit, &boundary, &execution, &hook_records).await?;
+        }
         Some(execution)
     } else {
         None
@@ -793,6 +1216,7 @@ async fn prepare_owned(
     let prepared = worker_run::prepare(Preparation {config:plan.config.clone(),workflow:plan.workflow.clone(),authority:plan.request.authority.clone(),operation_id:plan.request.operation_id,role:plan.role,phase:plan.request.phase.phase.clone(),context:plan.context.clone(),isolation,repository:plan.source.as_ref().map(|source|RepositoryContext {root:repository,revision:source.revision.commit.clone(),scope_paths}),repository_id:plan.repository_id.clone(),read_resources:grants.resources,review:plan.review.clone(),required_context:vec![],project_doc_max_bytes:32_768,provider_discovery:ProviderDiscovery::Unavailable {reason:"Pinned app-server does not expose an authenticated project-instruction discovery inventory; supplied accessible files are separately hashed".into()},known_secrets:vec![]})?;
     records.write("contract.json", &json!({"scope":prepared.contract().scope_digest(),"instructions":prepared.contract().instructions().manifest,"tool_contract":prepared.contract().tools().digest(),"isolation":prepared.isolation().plan()}))?;
     Ok(Prepared {
+        processes,
         run: prepared,
         execution,
         records,
@@ -910,6 +1334,7 @@ fn grants(plan: &Plan, repository: &Path) -> Result<Grants> {
         result.writes = scope
             .write_paths
             .iter()
+            .filter(|_| plan.role.permits_source_writes())
             .map(|path| PathGrant {
                 path: repository.join(path.trim_end_matches('/')),
                 directory: path.ends_with('/'),
@@ -921,6 +1346,16 @@ fn grants(plan: &Plan, repository: &Path) -> Result<Grants> {
                 .as_ref()
                 .is_some_and(|source| &source.repository == id)
             {
+                continue;
+            }
+            if plan.request.delivery.as_ref().is_some_and(|assignment| {
+                assignment
+                    .read_sources()
+                    .iter()
+                    .any(|source| &source.repository().id == id)
+            }) {
+                // The exact candidate is copied under this owned execution;
+                // never require or grant an unrelated operator checkout here.
                 continue;
             }
             let path = Path::new(
@@ -960,7 +1395,10 @@ fn grants(plan: &Plan, repository: &Path) -> Result<Grants> {
                 path: path.clone(),
                 directory: path.is_dir(),
             };
-            if resource.writable {
+            if resource.writable
+                && plan.repository_id.is_some()
+                && plan.role.permits_repository_execution()
+            {
                 if !resource.disposable {
                     return Err(Error::new(
                         "scope_violation",
@@ -1022,6 +1460,80 @@ fn forbidden_paths(
     }
     Ok(forbidden)
 }
+/// Native source material for the exact admitted parent/child; it grants no authority.
+pub fn native_context(
+    parent: &crate::reconcile::ParentProjection,
+    gate: &crate::reconcile::FreshGate,
+) -> Result<Value> {
+    if parent.workspace_id != gate.workspace_id() || parent.key.issue != gate.work().parent {
+        return Err(Error::new(
+            "scope_violation",
+            "native context belongs to another admitted parent",
+        ));
+    }
+    let mut selected = std::collections::BTreeSet::from([parent.key.issue]);
+    if let Some(child) = gate.work().child {
+        selected.insert(child);
+        if let Some(child) = parent.children.get(&child) {
+            selected.extend(child.prerequisites.iter().copied());
+        }
+    } else {
+        selected.extend(parent.required_children.iter().copied());
+    }
+    let mut pending: Vec<_> = selected.iter().copied().collect();
+    while let Some(issue) = pending.pop() {
+        if let Some(observation) = parent.observations.get(&issue) {
+            for relation in &observation.dependencies {
+                if relation.relation_type == "blocks"
+                    && relation.related_issue_id == issue
+                    && selected.insert(relation.issue_id)
+                {
+                    pending.push(relation.issue_id);
+                }
+            }
+        }
+    }
+    let observations: BTreeMap<_, _> = parent
+        .observations
+        .iter()
+        .filter(|(issue, _)| selected.contains(issue))
+        .collect();
+    let pending = parent.corrections.invalidations().pending;
+    let mut comments = Vec::new();
+    for (id, expected) in &pending {
+        let found: Vec<_> = observations
+            .values()
+            .flat_map(|observation| &observation.comments)
+            .filter(|comment| comment.id == *id)
+            .collect();
+        if found.is_empty() && gate.work().child.is_some() {
+            continue;
+        }
+        let [comment] = found.as_slice() else {
+            return Err(Error::new(
+                "incompletely_observed",
+                "pending correction lacks one complete native comment",
+            ));
+        };
+        if comment.body_digest != expected.body_digest
+            || comment.user_id != expected.author
+            || comment.edited_at != expected.edited_at
+            || crate::digest::bytes_digest(comment.body.as_bytes()) != comment.body_digest
+            || !selected.contains(&comment.issue_id)
+        {
+            return Err(Error::new(
+                "stale_correction",
+                "native pending text differs from the admitted revision",
+            ));
+        }
+        comments.push(*comment);
+    }
+    Ok(
+        json!({"authority":"untrusted_native_source_material","observations":observations,
+        "pending_correction_comments":comments}),
+    )
+}
+
 fn scoped_evidence(
     runtime: &RuntimeCoordinator,
     parent: &crate::authority::IssueKey,
@@ -1039,7 +1551,163 @@ fn scoped_evidence(
 
 fn fresh_preparation(runtime: &RuntimeCoordinator, request: &LaunchRequest) -> Result<()> {
     runtime.verify_owner(&request.lease)?;
-    request
-        .authority
-        .compare(&runtime.retained_authority(&request.authority)?)
+    let current = runtime.retained_authority(&request.authority)?;
+    request.authority.compare(&current)?;
+    if let Some(assignment) = &request.delivery {
+        let WorkerAuthority::Authorized(gate) = &current else {
+            return Err(Error::new(
+                "worker_binding",
+                "delivery authority changed class",
+            ));
+        };
+        assignment.verify_binding(gate, &request.phase.phase)?;
+    }
+    Ok(())
+}
+
+fn source_error(error: Error) -> Error {
+    if error.code == "git_operation_failed" {
+        Error::new(
+            "source_unavailable",
+            "the configured local source lacks the exact selected objects; an owned authenticated object cache is required",
+        )
+    } else {
+        error
+    }
+}
+
+fn scoped_git_gate(
+    runtime: Arc<RuntimeCoordinator>,
+    permit: Permit,
+    authority: WorkerAuthority,
+) -> GitStartGate {
+    Arc::new(move |spawn| {
+        runtime.control.validate_permit(&permit, || {
+            runtime.verify_owner(&permit.lease)?;
+            authority.compare(&runtime.retained_authority(&authority)?)?;
+            spawn()
+        })
+    })
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    use crate::providers::{
+        Credential, GithubClient, HttpPolicy, HttpRequest, HttpResponse, HttpTransport,
+        RepositoryIdentity,
+    };
+    use std::{collections::VecDeque, future::Future, pin::Pin, sync::Mutex, time::Duration};
+    struct Wire {
+        responses: Mutex<VecDeque<Value>>,
+        paths: Mutex<Vec<String>>,
+    }
+    impl HttpTransport for Wire {
+        fn send(
+            &self,
+            request: HttpRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
+            Box::pin(async move {
+                assert_eq!(request.method, crate::providers::Method::Get);
+                self.paths.lock().unwrap().push(request.url.path().into());
+                let value = self
+                    .responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("unexpected source request");
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: serde_json::to_vec(&value).unwrap(),
+                })
+            })
+        }
+    }
+    fn fixture(
+        last_commit: &str,
+        returned_commit: &str,
+    ) -> (GithubClient, Arc<Wire>, RepositoryIdentity) {
+        let mut values = VecDeque::new();
+        for response in [
+            json!({"ref":"refs/heads/staging","object":{"type":"commit","sha":"a".repeat(40)}}),
+            json!({"sha":returned_commit,"tree":{"sha":"b".repeat(40)},"parents":[]}),
+            json!({"ref":"refs/heads/staging","object":{"type":"commit","sha":last_commit}}),
+        ] {
+            values.push_back(json!({"id":7,"login":"fixture","type":"User"}));
+            values.push_back(json!({"id":42,"name":"repo","owner":{"id":7,"login":"fixture","type":"User"},"default_branch":"main","private":true,"archived":false,"disabled":false,"permissions":{"pull":true}}));
+            values.push_back(response);
+        }
+        let wire = Arc::new(Wire {
+            responses: Mutex::new(values),
+            paths: Mutex::new(vec![]),
+        });
+        let client = GithubClient::with_transport(
+            HttpPolicy::new(
+                "https://fixture.invalid/api/v3",
+                "7".into(),
+                Duration::from_secs(1),
+            )
+            .unwrap(),
+            crate::config::GithubSelection {
+                repositories: vec!["42".into()],
+                organizations: vec![],
+                pr_authors: vec![],
+            },
+            Credential::new("fixture-only".into()).unwrap(),
+            Some(wire.clone()),
+        )
+        .unwrap();
+        (
+            client,
+            wire,
+            RepositoryIdentity {
+                id: 42,
+                owner: "fixture".into(),
+                name: "repo".into(),
+                owner_id: 7,
+                organization_id: None,
+            },
+        )
+    }
+    #[tokio::test]
+    async fn source_resolution_requires_stable_provider_branch_and_exact_commit_tree() {
+        let (client, wire, repository) = fixture(&"a".repeat(40), &"a".repeat(40));
+        let result = provider_revision(&client, &repository, ProviderSource::Staging("staging"))
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            Revision {
+                commit: "a".repeat(40),
+                tree: "b".repeat(40)
+            }
+        );
+        assert!(wire.responses.lock().unwrap().is_empty());
+        assert_eq!(
+            wire.paths
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|path| path.ends_with("/git/ref/heads/staging"))
+                .count(),
+            2
+        );
+        let (client, _, repository) = fixture(&"c".repeat(40), &"a".repeat(40));
+        assert_eq!(
+            provider_revision(&client, &repository, ProviderSource::Staging("staging"))
+                .await
+                .unwrap_err()
+                .code,
+            "stale_revision"
+        );
+        let (client, _, repository) = fixture(&"a".repeat(40), &"c".repeat(40));
+        assert_eq!(
+            provider_revision(&client, &repository, ProviderSource::Staging("staging"))
+                .await
+                .unwrap_err()
+                .code,
+            "identity_mismatch"
+        );
+    }
 }

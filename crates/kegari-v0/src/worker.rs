@@ -213,7 +213,8 @@ impl WorkerAuthority {
 }
 
 /// Trusted host integration, never implemented by worker input. These callbacks
-/// run inside ControlHost's serialized gate: they MUST NOT reenter ControlHost.
+/// used by fresh-gate validation run inside ControlHost's serialized gate and
+/// MUST NOT reenter it. Session observations explicitly run outside that gate.
 /// Production implementations reread provider projections and verify the actual
 /// orchestration PID/start identity plus held OS ownership lock.
 pub trait WorkerHost: Send + Sync {
@@ -853,6 +854,32 @@ impl ScopedWorker {
             evidence: vec![],
         })
     }
+    /// Obtain a launch capability from this exact admitted production broker.
+    /// Live evaluation uses the same native launch, process journal and RPC gate.
+    pub fn provider_launch(
+        &self,
+        processes: Arc<crate::process_records::ProcessJournal>,
+        executable: &std::path::Path,
+        auth_home: &std::path::Path,
+        permissions: &crate::codex::PermissionConfiguration,
+        timeout: std::time::Duration,
+    ) -> Result<crate::worker_run::WorkerProviderLaunch> {
+        crate::worker_run::WorkerProviderLaunch::new(
+            crate::worker_run::ProviderLaunchInput {
+                control: self.control.clone(),
+                permit: self.permit.clone(),
+                processes,
+                executable: crate::platform::BinaryIdentity::inspect(executable, false)?,
+                auth_home: auth_home.to_owned(),
+                permissions: permissions.clone(),
+                isolation: self.contract.isolation().clone(),
+                timeout,
+            },
+            &self.contract,
+            self.host.clone(),
+            self.executions.clone(),
+        )
+    }
     pub fn take_verified_checks(&mut self) -> Vec<VerifiedCheckExecution> {
         std::mem::take(&mut self.checks)
     }
@@ -1184,13 +1211,22 @@ impl ScopedWorker {
             }
             "git_inspect" => {
                 let a: GitArgs = parse(&call.arguments)?;
-                let e = self.execution.as_ref().ok_or_else(|| {
+                let execution = self.execution.clone().ok_or_else(|| {
                     Error::new("unsupported_tool", "owned Git reader unavailable")
                 })?;
-                let result = e
-                    .executor(&self.contract.isolation)
-                    .inspect_git(&e.binding, &e.git_executable, a.inspection)
-                    .await?;
+                let contract = self.contract.clone();
+                let handle = tokio::runtime::Handle::current();
+                let result = tokio::task::spawn_blocking(move || {
+                    handle.block_on(execution.executor(&contract.isolation).inspect_git(
+                        &execution.binding,
+                        &execution.git_executable,
+                        a.inspection,
+                    ))
+                })
+                .await
+                .map_err(|_| {
+                    Error::new("operation_uncertain", "owned Git inspection interrupted")
+                })??;
                 bounded_value(
                     serde_json::to_value(result)
                         .map_err(|_| Error::invalid("Git receipt encoding"))?,
@@ -1424,18 +1460,23 @@ impl TrialHost for ScopedWorker {
     fn observe(&self) -> Result<ObservedFacts> {
         let mut checks = BTreeMap::new();
         let mut artifacts = BTreeMap::new();
-        let candidate = self
-            .execution
-            .as_ref()
-            .and_then(|e| e.binding.candidate_vector_digest.clone())
-            .unwrap_or_else(|| {
-                self.contract
-                    .assembled
-                    .manifest
-                    .repository_revision
-                    .clone()
-                    .unwrap_or_default()
-            });
+        self.contract.isolation.revalidate()?;
+        let current = crate::evaluation::snapshot(&self.contract.isolation.plan().repository)?;
+        let candidate = canonical_digest(1, &current)?;
+        let revision = match &self.execution {
+            Some(e) => {
+                e.git
+                    .revision(&self.contract.isolation.plan().repository, "HEAD")?
+                    .commit
+            }
+            None => self
+                .contract
+                .assembled
+                .manifest
+                .repository_revision
+                .clone()
+                .unwrap_or_default(),
+        };
         for name in self
             .contract
             .workflow
@@ -1459,44 +1500,31 @@ impl TrialHost for ScopedWorker {
                 serde_json::from_value(value.clone())
                     .map_err(|_| Error::new("record_corrupt", "host check record malformed"))?;
             let digest = canonical_digest(1, &record)?;
-            checks.insert(
-                record.check_name.clone(),
-                ObservedCheck {
-                    status: if record.successful {
-                        CheckStatus::Passed
-                    } else {
-                        CheckStatus::Failed
-                    },
-                    candidate_digest: candidate.clone(),
-                    receipt_digest: Some(digest.clone()),
-                },
-            );
+            let observed = crate::evaluation::observed_check(&record, &current, &revision)?;
+            let checked_candidate = observed.candidate_digest.clone();
+            checks.insert(record.check_name.clone(), observed);
             for artifact in record.artifacts {
+                if !self
+                    .retained
+                    .iter()
+                    .any(|retained| retained.verify_reference(&artifact).is_ok())
+                {
+                    return Err(Error::new(
+                        "artifact_conflict",
+                        "observed check artifact lacks its exact intact retained bytes",
+                    ));
+                }
                 artifacts.insert(
                     artifact.path.to_string_lossy().into_owned(),
                     ObservedArtifact {
                         digest: artifact.digest,
-                        candidate_digest: candidate.clone(),
+                        candidate_digest: checked_candidate.clone(),
                         visual: false,
                         receipt_digest: digest.clone(),
                     },
                 );
             }
         }
-        let revision = match &self.execution {
-            Some(e) => {
-                e.git
-                    .revision(&self.contract.isolation.plan().repository, "HEAD")?
-                    .commit
-            }
-            None => self
-                .contract
-                .assembled
-                .manifest
-                .repository_revision
-                .clone()
-                .unwrap_or_default(),
-        };
         let summary = self
             .proposals
             .iter()
@@ -1567,6 +1595,15 @@ impl TrialHost for ScopedWorker {
         Ok(())
     }
     fn checkpoint(&mut self, state: &SessionState, pending_method: Option<&str>) -> Result<()> {
+        if let Some(admitted) = crate::control::RunReference::from_receipt(
+            &self.control.operation(self.permit.operation_id)?,
+        )? && (state.max_turns > admitted.max_turns || state.turns_started > state.max_turns)
+        {
+            return Err(Error::new(
+                "admission_budget",
+                "session exceeds its original finite admitted turn bound",
+            ));
+        }
         let m = &self.contract.assembled.manifest;
         if state.binding.operation_id != self.permit.operation_id.to_string()
             || state.binding.account_id != self.contract.account_id
@@ -1875,13 +1912,16 @@ pub fn recover_session(
             "worker journal belongs to another admitted contract",
         ));
     }
-    let files = journal.records()?;
-    if files.len() > 65_537 {
-        return Err(Error::new(
-            "journal_limit",
-            "worker recovery exceeds the declared record bound",
-        ));
-    }
+    let files = journal.records_bounded(65_537).map_err(|error| {
+        if error.code == "record_limit" {
+            Error::new(
+                "journal_limit",
+                "worker recovery exceeds the declared record bound",
+            )
+        } else {
+            error
+        }
+    })?;
     let mut total = 0usize;
     let mut latest: Option<RecoveredWorkerSession> = None;
     let mut intervention = None;

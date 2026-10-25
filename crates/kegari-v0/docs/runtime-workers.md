@@ -48,6 +48,15 @@ flags, forbidden resource aliases, role/tool narrowing and actual assembled
 manifests. It does not qualify live Codex or native sandbox containment. The
 native command boundary still retains `process_tree_unverified` where group exit
 and pipe EOF cannot prove that detached descendants exited. Delivery-specific
-sealed review/validation phases, continuation readmission, durable native worker
-process recovery and non-Linear cleanup inventory are separate remaining
+sealed review/validation phases, continuation readmission, full descendant containment, startup reconciliation of retained native worker
+process references and non-Linear cleanup eligibility are separate remaining
 integration work; retained preparation records do not authorize cleanup.
+
+Source resolution reads the actual configured provider staging reference twice
+around commit/tree metadata, or rereads the exact independent PR before and after
+that metadata. Changed source/configuration/authority blocks preparation. It does
+not update the operator checkout. The exact selected objects must currently be
+available there for a local owned clone; an authenticated owned remote-object
+cache is pending. Git metadata and clone commands use the preparation permit's
+journaled process path. After model admission the execution boundary is rebuilt
+with the model permit, so preparation authority is never reused for later checks.

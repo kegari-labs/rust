@@ -1396,6 +1396,16 @@ pub struct DependencyOutcomes {
     outcomes: BTreeMap<IssueKey, Vec<(Generation, String, bool)>>,
 }
 impl DependencyOutcomes {
+    pub(crate) fn merge(&mut self, other: &Self) {
+        for (work, entries) in &other.outcomes {
+            let retained = self.outcomes.entry(work.clone()).or_default();
+            for entry in entries {
+                if !retained.contains(entry) {
+                    retained.push(entry.clone());
+                }
+            }
+        }
+    }
     pub fn child(&mut self, verified: &VerifiedChild) -> Result<()> {
         let work = &verified.evidence().work;
         let child = work
@@ -1445,6 +1455,9 @@ impl DependencyOutcomes {
             .push((work.generation.clone(), verified.digest().into(), true));
         Ok(())
     }
+    pub(crate) fn parent_outcome(&self, key: &IssueKey, generation: &Generation) -> Option<&str> {
+        self.outcome(key, generation, true)
+    }
     fn outcome(&self, key: &IssueKey, generation: &Generation, parent: bool) -> Option<&str> {
         self.outcomes
             .get(key)?
@@ -1474,6 +1487,9 @@ pub struct AuthorizationGate {
     observed_at: DateTime<Utc>,
 }
 impl AuthorizationGate {
+    pub fn workflow_digest(&self) -> &str {
+        &self.workflow_digest
+    }
     pub fn workspace_id(&self) -> Uuid {
         self.workspace_id
     }
@@ -1572,6 +1588,7 @@ pub struct FreshGate {
     workflow_digest: String,
     sources_digest: String,
     correction_watermark: u64,
+    pending_correction_digest: String,
     profile_digest: String,
     profile: Profile,
     child_scope: Option<ChildScope>,
@@ -1582,6 +1599,135 @@ pub struct FreshGate {
     observed_at: DateTime<Utc>,
 }
 impl FreshGate {
+    /// Recover historical provenance only from the host-authenticated pending
+    /// outcome envelope. A current provider gate and live permit are still
+    /// required before any effect. Worker JSON never deserializes this capability.
+    pub fn recover_host_claim(
+        key: &AttestationKey,
+        signed: &Signed<serde_json::Value>,
+        expected_digest: &str,
+    ) -> Result<Self> {
+        key.verify("pending_worker_claim", signed)?;
+        let payload = signed.payload.as_object().ok_or_else(|| {
+            Error::new(
+                "invalid_attestation",
+                "pending host claim envelope is malformed",
+            )
+        })?;
+        if payload.len() != 3
+            || payload.get("schema_version") != Some(&serde_json::json!(1))
+            || !payload
+                .get("outcome")
+                .is_some_and(serde_json::Value::is_object)
+        {
+            return Err(Error::new(
+                "invalid_attestation",
+                "pending host claim envelope is not the exact versioned schema",
+            ));
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct StoredGate {
+            workspace_id: Uuid,
+            work: WorkIdentity,
+            config_revision: String,
+            drain_config_revision: String,
+            workflow_digest: String,
+            sources_digest: String,
+            correction_watermark: u64,
+            pending_correction_digest: String,
+            profile_digest: String,
+            profile: Profile,
+            child_scope: Option<ChildScope>,
+            required_children: BTreeSet<Uuid>,
+            child_scope_digest: Option<String>,
+            dependency_digest: String,
+            purpose: String,
+            observed_at: DateTime<Utc>,
+        }
+        let stored: StoredGate =
+            serde_json::from_value(payload.get("authority").cloned().ok_or_else(|| {
+                Error::new(
+                    "invalid_attestation",
+                    "legacy pending host claim lacks authority provenance",
+                )
+            })?)
+            .map_err(|_| {
+                Error::new(
+                    "invalid_attestation",
+                    "stored host authority schema is invalid",
+                )
+            })?;
+        let purpose = match stored.purpose.as_str() {
+            "new_operation" => GatePurpose::NewOperation,
+            "drain_existing" => GatePurpose::DrainExisting,
+            "coordination" => GatePurpose::Coordination,
+            _ => {
+                return Err(Error::new(
+                    "invalid_attestation",
+                    "stored host authority purpose is unknown",
+                ));
+            }
+        };
+        stored.work.validate()?;
+        for digest in [
+            &stored.config_revision,
+            &stored.drain_config_revision,
+            &stored.workflow_digest,
+            &stored.sources_digest,
+            &stored.profile_digest,
+            &stored.pending_correction_digest,
+            &stored.dependency_digest,
+            expected_digest,
+        ] {
+            crate::evidence::validate_digest(digest)?;
+        }
+        if stored.workspace_id.is_nil()
+            || stored.required_children.iter().any(Uuid::is_nil)
+            || stored
+                .work
+                .child
+                .is_some_and(|child| !stored.required_children.contains(&child))
+            || canonical_digest(1, &stored.profile)? != stored.profile_digest
+            || stored
+                .child_scope
+                .as_ref()
+                .map(|scope| canonical_digest(1, scope))
+                .transpose()?
+                != stored.child_scope_digest
+            || (stored.work.child.is_none() && stored.child_scope.is_some())
+        {
+            return Err(Error::new(
+                "invalid_attestation",
+                "stored host authority identities or embedded digests differ",
+            ));
+        }
+        let recovered = Self {
+            workspace_id: stored.workspace_id,
+            work: stored.work,
+            config_revision: stored.config_revision,
+            drain_config_revision: stored.drain_config_revision,
+            workflow_digest: stored.workflow_digest,
+            sources_digest: stored.sources_digest,
+            correction_watermark: stored.correction_watermark,
+            pending_correction_digest: stored.pending_correction_digest,
+            profile_digest: stored.profile_digest,
+            profile: stored.profile,
+            child_scope: stored.child_scope,
+            required_children: stored.required_children,
+            child_scope_digest: stored.child_scope_digest,
+            dependency_digest: stored.dependency_digest,
+            purpose,
+            observed_at: stored.observed_at,
+        };
+        if recovered.digest()? != expected_digest {
+            return Err(Error::new(
+                "invalid_attestation",
+                "stored host authority differs from immutable worker outcome digest",
+            ));
+        }
+        Ok(recovered)
+    }
     /// Canonical claim identity intentionally survives corrected generations.
     /// Exact generation/profile/scope remain bound separately in digest().
     pub fn work_key(&self) -> Result<String> {
@@ -1631,7 +1777,7 @@ impl FreshGate {
     pub fn digest(&self) -> Result<String> {
         canonical_digest(
             1,
-            &serde_json::json!({"workspace":self.workspace_id,"work":self.work,"config":self.config_revision,"workflow":self.workflow_digest,"sources":self.sources_digest,"watermark":self.correction_watermark,"profile":self.profile_digest,"scope":self.child_scope_digest,"children":self.required_children,"dependencies":self.dependency_digest,"purpose":self.purpose}),
+            &serde_json::json!({"workspace":self.workspace_id,"work":self.work,"config":self.config_revision,"workflow":self.workflow_digest,"sources":self.sources_digest,"watermark":self.correction_watermark,"pending_corrections":self.pending_correction_digest,"profile":self.profile_digest,"scope":self.child_scope_digest,"children":self.required_children,"dependencies":self.dependency_digest,"purpose":self.purpose}),
         )
     }
     pub fn compare_current(
@@ -1668,7 +1814,9 @@ impl FreshGate {
             && self.child_scope_digest == current.child_scope_digest
             && self.required_children == current.required_children
             && self.dependency_digest == current.dependency_digest
-            && self.purpose == current.purpose;
+            && self.purpose == current.purpose
+            && (self.purpose != GatePurpose::Coordination
+                || self.pending_correction_digest == current.pending_correction_digest);
         if !same_authority && !allowed_filter_drain {
             return Err(Error::new(
                 "stale_result",
@@ -1905,6 +2053,7 @@ impl ParentProjection {
             workflow_digest: self.workflow_digest.clone(),
             sources_digest: self.source_digest.clone(),
             correction_watermark: self.corrections.watermark,
+            pending_correction_digest: self.corrections.pending_revision_digest()?,
             profile_digest: canonical_digest(1, profile)?,
             profile: profile.clone(),
             child_scope: child
@@ -1976,13 +2125,37 @@ impl ParentDelivery {
         self.release = None;
         Ok(())
     }
+    pub(crate) fn require_release_selection(
+        &self,
+        parent_token: &str,
+        acceptance_digest: &str,
+        accepted_at: DateTime<Utc>,
+    ) -> Result<()> {
+        if self
+            .parent
+            .as_ref()
+            .is_none_or(|parent| parent.token() != parent_token)
+            || self.acceptance.as_ref().is_none_or(|acceptance| {
+                acceptance.digest() != acceptance_digest
+                    || acceptance.acceptance().accepted_at != accepted_at
+                    || acceptance.acceptance().reviewed_token != parent_token
+            })
+        {
+            return Err(Error::new(
+                "stale_result",
+                "sorted release parent or exact acceptance changed before admission",
+            ));
+        }
+        Ok(())
+    }
     pub fn release(&mut self, proof: crate::release::VerifiedReleaseEligibility) -> Result<()> {
         if self
             .parent
             .as_ref()
             .is_none_or(|p| p.token() != proof.evidence_token())
             || self.acceptance.as_ref().is_none_or(|a| {
-                a.acceptance().reviewed_token != proof.evidence_token()
+                a.digest() != proof.acceptance_digest()
+                    || a.acceptance().reviewed_token != proof.evidence_token()
                     || self
                         .parent
                         .as_ref()

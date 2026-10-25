@@ -1,5 +1,9 @@
-//! Deterministic fixtures use real disposable Git repositories. Provider facts
-//! below are explicitly simulated complete snapshots, not live qualification.
+#[path = "support/pinned_git.rs"]
+mod pinned_git;
+#[path = "support/process_probe.rs"]
+mod process_probe;
+// Deterministic fixtures use real disposable Git repositories. Provider facts
+// below are explicitly simulated complete snapshots, not live qualification.
 use chrono::{Duration, Utc};
 use kegari_v0::digest::{bytes_digest, canonical_digest};
 use kegari_v0::error::{Error, Result};
@@ -64,6 +68,94 @@ fn private_dir(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }
+}
+
+#[test]
+fn scoped_git_metadata_is_journaled_registered_and_fenced_before_each_spawn() {
+    use kegari_v0::{
+        control::{Lease, Permit},
+        process_records::{ProcessJournal, RecoveryState},
+        storage::PrivateDir,
+        worker::ExecutionRegistry,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let fixture = Fixture::new(false);
+    let git = Git::from_pinned_executable(fixture.git.executable()).unwrap();
+    assert!(git.version().is_empty());
+    assert_eq!(
+        git.revision(&fixture.source, "HEAD").unwrap_err().code,
+        "unsupported_git_version"
+    );
+    let runtime = Uuid::new_v4();
+    let operation = Uuid::new_v4();
+    let records = Arc::new(
+        ProcessJournal::with_probe(
+            PrivateDir::create(
+                &fixture
+                    ._root
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .join("processes"),
+            )
+            .unwrap(),
+            runtime,
+            Arc::new(process_probe::FixtureBootProbe::new()),
+        )
+        .unwrap(),
+    );
+    let executions = Arc::new(ExecutionRegistry::default());
+    let permitted = Arc::new(AtomicBool::new(true));
+    let current = permitted.clone();
+    let scoped = git
+        .with_execution_scope(GitExecutionScope {
+            limits: GitLimits::default(),
+            start_gate: Arc::new(move |start| {
+                if !current.load(Ordering::SeqCst) {
+                    return Err(Error::new("stale_generation", "fixture fence"));
+                }
+                start()
+            }),
+            processes: records.clone(),
+            permit: Permit {
+                operation_id: operation,
+                lease: Lease {
+                    runtime_id: runtime,
+                    owner_generation: 1,
+                    owner_id: Uuid::new_v4(),
+                },
+                control_generation: 1,
+                work_key: d("scoped fixture"),
+                scope_digest: d("scope"),
+                registered_at: Utc::now(),
+            },
+            executions: executions.clone(),
+        })
+        .unwrap();
+    assert_eq!(scoped.version(), SUPPORTED_GIT_VERSION);
+    assert_eq!(
+        scoped.revision(&fixture.source, "HEAD").unwrap().commit,
+        fixture.squash
+    );
+    assert!(executions.active_operations().unwrap().is_empty());
+    let observed = records.observe(operation).unwrap();
+    assert!(observed.len() >= 3);
+    assert!(observed.iter().all(|record| record.state
+        == RecoveryState::GroupExitRecordedTreeUnverified
+        && !record.all_descendants_exited));
+    permitted.store(false, Ordering::SeqCst);
+    assert_eq!(
+        scoped.revision(&fixture.source, "HEAD").unwrap_err().code,
+        "stale_generation"
+    );
+    assert_eq!(records.observe(operation).unwrap().len(), observed.len());
+    assert_eq!(
+        git_run(&fixture.source, &["rev-parse", "HEAD"]),
+        fixture.squash
+    );
 }
 
 #[tokio::test]
@@ -311,10 +403,13 @@ fn independent_review_clone_binds_provider_pr_without_fabricated_parent_authorit
         "preserve review scratch\n",
     )
     .unwrap();
-    fixture
+    let observed = fixture
         .git
         .observe_independent_review_clone(&root, &identity)
         .unwrap();
+    assert_eq!(observed.identity(), &identity);
+    assert_eq!(observed.root(), root.as_path());
+    observed.revalidate_filesystem().unwrap();
     assert_eq!(fs::read(path.join(".git/index")).unwrap(), index);
     assert_eq!(
         fs::read_to_string(path.join("retained-untracked-note")).unwrap(),
@@ -338,6 +433,14 @@ fn independent_review_clone_binds_provider_pr_without_fabricated_parent_authorit
         "execution_ownership"
     );
     assert_eq!(fixture.git.revision(&path, "HEAD").unwrap(), identity.head);
+    let marker = root.join(format!("prepared-clone-{}.json", identity.directory_id));
+    let mut tampered = record;
+    tampered["prepared"] = serde_json::json!(false);
+    fs::write(marker, serde_json::to_vec(&tampered).unwrap()).unwrap();
+    assert_eq!(
+        observed.revalidate_filesystem().unwrap_err().code,
+        "execution_ownership"
+    );
 }
 
 struct Fixture {
@@ -404,11 +507,12 @@ impl Fixture {
             ],
         );
         let squash = git_run(&source, &["rev-parse", "HEAD"]);
+        let owned_git = Git::new(pinned_git::prepare(root.path())).unwrap();
         Self {
             _root: root,
             source,
             runs,
-            git: Git::new(git_binary()).unwrap(),
+            git: owned_git,
             repository: RepositoryId {
                 hostname: "github.com".into(),
                 id: "101".into(),
@@ -664,7 +768,8 @@ fn v0_t15_squash_delta_scope_and_exact_artifact_are_revalidated() {
 
 #[test]
 fn full_unicode_branch_title_is_preserved_and_length_is_never_truncated() {
-    let git = Git::new(git_binary()).unwrap();
+    let fixture = TempDir::new().unwrap();
+    let git = Git::new(pinned_git::prepare(fixture.path())).unwrap();
     let branch = git
         .branch_name(
             "CHILD-12",
@@ -1429,7 +1534,7 @@ fn verify_fixture_parent_with_integrations(
             criteria: &BTreeSet::from(["prepared-outcome".into()]),
             integrated_commands: &BTreeMap::from([("integrated".into(), vec!["./e2e.sh".into()])]),
             test_resources: &BTreeSet::new(),
-            production_targets: &BTreeSet::new(),
+            production_targets: &manifest.production_targets,
             visual: false,
             required_contributions: &manifest.required_contributions,
             production_integrations: integrations,
@@ -3197,5 +3302,167 @@ fn canonical_publications_reject_quotes_trailing_data_duplicates_and_wrong_domai
     let other = AttestationKey::new("fixture-key".into(), vec![18; 32]).unwrap();
     assert!(
         decode_signed_publication::<serde_json::Value>(&body, "fixture_record", &other).is_err()
+    );
+}
+
+#[test]
+fn attestation_rejects_unserializable_payload_without_panicking() {
+    let key = AttestationKey::new("fixture-invalid-json".into(), vec![7; 32]).unwrap();
+    let payload = BTreeMap::from([(("structured", "key"), "unsupported JSON key")]);
+    assert!(key.sign("fixture_payload", &payload).is_err());
+}
+
+#[test]
+fn mixed_release_verifies_unchanged_target_without_inventing_merge_or_deploy() {
+    let mut f = GateFixture::new(1);
+    let mut unchanged = Fixture::new(false);
+    unchanged.parent = f.parent.manifest().work.parent;
+    unchanged.repository.id = "unchanged-target-repository".into();
+    let candidate = unchanged.candidate(Uuid::new_v4(), &[]).unwrap();
+    let source = candidate.manifest.production.clone();
+    let original_main = git_run(&unchanged.source, &["rev-parse", "main"]);
+    let target = ResourceKey::Target {
+        provider: "github".into(),
+        id: "already-serving".into(),
+    };
+    let artifact = d("actual-fixture-existing-artifact");
+    let mut manifest = f.parent.manifest().clone();
+    manifest.candidates.push(candidate.manifest.clone());
+    manifest.baselines.push(ProductionBaseline {
+        repository: unchanged.repository.clone(),
+        production: source.clone(),
+        deployed_revision: Some(source.commit.clone()),
+        deployed_artifact: Some(artifact.clone()),
+        target_artifacts: BTreeMap::from([("already-serving".into(), artifact.clone())]),
+        deployment_free: false,
+        successor_recovery_operation: None,
+    });
+    manifest.production_targets.insert("already-serving".into());
+    manifest.integrated_results[0].candidate_vector_digest =
+        manifest.candidate_vector_digest().unwrap();
+    f.parent = verify_fixture_parent(&manifest, &f.children).unwrap();
+    f.acceptance = accept_fixture_parent(&f.parent, &f.key);
+    let revision = RevisionBinding {
+        repository: unchanged.repository.clone(),
+        head: source.commit.clone(),
+        base: source.commit.clone(),
+        tested_commit: source.commit.clone(),
+        tested_tree: source.tree.clone(),
+    };
+    let requirements = vec![CheckRequirement {
+        id: "existing-production".into(),
+        kind: CheckKind::ProductionCi,
+        workflow_id: Some(400),
+        command: vec![],
+    }];
+    let mut snapshot = checks(&manifest.work, &revision);
+    let mut run = snapshot.runs[1].clone();
+    run.id = requirements[0].id.clone();
+    run.kind = CheckKind::ProductionCi;
+    run.workflow_id = Some(400);
+    snapshot.runs = vec![run];
+    f.production.push(
+        verify_existing_production(&f.parent, &revision, &requirements, &snapshot, &[]).unwrap(),
+    );
+    f.plan.evidence_token = f.parent.token().into();
+    f.plan.acceptance_digest = f.acceptance.digest().into();
+    f.plan.resources.insert(ResourceKey::Repository {
+        repository: unchanged.repository.clone(),
+    });
+    f.plan.resources.insert(target.clone());
+    f.plan.steps.push(ReleaseStep {
+        id: "verify-existing".into(),
+        depends_on: BTreeSet::new(),
+        kind: StepKind::VerifyExisting {
+            repository: unchanged.repository.clone(),
+            target: target.clone(),
+            source: source.clone(),
+            artifact_digest: artifact.clone(),
+        },
+    });
+    let mut attempt =
+        ReleaseAttempt::admit(f.plan.clone(), f.evidence(), f.facts(), Utc::now()).unwrap();
+    let current = BTreeMap::from([(unchanged.repository.clone(), source.clone())]);
+    let facts = FreshReleaseFacts {
+        generation: &f.plan.generation,
+        evidence_token: f.parent.token(),
+        owner_generation: 1,
+        authority_current: true,
+        pending_correction: false,
+        provider_reads_complete: true,
+        resource_lock_owned: true,
+        credentials_usable: true,
+        repository_policy_current: true,
+        force_stopped: false,
+        current_revisions: &current,
+    };
+    let payload = attempt
+        .prepare_step("verify-existing", &facts, |_| Ok(()))
+        .unwrap();
+    assert_eq!(
+        payload.exact_source_commit.as_deref(),
+        Some(source.commit.as_str())
+    );
+    attempt.mark_sent(&payload, &facts, |_| Ok(())).unwrap();
+    let effect = ObservedEffect::Verification {
+        repository: unchanged.repository.clone(),
+        target: target.clone(),
+        source_commit: source.commit.clone(),
+        tree: source.tree.clone(),
+        artifact_digest: artifact.clone(),
+        evidence_digest: d("current authenticated target fixture"),
+    };
+    let mut wrong = effect.clone();
+    if let ObservedEffect::Verification {
+        artifact_digest, ..
+    } = &mut wrong
+    {
+        *artifact_digest = d("different serving artifact");
+    }
+    assert_eq!(
+        attempt
+            .observe_success("verify-existing", wrong, Utc::now(), |_| Ok(()))
+            .unwrap_err()
+            .code,
+        "release_provenance"
+    );
+    attempt
+        .observe_success("verify-existing", effect, Utc::now(), |_| Ok(()))
+        .unwrap();
+    assert!(!attempt.completed());
+    let mut changed_artifact = f.plan.clone();
+    if let StepKind::VerifyExisting {
+        artifact_digest, ..
+    } = &mut changed_artifact.steps.last_mut().unwrap().kind
+    {
+        *artifact_digest = d("unaccepted artifact");
+    }
+    assert_eq!(
+        ReleaseAttempt::admit(changed_artifact, f.evidence(), f.facts(), Utc::now())
+            .unwrap_err()
+            .code,
+        "scope_violation"
+    );
+    let mut omitted = f.plan.clone();
+    omitted.steps.pop();
+    omitted.resources.remove(&target);
+    omitted.resources.remove(&ResourceKey::Repository {
+        repository: unchanged.repository.clone(),
+    });
+    let mut incomplete_facts = f.facts();
+    incomplete_facts.required_step_ids = omitted.steps.iter().map(|step| step.id.clone()).collect();
+    assert_eq!(
+        ReleaseAttempt::admit(omitted, f.evidence(), incomplete_facts, Utc::now())
+            .unwrap_err()
+            .code,
+        "scope_violation"
+    );
+    assert_eq!(
+        git_run(&unchanged.source, &["rev-parse", "main"]),
+        original_main
+    );
+    assert_eq!(
+        git_run(candidate.path(), &["rev-parse", "HEAD"]),
+        source.commit
     );
 }

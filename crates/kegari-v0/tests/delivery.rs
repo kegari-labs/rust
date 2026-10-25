@@ -1,5 +1,9 @@
 //! Delivery integration fixtures use production reconciliation/provider parsers.
 //! HTTP observations are deterministic fixtures, never live qualification.
+#[path = "support/pinned_git.rs"]
+mod pinned_git;
+#[path = "support/process_probe.rs"]
+mod process_probe;
 use base64::Engine as _;
 use chrono::{Duration, Utc};
 use kegari_v0::{
@@ -408,6 +412,8 @@ struct DeliveryFixture {
     wire: Arc<Mutex<Fixture>>,
     current: Arc<std::sync::atomic::AtomicBool>,
     parent: ParentProjection,
+    observer: kegari_v0::deployment::ProductionObserver,
+    repository_contract: RepositoryContract,
 }
 impl DeliveryFixture {
     async fn new() -> Self {
@@ -579,11 +585,19 @@ impl DeliveryFixture {
         let admission = DeliveryAdmission::bind(permit, gate.clone(), scope).unwrap();
         let current = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let callback_flag = current.clone();
+        let callback_parent = projection.parent(id(2), id(100)).unwrap().clone();
         let callback: GateCheck = Arc::new(move |actual| {
             if !callback_flag.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(Error::new("stale_result", "fixture correction arrived"));
             }
-            actual.compare_current(&gate, Utc::now(), Duration::seconds(60))
+            let current_gate = callback_parent.fresh_gate(
+                actual.work().child,
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                Utc::now(),
+                Duration::seconds(60),
+            )?;
+            actual.compare_current(&current_gate, Utc::now(), Duration::seconds(60))
         });
         let transport: Arc<dyn HttpTransport> = Arc::new(Wire(wire.clone()));
         let broker = ProviderBroker {
@@ -617,22 +631,35 @@ impl DeliveryFixture {
                 .unwrap(),
             ),
         };
-        let binary = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-            .map(|p| p.join("git"))
-            .find(|p| p.is_file())
-            .unwrap();
         let key =
             Arc::new(AttestationKey::new("fixture-attestation".into(), vec![17; 32]).unwrap());
+        let observer = kegari_v0::deployment::ProductionObserver::new(
+            broker.github.as_ref().unwrap().clone(),
+            host.clone(),
+            key.clone(),
+            PrivateDir::create(&directory.join("deployment-proofs")).unwrap(),
+            callback.clone(),
+        )
+        .unwrap();
+        let repository_contract = contract.clone();
         let coordinator = DeliveryCoordinator::new(
             DeliveryServices {
                 host: host.clone(),
                 broker,
                 records: Arc::new(PrivateDir::create(&directory.join("records")).unwrap()),
                 key: key.clone(),
-                git: Arc::new(Git::new(binary).unwrap()),
+                git: Arc::new(Git::new(pinned_git::prepare(&directory)).unwrap()),
                 retained_git_sources: BTreeMap::new(),
                 current_gate: callback,
                 executions: Arc::new(kegari_v0::worker::ExecutionRegistry::default()),
+                processes: Arc::new(
+                    kegari_v0::process_records::ProcessJournal::with_probe(
+                        PrivateDir::create(&directory.join("processes")).unwrap(),
+                        cfg.runtime.id,
+                        Arc::new(process_probe::FixtureBootProbe::new()),
+                    )
+                    .unwrap(),
+                ),
             },
             vec![contract],
         )
@@ -646,6 +673,8 @@ impl DeliveryFixture {
             wire,
             current,
             parent: projection.parent(id(2), id(100)).unwrap().clone(),
+            observer,
+            repository_contract,
         }
     }
     fn review(&self) -> kegari_v0::evidence::Signed<ReviewAttestation> {
@@ -1172,6 +1201,44 @@ async fn stopped_child_hydration_reads_current_gates_without_admitting_or_writin
         .await
         .unwrap();
     assert_eq!(child.verified().evidence().work, f.admission.scope().work);
+    let parent_gate = f
+        .parent
+        .fresh_gate(
+            None,
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            Duration::seconds(60),
+        )
+        .unwrap();
+    let contract = f
+        .coordinator
+        .parent_contract(parent_gate, &f.parent, &workflow())
+        .unwrap();
+    let gates = BTreeMap::from([(id(101), f.admission.fresh_gate().clone())]);
+    let refreshed = f
+        .coordinator
+        .refresh_delivery(
+            ParentHydrationInputs {
+                contract: &contract,
+                observer: &f.observer,
+                child_gates: &gates,
+                workflow: &workflow(),
+                production_integrations: &[],
+            },
+            &config(),
+        )
+        .await
+        .unwrap();
+    // E2E source/local/CI/review proof alone is not an integrated candidate
+    // responsibility. Recovery must not expose it as a completed dependency.
+    assert!(
+        !refreshed
+            .parent_delivery()
+            .verified_children()
+            .contains_key(&id(101))
+    );
+    assert!(refreshed.parent_delivery().verified_parent().is_none());
     assert_eq!(
         f.host.snapshot().unwrap().intent.generation,
         before.intent.generation
@@ -1664,11 +1731,134 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
         replay.provenance_digest().unwrap()
     );
     assert_eq!(slice.operation_id(), f.admission.operation_id());
+    let read_root = f
+        .coordinator
+        .retained_candidate_host_root(&f.admission, slice.operation_id())
+        .unwrap();
+    read_root.revalidate_filesystem().unwrap();
+    assert_eq!(read_root.root(), slice.path());
+    assert_eq!(read_root.repository(), &f.admission.scope().repository);
+    assert_eq!(
+        read_root.config_revision(),
+        f.admission.fresh_gate().config_revision()
+    );
+    let contract = f
+        .coordinator
+        .parent_contract(f.admission.fresh_gate().clone(), &f.parent, &workflow())
+        .unwrap();
+    let baseline = f.observer.observe(&f.repository_contract).await.unwrap();
+    assert_eq!(
+        f.coordinator
+            .prepare_parent_vector(&contract, &f.observer, &[], &[&baseline])
+            .await
+            .unwrap_err()
+            .code,
+        "candidate_provenance"
+    );
+    let vector = f
+        .coordinator
+        .prepare_parent_vector(&contract, &f.observer, &[&slice], &[&baseline])
+        .await
+        .unwrap();
+    assert_eq!(vector.candidates(), &[slice.manifest().clone()]);
+    // Candidate construction and the exact E2E assignment precede child
+    // completion. No child result or integrated check has been fabricated.
+    let e2e_gate = f
+        .parent
+        .fresh_gate(
+            Some(id(101)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            chrono::Duration::seconds(30),
+        )
+        .unwrap();
+    let assignment = f
+        .coordinator
+        .integrated_worker_assignment(
+            &contract,
+            &e2e_gate,
+            &vector,
+            &f.observer,
+            &[&slice],
+            json!({"purpose":"pending E2E responsibility fixture"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(assignment.candidate_vector_digest(), Some(vector.digest()));
+    assert_eq!(
+        assignment.source().unwrap().revision(),
+        slice.manifest().result.as_ref().unwrap()
+    );
+    assert!(
+        f.coordinator
+            .verify_integrated_checks(&contract, &e2e_gate, &vector, &f.observer, &[])
+            .await
+            .is_err()
+    );
+    let authority = kegari_v0::worker::WorkerAuthority::Authorized(e2e_gate.clone());
+    let mut request = kegari_v0::runtime_workers::LaunchRequest {
+        lease: Lease {
+            runtime_id: id(1),
+            owner_generation: 1,
+            owner_id: Uuid::new_v4(),
+        },
+        operation_id: Uuid::new_v4(),
+        phase: kegari_v0::scheduler::PhaseKey {
+            work: authority.work_key().unwrap(),
+            generation: canonical_digest(1, &e2e_gate.work().generation).unwrap(),
+            phase: assignment.phase().into(),
+            retry_grant: None,
+        },
+        authority,
+        source: None,
+        delivery: Some(assignment.clone()),
+        max_seconds: 60,
+        max_turns: 2,
+    };
+    request.validate_binding().unwrap();
+    request.phase.phase = "implementation".into();
+    assert!(request.validate_binding().is_err());
+    request.phase.phase = assignment.phase().into();
+    request.source = Some(kegari_v0::runtime_workers::SourceSelection {
+        repository: "42".into(),
+        revision: kegari_v0::git::Revision {
+            commit: "e".repeat(40),
+            tree: "f".repeat(40),
+        },
+    });
+    assert!(request.validate_binding().is_err());
+    let hydrated = f
+        .coordinator
+        .hydrate_parent_vector(&contract, &f.observer, vector.digest())
+        .await
+        .unwrap();
+    assert_eq!(hydrated.digest(), vector.digest());
+    assert_eq!(hydrated.prepared_at(), vector.prepared_at());
+    assert_eq!(std::fs::read(source.join(".git/index")).unwrap(), index);
+    assert_eq!(f.writes(), 0);
+    {
+        let mut wire = f.wire.lock().unwrap();
+        wire.production = "c".repeat(40);
+    }
+    assert_eq!(
+        f.coordinator
+            .reobserve_parent_vector(&contract, &f.observer, &vector)
+            .await
+            .unwrap_err()
+            .code,
+        "stale_result"
+    );
+    f.wire.lock().unwrap().production = slice.manifest().production.commit.clone();
     let marker = slice.path().join(".git/kegari-candidate.json");
     let mut data: Value = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
     data["selected_contributions"] =
         json!({canonical_digest(1,&"forged").unwrap():[canonical_digest(1,&"credit").unwrap()]});
     std::fs::write(&marker, serde_json::to_vec(&data).unwrap()).unwrap();
+    assert_eq!(
+        read_root.revalidate_filesystem().unwrap_err().code,
+        "execution_ownership"
+    );
     assert_eq!(
         f.coordinator
             .recover_isolated_slice(&f.admission, slice.operation_id())
@@ -1778,4 +1968,52 @@ async fn production_change_during_candidate_build_retains_candidate_without_prom
         std::fs::read(candidate.join(".git/kegari-candidate.json")).unwrap(),
         receipt
     );
+}
+
+#[tokio::test]
+async fn delivery_refresh_does_not_promote_tracker_done_without_current_authenticated_gates() {
+    let f = DeliveryFixture::build(false, true).await;
+    let contract = f
+        .coordinator
+        .parent_contract(f.admission.fresh_gate().clone(), &f.parent, &workflow())
+        .unwrap();
+    {
+        let mut wire = f.wire.lock().unwrap();
+        wire.issues.get_mut(&id(101)).unwrap()["state"]["id"] = json!(id(14));
+        wire.issues.get_mut(&id(100)).unwrap()["state"]["id"] = json!(id(15));
+    }
+    let mut configuration = config();
+    configuration
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .repositories
+        .get_mut("42")
+        .unwrap()
+        .source = f.repository_contract.configuration.source.clone();
+    let before = f.host.snapshot().unwrap();
+    let snapshot = f
+        .coordinator
+        .refresh_delivery(
+            ParentHydrationInputs {
+                contract: &contract,
+                observer: &f.observer,
+                child_gates: &BTreeMap::new(),
+                workflow: &workflow(),
+                production_integrations: &[],
+            },
+            &configuration,
+        )
+        .await
+        .unwrap();
+    assert!(snapshot.parent_delivery().verified_children().is_empty());
+    assert!(snapshot.parent_delivery().verified_parent().is_none());
+    assert!(snapshot.parent_delivery().verified_acceptance().is_none());
+    assert!(!snapshot.blockers().is_empty());
+    assert_eq!(snapshot.work(), contract.work());
+    assert_eq!(
+        f.host.snapshot().unwrap().intent.generation,
+        before.intent.generation
+    );
+    assert_eq!(f.writes(), 0);
 }

@@ -88,19 +88,51 @@ impl CommandBoundary for SandboxBoundary {
     }
     fn start(
         &self,
+        _isolation: &ValidatedIsolation,
+        _argv: &[String],
+        _timeout: Duration,
+        _output_limit: usize,
+    ) -> Result<Box<dyn StartedCommand>> {
+        Err(Error::new(
+            "process_journal_required",
+            "native repository execution requires the current operation's durable process journal",
+        ))
+    }
+}
+
+/// Native execution is bound to one immutable admitted operation. Reusing an
+/// owned directory does not reuse its old permit or its process journal scope.
+pub struct JournaledSandboxBoundary {
+    journal: std::sync::Arc<crate::process_records::ProcessJournal>,
+    permit: crate::control::Permit,
+}
+impl JournaledSandboxBoundary {
+    pub fn new(
+        journal: std::sync::Arc<crate::process_records::ProcessJournal>,
+        permit: crate::control::Permit,
+    ) -> Self {
+        Self { journal, permit }
+    }
+}
+impl CommandBoundary for JournaledSandboxBoundary {
+    fn evidence_class(&self) -> ExecutionEvidenceClass {
+        ExecutionEvidenceClass::ConfinedExecution
+    }
+    fn start(
+        &self,
         isolation: &ValidatedIsolation,
         argv: &[String],
         timeout: Duration,
         output_limit: usize,
     ) -> Result<Box<dyn StartedCommand>> {
-        // run_command clears the environment. Provider credentials and host
-        // secrets are never injected into this boundary.
-        Ok(Box::new(isolation::start_command(
+        Ok(Box::new(isolation::start_journaled_command(
             isolation,
             argv,
             timeout,
             output_limit,
             &[],
+            self.journal.clone(),
+            self.permit.clone(),
         )?))
     }
 }
@@ -527,7 +559,7 @@ fn executable_role(boundary: &ValidatedIsolation) -> Result<()> {
     boundary.revalidate()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckExecutionRecord {
     pub schema_version: u32,
@@ -596,6 +628,15 @@ pub struct RetainedArtifact {
     retained_paths: Vec<PathBuf>,
 }
 impl RetainedArtifact {
+    pub(crate) fn verify_reference(&self, expected: &ArtifactProof) -> Result<()> {
+        if &self.original != expected {
+            return Err(Error::new(
+                "artifact_conflict",
+                "retained artifact identity differs from requested evidence",
+            ));
+        }
+        self.verify(expected.bytes)
+    }
     fn verify(&self, maximum: u64) -> Result<()> {
         let mut bytes = Vec::new();
         for path in &self.retained_paths {
@@ -1488,64 +1529,25 @@ impl LocalExecutor<'_> {
         git_executable: &Path,
         inspection: GitInspection,
     ) -> Result<CommandOutcome> {
-        self.preflight(binding)?;
-        Git::new(git_executable)?;
-        let executable = git_executable
-            .to_str()
-            .ok_or_else(|| Error::invalid("Git executable path is not UTF-8"))?;
-        self.isolation.resolve_executable(executable)?;
-        let mut argv: Vec<String> = [
-            executable,
-            "--no-replace-objects",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "protocol.allow=never",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
-        match inspection {
-            GitInspection::Status => argv
-                .extend(["status", "--porcelain=v1", "--untracked-files=all"].map(str::to_owned)),
-            GitInspection::Diff { staged } => {
-                argv.extend(
-                    [
-                        "diff",
-                        "--binary",
-                        "--full-index",
-                        "--no-ext-diff",
-                        "--no-textconv",
-                        "--no-renames",
-                    ]
-                    .map(str::to_owned),
-                );
-                if staged {
-                    argv.push("--cached".into());
-                }
-                argv.push("--".into());
-            }
-            GitInspection::ShowFile { commit, path } => {
-                crate::git::validate_oid(&commit)?;
-                source_relative(&path)?;
-                argv.extend([
-                    "show".into(),
-                    "--no-ext-diff".into(),
-                    "--no-textconv".into(),
-                    format!("{commit}:{path}"),
-                ]);
-            }
+        self.limits.validate()?;
+        self.isolation.revalidate()?;
+        self.ownership.verify(binding, self.isolation)?;
+        binding.validate(self.isolation)?;
+        if std::fs::canonicalize(git_executable)
+            .map_err(|e| Error::io("resolve selected Git tool", e))?
+            != self.git.executable()
+        {
+            return Err(Error::new(
+                "identity_mismatch",
+                "inspection Git differs from admitted pinned tool",
+            ));
         }
-        self.boundary
-            .run(
-                self.isolation,
-                &argv,
-                Duration::from_millis(self.limits.command_timeout_ms),
-                self.limits.output_bytes,
-            )
-            .await
+        let mut result = self
+            .git
+            .inspect_read_only(&self.isolation.plan().repository, &inspection)?;
+        result.isolation_digest = self.isolation.digest().into();
+        self.ownership.verify(binding, self.isolation)?;
+        Ok(result)
     }
 }
 
@@ -1575,7 +1577,10 @@ impl LocalExecutor<'_> {
         write: SourceWrite<'_>,
         mut persist: impl FnMut(&SourceWriteReceipt) -> Result<()>,
     ) -> Result<SourceWriteReceipt> {
-        self.preflight(binding)?;
+        // The worker invokes this inside its serialized mutation gate. Source
+        // writes validate exact path/content CAS here; Git reads belong outside
+        // that gate and no validation capability is minted by this write.
+        self.launch_identity(binding)?;
         if self.isolation.plan().role != ExecutionRole::Child
             || write.bytes.len() as u64 > self.limits.source_bytes
         {

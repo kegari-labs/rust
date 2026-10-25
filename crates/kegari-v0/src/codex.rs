@@ -880,6 +880,7 @@ pub struct RpcClient {
     diagnostic_task: Option<tokio::task::JoinHandle<()>>,
     expected_home: Option<PathBuf>,
     initialized: bool,
+    startup_error: Option<Error>,
     uncertain_request: Option<u64>,
     allowed_tools: BTreeSet<String>,
     account_id: Option<String>,
@@ -911,6 +912,7 @@ impl RpcClient {
             diagnostic_task: None,
             expected_home: None,
             initialized: false,
+            startup_error: None,
             uncertain_request: None,
             allowed_tools: BTreeSet::new(),
             account_id: None,
@@ -962,13 +964,33 @@ impl RpcClient {
             self.send(&frame).await
         }
     }
+
     pub async fn verify_version(executable: &Path, deadline: Duration) -> Result<()> {
-        if !executable.is_absolute() {
-            return Err(Error::invalid(
-                "Codex executable must be an absolute verified path",
+        let identity = crate::platform::BinaryIdentity::inspect(executable, false)?;
+        Self::start_version_probe(&identity, None)?
+            .verify(deadline)
+            .await
+            .map(|_| ())
+    }
+    /// Split metadata probe: spawn/register while serialized, wait outside the gate.
+    pub fn start_version_probe(
+        executable: &crate::platform::BinaryIdentity,
+        mut guard: Option<crate::process_records::SpawnGuard>,
+    ) -> Result<VersionProbe> {
+        executable.revalidate(false)?;
+        if let Some(guard) = &guard
+            && (guard.binding().executable != *executable
+                || guard.binding().argv_digest
+                    != crate::digest::canonical_digest(1, &vec!["--version"])?
+                || guard.binding().kind != "codex-version"
+                || !guard.binding().observed_executables.is_empty())
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "version process guard differs from actual pinned launch",
             ));
         }
-        let mut command = Command::new(executable);
+        let mut command = Command::new(&executable.path);
         command
             .arg("--version")
             .env_clear()
@@ -977,47 +999,25 @@ impl RpcClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        if let Some(guard) = &guard {
+            command.current_dir(&guard.binding().cwd);
+            guard.configure_tokio(&mut command)?;
+        }
         let (mut child, group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command)?;
         let stdout = child
             .stdout
             .take()
             .ok_or_else(|| Error::new("process_error", "version probe stdout is missing"))?;
-        let child = std::sync::Arc::new(OwnedProviderProcess::new(child, group));
-        let mut bytes = Vec::new();
-        let result = tokio::time::timeout(deadline, async {
-            stdout
-                .take(4097)
-                .read_to_end(&mut bytes)
-                .await
-                .map_err(|error| Error::io("read Codex version", error))?;
-            if bytes.len() > 4096 {
-                return Err(Error::new(
-                    "protocol_error",
-                    "version response exceeds its finite bound",
-                ));
-            }
-            loop {
-                if let Some(status) = child.child.lock().await.observe_exit()? {
-                    child.record_exit();
-                    break Ok(status);
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .map_err(|_| Error::new("timeout", "Codex version probe timed out"));
-        let terminated = terminate_owned_provider(&child).await;
-        terminated?;
-        let status = result??;
-        if !status.success() || String::from_utf8_lossy(&bytes).trim() != SUPPORTED_CODEX_VERSION {
-            return Err(Error::new(
-                "unsupported_codex_version",
-                format!(
-                    "required {SUPPORTED_CODEX_VERSION}; install and qualify a matching executable"
-                ),
-            ));
+        if let Some(guard) = &mut guard {
+            // A quick metadata process may exit before inspection. Its actual
+            // Child/OwnedGroup must still be joined before bytes qualify a version.
+            let _ = guard.spawned_tokio(&child);
         }
-        Ok(())
+        Ok(VersionProbe {
+            identity: executable.clone(),
+            stdout: Some(stdout),
+            child: std::sync::Arc::new(OwnedProviderProcess::new(child, group, guard)),
+        })
     }
     pub async fn spawn(
         executable: &Path,
@@ -1045,7 +1045,61 @@ impl RpcClient {
         permissions: &PermissionConfiguration,
         request_timeout: Duration,
     ) -> Result<Self> {
+        Self::start_inner(executable, codex_home, permissions, request_timeout, None)
+    }
+    /// Native worker startup requires a durable, inherited guard bound before spawn.
+    pub fn start_verified_guarded(
+        executable: &VerifiedCodexExecutable,
+        codex_home: &Path,
+        permissions: &PermissionConfiguration,
+        request_timeout: Duration,
+        guard: crate::process_records::SpawnGuard,
+    ) -> Result<Self> {
+        Self::start_inner(
+            executable,
+            codex_home,
+            permissions,
+            request_timeout,
+            Some(guard),
+        )
+    }
+    pub fn app_server_argv(permissions: &PermissionConfiguration) -> Result<Vec<String>> {
+        let mut args = vec![
+            "app-server".into(),
+            "--listen".into(),
+            "stdio://".into(),
+            "--strict-config".into(),
+        ];
+        for (key, value) in permissions
+            .settings
+            .as_object()
+            .ok_or_else(|| Error::invalid("permission settings must be an object"))?
+        {
+            args.push("-c".into());
+            args.push(format!("{key}={}", toml_inline(value)?));
+        }
+        Ok(args)
+    }
+    fn start_inner(
+        executable: &VerifiedCodexExecutable,
+        codex_home: &Path,
+        permissions: &PermissionConfiguration,
+        request_timeout: Duration,
+        mut guard: Option<crate::process_records::SpawnGuard>,
+    ) -> Result<Self> {
         executable.0.revalidate(false)?;
+        let args = Self::app_server_argv(permissions)?;
+        if let Some(guard) = &guard
+            && (guard.binding().executable != executable.0
+                || guard.binding().argv_digest != crate::digest::canonical_digest(1, &args)?
+                || guard.binding().kind != "codex-app-server"
+                || !guard.binding().observed_executables.is_empty())
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "provider process guard differs from actual pinned launch",
+            ));
+        }
         if request_timeout.is_zero() {
             return Err(Error::invalid("request timeout must be positive"));
         }
@@ -1071,15 +1125,10 @@ impl RpcClient {
             }
         }
         let mut command = Command::new(&executable.0.path);
-        command.args(["app-server", "--listen", "stdio://", "--strict-config"]);
-        for (key, value) in permissions
-            .settings
-            .as_object()
-            .ok_or_else(|| Error::invalid("permission settings must be an object"))?
-        {
-            command
-                .arg("-c")
-                .arg(format!("{key}={}", toml_inline(value)?));
+        command.args(args);
+        if let Some(guard) = &guard {
+            command.current_dir(&guard.binding().cwd);
+            guard.configure_tokio(&mut command)?;
         }
         command
             .env_clear()
@@ -1110,13 +1159,24 @@ impl RpcClient {
             let mut buffer = [0u8; 4096];
             while matches!(stderr.read(&mut buffer).await,Ok(n) if n>0) {}
         });
+        // Identity capture can race a quick exit. Retain the actual owned handle
+        // even on capture failure; no protocol is sent and termination still joins it.
+        let startup_error = guard
+            .as_mut()
+            .and_then(|guard| guard.spawned_tokio(&child).err());
         let mut rpc = Self::from_transport(stdout, stdin, request_timeout)?;
-        rpc.child = Some(std::sync::Arc::new(OwnedProviderProcess::new(child, group)));
+        rpc.startup_error = startup_error;
+        rpc.child = Some(std::sync::Arc::new(OwnedProviderProcess::new(
+            child, group, guard,
+        )));
         rpc.diagnostic_task = Some(diagnostic_task);
         rpc.expected_home = Some(home);
         Ok(rpc)
     }
     async fn send(&mut self, value: &Value) -> Result<()> {
+        if let Some(error) = &self.startup_error {
+            return Err(error.clone());
+        }
         let mut bytes = serde_json::to_vec(value)
             .map_err(|_| Error::new("protocol_error", "cannot encode request"))?;
         if bytes.len() > MAX_FRAME_BYTES {
@@ -1942,6 +2002,68 @@ impl RpcClient {
         Ok(())
     }
 }
+
+/// Owns only the pinned binary's finite metadata query, never a model turn.
+pub struct VersionProbe {
+    identity: crate::platform::BinaryIdentity,
+    stdout: Option<tokio::process::ChildStdout>,
+    child: std::sync::Arc<OwnedProviderProcess>,
+}
+impl VersionProbe {
+    pub fn cancellation(&self) -> OwnedProviderCancellation {
+        OwnedProviderCancellation {
+            child: self.child.clone(),
+        }
+    }
+    pub async fn verify(mut self, deadline: Duration) -> Result<VerifiedCodexExecutable> {
+        if deadline.is_zero() {
+            return Err(Error::invalid("metadata deadline must be positive"));
+        }
+        let stdout = self.stdout.take().ok_or_else(|| {
+            Error::new("ownership_conflict", "metadata probe was already consumed")
+        })?;
+        let mut bytes = Vec::new();
+        let result = tokio::time::timeout(deadline, async {
+            stdout
+                .take(4097)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|error| Error::io("read Codex version", error))?;
+            if bytes.len() > 4096 {
+                return Err(Error::new(
+                    "protocol_error",
+                    "version response exceeds its finite bound",
+                ));
+            }
+            loop {
+                if let Some(status) = self.child.child.lock().await.observe_exit()? {
+                    self.child.record_exit();
+                    break Ok(status);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .map_err(|_| Error::new("timeout", "Codex version probe timed out"));
+        terminate_owned_provider(&self.child).await?;
+        let status = result??;
+        if !status.success() || String::from_utf8_lossy(&bytes).trim() != SUPPORTED_CODEX_VERSION {
+            return Err(Error::new(
+                "unsupported_codex_version",
+                format!(
+                    "required {SUPPORTED_CODEX_VERSION}; install and qualify a matching executable"
+                ),
+            ));
+        }
+        self.identity.revalidate(false)?;
+        Ok(VerifiedCodexExecutable(self.identity.clone()))
+    }
+}
+impl Drop for VersionProbe {
+    fn drop(&mut self) {
+        let _ = self.cancellation().request_cancel();
+    }
+}
 /// Same-process capability for one unreaped spawned adapter, never a restored PID.
 #[derive(Clone)]
 pub struct OwnedProviderCancellation {
@@ -1952,9 +2074,17 @@ struct OwnedProviderProcess {
     exited: std::sync::atomic::AtomicBool,
 }
 impl OwnedProviderProcess {
-    fn new(child: Child, group: crate::process_group::OwnedGroup) -> Self {
+    fn new(
+        child: Child,
+        group: crate::process_group::OwnedGroup,
+        guard: Option<crate::process_records::SpawnGuard>,
+    ) -> Self {
         Self {
-            child: tokio::sync::Mutex::new(ProviderChild { child, group }),
+            child: tokio::sync::Mutex::new(ProviderChild {
+                child,
+                group,
+                guard,
+            }),
             exited: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1977,6 +2107,9 @@ impl OwnedProviderCancellation {
         Ok(exited)
     }
     pub fn request_cancel(&self) -> Result<()> {
+        if self.child.exited.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
             Error::new(
                 "prerequisite",
@@ -1996,18 +2129,30 @@ impl OwnedProviderCancellation {
 struct ProviderChild {
     child: Child,
     group: crate::process_group::OwnedGroup,
+    guard: Option<crate::process_records::SpawnGuard>,
 }
 impl ProviderChild {
     fn observe_exit(&mut self) -> Result<Option<std::process::ExitStatus>> {
         if !self.group.observe_exit_before_reap()? {
             return Ok(None);
         }
-        self.child
+        let status = self
+            .child
             .try_wait()
-            .map_err(|error| Error::io("reap owned provider", error))
+            .map_err(|error| Error::io("reap owned provider", error))?;
+        if let Some(status) = status {
+            if let Some(guard) = &mut self.guard {
+                guard.group_exited(status)?;
+            }
+            self.guard.take();
+        }
+        Ok(status)
     }
 }
 async fn terminate_owned_provider(process: &std::sync::Arc<OwnedProviderProcess>) -> Result<()> {
+    if process.exited.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
     let mut child = process.child.lock().await;
     if child.observe_exit()?.is_some() {
         process.record_exit();

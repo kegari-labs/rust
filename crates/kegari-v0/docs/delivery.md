@@ -164,3 +164,95 @@ assembly, deployed-baseline observation and the remaining provider release path
 are still in progress. Exact remote objects must currently be present in the
 owned/local object source; network object acquisition is an open integration gap,
 not an instruction to mutate or fetch into the operator checkout.
+
+## Completed-run and parent adapters
+
+`delivery_child.rs` accepts a protected `VerifiedAuthorizedOutcome` together with
+its actual retained `RunCompletion`. The operation, completed session/turn,
+current child authority and confirmed local exit must match. Worker JSON remains
+a product assertion: `ChildResultClaim` cannot inject passed CI, review or staging
+fields. A changed child is sealed by owned, journaled Git commands only after its
+writer has exited. `SealedChildSource` requires a new exact-head validation before
+branch/PR publication. A no-change claim with dirty source is rejected before a
+commit is created. A repeated source-seal attempt is never silently replayed;
+`recover_child_source` authenticates its acknowledged receipt and rereads the
+actual raw commit, tree, blob, mode and scoped patch bytes.
+
+`advance_child` executes one explicit admitted action: local validation,
+branch/PR publication, hosted or exact-revision validation, staging request and
+observation, result publication, or tracker closure. Review is a separate
+prepared assignment. Its full base/head/tree/delta identity is inserted into the
+host context before the review worker starts. `publish_completed_review` requires
+that exact context digest, a read-only Review role and the actual completed run
+before it signs the review attestation. It does not accept a worker-selected
+revision as proof of what was reviewed.
+
+`delivery_parent.rs` constructs complete repository vectors from authenticated
+isolated slices and `ProductionObserver` baselines. Recovery checks the actual
+candidate Git objects, complete target inventory and current deployment record
+identity. Integrated execution accepts only private production check
+capabilities, verifies every configured command against the vector after staging,
+and retains actual output bytes in bounded private chunks. Deterministic command
+fixtures are rejected as production evidence.
+
+Parent synthesis receives that full verified vector, all current required child
+results and integrated artifacts as one exact host context. Publication rechecks
+those gates, and read-only hydration repeats current provider/Git/artifact
+observations. `refresh_delivery` returns a sealed snapshot with the original
+FreshGate; the runtime must compare that authority again while replacing cached
+readiness. Missing, stale or ambiguous publications yield absent readiness and
+specific blockers. Tracker Done/Accepted state cannot produce a passed gate.
+
+These adapters do not qualify native process-tree containment or provider access.
+Visual parent readiness remains unavailable until actual authenticated upload,
+association and playback verification issues its sealed video capability. The
+runtime release decision backend and complete release-plan preparation are still
+being integrated; these component APIs are not an assertion of application
+completion. Stopped Git hydration must use the separately authenticated host-local
+process scope; a fabricated worker lease is not permitted.
+
+`RuntimeDelivery` composes current-provider hydration, protected manual release
+intent records, and finite child/parent phase progression. Child validation and
+review launch from opaque assignments preserving the exact original source and
+context. Parent progression assembles every repository, validates the complete
+candidate vector, and binds the coordination result to the integrated evidence.
+The permanent capability maps retain original runs and admitted phases even if
+an error-report write fails. Tests replace an owned private-directory inode to
+exercise that failure path. These runtime paths still require broader integrated
+verification; restart phase hydration, visual recording publication, release
+backend composition, and authenticated remote Git object acquisition remain
+unfinished. A missing remote object is a prerequisite error, never permission to
+use an old operator checkout revision.
+
+Before source sealing, configure the human committer's `user.name` and
+`user.email` in each configured source repository's local Git configuration.
+The host reads only those two local values. It will not infer identity from a
+provider account or global Git configuration. Runtime commits preserve human
+signoff and record the selected Codex model and exact instruction digest.
+
+A mixed release may include `VerifyExisting` for an unchanged target already
+serving its accepted exact source and artifact. This read-only verification
+requires full current production validation and covers the target in the finite
+plan. It cannot create a merge or deployment. A deployment-only successor whose
+main and target still diverge needs separate existing-source recovery modeling;
+`VerifyExisting` must not conceal that divergence.
+
+Candidate prerequisites are distinct from final completeness. Every ordinary
+child must be complete; the designated E2E child may have its reviewed, validated
+and staged test contribution ready while its candidate execution remains pending.
+Its final publication waits for the reobserved exact-vector integrated proof.
+Parent review still requires all children complete. On recovery, a source-only
+E2E child publication is withheld from completed dependency outcomes until a
+current authenticated parent also binds its integrated vector and checks.
+Standalone E2E recovery before parent publication remains unavailable.
+
+Parent records are keyed by the complete authorized work identity. A later
+correction preserves previous generation records and cannot overlap their live
+or uncertain effects. A persisted worker launch ID alone is not an admission:
+capacity/spacing waits can retry the same effect-free intent; a retained
+preparation requires recovery. Admitted phases retain their original settings
+while current permission and scope revocations still apply. Maintenance polls
+only those phases and never starts the next worker. A known terminal validation
+or review failure retains its evidence, retires proven terminal ownership, and
+blocks further phase execution; it does not authorize a new attempt. Unknown
+process/provider effects keep their original holds.

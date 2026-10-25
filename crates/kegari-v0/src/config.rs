@@ -950,7 +950,16 @@ impl Repository {
                 for step in steps {
                     nonempty(&step.id, "deployment step ID")?;
                     nonempty(&step.target_id, "deployment target ID")?;
-                    nonempty(&step.environment_id, "deployment environment ID")?;
+                    if step
+                        .environment_id
+                        .parse::<u64>()
+                        .ok()
+                        .is_none_or(|id| id == 0 || id.to_string() != step.environment_id)
+                    {
+                        return Err(Error::invalid(
+                            "deployment environment IDs must be canonical positive numeric GitHub environment IDs",
+                        ));
+                    }
                     if !ids.insert(step.id.as_str()) {
                         return Err(Error::invalid("duplicate deployment step ID"));
                     }

@@ -227,14 +227,20 @@ impl OwnedGroup {
         if result != 0 {
             let error = std::io::Error::last_os_error();
             #[cfg(target_os = "macos")]
-            if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::EPERM))
-                && self.terminal_without_reaping()?
-                && !self.live_group_members()?
-            {
-                // A running leader may have exited between verification and
-                // signal. Only fresh WNOWAIT plus a complete empty live-member
-                // inventory proves that no termination request remains needed.
-                return Ok(());
+            if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::EPERM)) {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+                loop {
+                    if self.terminal_without_reaping()? && !self.live_group_members()? {
+                        // A running leader may have exited between verification and
+                        // signal. Only fresh WNOWAIT plus a complete empty live-member
+                        // inventory proves that no termination request remains needed.
+                        return Ok(());
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
             if error.raw_os_error() != Some(libc::ESRCH)
                 || (!terminal && !self.terminal_without_reaping()?)

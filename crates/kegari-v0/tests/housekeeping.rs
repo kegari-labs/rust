@@ -1,5 +1,9 @@
 //! Owned local fixtures; provider responses/process ownership are explicitly
 //! synthetic. These tests never access native Keychain or launchd.
+#[path = "support/pinned_git.rs"]
+mod pinned_git;
+#[path = "support/process_probe.rs"]
+mod process_probe;
 use kegari_v0::{
     control::*,
     digest::bytes_digest,
@@ -24,7 +28,7 @@ use std::{
     process::Command,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use uuid::Uuid;
@@ -113,6 +117,10 @@ impl ProcessProbe for Probe {
 struct Wire {
     commit: String,
     changed: AtomicBool,
+    reads: AtomicUsize,
+    pause_at: AtomicUsize,
+    paused: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
 }
 impl HttpTransport for Wire {
     fn send(
@@ -127,6 +135,11 @@ impl HttpTransport for Wire {
                     json!({"id":101,"name":"repo","owner":{"id":7,"login":"fixture","type":"User"},"default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":true,"push":true}})
                 }
                 "/repos/fixture/repo/git/ref/heads/main" => {
+                    let count = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
+                    if self.pause_at.load(Ordering::SeqCst) == count {
+                        self.paused.notify_one();
+                        self.resume.notified().await;
+                    }
                     json!({"ref":"refs/heads/main","object":{"type":"commit","sha":if self.changed.load(Ordering::SeqCst){"1111111111111111111111111111111111111111"}else{&self.commit}}})
                 }
                 other => panic!("unexpected fixture read {other}"),
@@ -136,6 +149,54 @@ impl HttpTransport for Wire {
                 headers: Default::default(),
                 body: serde_json::to_vec(&value).unwrap(),
             })
+        })
+    }
+}
+struct NativeReadConfiguration(kegari_v0::config::Config);
+impl kegari_v0::app::ConfigurationControl for NativeReadConfiguration {
+    fn authority_fences(&self) -> Result<kegari_v0::configuration::AuthorityFences> {
+        Ok(Default::default())
+    }
+    fn snapshot(&self) -> Result<kegari_v0::config::Config> {
+        Ok(self.0.clone())
+    }
+    fn execute(
+        &self,
+        _: Actor,
+        _: kegari_v0::api::CommandRequest,
+        _: Option<kegari_v0::secrets::Secret>,
+        _: Receipt,
+    ) -> kegari_v0::app::HostFuture<'_, Receipt> {
+        Box::pin(async { Err(Error::new("fixture", "configuration mutation unexpected")) })
+    }
+    fn check(&self, _: Option<Uuid>) -> kegari_v0::app::HostFuture<'_, Value> {
+        Box::pin(async { Ok(json!({})) })
+    }
+}
+struct FixtureCleanupProcesses {
+    git: Git,
+}
+impl CleanupProcesses for FixtureCleanupProcesses {
+    fn read<'a>(
+        &'a self,
+        root: VerifiedCleanupReadRoot,
+        query: kegari_v0::git::CleanupRead,
+        cleanup: Option<Arc<VerifiedCleanupExecution>>,
+    ) -> CleanupFuture<'a, String> {
+        Box::pin(async move {
+            root.revalidate_filesystem()?;
+            if let Some(proof) = cleanup {
+                assert_eq!(proof.plan().operation_id, root.operation_id());
+            }
+            self.git.cleanup_read(root.root(), query)
+        })
+    }
+    fn before_remove<'a>(&'a self, _: CleanupHook<'a>) -> CleanupFuture<'a, ()> {
+        Box::pin(async {
+            Err(Error::new(
+                "fixture",
+                "native hooks are not exercised by the retention fixture",
+            ))
         })
     }
 }
@@ -149,12 +210,66 @@ struct Fixture {
     wire: Arc<Wire>,
     client: GithubClient,
     probe: Arc<Probe>,
+    processes: Option<Arc<kegari_v0::process_records::ProcessJournal>>,
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_hook(false)
+    }
+    fn with_hook(hook: bool) -> Self {
+        Self::build(hook, false)
+    }
+    fn build(hook: bool, native: bool) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().canonicalize().unwrap();
-        let root = PrivateDir::create(&home.join("control")).unwrap();
+        let pinned_git = pinned_git::prepare(&home);
+        let native = if native {
+            let probe = Arc::new(process_probe::FixtureBootProbe::new());
+            let process = probe.current().unwrap();
+            let host = kegari_v0::platform::HostIdentity {
+                host_id: "fixture".into(),
+                boot_id: process.boot_id,
+                uid: process.uid,
+                user: "fixture".into(),
+                home: home.clone(),
+            };
+            let (registration, control) = kegari_v0::platform::Registration::bootstrap_with_probe(
+                &host,
+                id(2),
+                kegari_v0::platform::BinaryIdentity::inspect(
+                    &std::env::current_exe().unwrap(),
+                    false,
+                )
+                .unwrap(),
+                Uuid::new_v4(),
+                probe.clone(),
+            )
+            .unwrap();
+            let configuration:kegari_v0::config::Config=serde_json::from_value(json!({"schema_version":1,"runtime":{"id":id(2),"host_id":"fixture","max_agents":1,"execution_root":home.join("execution")},"connections":{},"workspaces":{},"control":{"local_users":{unsafe{libc::geteuid()}.to_string():{"id":"fixture-human","linear_user_id":id(99),"roles":["inspect","recover","configure","lifecycle"]}}}})).unwrap();
+            registration.complete_setup(&configuration).unwrap();
+            let processes = Arc::new(
+                kegari_v0::process_records::ProcessJournal::with_probe(
+                    registration.root().child("worker-processes").unwrap(),
+                    id(2),
+                    probe,
+                )
+                .unwrap(),
+            );
+            Some(kegari_v0::host_process::HostProcessServices {
+                control: Arc::new(control),
+                registration: Arc::new(registration),
+                configuration: Arc::new(NativeReadConfiguration(configuration)),
+                processes,
+                executions: Arc::new(kegari_v0::worker::ExecutionRegistry::default()),
+            })
+        } else {
+            None
+        };
+        let root = if let Some(services) = &native {
+            PrivateDir::open(services.registration.root().path()).unwrap()
+        } else {
+            PrivateDir::create(&home.join("control")).unwrap()
+        };
         let execution = PrivateDir::create(&home.join("execution")).unwrap();
         let source = execution.child("repo").unwrap().path().to_owned();
         let scratch = execution.child("scratch").unwrap().path().to_owned();
@@ -172,7 +287,7 @@ impl Fixture {
             ],
         );
         let commit = git(&source, &["rev-parse", "HEAD"]);
-        let git_api = Git::new(git_path()).unwrap();
+        let git_api = Git::new(&pinned_git).unwrap();
         let revision = git_api.revision(&source, "HEAD").unwrap();
         let retained = home.join("retained");
         copy_tree(&source, &retained);
@@ -205,7 +320,7 @@ impl Fixture {
             resource_writes: vec![],
             source_writes: vec![],
             forbidden_roots: vec![root.path().into()],
-            executables: vec![git_path()],
+            executables: vec![pinned_git.clone()],
         }
         .validate()
         .unwrap();
@@ -232,11 +347,23 @@ impl Fixture {
             isolation_digest: isolation.digest().into(),
         };
         let workflow_path = home.join("WORKFLOW.md");
-        std::fs::write(&workflow_path, "Fixture context").unwrap();
+        std::fs::write(
+            &workflow_path,
+            if hook {
+                "---\nhooks:\n  before_remove: 'true'\n---\nFixture context"
+            } else {
+                "Fixture context"
+            },
+        )
+        .unwrap();
         let workflow = Workflow::load(&workflow_path).unwrap();
-        let control = Arc::new(
-            ControlHost::setup(PrivateDir::open(root.path()).unwrap(), id(2), id(8)).unwrap(),
-        );
+        let control = if let Some(services) = &native {
+            services.control.clone()
+        } else {
+            Arc::new(
+                ControlHost::setup(PrivateDir::open(root.path()).unwrap(), id(2), id(8)).unwrap(),
+            )
+        };
         let probe = Arc::new(Probe {
             live: AtomicBool::new(false),
         });
@@ -245,16 +372,40 @@ impl Fixture {
                 PrivateDir::open(root.path()).unwrap(),
                 control.clone(),
                 probe.clone(),
-                git_path(),
+                pinned_git.clone(),
             )
             .unwrap(),
+        );
+        let adapter: Arc<dyn CleanupProcesses> = if let Some(services) = &native {
+            Arc::new(NativeCleanupProcesses::new(services.clone(), &pinned_git).unwrap())
+        } else {
+            Arc::new(FixtureCleanupProcesses {
+                git: Git::new(&pinned_git).unwrap(),
+            })
+        };
+        house.install_processes(adapter.clone()).unwrap();
+        assert_eq!(
+            house.install_processes(adapter).unwrap_err().code,
+            "authority_already_bound"
         );
         house
             .register_execution(&binding, &isolation, &owned, &workflow)
             .unwrap();
+        if hook {
+            house
+                .record_hook_ledger(
+                    id(7),
+                    &kegari_v0::execution::HookLedger::new(&binding).unwrap(),
+                )
+                .unwrap();
+        }
         let wire = Arc::new(Wire {
             commit: commit.clone(),
             changed: AtomicBool::new(false),
+            reads: AtomicUsize::new(0),
+            pause_at: AtomicUsize::new(0),
+            paused: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
         });
         let client = GithubClient::with_transport(
             HttpPolicy::new(
@@ -310,6 +461,7 @@ impl Fixture {
             wire,
             client,
             probe,
+            processes: native.map(|services| services.processes),
         }
     }
 }
@@ -855,4 +1007,136 @@ async fn unsupported_replacement_format_preserves_old_state_and_qualification_ca
         .unwrap();
     signed.payload.reviewed_by = "forged reviewer".into();
     assert!(verify_runtime_qualification(&signed, &f.key).is_err());
+}
+
+#[tokio::test]
+async fn blocked_provider_read_does_not_hold_control_and_force_prevents_deletion() {
+    let f = Fixture::new();
+    let plan = f.house.inspect(id(7), &f.client).await.unwrap();
+    f.wire.pause_at.store(3, Ordering::SeqCst);
+    let house = f.house.clone();
+    let client = f.client.clone();
+    let task = tokio::spawn(async move {
+        house
+            .apply(
+                request(id(600)),
+                id(7),
+                plan.token,
+                client,
+                Arc::new(authorize),
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), f.wire.paused.notified())
+        .await
+        .unwrap();
+    assert_eq!(
+        f.control.operation(id(600)).unwrap().phase,
+        ReceiptPhase::Sent
+    );
+    let control = f.control.clone();
+    let snapshot = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tokio::task::spawn_blocking(move || control.snapshot()),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .unwrap();
+    assert!(snapshot.pending_local_processes.contains(&id(600)));
+    let control = f.control.clone();
+    let mut force = request(id(601));
+    force.actor.roles.insert("lifecycle".into());
+    force.canonical_targets = vec![id(2).to_string()];
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tokio::task::spawn_blocking(move || control.lifecycle(force, Lifecycle::ForceStop, 0)),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .unwrap();
+    f.wire.resume.notify_one();
+    assert!(task.await.unwrap().is_err());
+    assert!(f.source.join("file.txt").is_file());
+    assert!(f.retained.join("file.txt").is_file());
+    assert_eq!(
+        f.control.operation(id(600)).unwrap().phase,
+        ReceiptPhase::Sent
+    );
+    assert!(
+        f.control
+            .snapshot()
+            .unwrap()
+            .fenced_operations
+            .contains(&id(600))
+    );
+}
+
+#[tokio::test]
+async fn unavailable_native_containment_blocks_hook_before_cleanup_effect() {
+    let f = Fixture::with_hook(true);
+    let plan = f.house.inspect(id(7), &f.client).await.unwrap();
+    let error = f
+        .house
+        .clone()
+        .apply(
+            request(id(602)),
+            id(7),
+            plan.token,
+            f.client.clone(),
+            Arc::new(authorize),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "process_tree_unverified");
+    assert_eq!(
+        f.control.operation(id(602)).unwrap_err().code,
+        "record_missing"
+    );
+    assert!(
+        f.control
+            .snapshot()
+            .unwrap()
+            .pending_local_processes
+            .is_empty()
+    );
+    assert!(f.source.exists());
+}
+
+#[tokio::test]
+async fn native_cleanup_metadata_uses_control_journal_and_same_sealed_cleanup_effect() {
+    let f = Fixture::build(false, true);
+    let plan = f.house.inspect(id(7), &f.client).await.unwrap();
+    let receipt = f
+        .house
+        .clone()
+        .apply(
+            request(id(603)),
+            id(7),
+            plan.token,
+            f.client.clone(),
+            Arc::new(authorize),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.phase, ReceiptPhase::Acknowledged);
+    assert!(!f.source.exists());
+    assert!(f.retained.join("file.txt").is_file());
+    let journal = f.processes.unwrap();
+    let records = journal.observe(id(603)).unwrap();
+    assert!(!records.is_empty());
+    assert!(records.iter().all(|record| {
+        record.binding.lease.is_none()
+            && record.binding.control_owner.as_ref().is_some_and(|owner| {
+                owner.cleanup_receipt.as_ref() == Some(&receipt.payload_digest)
+            })
+    }));
+    assert!(
+        f.control
+            .snapshot()
+            .unwrap()
+            .pending_local_processes
+            .is_empty()
+    );
 }

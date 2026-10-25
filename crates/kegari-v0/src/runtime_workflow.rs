@@ -29,6 +29,7 @@ use uuid::Uuid;
 pub struct RuntimeWorkflow {
     runtime: Arc<RuntimeCoordinator>,
     decisions: DecisionManager,
+    progression: Arc<dyn crate::runtime_driver::RuntimeProgression>,
 }
 impl RuntimeWorkflow {
     /// The release/recovery implementation is mandatory. Construction cannot
@@ -36,6 +37,7 @@ impl RuntimeWorkflow {
     pub fn new(
         runtime: Arc<RuntimeCoordinator>,
         delivery: Arc<dyn RuntimeDeliveryDecisions>,
+        progression: Arc<dyn crate::runtime_driver::RuntimeProgression>,
     ) -> Self {
         let services = &runtime.services;
         let decisions = DecisionManager::new(DecisionDependencies {
@@ -51,7 +53,11 @@ impl RuntimeWorkflow {
             housekeeping: services.housekeeping.clone(),
             inputs: services.inputs.clone(),
         });
-        Self { runtime, decisions }
+        Self {
+            runtime,
+            decisions,
+            progression,
+        }
     }
 }
 impl WorkflowControl for RuntimeWorkflow {
@@ -66,8 +72,7 @@ impl WorkflowControl for RuntimeWorkflow {
                         "provider journal recovery task failed",
                     )
                 })??;
-            let projection = self.runtime.observations.refresh().await?;
-            self.runtime.refresh_retry_references(&projection)?;
+            self.progression.reconcile().await?;
             self.runtime.inspection()
         })
     }

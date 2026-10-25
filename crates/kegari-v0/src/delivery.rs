@@ -46,6 +46,7 @@ pub trait RuntimeDeliveryDecisions: Send + Sync {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryPhase {
+    SourceSealing,
     LocalValidation,
     PublishChild,
     HostedValidation,
@@ -224,6 +225,7 @@ pub struct DeliveryCoordinator {
     contracts: BTreeMap<RepositoryId, RepositoryContract>,
     current_gate: GateCheck,
     executions: Arc<crate::worker::ExecutionRegistry>,
+    processes: Arc<crate::process_records::ProcessJournal>,
     workers: std::sync::Mutex<BTreeMap<Uuid, WorkerBinding>>,
 }
 #[derive(Clone)]
@@ -244,6 +246,7 @@ pub struct DeliveryServices {
     pub retained_git_sources: BTreeMap<RepositoryId, PathBuf>,
     pub current_gate: GateCheck,
     pub executions: Arc<crate::worker::ExecutionRegistry>,
+    pub processes: Arc<crate::process_records::ProcessJournal>,
 }
 impl DeliveryCoordinator {
     pub fn new(services: DeliveryServices, contracts: Vec<RepositoryContract>) -> Result<Self> {
@@ -291,6 +294,7 @@ impl DeliveryCoordinator {
             contracts: selected,
             current_gate: services.current_gate,
             executions: services.executions,
+            processes: services.processes,
             workers: std::sync::Mutex::new(BTreeMap::new()),
         })
     }
@@ -1639,6 +1643,9 @@ impl DeliveryCoordinator {
                 )
             })?;
         if record.body != record_body(purpose, payload)?
+            || record.issue_id != issue
+            || record.bot
+            || record.delegated
             || record.user_id.map(|id| id.to_string()).as_deref() != Some(writer.as_str())
         {
             return Err(Error::new(
@@ -1717,7 +1724,11 @@ impl DeliveryCoordinator {
                         } else {
                             crate::providers::StatusState::Failure
                         },
-                        description: if passed {
+                        description: if passed
+                            && matches!(a.review, evidence::ReviewKind::Derived { .. })
+                        {
+                            "Carries verified unchanged child reviews"
+                        } else if passed {
                             "Authenticated current Codex review passed"
                         } else {
                             "Codex review has unresolved findings"
@@ -2741,6 +2752,7 @@ impl DeliveryCoordinator {
                 admission,
                 "dispatch-exact-validation",
                 ProviderMutation::GithubDispatch {
+                    expected_production: None,
                     repository: contract.provider.clone(),
                     workflow_id: route.workflow_id,
                     workflow_path: workflow_path.into(),
@@ -3597,11 +3609,79 @@ impl DeliveryCoordinator {
     /// Reconcile a uniquely observed signed publication without replaying it.
     /// This read-only provider phase requires authenticated recovery authority,
     /// but does not require RUNNING intent or adopt a worker's proposed record.
+    /// Find an actual retained publication effect by the user's receipt ID.
+    /// This is metadata lookup only; subsequent reconciliation reobserves the
+    /// current provider record and rechecks authenticated operator authority.
+    pub fn publication_recovery_target(&self, request: Uuid) -> Result<Option<(Uuid, String)>> {
+        let mut found = None;
+        for entry in std::fs::read_dir(self.records.path())
+            .map_err(|error| Error::io("list retained delivery effects", error))?
+            .take(65_537)
+            .enumerate()
+        {
+            let (index, entry) = entry;
+            if index == 65_536 {
+                return Err(Error::new(
+                    "record_limit",
+                    "delivery effect inventory exceeds its bound",
+                ));
+            }
+            let entry = entry.map_err(|error| Error::io("read retained delivery effect", error))?;
+            let leaf = entry.file_name().to_string_lossy().into_owned();
+            if !leaf.starts_with("delivery-effect-") || !leaf.ends_with(".json") {
+                continue;
+            }
+            let record: EffectRecord = self.records.read(&leaf)?;
+            if record.request_id != request {
+                continue;
+            }
+            self.key.verify("delivery_mutation", &record.command)?;
+            if record.schema_version != 1
+                || record.payload_digest != canonical_digest(1, &record.command.payload)?
+                || found.is_some()
+            {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "delivery receipt has ambiguous or invalid signed effect lineage",
+                ));
+            }
+            let receipt = self.host.operation(record.request_id)?;
+            let operation = receipt
+                .expected
+                .get("admission_operation")
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .ok_or_else(|| {
+                    Error::new(
+                        "record_corrupt",
+                        "delivery receipt lacks its actual phase admission",
+                    )
+                })?;
+            if receipt.expected.get("delivery_scope") != Some(&record.admission_digest) {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "delivery receipt scope differs from retained signed effect",
+                ));
+            }
+            found = Some((operation, record.action));
+        }
+        Ok(found)
+    }
     pub async fn reconcile_receipt(
         &self,
         actor: &Actor,
         original_operation: Uuid,
         action: &str,
+    ) -> Result<Receipt> {
+        self.reconcile_receipt_checked(actor, original_operation, action, |_| Ok(()))
+            .await
+    }
+
+    pub async fn reconcile_receipt_checked(
+        &self,
+        actor: &Actor,
+        original_operation: Uuid,
+        action: &str,
+        final_gate: impl FnOnce(&crate::control::ControlSnapshot) -> Result<()> + Send,
     ) -> Result<Receipt> {
         actor.require("recover")?;
         if original_operation.is_nil()
@@ -3609,6 +3689,7 @@ impl DeliveryCoordinator {
                 "publish-review",
                 "publish-no-change-review",
                 "publish-child-result",
+                "publish-parent-result",
             ]
             .contains(&action)
         {
@@ -3725,9 +3806,11 @@ impl DeliveryCoordinator {
         };
         let payload_digest = original.payload_digest.clone();
         let owner = original.actor.clone();
-        let reconciled = self
-            .host
-            .reconcile_operation(actor, record.request_id, |current| {
+        let reconciled = self.host.reconcile_operation_observed(
+            actor,
+            record.request_id,
+            |current, snapshot| {
+                final_gate(snapshot)?;
                 if current.payload_digest != payload_digest
                     || current.actor != owner
                     || current.expected.get("delivery_scope") != Some(&record.admission_digest)
@@ -3743,7 +3826,8 @@ impl DeliveryCoordinator {
                     payload_digest,
                     actor: owner,
                 })
-            })?;
+            },
+        )?;
         let mut updated = record;
         updated.receipt = Some(reconciled.clone());
         self.records.write(&leaf, &updated)?;
@@ -3993,9 +4077,11 @@ impl DeliveryCoordinator {
             &admission.permit,
             || (self.current_gate)(&admission.gate),
             |receipt| {
-                let running = self.git.start_operation(
+                let running = self.git.start_journaled_operation(
                     crate::git::GitLimits::default(),
                     start_gate,
+                    self.processes.clone(),
+                    admission.permit.clone(),
                     move |git| {
                         let order = git.order_deltas(
                             &source,
@@ -4041,7 +4127,10 @@ impl DeliveryCoordinator {
         )?;
         let cancellation = running.cancellation();
         let result = running.wait().await;
-        if !cancellation.exited()? {
+        if !matches!(cancellation.exited(), Ok(true)) {
+            self.host.fence(admission.operation_id())?;
+            self.executions
+                .cancel_fenced(&self.host, admission.operation_id())?;
             return Err(Error::new(
                 "operation_uncertain",
                 "candidate Git process exit is unconfirmed; retain partial work",
@@ -4376,3 +4465,21 @@ impl DeliveryCoordinator {
         })
     }
 }
+
+#[path = "delivery_parent.rs"]
+mod parent;
+pub use parent::*;
+#[path = "delivery_child.rs"]
+mod child;
+pub use child::*;
+
+#[path = "delivery_release.rs"]
+mod production_release;
+pub use production_release::*;
+
+#[path = "delivery_assignment.rs"]
+mod assignment;
+pub use assignment::*;
+
+#[cfg(test)]
+pub(crate) use production_release::tests::observed_merge_for_runtime;

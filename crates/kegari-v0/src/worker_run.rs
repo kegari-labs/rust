@@ -19,7 +19,7 @@ use crate::{
     platform::BinaryIdentity,
     worker::{
         ContractInput, ExecutionRegistry, ReadResource, ReviewTarget, ScopedWorker,
-        WorkerAuthority, WorkerContract, WorkerHost, WorkerServices,
+        WorkerAuthority, WorkerContract, WorkerExecution, WorkerHost, WorkerServices,
     },
     workflow::Workflow,
 };
@@ -285,6 +285,7 @@ pub trait RunHooks: Send + Sync {
     fn after<'a>(&'a self, permit: &'a Permit, session: &'a SessionState) -> RunFuture<'a, ()>;
 }
 pub struct RunServices {
+    pub processes: Arc<crate::process_records::ProcessJournal>,
     pub worker: WorkerServices,
     pub hooks: Arc<dyn RunHooks>,
 }
@@ -317,6 +318,9 @@ pub struct RunCompletion {
     pub elapsed_ms: u64,
     pub hook_error: Option<Error>,
     pub checks: Vec<VerifiedCheckExecution>,
+    /// Original host-owned checkout capability, retained for separately admitted source sealing.
+    pub execution: Option<Arc<WorkerExecution>>,
+    pub contract: Option<Arc<WorkerContract>>,
     /// Actual owned adapter and registered command handles have confirmed exit.
     /// False keeps local ownership held independently of remote-effect recovery.
     pub local_exit_confirmed: bool,
@@ -330,7 +334,7 @@ struct Cancellation {
     requested: AtomicBool,
     task_finished: AtomicBool,
     notification: Notify,
-    provider: Mutex<Option<OwnedProviderCancellation>>,
+    provider: Mutex<Vec<OwnedProviderCancellation>>,
 }
 struct FinishTask(Arc<Cancellation>);
 impl Drop for FinishTask {
@@ -339,6 +343,31 @@ impl Drop for FinishTask {
     }
 }
 impl Cancellation {
+    fn before_start(&self) -> Result<()> {
+        if self.requested.load(Ordering::SeqCst) || self.task_finished.load(Ordering::SeqCst) {
+            return Err(Error::new(
+                "admission_closed",
+                "owned provider scope is cancelled or closed",
+            ));
+        }
+        let owned = self.provider.lock().map_err(|_| {
+            Error::new(
+                "ownership_conflict",
+                "provider cancellation registry failed",
+            )
+        })?;
+        if owned.len() >= 2
+            || owned
+                .iter()
+                .any(|prior| !matches!(prior.exited(), Ok(true)))
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "prior owned provider has not exited",
+            ));
+        }
+        Ok(())
+    }
     fn install(&self, provider: OwnedProviderCancellation) -> Result<()> {
         let mut owned = self.provider.lock().map_err(|_| {
             Error::new(
@@ -346,16 +375,20 @@ impl Cancellation {
                 "provider cancellation registry failed",
             )
         })?;
-        if owned.is_some() {
+        if owned.len() >= 2
+            || owned
+                .iter()
+                .any(|prior| !matches!(prior.exited(), Ok(true)))
+        {
             return Err(Error::new(
                 "ownership_conflict",
-                "provider handle already installed",
+                "prior owned provider probe is not confirmed exited",
             ));
         }
         if self.requested.load(Ordering::SeqCst) {
             provider.request_cancel()?;
         }
-        *owned = Some(provider);
+        owned.push(provider);
         Ok(())
     }
     async fn notified(&self) {
@@ -373,34 +406,35 @@ impl CommandCancellation for Cancellation {
         if !self.task_finished.load(Ordering::SeqCst) {
             return Ok(false);
         }
-        self.provider
-            .lock()
-            .map_err(|_| {
-                Error::new(
-                    "ownership_conflict",
-                    "provider cancellation registry failed",
-                )
-            })?
-            .as_ref()
-            .map_or(Ok(true), OwnedProviderCancellation::exited)
+        let owned = self.provider.lock().map_err(|_| {
+            Error::new(
+                "ownership_conflict",
+                "provider cancellation registry failed",
+            )
+        })?;
+        for provider in owned.iter() {
+            if !provider.exited()? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
     fn cancel(&self) -> Result<()> {
         self.requested.store(true, Ordering::SeqCst);
         self.notification.notify_waiters();
-        if let Some(provider) = self
-            .provider
-            .lock()
-            .map_err(|_| {
-                Error::new(
-                    "ownership_conflict",
-                    "provider cancellation registry failed",
-                )
-            })?
-            .as_ref()
-        {
-            provider.request_cancel()?;
+        let owned = self.provider.lock().map_err(|_| {
+            Error::new(
+                "ownership_conflict",
+                "provider cancellation registry failed",
+            )
+        })?;
+        let mut first_error = None;
+        for provider in owned.iter() {
+            if let Err(error) = provider.request_cancel() {
+                first_error.get_or_insert(error);
+            }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 }
 pub struct OwnedWorkerRun {
@@ -503,6 +537,253 @@ impl RequestGate for ProtocolGate {
     }
 }
 
+/// Sealed provider launch from an actual scoped worker. It retains its own
+/// registry claim until `finish` observes the owned probe/provider handles.
+pub struct WorkerProviderLaunch {
+    input: ProviderLaunchInput,
+    cancellation: Arc<Cancellation>,
+    gate: Arc<ProtocolGate>,
+    registry: Arc<ExecutionRegistry>,
+    launched: AtomicBool,
+    manifest_digest: String,
+    max_turns: u32,
+}
+pub(crate) struct ProviderLaunchInput {
+    pub control: Arc<ControlHost>,
+    pub permit: Permit,
+    pub processes: Arc<crate::process_records::ProcessJournal>,
+    pub executable: BinaryIdentity,
+    pub auth_home: PathBuf,
+    pub permissions: PermissionConfiguration,
+    pub isolation: ValidatedIsolation,
+    pub timeout: Duration,
+}
+impl WorkerProviderLaunch {
+    pub(crate) fn new(
+        input: ProviderLaunchInput,
+        contract: &WorkerContract,
+        host: Arc<dyn WorkerHost>,
+        registry: Arc<ExecutionRegistry>,
+    ) -> Result<Self> {
+        let expected =
+            PermissionConfiguration::for_isolation(contract.isolation(), &input.auth_home)?;
+        let manifest = &contract.instructions().manifest;
+        let admitted = crate::control::RunReference::from_receipt(
+            &input.control.operation(input.permit.operation_id)?,
+        )?
+        .ok_or_else(|| {
+            Error::new(
+                "admission_budget",
+                "provider launch requires actual finite run admission",
+            )
+        })?;
+        if input.timeout.is_zero()
+            || input.timeout > Duration::from_secs(300)
+            || input.permit.scope_digest != contract.scope_digest()
+            || input.permit.work_key != contract.work_key()?
+            || input.isolation.digest() != contract.isolation().digest()
+            || canonical_digest(1, &input.permissions)? != canonical_digest(1, &expected)?
+            || admitted.instruction_digest != contract.instructions().manifest_digest
+            || admitted.workspace != manifest.workspace_id
+            || admitted.account != contract.account_id()
+            || admitted.profile_digest != canonical_digest(1, &manifest.profile)?
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "provider launch differs from actual admitted contract",
+            ));
+        }
+        let cancellation = Arc::new(Cancellation {
+            requested: AtomicBool::new(false),
+            task_finished: AtomicBool::new(false),
+            notification: Notify::new(),
+            provider: Mutex::new(vec![]),
+        });
+        let gate = Arc::new(ProtocolGate {
+            control: input.control.clone(),
+            permit: input.permit.clone(),
+            host,
+            authority: contract.authority().clone(),
+            pending: Mutex::new(BTreeMap::new()),
+        });
+        input
+            .control
+            .validate_permit(&input.permit, || gate.fresh())?;
+        Ok(Self {
+            input,
+            cancellation,
+            gate,
+            registry,
+            launched: AtomicBool::new(false),
+            manifest_digest: contract.instructions().manifest_digest.clone(),
+            max_turns: admitted.max_turns,
+        })
+    }
+    pub fn manifest_digest(&self) -> &str {
+        &self.manifest_digest
+    }
+    pub fn operation_id(&self) -> Uuid {
+        self.input.permit.operation_id
+    }
+    pub fn max_turns(&self) -> u32 {
+        self.max_turns
+    }
+    pub fn verify_binding(
+        &self,
+        work: &str,
+        assembled: &instructions::AssembledInstructions,
+        isolation: &ValidatedIsolation,
+        permissions: &PermissionConfiguration,
+        executable: &std::path::Path,
+        auth_home: &std::path::Path,
+    ) -> Result<()> {
+        self.input.executable.revalidate(false)?;
+        if work != self.input.permit.work_key
+            || assembled.manifest_digest != self.manifest_digest
+            || assembled.manifest.operation_id != self.operation_id()
+            || isolation.digest() != self.input.isolation.digest()
+            || canonical_digest(1, permissions)? != canonical_digest(1, &self.input.permissions)?
+            || executable
+                .canonicalize()
+                .map_err(|e| Error::io("verify provider executable", e))?
+                != self.input.executable.path
+            || auth_home
+                .canonicalize()
+                .map_err(|e| Error::io("verify provider auth home", e))?
+                != self.input.auth_home
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "trial differs from its original scoped provider launch",
+            ));
+        }
+        self.input
+            .control
+            .validate_permit(&self.input.permit, || self.gate.fresh())
+    }
+    pub async fn launch(&self) -> Result<RpcClient> {
+        if self.launched.swap(true, Ordering::SeqCst) {
+            return Err(Error::new(
+                "operation_uncertain",
+                "owned provider launch is single-use",
+            ));
+        }
+        self.input.control.validate_permit(&self.input.permit, || {
+            self.gate.fresh()?;
+            self.cancellation.before_start()?;
+            self.registry.register(
+                self.input.permit.operation_id,
+                Uuid::new_v4(),
+                self.cancellation.clone(),
+            )
+        })?;
+        let result = launch_provider(&self.input, &self.cancellation, self.gate.clone()).await;
+        if result.is_err() {
+            self.input.control.fence(self.input.permit.operation_id)?;
+            self.registry
+                .cancel_fenced(&self.input.control, self.input.permit.operation_id)?;
+        }
+        result
+    }
+    pub fn cancel(&self) -> Result<()> {
+        self.input.control.fence(self.input.permit.operation_id)?;
+        self.registry
+            .cancel_fenced(&self.input.control, self.input.permit.operation_id)
+            .map(|_| ())
+    }
+    /// Call after terminating/joining the returned RpcClient. This never turns a
+    /// missing handle, open process or unknown descendant into confirmed exit.
+    pub fn finish(&self) -> Result<()> {
+        self.input.control.serialize_observation(|_| {
+            self.cancellation
+                .task_finished
+                .store(true, Ordering::SeqCst);
+            Ok(())
+        })?;
+        if !self.cancellation.exited()? {
+            return Err(Error::new(
+                "operation_uncertain",
+                "owned provider process has not exited",
+            ));
+        }
+        self.registry
+            .observe_exited(self.input.permit.operation_id)?;
+        Ok(())
+    }
+}
+async fn launch_provider(
+    input: &ProviderLaunchInput,
+    cancel: &Arc<Cancellation>,
+    gate: Arc<ProtocolGate>,
+) -> Result<RpcClient> {
+    let control = &input.control;
+    let permit = &input.permit;
+    let processes = &input.processes;
+    let mut client = None;
+    let mut probe = None;
+    control.validate_permit(permit, || {
+        gate.fresh()?;
+        cancel.before_start()?;
+        let guard = processes.begin(crate::process_records::SpawnBinding {
+            operation_id: permit.operation_id,
+            effect_id: Uuid::new_v4(),
+            lease: Some(permit.lease.clone()),
+            control_owner: None,
+            work_key: permit.work_key.clone(),
+            scope_digest: permit.scope_digest.clone(),
+            cwd: input.isolation.plan().cwd.clone(),
+            executable: input.executable.clone(),
+            observed_executables: vec![],
+            argv_digest: canonical_digest(1, &vec!["--version"])?,
+            kind: "codex-version".into(),
+        })?;
+        let spawned = RpcClient::start_version_probe(&input.executable, Some(guard))?;
+        cancel.install(spawned.cancellation())?;
+        probe = Some(spawned);
+        Ok(())
+    })?;
+    let verified = probe
+        .ok_or_else(|| Error::new("ownership_conflict", "version probe gate did not run"))?
+        .verify(input.timeout)
+        .await?;
+    control.validate_permit(permit, || {
+        gate.fresh()?;
+        cancel.before_start()?;
+        let guard = processes.begin(crate::process_records::SpawnBinding {
+            operation_id: permit.operation_id,
+            effect_id: Uuid::new_v4(),
+            lease: Some(permit.lease.clone()),
+            control_owner: None,
+            work_key: permit.work_key.clone(),
+            scope_digest: permit.scope_digest.clone(),
+            cwd: input.isolation.plan().cwd.clone(),
+            executable: input.executable.clone(),
+            observed_executables: vec![],
+            argv_digest: canonical_digest(1, &RpcClient::app_server_argv(&input.permissions)?)?,
+            kind: "codex-app-server".into(),
+        })?;
+        let spawned = RpcClient::start_verified_guarded(
+            &verified,
+            &input.auth_home,
+            &input.permissions,
+            input.timeout,
+            guard,
+        )?;
+        cancel.install(spawned.cancellation().ok_or_else(|| {
+            Error::new(
+                "ownership_conflict",
+                "native provider process lacks its owned cancellation handle",
+            )
+        })?)?;
+        client = Some(spawned);
+        Ok(())
+    })?;
+    let mut rpc = client
+        .ok_or_else(|| Error::new("ownership_conflict", "provider spawn gate did not run"))?;
+    rpc.bind_request_gate(gate)?;
+    Ok(rpc)
+}
+
 /// Starts exactly one already-admitted operation. The registry insertion and task
 /// launch occur under the serialized permit gate, before any provider request.
 pub fn run(
@@ -557,6 +838,7 @@ pub fn run(
     let host = services.worker.host.clone();
     let authority = prepared.contract.authority().clone();
     let registry = services.worker.executions.clone();
+    let execution = services.worker.execution.clone();
     let mut broker = ScopedWorker::new(prepared.contract.clone(), permit.clone(), services.worker)?;
     broker.validate_live_operation(
         prepared.contract.instructions(),
@@ -607,7 +889,7 @@ pub fn run(
         requested: AtomicBool::new(false),
         task_finished: AtomicBool::new(false),
         notification: Notify::new(),
-        provider: Mutex::new(None),
+        provider: Mutex::new(vec![]),
     });
     let gate = Arc::new(ProtocolGate {
         control: control.clone(),
@@ -626,6 +908,7 @@ pub fn run(
         let registry = registry.clone();
         let control = control.clone();
         let hooks = services.hooks;
+        let processes = services.processes;
         let permit = permit.clone();
         let task_cancellation = cancellation.clone();
         join = Some(tokio::spawn(async move {
@@ -633,10 +916,12 @@ pub fn run(
             let mut result = execute(ExecutionTask {
                 prepared,
                 permit,
+                execution,
                 broker,
                 state,
                 options,
                 hooks,
+                processes,
                 cancel: cancellation,
                 gate,
                 control,
@@ -664,12 +949,14 @@ pub fn run(
     })
 }
 struct ExecutionTask {
+    execution: Option<Arc<WorkerExecution>>,
     prepared: PreparedRun,
     permit: Permit,
     broker: ScopedWorker,
     state: SessionState,
     options: RunOptions,
     hooks: Arc<dyn RunHooks>,
+    processes: Arc<crate::process_records::ProcessJournal>,
     cancel: Arc<Cancellation>,
     gate: Arc<ProtocolGate>,
     control: Arc<ControlHost>,
@@ -677,12 +964,14 @@ struct ExecutionTask {
 }
 async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
     let ExecutionTask {
+        execution,
         prepared,
         permit,
         mut broker,
         mut state,
         options,
         hooks,
+        processes,
         cancel,
         gate,
         control,
@@ -699,30 +988,24 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
                 "worker was fenced before provider startup",
             ));
         }
-        let verified = RpcClient::verify_executable(
-            &prepared.executable.path,
-            Duration::from_millis(prepared.runtime.request_timeout_ms),
-        )
-        .await?;
-        control.validate_permit(&permit, || {
-            gate.fresh()?;
-            let spawned = RpcClient::start_verified(
-                &verified,
-                &prepared.auth_home,
-                &prepared.permissions,
-                Duration::from_millis(prepared.runtime.request_timeout_ms),
-            )?;
-            cancel.install(spawned.cancellation().ok_or_else(|| {
-                Error::new(
-                    "ownership_conflict",
-                    "native provider process lacks its owned cancellation handle",
-                )
-            })?)?;
-            client = Some(spawned);
-            Ok(())
-        })?;
+        client = Some(
+            launch_provider(
+                &ProviderLaunchInput {
+                    control: control.clone(),
+                    permit: permit.clone(),
+                    processes: processes.clone(),
+                    executable: prepared.executable.clone(),
+                    auth_home: prepared.auth_home.clone(),
+                    permissions: prepared.permissions.clone(),
+                    isolation: prepared.isolation.clone(),
+                    timeout: Duration::from_millis(prepared.runtime.request_timeout_ms),
+                },
+                &cancel,
+                gate,
+            )
+            .await?,
+        );
         let rpc = client.as_mut().expect("owned adapter initialized");
-        rpc.bind_request_gate(gate)?;
         rpc.initialize().await?;
         rpc.verify_account(&state.binding.account_id).await?;
         state
@@ -880,6 +1163,8 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
         elapsed_ms: start.elapsed().as_millis().min(u64::MAX as u128) as u64,
         hook_error,
         checks: broker.take_verified_checks(),
+        execution,
+        contract: Some(prepared.contract.clone()),
         local_exit_confirmed: false,
     })
 }
@@ -951,16 +1236,17 @@ pub struct ExecutorHookServices {
     pub records: crate::storage::PrivateDir,
     pub session_id: Uuid,
 }
+#[derive(Clone)]
 pub struct ExecutorRunHooks {
     contract: Arc<WorkerContract>,
     control: Arc<ControlHost>,
     host: Arc<dyn WorkerHost>,
     execution: Arc<crate::worker::WorkerExecution>,
     registry: Arc<ExecutionRegistry>,
-    records: crate::storage::PrivateDir,
-    ledger: tokio::sync::Mutex<crate::execution::HookLedger>,
+    records: Arc<crate::storage::PrivateDir>,
+    ledger: Arc<tokio::sync::Mutex<crate::execution::HookLedger>>,
     session_id: Uuid,
-    _lock: crate::storage::ExclusiveLock,
+    _lock: Arc<crate::storage::ExclusiveLock>,
 }
 impl ExecutorRunHooks {
     pub fn new(input: ExecutorHookServices) -> Result<Self> {
@@ -1026,10 +1312,10 @@ impl ExecutorRunHooks {
             host: input.host,
             execution: input.execution,
             registry: input.registry,
-            records: input.records,
-            ledger: tokio::sync::Mutex::new(ledger),
+            records: Arc::new(input.records),
+            ledger: Arc::new(tokio::sync::Mutex::new(ledger)),
             session_id: input.session_id,
-            _lock: lock,
+            _lock: Arc::new(lock),
         })
     }
     fn fresh(&self, permit: &Permit) -> Result<()> {
@@ -1056,6 +1342,16 @@ impl ExecutorRunHooks {
         }
     }
     async fn phase(&self, permit: &Permit, phase: crate::execution::HookPhase) -> Result<()> {
+        let owned = self.clone();
+        let permit = permit.clone();
+        let handle = tokio::runtime::Handle::current();
+        // Scoped Git preflight and source hashing are synchronous. Keep them on
+        // a bounded owned task so local control remains responsive while waiting.
+        tokio::task::spawn_blocking(move || handle.block_on(owned.phase_owned(&permit, phase)))
+            .await
+            .map_err(|_| Error::new("operation_uncertain", "owned hook dispatcher interrupted"))?
+    }
+    async fn phase_owned(&self, permit: &Permit, phase: crate::execution::HookPhase) -> Result<()> {
         let mut ledger = self.ledger.lock().await;
         let executor = self.executor();
         let prepared = executor.prepare_hook(

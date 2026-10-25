@@ -141,7 +141,7 @@ impl PrivateDir {
         &self.path
     }
 
-    fn revalidate(&self) -> Result<()> {
+    pub(crate) fn revalidate(&self) -> Result<()> {
         let current = open_directory(&self.path)?;
         check_owner(&current, true)?;
         let a = self
@@ -193,7 +193,15 @@ impl PrivateDir {
     }
 
     pub fn read<T: DeserializeOwned + Serialize>(&self, leaf: &str) -> Result<T> {
-        let bytes = self.read_bytes(leaf, MAX_RECORD)?;
+        self.read_bounded(leaf, MAX_RECORD)
+    }
+
+    pub fn read_bounded<T: DeserializeOwned + Serialize>(
+        &self,
+        leaf: &str,
+        maximum: u64,
+    ) -> Result<T> {
+        let bytes = self.read_bytes(leaf, maximum)?;
         let record: Record<T> = serde_json::from_slice(&bytes).map_err(|_| {
             Error::new(
                 "record_corrupt",
@@ -277,6 +285,23 @@ impl PrivateDir {
         self.write_bytes_observed(leaf, bytes, |_| Ok(()))
     }
 
+    /// Immutable bounded evidence: never replace an existing record. A partial
+    /// write is retained for explicit reconciliation, not silently retried.
+    pub fn create_bytes_exclusive(&self, leaf: &str, bytes: &[u8]) -> Result<()> {
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(Error::invalid("private file exceeds 8 MiB"));
+        }
+        let mut file = self.open_file(leaf, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
+        file.write_all(bytes)
+            .map_err(|error| Error::io("write immutable private record", error))?;
+        file.sync_all()
+            .map_err(|error| Error::io("sync immutable private record", error))?;
+        self.revalidate()?;
+        self.dir
+            .sync_all()
+            .map_err(|error| Error::io("sync immutable record directory", error))
+    }
+
     pub fn write_bytes_observed(
         &self,
         leaf: &str,
@@ -328,6 +353,13 @@ impl PrivateDir {
     }
 
     pub fn records(&self) -> Result<Vec<String>> {
+        self.records_bounded(usize::MAX)
+    }
+
+    pub fn records_bounded(&self, maximum: usize) -> Result<Vec<String>> {
+        if maximum == 0 {
+            return Err(Error::invalid("record enumeration bound must be positive"));
+        }
         self.revalidate()?;
         let mut records = Vec::new();
         for entry in std::fs::read_dir(&self.path)
@@ -339,6 +371,12 @@ impl PrivateDir {
                 .into_string()
                 .map_err(|_| Error::new("record_corrupt", "non-UTF8 recovery record name"))?;
             if leaf.ends_with(".json") {
+                if records.len() >= maximum {
+                    return Err(Error::new(
+                        "record_limit",
+                        "private JSON record inventory exceeds its bound",
+                    ));
+                }
                 self.open_file(&leaf, libc::O_RDONLY)?;
                 records.push(leaf);
             }
@@ -362,6 +400,30 @@ impl PrivateDir {
             _file: Arc::new(file),
         })
     }
+
+    /// Observe only the recorded inode; missing/replaced locks are never created
+    /// anew or interpreted as proof that their former owner has exited.
+    pub fn lock_existing(&self, leaf: &str, device: u64, inode: u64) -> Result<ExclusiveLock> {
+        let file = self.open_file(leaf, libc::O_RDWR)?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| Error::io("inspect retained lock", error))?;
+        if metadata.dev() != device || metadata.ino() != inode {
+            return Err(Error::new(
+                "unsafe_storage",
+                "retained lock inode was replaced",
+            ));
+        }
+        fs2::FileExt::try_lock_exclusive(&file).map_err(|_| {
+            Error::new(
+                "ownership_conflict",
+                "another process holds this runtime lock",
+            )
+        })?;
+        Ok(ExclusiveLock {
+            _file: Arc::new(file),
+        })
+    }
 }
 
 /// The live descriptor is the lock, not its filename/PID metadata.
@@ -370,6 +432,13 @@ pub struct ExclusiveLock {
     _file: Arc<File>,
 }
 impl ExclusiveLock {
+    pub(crate) fn identity(&self) -> Result<(u64, u64)> {
+        let metadata = self
+            ._file
+            .metadata()
+            .map_err(|error| Error::io("inspect owned lock", error))?;
+        Ok((metadata.dev(), metadata.ino()))
+    }
     /// Duplicate the actual locked open-file description for an owned child.
     /// The child spawn hook, never an ambient setting, clears close-on-exec.
     pub(crate) fn inherited_file(&self) -> Result<File> {

@@ -1,17 +1,22 @@
 # Kegari v0 build progress
 
-Local implementation and integration remain in progress. The complete offline
-crate suite passed **411 tests, with 2 explicitly blocked native tests ignored**.
-Strict all-target Clippy passed. A subsequent review correction for stale retry
-grants passed its affected library/decision/scheduling/worker rerun. See
-[the local integration report](validation/LOCAL-INTEGRATION.md). These are
-component results, not full application conformance.
-The runtime decision facade and protected provider-session recovery are being
-connected. The complete scheduler, phase progression and executable entry remain
-in flight. Native descendant containment remains an implementation blocker and
-fails closed. The operator remains **unattended**. Live agents, remote mutations,
-installation, deployment and required human calibration have not been authorized
-or run. Independent local engineering continues.
+Local implementation and integration remain in progress. The frozen progression
+checkpoint passes **523 tests, zero failures, and 2 native qualification tests
+explicitly ignored** across 35 completed test groups. Strict all-target Clippy,
+formatting, the coverage inventory and diff checks pass. The tested source hashes
+remain unchanged. Detailed scope, results and limitations are in the
+[progression report](validation/LOCAL-PROGRESSION.md) and its
+[machine-readable evidence](validation/progression-checks.json).
+
+Checkpoint `e9d16ba16b58ec58227178e80630e12e6bd258b5` records the earlier 411-test
+control/worker integration, detailed in [its report](validation/LOCAL-INTEGRATION.md).
+The subsequent guarded-process, deployment, correction, delivery and release
+progression changes are verified locally and awaiting the next local commit.
+The complete delivery/recovery graph, concrete evaluation composition and
+executable entry remain in flight. Native descendant containment remains an
+implementation blocker and fails closed. The operator remains **unattended**.
+Live agents, remote mutations, installation, deployment and required human
+calibration have not been authorized or run. Independent local work continues.
 
 ## Baseline and authority
 
@@ -33,9 +38,11 @@ or run. Independent local engineering continues.
 
 Current checkpoint: strict configuration/workflow, embedded instruction assets, canonical digests, private durable storage, serialized intent/admission/mutations, authorization/correction/scheduling primitives, immutable paged snapshots, pinned app-server/isolation adapter, and deterministic Git/evidence/release primitives are implemented and have focused tests. Real Git fixtures preserve the source checkout/index, exclude staged B from A's candidate, and preserve failed candidates. Provider schemas/config parsing are verified locally; actual sandbox enforcement is not.
 
-Root owns shared files, control/persistence, application integration, this record and commits. Six completed local checkpoints are recorded below. Current in-flight ownership: root owns the dispatcher/runtime engine and shared control integration; the configuration agent owns active reload/permission fences and decision integration; the Codex agent owns the native host, worker construction and executable/service wiring; the delivery agent owns exact-revision child/parent/release progression. `main.rs` remains unwired at this checkpoint. Component APIs are not a substitute for the complete workflow; configuration/supervisor/factory and full delivery integration remain required.
+Root owns shared files, control/persistence, application integration, this record and commits. Seven completed local checkpoints are recorded below. Current in-flight ownership: root owns authenticated worker-claim recovery, action selection and progression; the configuration agent owns correction routing/restoration and deployment observations; the Codex agent owns guarded native process ownership and the scheduler driver; the delivery agent owns exact-revision child/parent/release progression. `main.rs` remains unwired at this checkpoint. Component APIs are not a substitute for the complete workflow; supervisor/factory and full delivery integration remain required.
 
-Latest focused component results: 30 configuration/harness, 13 configuration-transaction, 21 provider, 15 reconciliation, 11 transport, 15 worker, 14 local execution, 15 delivery-composition, 24 CLI, 8 local-CLI, 6 supervisor, 22 protocol and 20 deterministic evaluation tests. These were run by their owning agents and are subject to affected reruns as integration changes continue. Root directly reran the dispatcher/control/API/platform/channel/connection results in the summary. No aggregate full-suite or complete SC/V0-T scenario pass is claimed.
+The detailed local integration report records the checkpoint's full-suite counts.
+Later focused results below identify the tested increment and do not establish a
+complete SC/V0-T scenario or real-provider qualification.
 
 ## Requirement-to-evidence checklist
 
@@ -62,6 +69,125 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 
 ## Validation and evidence
 
+- **Frozen progression verification passed:** the full crate run completed with
+  523 passed, zero failed and two native qualifications ignored (35 groups,
+  Cargo exit 0). Strict all-target Clippy, formatting, inventory and diff checks
+  passed. All 497 source/test/fixture inputs retain digest
+  `sha256:60831f1db54e9807d560ae3d9a452a8d9a6d59301f409f7e1bb093f6610f8ac1`.
+  The [durable check record](validation/progression-checks.json) includes group
+  counts and the log digest. Raw local evidence is in
+  `/private/tmp/kegari-v0-progression-full.log` and
+  `/private/tmp/kegari-v0-progression-clippy.log`; input hashes are in
+  `/private/tmp/kegari-v0-progression-source.json`.
+  The built evaluation CLI reports all 56 declared slots with dispatch disabled.
+  An initial manual invocation used nonexistent `suite.json` and correctly
+  returned `io_error`; the actual `evaluations/manifest.json` invocation exited 0.
+  No trial was launched. The final release callback rejects changed acceptance
+  token/digest/time without an admission receipt. Failed provider-read invalidation
+  shares admission serialization. Known terminal phase failures retire only
+  proven finished local work, preserve the error/original operation, and grant no
+  retry; unknown effects remain held. Release regressions cover receipt failure,
+  restart/retirement, corrected-token preparations, global acceptance ordering
+  and native evidence replacement. This milestone remains separate from the
+  previous control/worker composition checkpoint because it adds independently
+  reviewable provider delivery, process ownership and recovery behavior. No
+  history rewrite or consolidation is planned.
+- **Current full-run failure and review:** the first post-checkpoint full suite
+  stopped in deployment after 9/10 cases passed: `verify_existing_target`
+  compared a refreshed observation timestamp as if it were source identity.
+  The correction normalizes only that timestamp and retains exact provider,
+  repository, source/tree, artifact and target identity; deployment (10),
+  provider (28) and release-wire (8) checks then passed. A fresh full run passed
+  503 tests with two native ignores (35 completed test groups, Cargo exit 0),
+  and strict all-target Clippy, formatting and inventory passed for that
+  pre-review snapshot. Subsequent corrections require affected checks again.
+  Independent review also found impossible zero-turn successful agent archives,
+  missing input/permission/evidence-class comparison conditions, and historical
+  reconstructed grader-version substitution. Those report fixes pass 8 archive
+  and 20 evaluation tests, with independent rereview confirming the changes.
+  Delivery review found the designated E2E candidate-preparation
+  cycle, parent generation replacement deadlock, pre-admission launch retry
+  deadlock and admitted-phase draining gaps. Their focused corrections are
+  being implemented; no completed parent/runtime scenario is claimed.
+- **Current review regression results:** cleanup's previous final metadata check
+  could miss same-inode, same-size content edits or mode changes. Descriptor
+  hashing outside the control lock and exact descriptor/path/time verification
+  at unlink now preserve modified files; 2 unit tests cover four mutation cases
+  and positive unlink, and all 14 housekeeping integration tests plus strict
+  selected Clippy pass. The first fixture run failed on `/var` versus `/private`
+  path canonicalization before reaching the regression and was corrected.
+  Capacity preflight now checks real occupying receipts before preparation while
+  retaining final atomic worker admission. An observed admission callback binds
+  the actual serialized control generation. Control/storage (24), scheduling
+  (7), evaluation (20) and archive (9) tests pass together. Archive grades also
+  require every declared predicate exactly once; missing historical timestamps
+  and build provenance remain unavailable rather than invented.
+  The first scheduling rerun stopped at an in-flight missing parent E2E helper;
+  later cleanup builds also stopped at a missing snapshot-release wrapper and
+  release-backend borrow/serialization errors. These were compile failures, not
+  test results; coherent-source reruns are reported separately. Further review
+  found final new-worker admission could reuse drain-only authority after filter
+  exclusion, and quota observations could race serialized admission. Both fixes
+  pass the six current runtime unit tests, including two new regressions using
+  actual ControlHost admission and deterministic ordering channels.
+- **Read-only evaluation report tooling:** `kegari-v0-evaluation plan/inspect/compare`
+  now provides executable local inspection and version-aware comparison commands.
+  The affected evaluation suite (20) and new report/archive/actual-CLI tests (6)
+  pass. Missing started results remain interrupted/unknown; altered criteria are
+  incomparable; later passes do not resolve earlier failures. Report writes now
+  use owner-only descriptor-relative exclusive creation, and replacement/link/
+  corruption cases are retained as regressions. Initial compile exposed a private
+  directory-revalidation visibility error, corrected with crate-only access.
+  This tool does not launch live trials or satisfy human review; concrete live
+  fixture/authority composition is still outstanding. Strict lint is in flight.
+- **Harness fidelity review correction:** live evaluation previously bypassed the
+  guarded provider startup path and projected the original Git commit as a
+  filesystem candidate digest. It now requires the actual scoped worker's opaque
+  journaled launch capability and request gate. Observations hash actual files,
+  retain each check's original candidate, and verify private retained artifact
+  bytes. The evaluation suite passed 20 tests; the affected worker suite passed
+  32 after adding stale-check and corrupted-archive regressions. The first new
+  stale-check regression incorrectly expected a dirty-source rerun to succeed;
+  the production exact-revision gate rejected it with `dirty_execution`. The
+  regression now explicitly verifies that rejection and continued ineligibility.
+  The current shared-launch worker/evaluation/host-process rerun passes 54 tests
+  (33/20/1). An outer-suite deadline could previously drop the trial before its
+  explicit cancellation block; a new guard fences the admitted operation before
+  provider-handle destruction. Its actual-control/drop-order regression passes
+  (1), without claiming an actual provider or native containment run.
+  Guarded live-run composition still requires affected checks and a concrete
+  authorized evaluation runner; no actual trial was launched.
+- **Current integration review corrections:** protected worker outcomes now require
+  the latest completed protocol turn, exact bound contract/manifest, contiguous
+  journal and matching correction watermark. Starting or failing a later turn
+  invalidates an older completed claim (4 claim regressions pass). Delivery and
+  dependency caches recheck their 30-second evidence age, complete current provider
+  projection, native source digest, required-child set, corrections and current
+  monotone permission fences on every read. Acceptance attaches to the actual
+  sealed snapshot without refreshing its observation age (4 runtime tests pass).
+- **Finite authorization preparation:** metadata admissions now atomically retain
+  original attempt bounds independently of model sessions. A next publication ID
+  requires actual local retirement, a proven never-sent effect, retryable failure
+  and backoff; unknown writes retain the original request. The 2 planner tests and
+  22 control/storage tests pass, including restart/cap-change cases. The real-wire
+  authorization fixture passes all 9 scenarios: exact publication, lost reply,
+  STOPPED recovery, missing/edited/duplicate native records, owner loss/revocation,
+  and one preflight retry with exactly one mutation. The latest 23-test
+  control/storage run also verifies that reconciliation sees an intervening stop
+  under the control lock, preserves a rejected unknown receipt, and resolves
+  only a fresh proof while STOPPED. The first new regression failed to compile
+  because IntentRecord has no PartialEq; it now compares the intended fields.
+  Read-only native recovery
+  never retransmits a missing result.
+- **Delegated latest increments:** correction publication and prefix/final recovery
+  pass 10 tests; deployment baseline tests pass 10; authenticated Linear asset
+  association/readback is included in 28 provider tests. Latest selected
+  configuration/authority/reconciliation suites pass 65. Host-local metadata
+  permits and process journals bind actual registered control ownership separately
+  from worker leases; selected host/process tests pass, but native containment and
+  strict installed-Git prerequisites remain unresolved. These overlapping targeted
+  results are not summed into a new full-suite count. The executable factory,
+  production phase graph and final integrated checks are still in flight.
 - Baseline `git status --porcelain=v2` and `git diff --cached --stat`: empty. `shasum -a 256 crates/kegari-v0/SPEC.md`: approved digest. Entire SPEC read before implementation.
 - `rustc --version`, `cargo --version`, `cargo fmt --version`, `cargo clippy --version`, `git --version`, `codex --version`, app-server/schema help inspected. CLI emits a PATH-alias write warning under sandbox; no host changes attempted.
 - Current official [Codex app-server documentation](https://learn.chatgpt.com/docs/app-server) retrieved for protocol context. Installed generated schema and actual bounded tests, not current docs alone, will decide supported-profile compatibility.
@@ -127,6 +253,14 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
   Built-in Codex shell is now disabled for every role; declared commands remain
   scoped host tools. A real process-containment/ownership mechanism and supervised
   native qualification remain required. No sandbox bypass or host change was made.
+- **Descendant implementation research (2026-10-25):** local macOS 27.0.1 SDK
+  and Apple XNU source rule out recursive kqueue NOTE_TRACK/NOTE_CHILD: unsupported
+  since 10.5 and rejected with ENOTSUP. The installed SDK documents the macOS 27
+  Endpoint Security descendants client, but it requires an Apple-granted signing
+  entitlement. No entitlement application, signing change or client activation
+  was attempted. This is a possible engineering route, not validated containment;
+  exact event-loss, identity, cancellation and exit guarantees still need design
+  and adversarial qualification. See [native host notes](docs/native-host.md).
 - Runtime authority, actual worker-handle collection, retained admission settings,
   signed pending outcomes and durable attempt planning are being composed in
   `src/runtime.rs`, `src/runtime_schedule.rs` and `src/runtime_workers.rs`. The
@@ -179,6 +313,27 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
   Unregistered development drafts were moved out of `src`, because the build
   provenance hashes all source-directory files. The pending executable is at
   `/private/tmp/kegari-v0-main.rs.pending`; no coordinator has been activated.
+- **Post-checkpoint integration:** the authorization publisher now rechecks the
+  actual orchestration owner before admission and immediately before dispatch;
+  its provider-wire regression passes all five scenarios, including owner loss
+  at final dispatch with zero POSTs. The guarded process/source increment passes
+  27 protocol, 6 process-journal, 28 worker and 1 provider-source tests, plus
+  selected strict Clippy (agent-reported). Real Git candidate/execution fixtures
+  pass 20 delivery and 18 execution tests; 13 decision and 11 housekeeping tests
+  also pass after adopting the strict fixture executable identity.
+- **Executable prerequisite:** strict pinning correctly rejects the installed
+  Homebrew Git path because an ancestor is group-writable. Production policy was
+  preserved. Disposable tests copy the exact installed Git bytes into a private
+  fixture directory and verify their digest; this is not an installation or a
+  qualification of the original path. Actual native boot identity remains denied;
+  fixture probes identify their simulated boot UUID explicitly.
+- **Runtime recovery review (correction in progress):** joined worker results now
+  retain sealed check capabilities before receipt retirement. A failed retirement
+  cannot discard the result or skip other completed workers. Empty process
+  registries cannot upgrade a joined-but-uncertain process tree to confirmed exit.
+  Pending correction proposals now retain a signed historical authority envelope;
+  recovery checks actual admission, contract, completed turn and journal output.
+  These new paths compile; focused adversarial tests remain in flight.
 
 ## Blockers and bounded follow-up dependencies
 
@@ -190,6 +345,7 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 | Actual macOS execution boundary; §7.1, V0-T12, E07 | Installed Codex schema generation and credential-free strict named-permission parsing succeeded. A nested sandbox probe exited 71 (`sandbox_apply: Operation not permitted`) under the existing outer sandbox. No bypass/unsandboxed retry. Continue deterministic boundary tests; actual canaries need a permitted supervised execution environment before qualification. |
 | Native execution descendants; §§7.1/11, V0-T12/23/E07 | An ordinary finite owned fixture proves setsid descendants can outlive group/EOF completion. Native result promotion now fails closed with `process_tree_unverified`; implement verifiable containment/descendant ownership before native checks can pass, then qualify in an allowed supervised environment. This is an engineering gap, not permission to use group exit as full proof. |
 | Native process ownership; §§6.1/11, V0-T07–09/23 | Read-only macOS boot-identity query returns `Operation not permitted` in this sandbox. Production ownership discovery fails closed; two retained native tests are explicitly blocked. Injected deterministic process fixtures verify registration/intent/lease logic only. A permitted supervised environment is required for actual process birth/boot identity, termination and restart qualification. |
+| Trusted native Git executable; §§7/8/9 | The installed Homebrew Git has a group-writable ancestor and fails the unchanged executable-identity policy. Exact-byte private copies are used only inside disposable tests. Production setup needs an operator-provisioned supported executable path satisfying the owner/mode/ancestor checks; no host permissions or installation have been changed. |
 | GitHub-hosted runner provenance; §§8.2/9.4 | Job labels do not prove runner type. Signed OIDC verifier now binds fixed issuer/JWKS, audience, exact job/run/attempt/workflow and time/replay guards. The trigger SHA is distinct from the source actually checked out: the reviewed pinned proof workflow must verify the tested checkout and derive the audience accordingly. Adapter fixtures pass; proof workflow preparation/collection and actual hosted route remain unqualified. |
 | Human qualitative review/calibration; §12.4.3 | Operator explicitly unavailable; not attempted. Prepare representative evidence across every qualitative rubric and all material failures, then request review only when supervision is explicit. |
 
@@ -212,4 +368,13 @@ These block only dependent validation, not local implementation. No missing prer
   amended only to wrap its body at 80 characters. Recovery reference
   `refs/recovery/kegari-v0/4a689e2` was created first; its file tree and final HEAD
   were verified identical. No other commits were consolidated or rewritten.
-- Provider/evaluation/API/platform increments remain intentionally in flight and excluded from the committed foundation claim. All test processes are bounded local Cargo tests; no lasting service has been installed/started. Git test fixtures are owned temporary repositories. No project branch/worktree, push, deployment or coordinator activation occurred.
+- Local checkpoint `e9d16ba16b58ec58227178e80630e12e6bd258b5` —
+  `feat(kegari-v0): compose scoped control and worker services` records the real
+  provider/control/CLI/worker components, 411 passing offline tests and two
+  explicitly ignored native qualifications, strict all-target Clippy and the
+  subsequent affected retry-publication review correction. No commits were
+  consolidated or rewritten. This remains an incomplete application checkpoint.
+- Subsequent source/process/deployment/runtime changes remain in flight. All test
+  processes are bounded local Cargo tests; no lasting service has been installed
+  or started. Git fixtures are owned temporary repositories. No project branch,
+  worktree, push, deployment or coordinator activation occurred.

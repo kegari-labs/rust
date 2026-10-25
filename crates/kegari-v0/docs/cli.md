@@ -1,11 +1,11 @@
 # CLI and client transport
 
-The completed entrypoint is retained in `src/main.rs.pending` until the concrete
+The entrypoint draft is retained outside the source tree until the concrete
 host factory is integrated; the currently built `main.rs` remains the original
 empty scaffold. The pending entrypoint routes public commands through the typed
 client and exact hidden build/supervisor/host entrypoints. `local_cli` implements client-only preferences,
 bounded terminal TOML guidance, explicit local bootstrap, browser opening and
-native service actions. The host factory is integrated separately in `app`;
+native service actions. The host factory is integrated separately through `host`;
 provider/Keychain/native ownership qualification remains incomplete. No real host
 bootstrap, LaunchAgent installation/start/stop, browser launch, credential import
 or remote mutation was executed during deterministic tests. Service installation

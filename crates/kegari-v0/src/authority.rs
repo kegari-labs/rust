@@ -428,9 +428,98 @@ pub struct Corrections {
     classes: BTreeMap<Uuid, CommentClass>,
     pending: BTreeSet<Uuid>,
     corrective_history: Vec<String>,
+    #[serde(default)]
+    known_corrective_ids: BTreeSet<Uuid>,
     pub watermark: u64,
 }
+/// Protected invalidation references contain no comment text or clearance.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CorrectionInvalidations {
+    pub corrective_revisions: BTreeSet<String>,
+    pub corrective_comments: BTreeSet<Uuid>,
+    pub pending: BTreeMap<Uuid, CommentRevision>,
+}
+impl CommentRevision {
+    pub fn identity_digest(&self) -> Result<String> {
+        canonical_digest(
+            1,
+            &serde_json::json!({"id":self.id,"author":self.author,
+            "body_digest":self.body_digest,"edited_at":self.edited_at}),
+        )
+    }
+}
 impl Corrections {
+    pub fn invalidations(&self) -> CorrectionInvalidations {
+        CorrectionInvalidations {
+            corrective_revisions: self.corrective_history.iter().cloned().collect(),
+            corrective_comments: self.known_corrective_ids.clone(),
+            pending: self
+                .pending
+                .iter()
+                .filter_map(|id| {
+                    self.revisions.get(id).cloned().map(|mut revision| {
+                        revision.observed_revision = 0;
+                        (*id, revision)
+                    })
+                })
+                .collect(),
+        }
+    }
+    /// Restoration can retain invalidation and pending work, never completion.
+    pub fn from_invalidations(references: CorrectionInvalidations) -> Result<Self> {
+        if references.corrective_revisions.len() > 16_384
+            || references.corrective_comments.len() > 16_384
+            || references.pending.len() > 16_384
+            || references.corrective_comments.iter().any(Uuid::is_nil)
+        {
+            return Err(Error::new(
+                "bounded_input",
+                "correction invalidation references exceed finite identity bounds",
+            ));
+        }
+        for digest in &references.corrective_revisions {
+            crate::evidence::validate_digest(digest)?;
+        }
+        if references
+            .pending
+            .iter()
+            .any(|(id, r)| id.is_nil() || *id != r.id || r.observed_revision != 0)
+        {
+            return Err(Error::new(
+                "record_corrupt",
+                "pending correction identity references are malformed",
+            ));
+        }
+        Ok(Self {
+            watermark: references.corrective_revisions.len() as u64,
+            corrective_history: references.corrective_revisions.into_iter().collect(),
+            known_corrective_ids: references.corrective_comments,
+            pending: references.pending.keys().copied().collect(),
+            revisions: references.pending,
+            classes: BTreeMap::new(),
+        })
+    }
+    /// Stable phase identity from authoritative pending native revisions; local
+    /// polling counters never create a new classification budget.
+    pub fn pending_revision_digest(&self) -> Result<String> {
+        let revisions = self
+            .pending
+            .iter()
+            .map(|id| {
+                self.revisions
+                    .get(id)
+                    .ok_or_else(|| {
+                        Error::new("record_corrupt", "pending comment revision is absent")
+                    })
+                    .and_then(CommentRevision::identity_digest)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        canonical_digest(1, &revisions)
+    }
+    pub fn revision(&self, id: Uuid) -> Option<&CommentRevision> {
+        self.revisions.get(&id)
+    }
     pub fn observe(
         &mut self,
         revision: CommentRevision,
@@ -465,9 +554,7 @@ impl Corrections {
         self.revisions.insert(id, revision);
         // An edited known correction is ineligible immediately, even if classification
         // or steering is waiting for RUNNING admission.
-        if self.classes.get(&id) == Some(&CommentClass::Corrective)
-            || verified_cli_corrector.is_some()
-        {
+        if self.known_corrective_ids.contains(&id) || verified_cli_corrector.is_some() {
             self.record_corrective_revision(id)?;
         }
         if verified_cli_corrector.is_some() {
@@ -476,15 +563,22 @@ impl Corrections {
         Ok(true)
     }
     fn record_corrective_revision(&mut self, id: Uuid) -> Result<()> {
-        let digest = canonical_digest(
-            1,
-            self.revisions
-                .get(&id)
-                .ok_or_else(|| Error::invalid("unknown correction"))?,
-        )?;
+        let digest = self
+            .revisions
+            .get(&id)
+            .ok_or_else(|| Error::invalid("unknown correction"))?
+            .identity_digest()?;
+        self.known_corrective_ids.insert(id);
         if !self.corrective_history.contains(&digest) {
-            self.watermark += 1;
+            if self.corrective_history.len() >= 16_384 {
+                return Err(Error::new(
+                    "bounded_input",
+                    "correction history exceeds finite revision bound",
+                ));
+            }
             self.corrective_history.push(digest);
+            self.corrective_history.sort();
+            self.watermark = self.corrective_history.len() as u64;
         }
         Ok(())
     }
@@ -511,7 +605,7 @@ impl Corrections {
         Ok(())
     }
     pub fn generation(&self) -> Result<String> {
-        canonical_digest(1, &self.corrective_history)
+        canonical_digest(1, &self.corrective_history.iter().collect::<BTreeSet<_>>())
     }
     pub fn gates_current(&self, worker_watermark: u64) -> bool {
         self.pending.is_empty() && worker_watermark == self.watermark

@@ -4,10 +4,13 @@ use crate::{
     app::ConfigurationControl,
     configuration::{ConfigurationInputs, NativeConfigurationInputs},
     connections::ConnectionRegistry,
-    control::{Actor, ControlHost, Lease, MutationRequest, Receipt, Reconciliation},
+    control::{
+        Actor, ControlHost, Lease, MetadataAdmission, MetadataReference, MutationRequest, Receipt,
+        ReceiptPhase, Reconciliation,
+    },
     digest::{bytes_digest, canonical_digest},
     error::{Error, Result},
-    evidence::{AttestationKey, Publication, encode_signed_publication},
+    evidence::{AttestationKey, Publication, decode_signed_publication, encode_signed_publication},
     observations::ObservationCache,
     providers::{LinearClient, ProviderBroker, ProviderMutation},
     reconcile::{AuthorizationGate, VerifiedAuthorization},
@@ -18,6 +21,8 @@ use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 use uuid::Uuid;
 
+pub type OwnerCheck = Arc<dyn Fn(&Lease) -> Result<()> + Send + Sync>;
+
 pub struct AuthorizationPublisher {
     configuration: Arc<dyn ConfigurationControl>,
     control: Arc<ControlHost>,
@@ -25,14 +30,33 @@ pub struct AuthorizationPublisher {
     secrets: Arc<dyn SecretStore>,
     key: Arc<AttestationKey>,
     inputs: Arc<dyn ConfigurationInputs>,
+    owner: OwnerCheck,
 }
 impl AuthorizationPublisher {
+    /// Stable next request identity, derived from protected admission history.
+    /// A new identity is possible only after an exited, known-not-sent retryable
+    /// attempt. Unknown and acknowledged effects always keep their original ID.
+    pub fn next_publication(&self, gate: &AuthorizationGate) -> Result<Uuid> {
+        Ok(self.plan(gate)?.operation)
+    }
+    fn plan(&self, gate: &AuthorizationGate) -> Result<PublicationAttempt> {
+        let config = self.configuration.snapshot()?;
+        publication_attempt(
+            config.runtime.id,
+            &canonical_digest(1, gate.snapshot())?,
+            &gate.work_key()?,
+            &self.control.operations()?,
+            &config.runtime,
+            Utc::now(),
+        )
+    }
     pub fn new(
         configuration: Arc<dyn ConfigurationControl>,
         control: Arc<ControlHost>,
         observations: Arc<ObservationCache>,
         secrets: Arc<dyn SecretStore>,
         key: Arc<AttestationKey>,
+        owner: OwnerCheck,
     ) -> Self {
         Self::with_inputs(
             configuration,
@@ -41,6 +65,7 @@ impl AuthorizationPublisher {
             secrets,
             key,
             Arc::new(NativeConfigurationInputs),
+            owner,
         )
     }
     pub fn with_inputs(
@@ -50,6 +75,7 @@ impl AuthorizationPublisher {
         secrets: Arc<dyn SecretStore>,
         key: Arc<AttestationKey>,
         inputs: Arc<dyn ConfigurationInputs>,
+        owner: OwnerCheck,
     ) -> Self {
         Self {
             configuration,
@@ -58,9 +84,14 @@ impl AuthorizationPublisher {
             secrets,
             key,
             inputs,
+            owner,
         }
     }
-    fn current(&self, gate: &AuthorizationGate) -> Result<()> {
+    fn current(&self, gate: &AuthorizationGate, lease: &Lease) -> Result<()> {
+        (self.owner)(lease)?;
+        self.configuration
+            .authority_fences()?
+            .check_workspace(gate.workspace_id())?;
         if self.configuration.snapshot()?.revision()? != gate.config_revision() {
             return Err(Error::new(
                 "stale_config",
@@ -81,10 +112,14 @@ impl AuthorizationPublisher {
                 "authorization preparation configuration changed",
             ));
         }
+        self.client_for_workspace(gate.workspace_id())
+    }
+    fn client_for_workspace(&self, workspace_id: Uuid) -> Result<(LinearClient, String, Uuid)> {
+        let config = self.configuration.snapshot()?;
         let workspace = config
             .workspaces
             .values()
-            .find(|w| w.id == gate.workspace_id())
+            .find(|w| w.id == workspace_id)
             .ok_or_else(|| Error::new("scope_violation", "authorization workspace was removed"))?;
         let transports = config
             .connections
@@ -120,6 +155,171 @@ impl AuthorizationPublisher {
             config.runtime.id,
         ))
     }
+    /// Recover an already transmitted authorization publication from its exact
+    /// current native record. This creates no authorization/admission and never
+    /// resends a missing result. The host supplies its actual control-owner check;
+    /// it must not reenter ControlHost, because the final check is serialized.
+    pub async fn recover_receipt(
+        &self,
+        operation: Uuid,
+        current_owner: impl Fn() -> Result<()> + Send + Sync,
+    ) -> Result<VerifiedAuthorization> {
+        current_owner()?;
+        let receipt = self.control.operation(operation)?;
+        let config = self.configuration.snapshot()?;
+        let parse_id = |name: &str| {
+            receipt
+                .expected
+                .get(name)
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .filter(|id| !id.is_nil())
+                .ok_or_else(|| {
+                    Error::new(
+                        "record_corrupt",
+                        format!("authorization receipt lacks {name} identity"),
+                    )
+                })
+        };
+        let workspace_id = parse_id("workspace")?;
+        let parent_id = parse_id("parent")?;
+        let workspace = config
+            .workspaces
+            .values()
+            .find(|w| w.id == workspace_id)
+            .ok_or_else(|| {
+                Error::new(
+                    "scope_violation",
+                    "authorization recovery workspace is unavailable",
+                )
+            })?;
+        let connection = &config.connections[&workspace.linear_connection];
+        let endpoint = connection
+            .endpoint
+            .as_deref()
+            .ok_or_else(|| Error::invalid("Linear endpoint is unavailable"))?;
+        let expected_target = format!(
+            "linear:{endpoint}:{}:{parent_id}",
+            workspace.linear_workspace_id
+        );
+        let (linear, writer, runtime) = self.client_for_workspace(workspace_id)?;
+        if receipt.runtime_id != runtime
+            || receipt.kind != "linear_comment"
+            || receipt.expected.get("preparation").map(String::as_str)
+                != Some("parent_authorization")
+            || receipt.expected.get("writer") != Some(&writer)
+            || receipt.expected.get("provider_writer") != Some(&writer)
+            || receipt.canonical_targets != vec![expected_target]
+            || receipt.expected.get("body_digest") != receipt.expected.get("provider_body_digest")
+            || !receipt.expected.contains_key("body_digest")
+            || receipt.observed_result.as_ref().is_some_and(|r| {
+                r.get("effect").and_then(serde_json::Value::as_str) == Some("not_sent")
+            })
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "receipt is not the exact owned authorization publication",
+            ));
+        }
+        let comments = linear.comments(parent_id).await?;
+        let matches = comments
+            .iter()
+            .filter(|comment| {
+                comment.issue_id == parent_id
+                    && !comment.bot
+                    && !comment.delegated
+                    && comment.user_id.is_some_and(|id| id.to_string() == writer)
+                    && receipt.expected.get("body_digest")
+                        == Some(&bytes_digest(comment.body.as_bytes()))
+            })
+            .collect::<Vec<_>>();
+        let [comment] = matches.as_slice() else {
+            return Err(Error::new(
+                if matches.is_empty() {
+                    "operation_uncertain"
+                } else {
+                    "ownership_conflict"
+                },
+                "authorization recovery requires exactly one unchanged native record; no record will be resent",
+            ));
+        };
+        let signed = decode_signed_publication::<crate::reconcile::AuthorizationSnapshot>(
+            &comment.body,
+            "parent_authorization",
+            &self.key,
+        )?;
+        let snapshot_digest = canonical_digest(1, &signed.payload)?;
+        let admission_id = parse_id("admission_operation")?;
+        let parent_key =
+            crate::authority::IssueKey::new(endpoint, workspace.linear_workspace_id, parent_id)?;
+        let admission = self.control.operation(admission_id)?;
+        let attempt = MetadataReference::from_receipt(&admission)?;
+        let ordinal = attempt.as_ref().map_or(1, |reference| reference.attempt);
+        if signed.payload.parent != parent_key
+            || receipt.expected.get("snapshot") != Some(&snapshot_digest)
+            || operation != attempt_id(runtime, &snapshot_digest, "publication", ordinal)?
+            || admission_id != attempt_id(runtime, &snapshot_digest, "admission", ordinal)?
+            || attempt
+                .as_ref()
+                .is_some_and(|reference| reference.generation != snapshot_digest)
+            || attempt.as_ref().is_some_and(|reference| {
+                receipt.expected.get("metadata_attempt") != Some(&reference.attempt.to_string())
+                    || receipt.expected.get("metadata_max_attempts")
+                        != Some(&reference.max_attempts.to_string())
+            })
+            || admission.kind != "admission"
+            || admission.runtime_id != runtime
+            || admission.actor != receipt.actor
+            || admission.owner_generation != receipt.owner_generation
+            || admission.canonical_targets != vec![parent_key.identity()?]
+            || admission.expected.contains_key("run")
+            || !admission.expected.contains_key("scope")
+            || receipt.expected.get("admission_operation") != Some(&admission_id.to_string())
+            || receipt.expected.get("admitted_scope") != admission.expected.get("scope")
+            || receipt
+                .remote_ids
+                .get("comment_id")
+                .is_some_and(|id| id != &comment.id.to_string())
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "authorization native record differs from its original admission",
+            ));
+        }
+        let publication = Publication {
+            provider: "linear".into(),
+            record_id: comment.id.to_string(),
+            writer_account_id: writer.clone(),
+            payload_digest: canonical_digest(1, &signed)?,
+            observed_at: Utc::now(),
+            url: comment.url.clone(),
+        };
+        let verified = VerifiedAuthorization::verify(&self.key, &signed, &publication, &writer)?;
+        self.control.reconcile_owned_checked(&receipt,Reconciliation::UniqueVerified {
+            remote_ids:BTreeMap::from([("comment_id".into(),comment.id.to_string())]),
+            result:json!({"publication":publication,"authorization_digest":verified.digest(),"recovery":"observed_existing_native_record"}),
+            payload_digest:receipt.payload_digest.clone(),actor:receipt.actor.clone(),
+        },||{
+            current_owner()?;
+            if self.configuration.snapshot()?.revision()?!=config.revision()? {
+                return Err(Error::new("stale_config","authorization recovery configuration changed"));
+            }
+            Ok(())
+        })?;
+        // This admission only owned the finite publication task (no model or
+        // native process). Its exact side effect is now known. Active tasks are
+        // rejected by reconcile_owned_checked; unknown effects are never resent.
+        if admission.phase != crate::control::ReceiptPhase::Reconciled {
+            self.control.reconcile_owned_checked(&admission,Reconciliation::UniqueVerified {
+                remote_ids:BTreeMap::from([("publication_operation".into(),operation.to_string())]),
+                result:json!({"metadata_task":"authorization_publication_verified","publication_operation":operation,"authorization_digest":verified.digest()}),
+                payload_digest:admission.payload_digest.clone(),actor:admission.actor.clone(),
+            },&current_owner)?;
+        }
+        // Historical publication recovery cannot restore current authorization.
+        // Ordinary observation reconstruction decides present scope separately.
+        self.observations.refresh().await?;
+        Ok(verified)
+    }
     /// Called only by the RUNNING supervisor after complete provider refresh.
     /// Stable request IDs preserve uncertainty across repeat polls and restart.
     pub async fn publish(
@@ -130,13 +330,9 @@ impl AuthorizationPublisher {
         let (linear, writer, runtime) = self.client(&gate)?;
         let signed = self.key.sign("parent_authorization", gate.snapshot())?;
         let body = encode_signed_publication("parent_authorization", &signed)?;
-        let operation = publication_id(
-            runtime,
-            &canonical_digest(1, gate.snapshot())?,
-            "publication",
-        )?;
-        let admission =
-            publication_id(runtime, &canonical_digest(1, gate.snapshot())?, "admission")?;
+        let plan = self.plan(&gate)?;
+        let operation = plan.operation;
+        let admission = plan.admission;
         let prior = self
             .control
             .operations()?
@@ -149,12 +345,36 @@ impl AuthorizationPublisher {
                 .recover_publication(&linear, &writer, &gate, &body, &signed, receipt)
                 .await;
         }
-        self.current(&gate)?;
-        let permit =
-            self.control
-                .admit(lease, admission, gate.work_key()?, gate.digest()?, || {
-                    self.current(&gate)
-                })?;
+        self.current(&gate, lease)?;
+        let permit = self.control.admit_metadata(
+            lease,
+            MetadataAdmission {
+                request_id: admission,
+                work_key: gate.work_key()?,
+                scope_digest: gate.digest()?,
+                reference: plan.reference.clone(),
+            },
+            || self.current(&gate, lease),
+        )?;
+        let mut expected = BTreeMap::from([
+            ("preparation".into(), "parent_authorization".into()),
+            ("workspace".into(), gate.workspace_id().to_string()),
+            ("parent".into(), gate.snapshot().parent.issue.to_string()),
+            ("snapshot".into(), canonical_digest(1, gate.snapshot())?),
+            ("body_digest".into(), bytes_digest(body.as_bytes())),
+            ("writer".into(), writer.clone()),
+            (
+                "metadata_attempt".into(),
+                plan.reference.attempt.to_string(),
+            ),
+            (
+                "metadata_max_attempts".into(),
+                plan.reference.max_attempts.to_string(),
+            ),
+        ]);
+        if let Some(previous) = plan.previous {
+            expected.insert("previous_publication".into(), previous.to_string());
+        }
         let request = MutationRequest {
             request_id: operation,
             runtime_id: runtime,
@@ -165,18 +385,12 @@ impl AuthorizationPublisher {
             },
             kind: "parent_authorization".into(),
             canonical_targets: vec![gate.work_key()?],
-            expected: BTreeMap::from([
-                ("preparation".into(), "parent_authorization".into()),
-                ("workspace".into(), gate.workspace_id().to_string()),
-                ("parent".into(), gate.snapshot().parent.issue.to_string()),
-                ("snapshot".into(), canonical_digest(1, gate.snapshot())?),
-                ("body_digest".into(), bytes_digest(body.as_bytes())),
-                ("writer".into(), writer.clone()),
-            ]),
+            expected,
             payload: json!({}),
         };
         let this = self.clone();
         let checked_gate = gate.clone();
+        let checked_lease = lease.clone();
         let result = ProviderBroker {
             linear: Some(linear.clone()),
             github: None,
@@ -190,12 +404,12 @@ impl AuthorizationPublisher {
                 issue: gate.snapshot().parent.issue,
                 body: body.clone(),
             },
-            move || this.current(&checked_gate),
+            move || this.current(&checked_gate, &checked_lease),
         )
         .await;
         // The owned broker future has returned; remote uncertainty does not keep
         // this local preparation task falsely alive or clear its effect hold.
-        self.control.retire_local(admission,json!({"phase":"authorization_preparation","result":match &result{Ok(_)=>"provider_acknowledged",Err(_)=>"blocked"}}))?;
+        self.control.retire_local(admission,json!({"phase":"authorization_preparation","result":match &result{Ok(_)=>"provider_acknowledged",Err(_)=>"blocked"},"error":result.as_ref().err()}))?;
         let receipt = result?;
         self.recover_publication(&linear, &writer, &gate, &body, &signed, receipt)
             .await
@@ -306,6 +520,177 @@ impl AuthorizationPublisher {
         Ok(verified)
     }
 }
+struct PublicationAttempt {
+    operation: Uuid,
+    admission: Uuid,
+    reference: MetadataReference,
+    previous: Option<Uuid>,
+}
+fn publication_attempt(
+    runtime: Uuid,
+    snapshot: &str,
+    work: &str,
+    receipts: &[Receipt],
+    config: &crate::config::RuntimeConfig,
+    now: chrono::DateTime<Utc>,
+) -> Result<PublicationAttempt> {
+    let mut history = BTreeMap::new();
+    let mut cap = config.max_attempts_per_phase;
+    for receipt in receipts {
+        if let Some(reference) = MetadataReference::from_receipt(receipt)?
+            && reference.purpose == "parent_authorization"
+            && reference.generation == snapshot
+        {
+            if receipt.runtime_id != runtime
+                || receipt.canonical_targets != vec![work.to_string()]
+                || receipt.operation_id
+                    != attempt_id(runtime, snapshot, "admission", reference.attempt)?
+                || history.insert(reference.attempt, receipt).is_some()
+            {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "authorization metadata history has conflicting ownership",
+                ));
+            }
+            cap = cap.min(reference.max_attempts);
+        }
+    }
+    if history.keys().copied().ne(1..=history.len() as u32) {
+        return Err(Error::new(
+            "record_corrupt",
+            "authorization metadata history has a gap",
+        ));
+    }
+    let make = |attempt, previous| -> Result<PublicationAttempt> {
+        Ok(PublicationAttempt {
+            operation: attempt_id(runtime, snapshot, "publication", attempt)?,
+            admission: attempt_id(runtime, snapshot, "admission", attempt)?,
+            reference: MetadataReference {
+                purpose: "parent_authorization".into(),
+                generation: snapshot.into(),
+                attempt,
+                max_attempts: cap,
+            },
+            previous,
+        })
+    };
+    let mut previous = None;
+    for (attempt, admission) in &history {
+        let plan = make(*attempt, previous)?;
+        let effect = receipts
+            .iter()
+            .find(|receipt| receipt.operation_id == plan.operation);
+        if let Some(effect) = effect {
+            if effect.runtime_id != runtime
+                || effect.kind != "linear_comment"
+                || effect.expected.get("admission_operation")
+                    != Some(&admission.operation_id.to_string())
+                || effect.expected.get("snapshot").map(String::as_str) != Some(snapshot)
+            {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "authorization publication differs from its metadata admission",
+                ));
+            }
+            if effect.phase != ReceiptPhase::Reconciled
+                || effect
+                    .observed_result
+                    .as_ref()
+                    .is_none_or(|value| value["effect"] != "not_sent")
+            {
+                return Ok(plan);
+            }
+        }
+        let exited = admission.phase == ReceiptPhase::Reconciled
+            && admission.observed_result.as_ref().is_some_and(|value| {
+                value["local_execution"] == "exited"
+                    && value["unresolved_effects"]
+                        .as_array()
+                        .is_some_and(Vec::is_empty)
+            });
+        if !exited {
+            return Ok(plan);
+        }
+        let value = effect
+            .and_then(|receipt| receipt.observed_result.as_ref())
+            .and_then(|value| value.get("error"))
+            .or_else(|| {
+                admission
+                    .observed_result
+                    .as_ref()
+                    .and_then(|value| value.pointer("/observation/error"))
+            });
+        let error: Error = value
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "retired authorization preparation has no classified outcome",
+                )
+            })?;
+        if !retryable_preparation(&error) {
+            return Err(error);
+        }
+        let updated = effect.map_or(admission.updated_at, |receipt| {
+            receipt.updated_at.max(admission.updated_at)
+        });
+        let retry_after_ms = error
+            .details
+            .get("retry_after_ms")
+            .and_then(serde_json::Value::as_u64)
+            .into_iter()
+            .chain(
+                error
+                    .details
+                    .pointer("/rate_limit/retry_after_ms")
+                    .and_then(serde_json::Value::as_u64),
+            )
+            .max();
+        let mut retry_at =
+            crate::scheduler::retry_at(updated, *attempt, config.retry_cap_ms, retry_after_ms)?;
+        if let Some(reset) = error
+            .details
+            .pointer("/rate_limit/reset_at")
+            .filter(|value| !value.is_null())
+        {
+            let reset: chrono::DateTime<Utc> = serde_json::from_value(reset.clone())
+                .map_err(|_| Error::new("record_corrupt", "provider reset bound is invalid"))?;
+            retry_at = retry_at.max(reset);
+        }
+        if now < retry_at {
+            return Err(Error::new(
+                "retry_wait",
+                "authorization publication retry is waiting for its bounded backoff",
+            )
+            .detail(json!({"retry_at":retry_at,"attempt":attempt})));
+        }
+        previous = Some(plan.operation);
+    }
+    let attempt = history.len() as u32 + 1;
+    if attempt > cap {
+        return Err(Error::new(
+            "attempts_exhausted",
+            "authorization preparation exhausted its durable attempt budget",
+        ));
+    }
+    make(attempt, previous)
+}
+fn retryable_preparation(error: &Error) -> bool {
+    matches!(error.code.as_str(), "provider_transport" | "timeout")
+        || (error.retryable && matches!(error.code.as_str(), "provider_status" | "rate_limited"))
+}
+fn attempt_id(runtime: Uuid, snapshot: &str, phase: &str, attempt: u32) -> Result<Uuid> {
+    publication_id(
+        runtime,
+        snapshot,
+        &if attempt == 1 {
+            phase.into()
+        } else {
+            format!("{phase}:{attempt}")
+        },
+    )
+}
 fn publication_id(runtime: Uuid, snapshot: &str, phase: &str) -> Result<Uuid> {
     let digest = canonical_digest(
         1,
@@ -322,4 +707,166 @@ fn publication_id(runtime: Uuid, snapshot: &str, phase: &str) -> Result<Uuid> {
     bytes[6] = (bytes[6] & 0x0f) | 0x80;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     Ok(Uuid::from_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn config() -> crate::config::RuntimeConfig {
+        serde_json::from_value(json!({"id":Uuid::from_u128(1),"host_id":"fixture","max_agents":3}))
+            .unwrap()
+    }
+    fn history(attempt: u32, cap: u32, sent: bool) -> Vec<Receipt> {
+        let config = config();
+        let snapshot = canonical_digest(1, &"snapshot").unwrap();
+        let admission = attempt_id(config.id, &snapshot, "admission", attempt).unwrap();
+        let publication = attempt_id(config.id, &snapshot, "publication", attempt).unwrap();
+        let reference = MetadataReference {
+            purpose: "parent_authorization".into(),
+            generation: snapshot.clone(),
+            attempt,
+            max_attempts: cap,
+        };
+        let mut error = Error::new(
+            "provider_transport",
+            "fixture preflight failed before dispatch",
+        );
+        error.retryable = true;
+        let first = Receipt {
+            operation_id: admission,
+            request_id: admission,
+            runtime_id: config.id,
+            owner_generation: 1,
+            actor: "fixture".into(),
+            kind: "admission".into(),
+            canonical_targets: vec!["work".into()],
+            payload_digest: snapshot.clone(),
+            expected: BTreeMap::from([(
+                "metadata".into(),
+                serde_json::to_string(&reference).unwrap(),
+            )]),
+            phase: ReceiptPhase::Reconciled,
+            remote_ids: BTreeMap::new(),
+            observed_result: Some(
+                json!({"local_execution":"exited","unresolved_effects":[],"observation":{"error":error}}),
+            ),
+            cancellation: "none".into(),
+            updated_at: Utc::now() - Duration::minutes(5),
+        };
+        let effect = Receipt {
+            operation_id: publication,
+            request_id: publication,
+            kind: "linear_comment".into(),
+            canonical_targets: vec!["linear:fixture".into()],
+            expected: BTreeMap::from([
+                ("admission_operation".into(), admission.to_string()),
+                ("snapshot".into(), snapshot),
+            ]),
+            phase: if sent {
+                ReceiptPhase::Sent
+            } else {
+                ReceiptPhase::Reconciled
+            },
+            observed_result: if sent {
+                None
+            } else {
+                Some(json!({"effect":"not_sent","error":error}))
+            },
+            ..first.clone()
+        };
+        vec![first, effect]
+    }
+    fn planned(
+        receipts: &[Receipt],
+        config: &crate::config::RuntimeConfig,
+    ) -> Result<PublicationAttempt> {
+        publication_attempt(
+            config.id,
+            &canonical_digest(1, &"snapshot").unwrap(),
+            "work",
+            receipts,
+            config,
+            Utc::now(),
+        )
+    }
+    #[test]
+    fn authorization_retries_only_known_no_effect_with_durable_budget() {
+        let mut config = config();
+        let initial = planned(&[], &config).unwrap();
+        let first = history(1, 2, false);
+        let retry = planned(&first, &config).unwrap();
+        assert_ne!(initial.operation, retry.operation);
+        assert_eq!(retry.reference.attempt, 2);
+        assert_eq!(retry.previous, Some(initial.operation));
+        let mut exhausted = first.clone();
+        exhausted.extend(history(2, 2, false));
+        config.max_attempts_per_phase = 100;
+        assert_eq!(
+            planned(&exhausted, &config).err().unwrap().code,
+            "attempts_exhausted"
+        );
+        config.max_attempts_per_phase = 1;
+        assert_eq!(
+            planned(&first, &config).err().unwrap().code,
+            "attempts_exhausted"
+        );
+        let unknown = history(1, 3, true);
+        assert_eq!(
+            planned(&unknown, &config).unwrap().operation,
+            initial.operation
+        );
+        let mut no_receipt = history(1, 3, false);
+        no_receipt.pop();
+        config.max_attempts_per_phase = 3;
+        assert_eq!(planned(&no_receipt, &config).unwrap().reference.attempt, 2);
+    }
+    #[test]
+    fn authorization_retry_preserves_holds_backoff_and_permanent_failures() {
+        let config = config();
+        let initial = planned(&[], &config).unwrap();
+        let mut held = history(1, 3, false);
+        held[0].observed_result.as_mut().unwrap()["unresolved_effects"] = json!([Uuid::new_v4()]);
+        assert_eq!(
+            planned(&held, &config).unwrap().operation,
+            initial.operation
+        );
+        let mut delayed = history(1, 3, false);
+        delayed[1].updated_at = Utc::now();
+        assert_eq!(planned(&delayed, &config).err().unwrap().code, "retry_wait");
+        delayed[1].updated_at = Utc::now() - Duration::minutes(5);
+        delayed[1].observed_result.as_mut().unwrap()["error"]["details"] =
+            json!({"retry_after_ms":600000});
+        assert_eq!(planned(&delayed, &config).err().unwrap().code, "retry_wait");
+        delayed[1].observed_result.as_mut().unwrap()["error"]["details"] =
+            json!({"rate_limit":{"retry_after_ms":600000}});
+        assert_eq!(planned(&delayed, &config).err().unwrap().code, "retry_wait");
+        delayed[1].observed_result.as_mut().unwrap()["error"]["details"] =
+            json!({"rate_limit":{"reset_at":Utc::now()+Duration::minutes(10)}});
+        assert_eq!(planned(&delayed, &config).err().unwrap().code, "retry_wait");
+        let mut blocked = history(1, 3, false);
+        blocked[1].observed_result.as_mut().unwrap()["error"] =
+            json!(Error::new("access_denied", "fixture"));
+        assert_eq!(
+            planned(&blocked, &config).err().unwrap().code,
+            "access_denied"
+        );
+        blocked[1].observed_result.as_mut().unwrap()["error"]["retryable"] = json!(true);
+        assert_eq!(
+            planned(&blocked, &config).err().unwrap().code,
+            "access_denied"
+        );
+        let mut ambiguous = history(1, 3, false);
+        ambiguous[1].observed_result = Some(json!({"effect":"unknown"}));
+        assert_eq!(
+            planned(&ambiguous, &config).unwrap().operation,
+            initial.operation
+        );
+        let mut gap = history(2, 3, false);
+        assert_eq!(planned(&gap, &config).err().unwrap().code, "record_corrupt");
+        gap = history(1, 3, false);
+        gap[1]
+            .expected
+            .insert("admission_operation".into(), Uuid::new_v4().to_string());
+        assert_eq!(planned(&gap, &config).err().unwrap().code, "record_corrupt");
+    }
 }
