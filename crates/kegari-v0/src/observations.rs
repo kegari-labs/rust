@@ -11,8 +11,9 @@ use crate::{
     error::{Error, Result},
     evidence::{AttestationKey, Publication, decode_signed_publication},
     reconcile::{
-        AuthorizationSnapshot, Blocker, DefinitionCorrection, ParentRefs, ReconcileRefs,
-        Reconciler, RuntimeProjection, VerifiedAuthorization, VerifiedDefinitionCorrection,
+        AuthorizationSnapshot, Blocker, DefinitionCorrection, ParentProjection, ParentRefs,
+        ReconcileRefs, Reconciler, RuntimeProjection, VerifiedAuthorization,
+        VerifiedDefinitionCorrection,
     },
     secrets::SecretStore,
     storage::PrivateDir,
@@ -864,6 +865,73 @@ impl ObservationCache {
     ) -> Result<crate::reconcile::FreshGate> {
         self.active_parent(expected, outcomes)?.retain_active_gate(
             expected,
+            outcomes,
+            Utc::now(),
+            chrono::Duration::seconds(30),
+        )
+    }
+    /// Read current native correction facts through an existing admitted
+    /// snapshot. This returns no execution or transition authority.
+    pub(crate) fn active_correction_context(
+        &self,
+        admitted: &crate::reconcile::FreshGate,
+    ) -> Result<(Config, ParentProjection)> {
+        let projection = self.active_projection(
+            admitted.workspace_id(),
+            admitted.config_revision(),
+            admitted.workflow_digest(),
+        )?;
+        let identity = active_key(
+            admitted.workspace_id(),
+            admitted.config_revision(),
+            admitted.workflow_digest(),
+        )?;
+        let snapshot = self
+            .active
+            .lock()
+            .map_err(|_| {
+                Error::new(
+                    "observation_unavailable",
+                    "active snapshot registry unavailable",
+                )
+            })?
+            .get(&identity)
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| {
+                Error::new(
+                    "ownership_conflict",
+                    "correction has no retained admitted snapshot",
+                )
+            })?;
+        let current = self.configuration.snapshot()?;
+        let adjusted =
+            active_configuration(&current, &snapshot.configuration, admitted.workspace_id())?;
+        if adjusted.revision()? != projection.config_revision
+            || !projection
+                .workspaces
+                .get(&admitted.workspace_id())
+                .is_some_and(|workspace| workspace.complete)
+        {
+            return Err(Error::new(
+                "stale_config",
+                "correction observation does not cover the current active permissions",
+            ));
+        }
+        let parent = projection
+            .parent(admitted.workspace_id(), admitted.work().parent)?
+            .clone();
+        Ok((adjusted, parent))
+    }
+    pub(crate) fn active_corrected_gate(
+        &self,
+        admitted: &crate::reconcile::FreshGate,
+        routes: &crate::corrections::VerifiedCorrectionRoutes,
+        outcomes: &crate::reconcile::DependencyOutcomes,
+    ) -> Result<crate::reconcile::FreshGate> {
+        let (_, parent) = self.active_correction_context(admitted)?;
+        parent.retain_corrected_gate(
+            admitted,
+            routes,
             outcomes,
             Utc::now(),
             chrono::Duration::seconds(30),

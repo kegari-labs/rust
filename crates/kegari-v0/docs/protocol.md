@@ -150,7 +150,7 @@ RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test
 The local environment uses the preinstalled stable alias for the exact 1.99.1
 compiler; the alias is not a permission to select another compiler version.
 
-The 21 current fixtures exercise bounded fragmented/coalesced JSON-RPC,
+The deterministic protocol fixtures exercise bounded fragmented/coalesced JSON-RPC,
 malformed/oversized frames, exact outgoing pinned schemas, input/tool refusal,
 complete model pagination failure, native review, resume context, correction and
 completion races, duplicate notifications, persistent policy/verification holds,
@@ -181,3 +181,17 @@ checked execution boundary. Disposable test-resource write grants are separate
 from product-source grants and are included in the exact permission digest.
 Group exit and closed stdio do not establish all-descendant containment if a
 process can detach; this remains an explicit native qualification prerequisite.
+
+
+Before a recorded thread is resumed, `thread/read` with `includeTurns: true`
+reobserves its exact account, thread identity, private cwd, provider and complete
+completed-turn inventory. An active, failed, duplicate, missing or additional
+turn blocks reuse. A policy or verification signal is durably reported through
+the normal broker immediately; a later history mismatch cannot erase it. The
+read is bounded by the ordinary frame limit and a 4,096-turn inventory limit.
+It supplies a digest of actual provider history to reconciliation, without
+starting another turn or treating history as a verified reason to continue.
+The request/response schemas are pinned from the same installed CLI schema
+output as the original protocol inventory. Deterministic duplex fixtures cover
+history divergence and intervention retention; native resume qualification has
+not been run.

@@ -559,6 +559,11 @@ pub(crate) fn validate_metadata_argv(argv: &[String]) -> Result<bool> {
         }
         ["merge-base", "--is-ancestor", base, head] => oid(base) && oid(head),
         ["rev-list", "--parents", "-n", "1", head] => oid(head),
+        ["rev-list", "--objects", "--no-object-names", roots @ ..] => {
+            (2..=65).contains(&roots.len())
+                && roots.last() == Some(&"--")
+                && roots[..roots.len() - 1].iter().all(|root| oid(root))
+        }
         [
             "diff",
             "--binary",
@@ -579,7 +584,8 @@ pub(crate) fn validate_metadata_argv(argv: &[String]) -> Result<bool> {
         ] => true,
         ["status", "--porcelain=v1", "--untracked-files=all"]
         | ["for-each-ref", "--format=%(objectname)", "refs/heads"]
-        | ["fsck", "--full", "--no-reflogs"] => true,
+        | ["fsck", "--full", "--no-reflogs"]
+        | ["fsck", "--full", "--strict", "--no-reflogs"] => true,
         ["ls-tree", "-r", "-z", head] => oid(head),
         ["cat-file", "commit" | "blob", object] => oid(object),
         ["config", "--local", "--get", "user.name" | "user.email"] => true,
@@ -769,6 +775,15 @@ mod tests {
         for args in [
             vec!["rev-parse", "--verify", "HEAD^{tree}"],
             vec!["cat-file", "blob", &oid],
+            vec!["fsck", "--full", "--strict", "--no-reflogs"],
+            vec![
+                "rev-list",
+                "--objects",
+                "--no-object-names",
+                &oid,
+                &oid,
+                "--",
+            ],
             vec!["merge-base", "--is-ancestor", &oid, &oid],
             vec!["check-ref-format", "refs/heads/exact-derived-name"],
         ] {
@@ -781,10 +796,32 @@ mod tests {
             vec!["diff", "--no-index", "/etc/passwd", "/tmp/output"],
             vec!["rev-parse", "--git-path", "/etc/passwd"],
             vec!["submodule", "update"],
+            vec!["rev-list", "--objects", "--no-object-names", "--"],
+            vec!["rev-list", "--objects", "--no-object-names", "HEAD", "--"],
+            vec![
+                "rev-list",
+                "--objects",
+                "--no-object-names",
+                &oid,
+                "--",
+                "path",
+            ],
+            vec![
+                "rev-list",
+                "--objects",
+                "--no-object-names",
+                &oid,
+                "--all",
+                "--",
+            ],
             vec!["fetch", "https://example.invalid/repo"],
         ] {
             assert_eq!(check(&args).unwrap_err().code, "scope_violation");
         }
+        let mut too_many = vec!["rev-list", "--objects", "--no-object-names"];
+        too_many.extend(std::iter::repeat_n(oid.as_str(), 65));
+        too_many.push("--");
+        assert_eq!(check(&too_many).unwrap_err().code, "scope_violation");
         let mut changed = prefix;
         changed[1] = "core.hooksPath=/arbitrary".into();
         changed.extend(["status".into()]);

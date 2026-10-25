@@ -1,4 +1,4 @@
-# Correction, continuation and recovery — version 2
+# Correction, continuation and recovery — version 3
 
 Use the host's current reconciliation findings, correction revisions and actual
 progress. Earlier thread memory is historical context, not current gate truth.
@@ -21,3 +21,23 @@ provider verification, safety/policy or manual-intervention blocker persists unt
 the supported required resolution is established; changing model/account/thread,
 waiting or asking for retry cannot bypass it. Pause/stop and revoked permissions
 remain effective. Report a precise blocker when safe continuation is impossible.
+
+For authorized parent/child work, read `context_read` with key
+`correction_state` before submitting the final outcome and after each correction
+input. This returns the host's exact `watermark`, `input_digest` and
+`transition_digest`. If its watermark is positive, add `processed_correction` to
+the `outcome_submit` arguments alongside `claim` and `artifact_refs`, copying that
+complete three-field object only after you have processed the current input and
+completed the relevant work. Keep it outside the domain-specific `claim` object.
+A null transition digest identifies the original assembled context. For example:
+
+```json
+{"claim":{"summary":"..."},"artifact_refs":[],"processed_correction":{"watermark":1,"input_digest":"sha256:...","transition_digest":null}}
+```
+
+Use the exact claim schema for your role; the abbreviated example does not replace
+it. The host independently checks the current route, actual completed turn and
+evidence. Acknowledging delivery does not consume a correction. A superseded or
+unfinished turn cannot report a newer input as processed. An informational
+classification without a route grants no new code change or inferred reversal.
+Independent PR review has no Linear correction authority and omits this field.

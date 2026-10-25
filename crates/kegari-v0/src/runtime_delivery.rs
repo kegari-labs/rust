@@ -325,6 +325,27 @@ impl RuntimeDelivery {
                 ));
             }
         }
+        let read_coordinator = workspace.coordinator.clone();
+        let read_configuration = workspace.configuration.clone();
+        let read_workspace = gate.workspace_id();
+        let imported = tokio::task::spawn_blocking(move || {
+            read_coordinator.retained_object_read_roots(&read_configuration, read_workspace)
+        })
+        .await
+        .map_err(|_| {
+            Error::new(
+                "object_validation",
+                "retained source discovery did not finish",
+            )
+        })??;
+        for root in imported {
+            if roots.insert(root.root().to_owned(), root).is_some() {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "retained object roots overlap another granted source",
+                ));
+            }
+        }
         let registry = self.provider_broker(&workspace.configuration, gate.workspace_id())?;
         let authority = LocalProcessPermit::metadata(
             self.metadata_services(),
@@ -474,6 +495,7 @@ impl RuntimeDelivery {
     /// A failed read invalidates old readiness immediately and remains diagnostic.
     pub async fn refresh(&self, projection: &RuntimeProjection) -> Result<()> {
         let _refresh = self.refresh_lock.lock().await;
+        self.clear_no_release_observations()?;
         for observed in projection.workspaces.values() {
             let workspace = self.workspace(projection, observed.workspace_id);
             for parent in observed.parents.values() {
@@ -482,7 +504,15 @@ impl RuntimeDelivery {
                     Err(error) => Err(error.clone()),
                 };
                 match result {
-                    Ok(snapshot) => {
+                    Ok(mut snapshot) => {
+                        if let Ok(workspace) = &workspace
+                            && let Err(error) = self
+                                .hydrate_no_release(workspace, parent, &mut snapshot)
+                                .await
+                        {
+                            self.runtime.invalidate_delivery(&parent.key, error)?;
+                            continue;
+                        }
                         if let Err(error) = self.runtime.retain_delivery_snapshot(snapshot) {
                             self.runtime.invalidate_delivery(&parent.key, error)?;
                         }
@@ -699,7 +729,7 @@ impl RuntimeDelivery {
                     crate::control::ReceiptPhase::Acknowledged
                         | crate::control::ReceiptPhase::Reconciled
                 )
-                || command.kind != "command/release"
+                || command.kind != "command/Release"
                 || command.actor != intent.actor.identity
                 || command.payload_digest != intent.parent_command_digest
             {
@@ -749,7 +779,7 @@ fn mutation_digest(request: &crate::control::MutationRequest) -> Result<String> 
 
 #[cfg(test)]
 #[path = "runtime_delivery_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[path = "runtime_delivery_child.rs"]
 mod child;

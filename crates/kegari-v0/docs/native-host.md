@@ -2,9 +2,12 @@
 
 `host::run_native` accepts a mandatory `HostRuntimeFactory`. Its returned
 `RuntimeBackend` supplies the actual workflow controller and supervisor driver;
-the host does not install an empty or permissive scheduler. The root runtime
-coordinator and concrete factory/main entrypoint are still
-being integrated. Native service startup has not been executed or qualified.
+the host does not install an empty or permissive scheduler. The executable now installs `NativeRuntimeFactory`, which composes the concrete
+runtime coordinator, delivery/decision backend, correction publisher and driver.
+Offline executable tests cover public help/version, exact build/asset metadata
+and rejection of malformed hidden entrypoints. Native service startup has not
+been executed or qualified; remaining delivery/recovery gaps are documented in
+`delivery-release.md`.
 
 Startup uses the OS account/boot identity and exact immutable executable,
 recovers the existing registration under `control.lock`, and loads the validated

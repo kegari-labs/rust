@@ -212,3 +212,11 @@ an avoidable permanent unknown operation. The prebuilt host cleanup guard uses
 the same prerequisite and exact executable/profile/argument binding. Trusted
 fixed Git metadata remains a separate journaled operation. A passing fixture
 boundary does not remove this native production prerequisite.
+
+## Checks after an active correction
+
+`EffectiveExecutionBinding` requires the original owned execution and an actual `VerifiedCorrectionTransition` reconstructed from current signed native correction history. It changes only the effective work identity for new child local-check evidence. The original operation, revision, isolation, owned-directory identity and marker remain unchanged. An arbitrary serialized work identity cannot pass this bridge.
+
+`prepare_effective_check` retains that capability through process start and completion. Corrected check records use schema 2 and include the original binding digest, exact transition digest, processed watermark and correction input digest. Earlier check records retain their original generation. The enclosing worker compares the current correction epoch under the serialized start and completion gates; a changed epoch cannot publish stale passing evidence. Integrated validation continues to require a separately prepared exact candidate vector.
+
+The regression `native_correction_check_keeps_original_marker_and_historical_evidence` uses the real signed native correction-publication fixture and actual disposable Git clone, with an explicitly deterministic command boundary. It verifies unchanged ownership bytes, historical earlier checks, exact corrected provenance, rejected raw work/revision rebinding and continued rejection as production evidence. Native repository execution remains subject to the documented process-containment prerequisite.

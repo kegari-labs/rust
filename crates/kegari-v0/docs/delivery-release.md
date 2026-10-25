@@ -111,10 +111,75 @@ the exact provider receipt, restart, and failure to persist retirement. Only
 reconciled effects plus the actual admission's observed local exit can release
 those holds. No restart reconstructs a live dispatch permit from JSON.
 
-This backend increment is not yet attached to the runtime progression or human
-release-recovery trait. Explicit resume/abandon/resolve/supersede, new per-attempt
-dispatch identities after an observed failure, no-release dependency completion,
-and authenticated arbitrary remote Git-object recovery remain unfinished.
-Deployment-only corrected successors remain blocked until their actual previous
-integration and target baseline can be represented and verified. These are
-implementation gaps, separate from the live qualification described above.
+Step payloads bind an explicit attempt ordinal and the exact ordinals of their
+prerequisites. A completed failure/cancellation advances the ordinal only through
+an authenticated explicit resume; old effect records and request IDs remain
+immutable. A verification step names its actual deployment attempt, and a missing
+new attempt never falls back to an older effect. The immutable plan ID is distinct
+from the actual resumed admission used for ownership, cancellation and retirement.
+
+The recovery backend now provides concrete `abandon_release`, `resolve_release`,
+`resume_release` and `reconcile_operation` methods. Abandon retires only known
+unstarted work and preserves unknown effects. Resolve uses the complete sealed
+repository/target inventory and requires a coherent known terminal baseline;
+it cannot declare delivery successful. Explicit resume obtains a new checked
+control admission from the actual prior terminal receipts and authenticated
+operator command, then rechecks the same accepted token, plan and production
+proofs. A held idle finite execution can retire without releasing its resource
+hold. The ordinary queue still rejects that hold; only checked resume evaluation
+may exclude its own exact predecessor hold, never another attempt's.
+
+`recover_owned_release_step` reads signed original effect and actual admission
+records independently of current product readiness. Correction, exclusion or
+STOPPED state therefore cannot hide the outcome of an earlier action. Its result
+grants no write or readiness authority. Completed preflight rejection can retain
+a signed no-dispatch observation; remote absence alone is never such evidence.
+
+The concrete human release-recovery trait now delegates to these methods and
+`supersede_release`. Supersession requires a known locally retired predecessor,
+a freshly accepted corrected generation, complete current baseline observations,
+and prepared production validation. It stores a signed exact successor intent
+through the authenticated local transition. The predecessor hold is assigned to
+that plan and survives until actual complete successor delivery. A separate
+RUNNING admission rechecks current evidence, configuration, recover authority and
+actual acknowledged transition; the intent itself grants no permit.
+
+Same-result resume can now use a separate historical reader when ordinary
+readiness is absent after its own merge. It rechecks original signed parent/vector,
+actual local Git objects and integrated execution, current child/native acceptance
+publications, and complete main/target changes accounted for by original owned
+effects. Production recovery retains the original signed repository-policy
+observation and independently verifies current policy at the actual squash; it
+never substitutes that current base into the historical proof. Normal production
+recovery still rejects a merged PR. The actual Git/provider adapter fixture covers
+successful historical production readback and a later unrelated main movement.
+The full runtime historical-parent continuation is compile-checked and still
+needs its own positive end-to-end fixture. Previous-generation production
+integration recovery and visual historical asset readback remain prerequisites.
+
+An accepted outcome whose complete candidate vector is already production now
+uses a separate no-release completion path. It reobserves every selected source
+and configured target, verifies the exact native integrated-result and acceptance
+publications, then admits one finite metadata publication. The signed record is
+not dependency evidence until the exact selected writer's native comment and its
+actual host effect/admission receipts are read back. The record consumes no release
+spacing and sends no production mutation. The owned publication task retires even
+if its caller is cancelled; unknown provider effects retain their holds.
+
+Known-not-sent publication failures share the durable metadata attempt planner,
+including the original attempt cap, bounded backoff and provider reset bounds.
+Unknown or acknowledged effects are never replayed. Explicit operation recovery
+can observe the exact old publication while STOPPED, with current actor/account/
+endpoint checks; this records the historical effect and does not renew acceptance
+or the current work generation. Current dependency proofs are rebuilt from native
+readback. Replacing acceptance removes the old no-release proof, dependency credit
+and link until revalidation. An offline runtime fixture exercises publication,
+retirement, STOPPED readback and acceptance invalidation with actual owned Git and
+local provider fixtures. This is deterministic evidence, not live qualification.
+
+Deployment-only corrected successors remain a separate implementation increment.
+They cannot invent a production merge when the corrected tree is already on main
+but a configured target is behind. Complete historical UI reconstruction after a
+new generation and full recovery scenario qualification also remain outstanding.
+Remote Git-object acquisition has its own authenticated adapter and does not itself
+prove production integration.

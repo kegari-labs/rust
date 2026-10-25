@@ -26,6 +26,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
+#[path = "runtime_corrections.rs"]
+mod correction_transitions;
 
 #[derive(Clone)]
 struct RegisteredRun {
@@ -57,6 +59,9 @@ struct State {
     rate_observations: BTreeMap<String, Value>,
     resume_proofs: BTreeMap<Uuid, String>,
     correction_inputs: BTreeMap<(Uuid, u64), (String, String)>,
+    correction_transitions: BTreeMap<Uuid, Arc<crate::corrections::VerifiedCorrectionTransition>>,
+    correction_errors: BTreeMap<Uuid, Error>,
+    correction_wakes: BTreeMap<Uuid, Arc<tokio::sync::Notify>>,
     provider_holds: BTreeMap<Uuid, crate::codex::SessionState>,
     completions: BTreeMap<Uuid, Arc<RunCompletion>>,
 }
@@ -227,6 +232,25 @@ impl RuntimeCoordinator {
                 )?;
             expected.compare_current(&current, Utc::now(), Duration::seconds(30))?;
             state.delivery_errors.remove(&parent.identity()?);
+            if let Some(proof) = snapshot.parent_delivery().no_release_required() {
+                let record = proof.record();
+                let current_parent = projection.parent(expected.workspace_id(), record.work.parent)?;
+                let links = snapshot.no_release_link().map(|url| vec![url.to_owned()]).unwrap_or_default();
+                if !state.history.iter().any(|row| row.parent == parent
+                    && row.generation == record.work.generation && row.outcome == "no-release-required"
+                    && row.links == links)
+                {
+                    state.history.push(HistoryRow {
+                        parent_reference: current_parent.parent_reference.clone(), parent: parent.clone(),
+                        outcome: "no-release-required".into(), generation: record.work.generation.clone(),
+                        completed_at: record.recorded_at, links,
+                    });
+                }
+                state.release_details.insert(parent.clone(), json!({
+                    "outcome":"no-release-required", "record":record, "record_digest":proof.digest(),
+                    "publication":snapshot.no_release_link(), "production_changes":false,
+                }));
+            }
             state.delivery_snapshots.insert(parent, snapshot);
             // A replaced, missing or stale provider generation cannot continue
             // satisfying another parent's dependencies through an old cache.
@@ -1127,6 +1151,9 @@ impl RuntimeCoordinator {
                 "worker operation is already registered",
             ));
         }
+        state
+            .correction_wakes
+            .insert(permit.operation_id, Arc::new(tokio::sync::Notify::new()));
         state.runs.insert(
             permit.operation_id,
             RegisteredRun {
@@ -1275,6 +1302,67 @@ impl RuntimeCoordinator {
             }
         }
         Ok(completed)
+    }
+    /// Accept only the same admitted trial's final broker checkpoint and actual
+    /// owned provider/hook exit capability, never caller-supplied completion JSON.
+    pub fn finish_trial(
+        &self,
+        verified: crate::worker_run::VerifiedTrialCompletion,
+    ) -> Result<Arc<RunCompletion>> {
+        let completion = Arc::new(verified.into_completion());
+        let id = completion.operation_id;
+        let observed = completion.observation();
+        self.control.serialize_observation(|_| {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| Error::new("runtime_unavailable", "trial completion lock failed"))?;
+            if state.completions.contains_key(&id) {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "trial completion already retained",
+                ));
+            }
+            let run = state.runs.get_mut(&id).ok_or_else(|| {
+                Error::new("ownership_conflict", "trial admission is not registered")
+            })?;
+            let contract = completion
+                .contract
+                .as_ref()
+                .ok_or_else(|| Error::new("worker_binding", "trial lost original contract"))?;
+            if !Arc::ptr_eq(&run.contract, contract)
+                || !completion.local_exit_confirmed
+                || completion.state.binding.operation_id != id.to_string()
+                || !completion.state.completion_is_current()
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "trial completion does not bind its original registered worker",
+                ));
+            }
+            run.last_observation = Some(observed.clone());
+            run.joined = true;
+            state.completions.insert(id, completion.clone());
+            Ok(())
+        })?;
+        if let Err(error) = self.control.retire_local(id, observed) {
+            self.state
+                .lock()
+                .map_err(|_| Error::new("runtime_unavailable", "trial retirement lock failed"))?
+                .completion_errors
+                .insert(id, error.clone());
+            return Err(error);
+        }
+        if let Some(run) = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "trial retention lock failed"))?
+            .runs
+            .get_mut(&id)
+        {
+            run._active = None;
+        }
+        Ok(completion)
     }
     pub fn retained_completion(&self, operation: Uuid) -> Result<Option<Arc<RunCompletion>>> {
         Ok(self
@@ -1426,7 +1514,7 @@ impl RuntimeCoordinator {
             .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
         let holds=state.provider_holds.iter().map(|(id,session)| json!({"operation_id":id,"account":session.binding.account_id,"work":session.binding.work_identity,"intervention":session.intervention,"input_required":session.input_required})).collect::<Vec<_>>();
         Ok(
-            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"delivery":state.delivery_errors}),
+            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors}),
         )
     }
     pub fn execution_registry(&self) -> Arc<ExecutionRegistry> {
@@ -1468,14 +1556,25 @@ impl OutcomeSink for RuntimeCoordinator {
             })?;
         self.control.validate_permit(&run.permit, || {
             self.registration.verify_active_owner(&run.permit.lease)?;
-            self.current_authority(run.contract.authority())?;
+            crate::worker::effective_authority(
+                self,
+                outcome.operation_id,
+                run.contract.authority(),
+            )?;
+            let transition = self.current_correction_transition(outcome.operation_id)?;
+            let effective = transition
+                .as_ref()
+                .map(|proof| WorkerAuthority::Authorized(proof.current_authority().clone()))
+                .unwrap_or_else(|| run.contract.authority().clone());
             let manifest = &run.contract.instructions().manifest;
             if run.joined
-                || outcome.schema_version != 1
+                || !matches!(outcome.schema_version, 1 | 2)
+                || outcome.schema_version == 1
+                    && (transition.is_some() || outcome.processed_correction.is_some())
                 || outcome.proposal_id.is_nil()
                 || outcome.runtime_id != run.permit.lease.runtime_id
-                || outcome.work.as_ref() != run.contract.authority().work()
-                || outcome.fresh_gate_digest != run.contract.authority().digest()?
+                || outcome.work.as_ref() != effective.work()
+                || outcome.fresh_gate_digest != effective.digest()?
                 || outcome.instruction_digest != run.contract.instructions().manifest_digest
                 || outcome.tool_contract_digest != run.contract.tools().digest()
                 || canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &outcome.instructions)?
@@ -1499,10 +1598,43 @@ impl OutcomeSink for RuntimeCoordinator {
                 || outcome.session.intervention.is_some()
                 || outcome.session.input_required
                 || outcome.session.turn_id.is_some()
+                || outcome.schema_version == 2
+                    && outcome.session.last_completed_turn.as_deref()
+                        != Some(&outcome.completed_turn)
             {
                 return Err(Error::new(
                     "worker_binding",
                     "outcome differs from its current admitted completed session",
+                ));
+            }
+            let expected_correction = transition
+                .as_ref()
+                .map(|proof| crate::worker::ProcessedCorrection {
+                    watermark: proof.watermark(),
+                    input_digest: proof.input_digest(),
+                    transition_digest: Some(proof.digest().into()),
+                })
+                .or_else(|| match &effective {
+                    WorkerAuthority::Authorized(gate) => Some(crate::worker::ProcessedCorrection {
+                        watermark: gate.correction_watermark(),
+                        input_digest: manifest.context_digest.clone(),
+                        transition_digest: None,
+                    }),
+                    WorkerAuthority::Independent(_) => None,
+                });
+            if outcome.schema_version == 2
+                && (outcome
+                    .processed_correction
+                    .as_ref()
+                    .is_some_and(|reported| Some(reported) != expected_correction.as_ref())
+                    || expected_correction.as_ref().is_some_and(|expected| {
+                        expected.watermark > 0
+                            && outcome.processed_correction.as_ref() != Some(expected)
+                    }))
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "outcome does not report the exact current processed correction input",
                 ));
             }
             match run.contract.authority() {
@@ -1527,7 +1659,7 @@ impl OutcomeSink for RuntimeCoordinator {
                 }
                 _ => {}
             }
-            let authority = match run.contract.authority() {
+            let authority = match &effective {
                 WorkerAuthority::Authorized(gate) => serde_json::to_value(gate),
                 WorkerAuthority::Independent(gate) => serde_json::to_value(gate),
             }
@@ -1653,20 +1785,45 @@ impl WorkerHost for RuntimeCoordinator {
     }
     fn current_authority(&self, expected: &WorkerAuthority) -> Result<WorkerAuthority> {
         let expected_digest = expected.digest()?;
-        let registered = self
-            .state
-            .lock()
-            .map_err(|_| Error::new("runtime_unavailable", "worker registration lock failed"))?
-            .runs
-            .values()
-            .any(|run| {
+        let registered = {
+            let state = self.state.lock().map_err(|_| {
+                Error::new("runtime_unavailable", "worker registration lock failed")
+            })?;
+            state.runs.iter().any(|(operation, run)| {
                 run._active.is_some()
-                    && run.contract.authority().digest().as_ref() == Ok(&expected_digest)
-            });
+                    && !run.joined
+                    && (run.contract.authority().digest().as_ref() == Ok(&expected_digest)
+                        || state
+                            .correction_transitions
+                            .get(operation)
+                            .is_some_and(|transition| {
+                                transition.current_authority().digest().as_ref()
+                                    == Ok(&expected_digest)
+                            }))
+            })
+        };
         if registered {
             return self.retained_authority(expected);
         }
         self.current_admission_authority(expected)
+    }
+    fn correction_waiting(&self, operation: Uuid) -> Result<bool> {
+        self.waiting_for_correction(operation)
+    }
+    fn correction_transition(
+        &self,
+        operation: Uuid,
+    ) -> Result<Option<Arc<crate::corrections::VerifiedCorrectionTransition>>> {
+        self.current_correction_transition(operation)
+    }
+    fn correction_wake(&self, operation: Uuid) -> Result<Option<Arc<tokio::sync::Notify>>> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "correction notification lock failed"))?
+            .correction_wakes
+            .get(&operation)
+            .cloned())
     }
     fn verify_owner(&self, lease: &Lease) -> Result<()> {
         self.registration.verify_active_owner(lease)

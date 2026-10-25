@@ -52,12 +52,17 @@ replaying an unknown hook. Host recovery must resolve those effects separately.
 
 The native runtime coordinator remains responsible for selection, attempt
 admission, provider refresh, current OS owner checks, correction ingestion,
-delivery verification and supervisor integration. Changed authority invalidates
-the immutable worker contract. Resume requires reconciled prior state and exact
-effective binding compatibility; it cannot silently rebind a changed instruction
-manifest or correction generation. A fresh thread may be necessary. The complete
-application continuation/readmission path and live behavioral qualification are
-separate remaining integration work.
+delivery verification and supervisor integration. The initial worker contract
+stays immutable. An active child can receive a separate, host-verified correction
+chain with unchanged authority, permission scope, profile and dependency
+contracts; its exact native input and processing report are tied to the actual
+turn. Pending classification closes effects while the finite original session
+waits. Historical checks remain attached to their original work generation.
+Resume additionally requires actual provider history and exact effective binding
+compatibility. It cannot silently rebind a changed instruction manifest,
+directory, account or profile. The complete unfinished-work trigger and resumed
+session readmission path remain separate implementation work; a generic summary
+cannot authorize them. Live behavioral qualification remains unperformed.
 
 Deterministic validation uses the real assembly/control/broker/hook path and
 explicit disposable subprocess fixtures. Those fixtures never execute the
@@ -93,3 +98,11 @@ error or dropping a trial does not release an unknown process hold.
 Actual joined runs retain their original `WorkerContract` and optional
 `WorkerExecution` capabilities for separately admitted delivery phases. A
 historical JSON session record cannot manufacture checkout ownership.
+
+
+Joined completions retain actual failed check capabilities alongside passing
+checks, only after the corresponding effect has been observed under the current
+authority. A failed check is never passing evidence; its capability can establish
+an exact remaining validation obligation for a later host decision. An unknown
+owned-process exit withholds both capability classes. Serialized diagnostics
+cannot recreate either class.

@@ -1297,8 +1297,66 @@ pub struct VerifiedDeliverySnapshot {
     outcomes: crate::reconcile::DependencyOutcomes,
     observed_at: DateTime<Utc>,
     blockers: Vec<String>,
+    no_release_link: Option<String>,
 }
 impl VerifiedDeliverySnapshot {
+    #[cfg(test)]
+    pub(crate) fn fixture(
+        authority: FreshGate,
+        parent: evidence::VerifiedParent,
+        acceptance: evidence::VerifiedAcceptance,
+        children: Vec<evidence::VerifiedChild>,
+    ) -> Result<Self> {
+        let work = authority.work().clone();
+        if parent.manifest().work != work
+            || parent.manifest().required_children
+                != children
+                    .iter()
+                    .filter_map(|child| child.evidence().work.child)
+                    .collect()
+        {
+            return Err(Error::new(
+                "stale_result",
+                "fixture snapshot evidence does not match actual gate",
+            ));
+        }
+        let mut delivery = crate::reconcile::ParentDelivery::default();
+        let mut outcomes = crate::reconcile::DependencyOutcomes::default();
+        for child in children {
+            outcomes.child(&child)?;
+            delivery.child(child)?;
+        }
+        delivery.parent(parent);
+        delivery.acceptance(acceptance)?;
+        Ok(Self {
+            authority,
+            work,
+            delivery,
+            outcomes,
+            observed_at: Utc::now(),
+            blockers: vec![],
+            no_release_link: None,
+        })
+    }
+    pub(crate) fn no_release_required(
+        &mut self,
+        proof: evidence::VerifiedNoReleaseRequired,
+        publication_url: String,
+    ) -> Result<()> {
+        if proof.record().work != self.work || self.authority.work() != &self.work {
+            return Err(Error::new(
+                "stale_result",
+                "already-production outcome names another snapshot",
+            ));
+        }
+        self.delivery.record_no_release_required(proof.clone())?;
+        self.outcomes.no_release_required(&proof)?;
+        self.no_release_link = Some(publication_url);
+        Ok(())
+    }
+    pub(crate) fn no_release_link(&self) -> Option<&str> {
+        self.no_release_link.as_deref()
+    }
     pub fn release(
         &mut self,
         eligibility: crate::release::VerifiedReleaseEligibility,
@@ -1306,7 +1364,14 @@ impl VerifiedDeliverySnapshot {
         self.delivery.release(eligibility)
     }
     pub fn acceptance(&mut self, acceptance: evidence::VerifiedAcceptance) -> Result<()> {
-        self.delivery.acceptance(acceptance)
+        self.delivery.acceptance(acceptance)?;
+        let mut outcomes = crate::reconcile::DependencyOutcomes::default();
+        for child in self.delivery.verified_children().values() {
+            outcomes.child(child)?;
+        }
+        self.outcomes = outcomes;
+        self.no_release_link = None;
+        Ok(())
     }
     pub fn authority(&self) -> &FreshGate {
         &self.authority
@@ -1361,6 +1426,7 @@ impl DeliveryCoordinator {
             outcomes: Default::default(),
             observed_at: Utc::now(),
             blockers: vec![],
+            no_release_link: None,
         };
         let mut verified_children = BTreeMap::new();
         for child in contract.required_children() {
@@ -1731,3 +1797,7 @@ mod target_equivalence_tests {
         );
     }
 }
+
+#[path = "delivery_parent_history.rs"]
+mod history;
+pub use history::{HistoricalReleaseParent, RecoveredReleaseParent};

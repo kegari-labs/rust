@@ -19,6 +19,12 @@ use uuid::Uuid;
 pub const SUPPORTED_GIT_VERSION: &str = "git version 2.56.0";
 pub const DELTA_SCHEMA: u32 = 1;
 
+#[path = "git_acquired_clone.rs"]
+mod acquired_clone;
+#[path = "git_object_import.rs"]
+mod object_import;
+pub(crate) use object_import::retained_object_read_root;
+
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryId {
@@ -657,6 +663,8 @@ struct ExecutionCloneRecord {
     schema_version: u32,
     git_version: String,
     source: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_provenance: Option<String>,
     identity: CloneOwner,
     revision: Revision,
     prepared: bool,
@@ -1242,6 +1250,7 @@ impl Git {
             CloneOwner::Child(identity.clone()),
             revision,
             true,
+            None,
         )
     }
 
@@ -1272,6 +1281,7 @@ impl Git {
             CloneOwner::IndependentReview(identity.clone()),
             &identity.head,
             true,
+            None,
         )
     }
 
@@ -1289,6 +1299,7 @@ impl Git {
             CloneOwner::IndependentReview(identity.clone()),
             &identity.head,
             false,
+            None,
         )?;
         if self.exact_revision(&identity.repository_path, &identity.base.commit)? != identity.base {
             return Err(Error::new(
@@ -1324,11 +1335,17 @@ impl Git {
         identity: CloneOwner,
         revision: &Revision,
         create: bool,
+        source_provenance: Option<String>,
     ) -> Result<PathBuf> {
         let source = fs::canonicalize(source).map_err(|e| Error::io("resolve clone source", e))?;
         let root = owner_directory(execution_root)?;
         let path = identity.repository_path();
-        if identity.operator_checkout() != source
+        let operator = fs::canonicalize(identity.operator_checkout())
+            .map_err(|e| Error::io("resolve configured operator attribution", e))?;
+        if identity.operator_checkout() != operator
+            || (source_provenance.is_none() && operator != source)
+            || operator.starts_with(&root)
+            || root.starts_with(&operator)
             || path.parent() != Some(root.as_path())
             || path.file_name().is_none()
             || source.starts_with(&root)
@@ -1340,9 +1357,10 @@ impl Git {
             ));
         }
         let mut expected = ExecutionCloneRecord {
-            schema_version: 1,
+            schema_version: if source_provenance.is_some() { 2 } else { 1 },
             git_version: self.version().to_owned(),
             source: source.clone(),
+            source_provenance,
             identity: identity.clone(),
             revision: revision.clone(),
             prepared: false,

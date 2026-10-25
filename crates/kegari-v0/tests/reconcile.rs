@@ -1824,10 +1824,37 @@ async fn active_independent_review_drains_intake_filter_changes_but_never_a_chan
     let active = f.cache.active_independent_gate(&gate).unwrap();
     assert_eq!(active.profile().model, "fixture-model");
     assert_eq!(active.digest().unwrap(), gate.digest().unwrap());
-    f.wire.lock().unwrap().prs[0]["head"]["sha"] =
-        json!("3333333333333333333333333333333333333333");
+    let original = f.wire.lock().unwrap().prs[0].clone();
+    for (path, value) in [
+        (
+            "/head/sha",
+            json!("3333333333333333333333333333333333333333"),
+        ),
+        ("/head/repo/id", json!(99)),
+        ("/head/ref", json!("another-ref")),
+        ("/base/ref", json!("staging")),
+        (
+            "/html_url",
+            json!("https://github.invalid/other/repo/pull/1"),
+        ),
+    ] {
+        let mut changed = original.clone();
+        *changed.pointer_mut(path).unwrap() = value;
+        f.wire.lock().unwrap().prs[0] = changed;
+        f.cache.refresh().await.unwrap();
+        assert!(
+            f.cache.active_independent_gate(&gate).is_err(),
+            "accepted changed {path}"
+        );
+    }
+    let mut changed = original.clone();
+    changed["merged"] = json!(true);
+    f.wire.lock().unwrap().prs[0] = changed;
     f.cache.refresh().await.unwrap();
     assert!(f.cache.active_independent_gate(&gate).is_err());
+    f.wire.lock().unwrap().prs[0] = original;
+    f.cache.refresh().await.unwrap();
+    assert!(f.cache.active_independent_gate(&gate).is_ok());
 }
 
 struct PreservedProbe;

@@ -38,10 +38,29 @@ impl DeliveryCoordinator {
         eligibility: &crate::release::VerifiedReleaseEligibility,
     ) -> Result<DeliveryAdmission> {
         let digest = plan.digest()?;
-        gate.bind_permit(permit, &digest)?;
+        let scope_digest = if permit.operation_id == plan.operation_id {
+            digest.clone()
+        } else {
+            let receipt = self.host.operation(permit.operation_id)?;
+            let resume = crate::control::ReleaseResumeReference::from_receipt(&receipt)?
+                .ok_or_else(|| {
+                    production_error("release permit has no actual resume admission lineage")
+                })?;
+            if resume.plan_operation_id() != plan.operation_id
+                || resume.plan_digest() != digest
+                || resume.request_id()? != permit.operation_id
+                || receipt.runtime_id != permit.lease.runtime_id
+                || receipt.canonical_targets != vec![permit.work_key.clone()]
+            {
+                return Err(production_error(
+                    "resume admission belongs to another release plan or work",
+                ));
+            }
+            resume.scope_digest()?
+        };
+        gate.bind_permit(permit, &scope_digest)?;
         let payload = dispatch.payload();
-        if permit.operation_id != plan.operation_id
-            || permit.lease.runtime_id != plan.runtime_id
+        if permit.lease.runtime_id != plan.runtime_id
             || scope.runtime_id != plan.runtime_id
             || scope.work != *gate.work()
             || scope.work.parent != plan.parent_id
@@ -52,6 +71,7 @@ impl DeliveryCoordinator {
             || scope.fresh_gate_digest != gate.digest()?
             || payload.plan_digest != digest
             || payload.operation_id != plan.operation_id
+            || payload.attempt == 0
             || payload.kind.repository() != &scope.repository
             || !plan
                 .steps
@@ -421,6 +441,7 @@ pub enum ReleaseStepOutcome {
 pub struct ObservedReleaseStep {
     plan_digest: String,
     step_id: String,
+    attempt: u32,
     receipt: Option<Receipt>,
     outcome: ReleaseStepOutcome,
     effect: Option<ObservedEffect>,
@@ -432,6 +453,9 @@ impl ObservedReleaseStep {
     }
     pub fn step_id(&self) -> &str {
         &self.step_id
+    }
+    pub fn attempt(&self) -> u32 {
+        self.attempt
     }
     pub fn receipt(&self) -> Option<&Receipt> {
         self.receipt.as_ref()
@@ -460,11 +484,31 @@ struct ReleaseEffectRecord {
     deployment_step: Option<String>,
     challenge: Option<Uuid>,
 }
-fn release_effect_leaf(operation: Uuid, step: &str) -> String {
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoDispatchRecord {
+    schema_version: u32,
+    payload: crate::release::StepPayload,
+    runtime: Uuid,
+    work: WorkIdentity,
+    admission_operation: Uuid,
+    admission_scope: String,
+    provider_receipt: Option<(Uuid, String)>,
+    reason: String,
+    observed_at: DateTime<Utc>,
+}
+fn no_dispatch_leaf(operation: Uuid, step: &str, attempt: u32) -> String {
     format!(
-        "release-effect-{}-{}.json",
+        "release-no-dispatch-{operation}-{}-attempt-{attempt}.json",
+        &bytes_digest(step.as_bytes())[7..]
+    )
+}
+fn release_effect_leaf(operation: Uuid, step: &str, attempt: u32) -> String {
+    format!(
+        "release-effect-{}-{}-attempt-{}.json",
         operation,
-        bytes_digest(step.as_bytes()).rsplit(':').next().unwrap()
+        bytes_digest(step.as_bytes()).rsplit(':').next().unwrap(),
+        attempt
     )
 }
 fn configured_deployment<'a>(
@@ -592,6 +636,7 @@ impl DeliveryCoordinator {
             || plan.acceptance_digest != request.acceptance.digest()
             || plan.carried_acceptance.as_ref() != request.carried.map(|c| c.record())
             || payload.operation_id != plan.operation_id
+            || payload.attempt == 0
             || payload.plan_digest != plan.digest()?
             || plan
                 .steps
@@ -672,17 +717,91 @@ impl DeliveryCoordinator {
         &self,
         request: ReleaseStepRequest<'_>,
     ) -> Result<ObservedReleaseStep> {
-        self.check_release_request(&request)?;
+        let payload = request.dispatch.payload();
+        if let Some(observed) =
+            self.read_no_dispatch(request.plan, &payload.step_id, payload.attempt)?
+        {
+            return Ok(observed);
+        }
+        let result = self.dispatch_release_step_inner(&request).await;
+        if let Err(error) = &result {
+            // This owned future has ended. Intent persistence precedes every
+            // broker call; absence under the same lock proves no dispatch path
+            // was entered, rather than making any claim about remote absence.
+            let _lock = self.records.lock("release-effects.lock")?;
+            let leaf =
+                release_effect_leaf(request.plan.operation_id, &payload.step_id, payload.attempt);
+            match self.records.read::<Signed<ReleaseEffectRecord>>(&leaf) {
+                Err(missing) if missing.code == "record_missing" => {
+                    let owner = self.host.operation(request.admission.operation_id())?;
+                    if owner.kind != "admission"
+                        || owner.runtime_id != request.plan.runtime_id
+                        || owner.expected.get("scope")
+                            != Some(&request.admission.permit.scope_digest)
+                        || owner.canonical_targets
+                            != vec![request.admission.permit.work_key.clone()]
+                    {
+                        return Err(production_error(
+                            "failed preflight lacks actual admission lineage",
+                        ));
+                    }
+                    let no_dispatch = NoDispatchRecord {
+                        schema_version: 1,
+                        payload: payload.clone(),
+                        runtime: request.plan.runtime_id,
+                        work: request.admission.scope.work.clone(),
+                        admission_operation: request.admission.operation_id(),
+                        admission_scope: request.admission.permit.scope_digest.clone(),
+                        provider_receipt: None,
+                        reason: format!("preflight did not dispatch: {}", error.code),
+                        observed_at: Utc::now(),
+                    };
+                    let leaf = no_dispatch_leaf(
+                        request.plan.operation_id,
+                        &payload.step_id,
+                        payload.attempt,
+                    );
+                    match self.records.read::<Signed<NoDispatchRecord>>(&leaf) {
+                        Ok(_) => {}
+                        Err(e) if e.code == "record_missing" => self
+                            .records
+                            .write(&leaf, &self.key.sign("release_no_dispatch", &no_dispatch)?)?,
+                        Err(e) => return Err(e),
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if let Some(observed) =
+            self.read_no_dispatch(request.plan, &payload.step_id, payload.attempt)?
+        {
+            return Ok(observed);
+        }
+        result
+    }
+    async fn dispatch_release_step_inner(
+        &self,
+        request: &ReleaseStepRequest<'_>,
+    ) -> Result<ObservedReleaseStep> {
+        self.check_release_request(request)?;
         let a = request.admission;
         let payload = request.dispatch.payload();
         let contract = self.contract(a)?;
-        let leaf = release_effect_leaf(request.plan.operation_id, &payload.step_id);
+        let leaf =
+            release_effect_leaf(request.plan.operation_id, &payload.step_id, payload.attempt);
         // A retained intent, including one whose response was lost, is observed
         // only. A crash cannot turn SentUnknown back into a fresh provider call.
         match self.records.read::<Signed<ReleaseEffectRecord>>(&leaf) {
             Ok(_) => {
                 return self
-                    .recover_release_step(a, request.plan, &payload.step_id, request.observer)
+                    .recover_release_step(
+                        a,
+                        request.plan,
+                        &payload.step_id,
+                        payload.attempt,
+                        request.observer,
+                    )
                     .await;
             }
             Err(e) if e.code == "record_missing" => {}
@@ -765,6 +884,15 @@ impl DeliveryCoordinator {
             (self.current_gate)(&a.gate)?;
             (request.final_gate)(request.plan, &payload.step_id)?;
             let _lock = self.records.lock("release-effects.lock")?;
+            if self
+                .read_no_dispatch(request.plan, &payload.step_id, payload.attempt)?
+                .is_some()
+            {
+                return Err(Error::new(
+                    "operation_conflict",
+                    "step attempt already concluded without dispatch",
+                ));
+            }
             match self.records.read::<Signed<ReleaseEffectRecord>>(&leaf) {
                 Ok(_) => Err(Error::new(
                     "operation_conflict",
@@ -799,6 +927,7 @@ impl DeliveryCoordinator {
                         expected: BTreeMap::from([
                             ("release_plan".into(), record.plan_digest.clone()),
                             ("release_step".into(), step.clone()),
+                            ("release_attempt".into(), payload.attempt.to_string()),
                             ("delivery_scope".into(), a.scope.digest()?),
                         ]),
                         payload: Value::Null,
@@ -837,20 +966,137 @@ impl DeliveryCoordinator {
                 }
             }
         }
-        self.recover_release_step(a, request.plan, &payload.step_id, request.observer)
-            .await
+        self.recover_release_step(
+            a,
+            request.plan,
+            &payload.step_id,
+            payload.attempt,
+            request.observer,
+        )
+        .await
     }
 
+    fn read_no_dispatch(
+        &self,
+        plan: &ReleasePlan,
+        step: &str,
+        attempt: u32,
+    ) -> Result<Option<ObservedReleaseStep>> {
+        let signed: Signed<NoDispatchRecord> =
+            match self
+                .records
+                .read(&no_dispatch_leaf(plan.operation_id, step, attempt))
+            {
+                Ok(signed) => signed,
+                Err(e) if e.code == "record_missing" => return Ok(None),
+                Err(e) => return Err(e),
+            };
+        self.key.verify("release_no_dispatch", &signed)?;
+        let r = signed.payload;
+        let owner = self.host.operation(r.admission_operation)?;
+        if r.schema_version != 1
+            || r.runtime != plan.runtime_id
+            || r.payload.plan_digest != plan.digest()?
+            || r.payload.operation_id != plan.operation_id
+            || r.payload.step_id != step
+            || r.payload.attempt != attempt
+            || attempt == 0
+            || r.work.parent != plan.parent_id
+            || r.work.linear_workspace != plan.linear_workspace
+            || r.work.generation != plan.generation
+            || r.work.child.is_some()
+            || plan.steps.iter().find(|s| s.id == step).map(|s| &s.kind) != Some(&r.payload.kind)
+            || owner.kind != "admission"
+            || owner.runtime_id != plan.runtime_id
+            || owner.expected.get("scope") != Some(&r.admission_scope)
+            || owner.canonical_targets
+                != vec![
+                    crate::authority::IssueKey::new(
+                        &r.work.linear_endpoint,
+                        r.work.linear_workspace,
+                        r.work.parent,
+                    )?
+                    .identity()?,
+                ]
+        {
+            return Err(production_error(
+                "no-dispatch observation lacks exact original owned step identity",
+            ));
+        }
+        let receipt = if let Some((id, digest)) = &r.provider_receipt {
+            let effect = self.load_release_effect(plan, step, attempt)?;
+            let receipt = self.host.operation(*id)?;
+            if effect.request_id != Some(*id)
+                || effect.admission_operation != r.admission_operation
+                || canonical_digest(1, &effect.payload)? != canonical_digest(1, &r.payload)?
+                || receipt.payload_digest != *digest
+                || receipt.phase != crate::control::ReceiptPhase::Reconciled
+                || !receipt.remote_ids.is_empty()
+            {
+                return Err(production_error(
+                    "retained provider no-dispatch evidence changed",
+                ));
+            }
+            Some(receipt)
+        } else {
+            match self
+                .records
+                .read::<Signed<ReleaseEffectRecord>>(&release_effect_leaf(
+                    plan.operation_id,
+                    step,
+                    attempt,
+                )) {
+                Ok(_) => {
+                    return Err(production_error(
+                        "no-dispatch and provider intent records conflict; preserve uncertainty",
+                    ));
+                }
+                Err(error) if error.code == "record_missing" => {}
+                Err(error) => return Err(error),
+            }
+            None
+        };
+        Ok(Some(ObservedReleaseStep {
+            plan_digest: plan.digest()?,
+            step_id: step.into(),
+            attempt,
+            receipt,
+            outcome: ReleaseStepOutcome::Failed(r.reason),
+            effect: None,
+            observed_at: r.observed_at,
+        }))
+    }
     fn read_release_effect(
         &self,
         observation: &DeliveryObservation,
         plan: &ReleasePlan,
         step: &str,
+        attempt: u32,
+    ) -> Result<ReleaseEffectRecord> {
+        let r = self.load_release_effect(plan, step, attempt)?;
+        if r.scope.runtime_id != observation.scope.runtime_id
+            || r.scope.repository != observation.scope.repository
+            || r.scope.work.linear_endpoint != observation.scope.work.linear_endpoint
+            || r.scope.work.linear_workspace != observation.scope.work.linear_workspace
+            || r.scope.work.parent != observation.scope.work.parent
+            || r.scope.contract_digest != observation.scope.contract_digest
+        {
+            return Err(production_error(
+                "retained effect differs from observation scope",
+            ));
+        }
+        Ok(r)
+    }
+    fn load_release_effect(
+        &self,
+        plan: &ReleasePlan,
+        step: &str,
+        attempt: u32,
     ) -> Result<ReleaseEffectRecord> {
         plan.validate()?;
-        let signed: Signed<ReleaseEffectRecord> = self
-            .records
-            .read(&release_effect_leaf(plan.operation_id, step))?;
+        let signed: Signed<ReleaseEffectRecord> =
+            self.records
+                .read(&release_effect_leaf(plan.operation_id, step, attempt))?;
         self.key.verify("release_effect", &signed)?;
         let r = signed.payload;
         if r.schema_version != 1
@@ -858,13 +1104,25 @@ impl DeliveryCoordinator {
             || r.payload.plan_digest != r.plan_digest
             || r.payload.operation_id != plan.operation_id
             || r.payload.step_id != step
+            || attempt == 0
+            || r.payload
+                .prerequisite_attempts
+                .values()
+                .any(|attempt| *attempt == 0)
+            || plan
+                .steps
+                .iter()
+                .find(|s| s.id == step)
+                .map(|s| &s.depends_on)
+                != Some(&r.payload.prerequisite_attempts.keys().cloned().collect())
+            || r.payload.attempt != attempt
             || plan.steps.iter().find(|s| s.id == step).map(|s| &s.kind) != Some(&r.payload.kind)
-            || r.scope.runtime_id != observation.scope.runtime_id
-            || r.scope.repository != observation.scope.repository
-            || r.scope.work.linear_endpoint != observation.scope.work.linear_endpoint
-            || r.scope.work.linear_workspace != observation.scope.work.linear_workspace
-            || r.scope.work.parent != observation.scope.work.parent
-            || r.scope.contract_digest != observation.scope.contract_digest
+            || r.scope.runtime_id != plan.runtime_id
+            || r.scope.work.linear_workspace != plan.linear_workspace
+            || r.scope.work.parent != plan.parent_id
+            || r.scope.work.generation != plan.generation
+            || r.scope.work.child.is_some()
+            || r.scope.repository != *r.payload.kind.repository()
         {
             return Err(production_error(
                 "retained release effect differs from canonical plan/runtime/repository",
@@ -880,6 +1138,7 @@ impl DeliveryCoordinator {
         admission: &DeliveryAdmission,
         plan: &ReleasePlan,
         step: &str,
+        attempt: u32,
         observer: &ProductionObserver,
         verifier: &HostedProofVerifier,
     ) -> Result<ObservedReleaseStep> {
@@ -887,7 +1146,7 @@ impl DeliveryCoordinator {
             admission,
             &[DeliveryPhase::Release, DeliveryPhase::Recovery],
         )?;
-        let record = self.read_release_effect(admission, plan, step)?;
+        let record = self.read_release_effect(admission, plan, step, attempt)?;
         if matches!(record.payload.kind, StepKind::Deploy { .. }) {
             if record.admission_operation != admission.operation_id()
                 || record.scope.digest()? != admission.scope.digest()?
@@ -943,7 +1202,7 @@ impl DeliveryCoordinator {
                 }
             }
         }
-        self.recover_release_step(admission, plan, step, observer)
+        self.recover_release_step(admission, plan, step, attempt, observer)
             .await
     }
     /// Metadata-only recovery never calls ProviderBroker or requires RUNNING.
@@ -953,19 +1212,79 @@ impl DeliveryCoordinator {
         observation: &DeliveryObservation,
         plan: &ReleasePlan,
         step: &str,
+        attempt: u32,
         observer: &ProductionObserver,
     ) -> Result<ObservedReleaseStep> {
         self.current(
             observation,
             &[DeliveryPhase::Release, DeliveryPhase::Recovery],
         )?;
-        let r = self.read_release_effect(observation, plan, step)?;
-        let contract = self.contract(observation)?;
+        if let Some(observed) = self.read_no_dispatch(plan, step, attempt)? {
+            return Ok(observed);
+        }
+        let r = self.read_release_effect(observation, plan, step, attempt)?;
+        let result = self.observe_release_record(plan, &r, observer).await?;
+        self.current(
+            observation,
+            &[DeliveryPhase::Release, DeliveryPhase::Recovery],
+        )?;
+        Ok(result)
+    }
+    /// Read only an already dispatched, authenticated effect. This path has no
+    /// execution gate or Permit and cannot publish or refresh product readiness;
+    /// it remains usable after corrections, exclusion, stop, or local retirement.
+    pub async fn recover_owned_release_step(
+        &self,
+        plan: &ReleasePlan,
+        step: &str,
+        attempt: u32,
+        observer: &ProductionObserver,
+    ) -> Result<ObservedReleaseStep> {
+        if let Some(observed) = self.read_no_dispatch(plan, step, attempt)? {
+            return Ok(observed);
+        }
+        let r = self.load_release_effect(plan, step, attempt)?;
+        self.observe_release_record(plan, &r, observer).await
+    }
+    async fn observe_release_record(
+        &self,
+        plan: &ReleasePlan,
+        r: &ReleaseEffectRecord,
+        observer: &ProductionObserver,
+    ) -> Result<ObservedReleaseStep> {
+        let contract = self.contracts.get(&r.scope.repository).ok_or_else(|| {
+            production_error("retained effect repository is no longer configured")
+        })?;
+        if contract.digest()? != r.scope.contract_digest
+            || self.host.snapshot()?.intent.runtime_id != r.scope.runtime_id
+        {
+            return Err(production_error(
+                "retained effect runtime or repository contract changed",
+            ));
+        }
+        let owner = self.host.operation(r.admission_operation)?;
+        let work = crate::authority::IssueKey::new(
+            &r.scope.work.linear_endpoint,
+            r.scope.work.linear_workspace,
+            r.scope.work.parent,
+        )?
+        .identity()?;
+        if owner.kind != "admission"
+            || owner.runtime_id != r.scope.runtime_id
+            || owner.canonical_targets != vec![work]
+            || owner.expected.get("scope") != Some(&r.admission_scope_digest)
+        {
+            return Err(production_error(
+                "retained effect lacks exact actual admission ownership",
+            ));
+        }
+
         let receipt = r.request_id.map(|id| self.host.operation(id)).transpose()?;
         if let Some(receipt) = &receipt
             && (receipt.runtime_id != r.scope.runtime_id
                 || receipt.expected.get("release_plan") != Some(&r.plan_digest)
                 || receipt.expected.get("release_step") != Some(&r.payload.step_id)
+                || receipt.expected.get("release_attempt") != Some(&r.payload.attempt.to_string())
                 || receipt.expected.get("admitted_scope") != Some(&r.admission_scope_digest)
                 || receipt.expected.get("admission_operation")
                     != Some(&r.admission_operation.to_string()))
@@ -976,12 +1295,45 @@ impl DeliveryCoordinator {
         }
         let mut observed = ObservedReleaseStep {
             plan_digest: r.plan_digest.clone(),
-            step_id: step.into(),
+            step_id: r.payload.step_id.clone(),
+            attempt: r.payload.attempt,
             receipt: receipt.clone(),
             outcome: ReleaseStepOutcome::Pending,
             effect: None,
             observed_at: Utc::now(),
         };
+        if let Some(receipt) = receipt.as_ref().filter(|receipt| {
+            receipt.phase == crate::control::ReceiptPhase::Reconciled
+                && receipt
+                    .observed_result
+                    .as_ref()
+                    .is_some_and(|result| result["effect"] == "not_sent")
+        }) {
+            let no_dispatch = NoDispatchRecord {
+                schema_version: 1,
+                payload: r.payload.clone(),
+                runtime: r.scope.runtime_id,
+                work: r.scope.work.clone(),
+                admission_operation: r.admission_operation,
+                admission_scope: r.admission_scope_digest.clone(),
+                provider_receipt: Some((receipt.operation_id, receipt.payload_digest.clone())),
+                reason: "authenticated provider preflight did not dispatch".into(),
+                observed_at: Utc::now(),
+            };
+            let _lock = self.records.lock("release-effects.lock")?;
+            let leaf = no_dispatch_leaf(plan.operation_id, &r.payload.step_id, r.payload.attempt);
+            match self.records.read::<Signed<NoDispatchRecord>>(&leaf) {
+                Ok(_) => {}
+                Err(e) if e.code == "record_missing" => self
+                    .records
+                    .write(&leaf, &self.key.sign("release_no_dispatch", &no_dispatch)?)?,
+                Err(e) => return Err(e),
+            }
+            return self
+                .read_no_dispatch(plan, &r.payload.step_id, r.payload.attempt)?
+                .ok_or_else(|| production_error("no-dispatch observation failed to persist"));
+        }
+        self.github()?.identity().await?;
         match &r.payload.kind {
             StepKind::Merge {
                 repository,
@@ -1073,7 +1425,7 @@ impl DeliveryCoordinator {
                             ));
                         }
                         observed.effect =
-                            Some(self.release_target_effect(plan, &r, &target, false)?);
+                            Some(self.release_target_effect(plan, r, &target, false)?);
                         observed.outcome = ReleaseStepOutcome::Succeeded;
                     }
                 }
@@ -1086,11 +1438,22 @@ impl DeliveryCoordinator {
                 let deployment = match &r.payload.kind {
                     StepKind::Verify {
                         deployment_step, ..
-                    } => self.read_release_effect(observation, plan, deployment_step)?,
+                    } => self.load_release_effect(
+                        plan,
+                        deployment_step,
+                        *r.payload
+                            .prerequisite_attempts
+                            .get(deployment_step)
+                            .ok_or_else(|| {
+                                production_error(
+                                    "verification lacks exact deployment attempt lineage",
+                                )
+                            })?,
+                    )?,
                     _ => unreachable!(),
                 };
                 self.release_target_effect(plan, &deployment, &target, false)?;
-                observed.effect = Some(self.release_target_effect(plan, &r, &target, true)?);
+                observed.effect = Some(self.release_target_effect(plan, r, &target, true)?);
                 observed.outcome = ReleaseStepOutcome::Succeeded;
             }
             StepKind::VerifyExisting {
@@ -1119,10 +1482,6 @@ impl DeliveryCoordinator {
                 observed.outcome = ReleaseStepOutcome::Succeeded;
             }
         }
-        self.current(
-            observation,
-            &[DeliveryPhase::Release, DeliveryPhase::Recovery],
-        )?;
         Ok(observed)
     }
     fn release_target_effect(
@@ -1242,6 +1601,7 @@ impl PreparedProductionCandidate {
 struct ProductionValidationRecord {
     schema_version: u32,
     preparation_digest: String,
+    protection: evidence::RepositoryProtection,
     checks: Vec<CheckRun>,
     proofs: Vec<crate::providers::VerifiedHostedJob>,
 }
@@ -2032,6 +2392,16 @@ impl DeliveryCoordinator {
         parent: &evidence::VerifiedParent,
         prepared: &PreparedProductionCandidate,
     ) -> Result<PublishedReview> {
+        self.observe_production_preparation_at(observation, parent, prepared, None)
+            .await
+    }
+    async fn observe_production_preparation_at(
+        &self,
+        observation: &DeliveryObservation,
+        parent: &evidence::VerifiedParent,
+        prepared: &PreparedProductionCandidate,
+        owned_merge: Option<&crate::git::Revision>,
+    ) -> Result<PublishedReview> {
         self.current(
             observation,
             &[DeliveryPhase::Release, DeliveryPhase::Recovery],
@@ -2071,14 +2441,22 @@ impl DeliveryCoordinator {
             .pull_request(&contract.provider, r.pull_request)
             .await?;
         if current.head_sha != r.scope.revision.head
-            || current.base_sha != r.scope.revision.base
+            || (owned_merge.is_none() && current.base_sha != r.scope.revision.base)
             || current.head_ref != r.branch
             || current.base_ref != "main"
-            || current.state != "open"
+            || match owned_merge {
+                None => current.state != "open" || current.merged == Some(true),
+                Some(source) => {
+                    current.state != "closed"
+                        || current.merged != Some(true)
+                        || current.merge_commit_sha.as_deref() != Some(&source.commit)
+                }
+            }
             || current.draft
             || current.head_repository_id != Some(contract.provider.id)
             || current.author_id.to_string() != self.github()?.identity().await?.account_id
-            || self.main_revision(observation).await? != r.candidate.production
+            || self.main_revision(observation).await?
+                != owned_merge.unwrap_or(&r.candidate.production).clone()
         {
             return Err(production_error(
                 "production PR or main no longer matches the isolated candidate",
@@ -2276,11 +2654,24 @@ impl DeliveryCoordinator {
         let verified = self
             .production_gate(admission, parent, &review, &hosted)
             .await?;
+        let protection = self
+            .current_repository_protection(admission, "main")
+            .await?;
+        let required_contexts = self
+            .contract(admission)?
+            .configuration
+            .production_ci
+            .iter()
+            .flat_map(|suite| suite.required_checks.iter().cloned())
+            .chain(std::iter::once(evidence::REVIEW_CONTEXT.into()))
+            .collect();
+        protection.verify(&admission.scope.revision, "main", &required_contexts)?;
         let retained = self.key.sign(
             "production_validation",
             &ProductionValidationRecord {
                 schema_version: 1,
                 preparation_digest: prepared.signed.digest()?,
+                protection,
                 checks: hosted.checks,
                 proofs: hosted.proofs,
             },
@@ -2376,3 +2767,7 @@ impl DeliveryCoordinator {
 #[cfg(test)]
 #[path = "../tests/support/release_wire.rs"]
 pub(super) mod tests;
+
+#[path = "delivery_release_history.rs"]
+mod history;
+pub use history::MergedProductionRecovery;

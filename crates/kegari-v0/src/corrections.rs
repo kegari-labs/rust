@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
+#[path = "correction_transition.rs"]
+mod transition;
+pub use transition::{VerifiedCorrectionRoutes, VerifiedCorrectionTransition};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClassificationProposal {
@@ -1552,3 +1556,6 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/support/correction_wire.rs"]
 pub(crate) mod wire_fixture;
+
+#[cfg(test)]
+pub(crate) use tests::{test_pending_transition_fixture, test_transition_fixture};

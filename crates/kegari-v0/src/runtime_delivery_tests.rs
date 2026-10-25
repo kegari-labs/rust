@@ -7,24 +7,84 @@ use crate::reconcile::DependencyOutcomes;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 // This deterministic process identity fixture does not qualify native ownership
 // or permit any child process launch. These tests exercise read-only composition.
-struct IdentityFixture(ProcessIdentity);
+struct IdentityFixture {
+    current: ProcessIdentity,
+    observed: Arc<std::sync::Mutex<Vec<ProcessIdentity>>>,
+}
+#[derive(Clone)]
+pub(super) struct FixtureOwner {
+    current: ProcessIdentity,
+    observed: Arc<std::sync::Mutex<Vec<ProcessIdentity>>>,
+}
+impl FixtureOwner {
+    pub(super) fn revoke_orchestration(&self) {
+        self.observed
+            .lock()
+            .unwrap()
+            .retain(|process| process == &self.current);
+    }
+
+    pub(super) fn start(
+        &self,
+        runtime: &RuntimeCoordinator,
+    ) -> (crate::control::Lease, crate::storage::ExclusiveLock) {
+        let snapshot = runtime.control.snapshot().unwrap();
+        runtime
+            .control
+            .lifecycle(
+                crate::control::MutationRequest {
+                    request_id: Uuid::new_v4(),
+                    runtime_id: snapshot.intent.runtime_id,
+                    actor: crate::control::Actor {
+                        identity: "fixture-operator".into(),
+                        principal: None,
+                        roles: ["lifecycle".into()].into(),
+                    },
+                    kind: "lifecycle".into(),
+                    canonical_targets: vec![snapshot.intent.runtime_id.to_string()],
+                    expected: BTreeMap::new(),
+                    payload: json!(null),
+                },
+                crate::control::Lifecycle::Start,
+                snapshot.intent.generation,
+            )
+            .unwrap();
+        let lease = runtime.registration.prepare_owner().unwrap();
+        let lock = runtime.registration.root().lock("runtime.lock").unwrap();
+        let mut child = self.current.clone();
+        child.parent_pid = self.current.pid;
+        child.pid = self.current.pid.checked_add(100_000).unwrap();
+        child.process_group = child.pid;
+        child.started_seconds += 1;
+        self.observed.lock().unwrap().push(child.clone());
+        runtime
+            .registration
+            .record_orchestration(lease.clone(), child)
+            .unwrap();
+        runtime.control.attach_reconciled(lease.clone()).unwrap();
+        (lease, lock)
+    }
+}
 impl ProcessProbe for IdentityFixture {
     fn current(&self) -> Result<ProcessIdentity> {
-        Ok(self.0.clone())
+        Ok(self.current.clone())
     }
     fn observe(&self, expected: &ProcessIdentity) -> Result<ProcessObservation> {
-        Ok(if expected == &self.0 {
+        Ok(if self.observed.lock().unwrap().contains(expected) {
             ProcessObservation::Running
         } else {
             ProcessObservation::DifferentIdentity
         })
     }
     fn matching_executable(&self, path: &Path) -> Result<Vec<ProcessIdentity>> {
-        Ok(if path == self.0.executable {
-            vec![self.0.clone()]
-        } else {
-            vec![]
-        })
+        Ok(self
+            .observed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|value| value.executable == path)
+            .cloned()
+            .collect())
     }
 }
 pub(super) async fn fixture() -> (
@@ -34,12 +94,24 @@ pub(super) async fn fixture() -> (
 ) {
     fixture_authorization(false).await
 }
-pub(super) async fn fixture_authorization(
+pub(crate) async fn fixture_authorization(
     authorized: bool,
 ) -> (
     tempfile::TempDir,
     crate::runtime_fixture::RuntimeFixture,
     Arc<RuntimeDelivery>,
+) {
+    let (temp, built, delivery, _, _) = fixture_authorization_with_wire(authorized).await;
+    (temp, built, delivery)
+}
+pub(super) async fn fixture_authorization_with_wire(
+    authorized: bool,
+) -> (
+    tempfile::TempDir,
+    crate::runtime_fixture::RuntimeFixture,
+    Arc<RuntimeDelivery>,
+    Arc<std::sync::Mutex<wire::Fixture>>,
+    FixtureOwner,
 ) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
@@ -70,13 +142,21 @@ pub(super) async fn fixture_authorization(
         started_microseconds: 0,
         executable: std::env::current_exe().unwrap().canonicalize().unwrap(),
     };
+    let observed = Arc::new(std::sync::Mutex::new(vec![identity.clone()]));
+    let owner = FixtureOwner {
+        current: identity.clone(),
+        observed: observed.clone(),
+    };
     let built = crate::runtime_fixture::build(crate::runtime_fixture::FixtureInputs {
         root: root.clone(),
         configuration,
         inputs: Arc::new(wire::CacheInputs(data.clone())),
         secrets: Arc::new(wire::CacheSecrets),
         key: Arc::new(crate::evidence::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap()),
-        probe: Arc::new(IdentityFixture(identity)),
+        probe: Arc::new(IdentityFixture {
+            current: identity,
+            observed,
+        }),
         git: git.clone(),
     })
     .await
@@ -100,7 +180,7 @@ pub(super) async fn fixture_authorization(
     }
     let delivery =
         RuntimeDelivery::with_fixture(built.runtime.clone(), built.processes.clone(), git).unwrap();
-    (temp, built, delivery)
+    (temp, built, delivery, data, owner)
 }
 #[tokio::test]
 async fn canonical_repository_id_builds_current_workspace_without_any_process_or_model_launch() {
@@ -207,7 +287,7 @@ fn phase_uuid_uses_versioned_digest_payload_and_is_domain_separated() {
     assert_eq!(first.get_version_num(), 8);
 }
 
-pub(super) fn start_control(runtime: &RuntimeCoordinator) -> crate::control::Lease {
+pub(crate) fn start_control(runtime: &RuntimeCoordinator) -> crate::control::Lease {
     let id = runtime.configuration.snapshot().unwrap().runtime.id;
     let state = runtime.control.snapshot().unwrap();
     runtime
@@ -421,4 +501,94 @@ async fn admitted_delivery_gate_survives_harmless_reload_but_not_permission_revo
         "permission_fenced"
     );
     assert!(fixture.runtime.control.operations().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn manual_release_recovery_uses_actual_queued_command_identity() {
+    let (_temp, fixture, delivery) = fixture_authorization(true).await;
+    let projection = fixture.runtime.observations.snapshot().unwrap();
+    let parent = projection.parent(wire::id(2), wire::id(100)).unwrap();
+    let config = fixture.configuration.snapshot().unwrap();
+    let actor = crate::control::Actor {
+        identity: "fixture-release-operator".into(),
+        principal: None,
+        roles: std::collections::BTreeSet::from(["release".into()]),
+    };
+    let command_request = crate::control::MutationRequest {
+        request_id: Uuid::new_v4(),
+        runtime_id: config.runtime.id,
+        actor: actor.clone(),
+        kind: format!("command/{:?}", crate::api::CommandName::Release),
+        canonical_targets: vec![parent.key.identity().unwrap()],
+        expected: BTreeMap::new(),
+        payload: json!({"fixture":"actual queued release command"}),
+    };
+    let (command, fresh) = fixture
+        .runtime
+        .control
+        .queue_command(command_request, "release", || Ok(()))
+        .unwrap();
+    assert!(fresh);
+    assert_eq!(command.kind, "command/Release");
+    let intent = ReleaseIntent {
+        schema_version: 1,
+        runtime_id: config.runtime.id,
+        workspace_id: wire::id(2),
+        request_id: Uuid::new_v4(),
+        parent_command: command.operation_id,
+        parent_command_digest: command.payload_digest,
+        work: parent.work.clone().unwrap(),
+        parent: parent.key.clone(),
+        evidence_token: canonical_digest(1, &"fixture accepted token").unwrap(),
+        actor,
+        config_revision: config.revision().unwrap(),
+        queued_at: Utc::now(),
+    };
+    let signed = fixture
+        .runtime
+        .services
+        .key
+        .sign("manual_release_intent", &intent)
+        .unwrap();
+    let request = release_intent_request(&signed).unwrap();
+    let receipt = fixture
+        .runtime
+        .control
+        .mutate(
+            request,
+            None,
+            Some("release"),
+            || Ok(()),
+            |_| {
+                delivery.records.write(
+                    &format!("release-intent-{}.json", intent.request_id),
+                    &signed,
+                )?;
+                Ok((
+                    BTreeMap::new(),
+                    json!({"queued":true,"dispatch_authorized":false}),
+                ))
+            },
+        )
+        .unwrap();
+    let pending = delivery.pending_release_requests().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].request_id(), intent.request_id);
+    assert_eq!(pending[0].receipt().payload_digest, receipt.payload_digest);
+    assert!(
+        fixture
+            .runtime
+            .control
+            .snapshot()
+            .unwrap()
+            .active_operations
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .processes
+            .observe(intent.request_id)
+            .unwrap()
+            .is_empty()
+    );
 }

@@ -21,7 +21,7 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 pub const SUITE_SCHEMA: u32 = 1;
-pub const GRADER_VERSION: &str = "kegari-observable-v1";
+pub const GRADER_VERSION: &str = "kegari-observable-v2";
 pub const MAX_EVIDENCE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_FILES: usize = 4096;
 pub const REQUIRED_VARIANTS: &[(&str, &[&str])] = &[
@@ -388,8 +388,10 @@ pub fn snapshot(root: &Path) -> Result<BTreeMap<String, FileSnapshot>> {
                 std::fs::read_dir(path).map_err(|e| Error::io("read fixture directory", e))?
             {
                 let entry = entry.map_err(|e| Error::io("read fixture entry", e))?;
-                // Git control files are inspected by the host's revision verifier, not the source diff.
-                if entry.file_name() == ".git" {
+                // Only the execution repository's own Git administration is
+                // checked separately by the revision verifier. A nested `.git`
+                // name cannot hide an added file from scope/diff grading.
+                if path == root && entry.file_name() == ".git" {
                     continue;
                 }
                 visit(root, &entry.path(), result, bytes)?;
@@ -437,6 +439,32 @@ pub struct PreparedFixture {
     pub input: Value,
     pub prior: Option<Value>,
     pub fixture_digest: String,
+    // Bind the declared reset, including private prior-state input. Public path
+    // access is useful to the host, but cannot silently substitute another
+    // fixture after preparation while retaining the original report provenance.
+    preparation_digest: String,
+}
+impl PreparedFixture {
+    fn preparation_digest(&self) -> Result<String> {
+        canonical_digest(
+            1,
+            &serde_json::json!({
+                "root":self.root,"repository":self.repository,"scratch":self.scratch,
+                "codex_home":self.codex_home,"grader_root":self.grader_root,
+                "before":self.before,"input":self.input,"prior":self.prior,
+                "fixture_digest":self.fixture_digest
+            }),
+        )
+    }
+    fn verify_preparation(&self) -> Result<()> {
+        if self.preparation_digest != self.preparation_digest()? {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "prepared fixture identity, input or initial state was substituted",
+            ));
+        }
+        Ok(())
+    }
 }
 /// Destination must not exist. Never resets a previous trial or consumes its outputs.
 pub fn prepare_fixture(
@@ -582,7 +610,7 @@ pub fn prepare_fixture(
     .map_err(|e| Error::io("bind fixture scratch resource", e))?;
     let input = read_json(&source.join("context.json"))?;
     let before = snapshot(&repository)?;
-    Ok(PreparedFixture {
+    let mut prepared = PreparedFixture {
         root,
         repository,
         scratch,
@@ -592,7 +620,10 @@ pub fn prepare_fixture(
         input,
         prior,
         fixture_digest: variant.fixture_digest.clone(),
-    })
+        preparation_digest: String::new(),
+    };
+    prepared.preparation_digest = prepared.preparation_digest()?;
+    Ok(prepared)
 }
 /// Both actual OS grants and instruction manifests must exclude the scorer and report store.
 pub fn verify_grader_boundary(
@@ -634,6 +665,13 @@ fn verify_fixture_scope(
     isolation: &ValidatedIsolation,
     permissions: &instructions::PermissionManifest,
 ) -> Result<()> {
+    fixture.verify_preparation()?;
+    if fixture.fixture_digest != variant.fixture_digest {
+        return Err(Error::new(
+            "evaluation_fidelity",
+            "prepared fixture does not belong to the declared variant",
+        ));
+    }
     let role = match variant.role {
         AgentRole::Implementation | AgentRole::Testing | AgentRole::Documentation => {
             ExecutionRole::Child
@@ -730,25 +768,62 @@ pub fn assemble_trial(
             "fixture changed before admission",
         ));
     }
-    let expected: Value = fixture.input.clone();
-    for key in [
-        "issue",
-        "parent",
-        "children",
-        "scope",
-        "dependencies",
-        "corrections",
-        "evidence",
-        "attempt",
+    verify_fixture_context(
+        input.context,
+        fixture,
+        input.workspace_id,
+        input.operation_id,
+        input.profile,
+        input.phase,
+    )?;
+    instructions::assemble(input)
+}
+
+/// Apply the same exact task-input check to direct assembly and the already
+/// admitted production worker. A valid worker contract alone does not prove that
+/// it is the task declared by this evaluation fixture.
+fn verify_fixture_context(
+    context: &Value,
+    fixture: &PreparedFixture,
+    workspace: uuid::Uuid,
+    operation: uuid::Uuid,
+    profile: &Profile,
+    phase: &str,
+) -> Result<()> {
+    fixture.verify_preparation()?;
+    let mut expected = fixture
+        .input
+        .as_object()
+        .cloned()
+        .ok_or_else(|| Error::invalid("fixture context must be an object"))?;
+    // Future corrections are delivered through the checked event path, not
+    // disclosed as advance prompt guidance. These four canonical host fields
+    // are the only schema-1 substitutions; arbitrary nested extra fields could
+    // otherwise inject undeclared hints while all task keys still matched.
+    expected.remove("timeline");
+    for (key, value) in [
+        (
+            "workspace",
+            serde_json::json!({"id":workspace,"name":"synthetic"}),
+        ),
+        ("operation", serde_json::json!({"id":operation})),
+        (
+            "profile",
+            serde_json::to_value(profile).map_err(|_| Error::invalid("profile encoding failed"))?,
+        ),
+        ("phase", Value::String(phase.into())),
     ] {
-        if input.context.get(key) != expected.get(key) {
-            return Err(Error::new(
-                "evaluation_fidelity",
-                "fixture task context was substituted",
-            ));
+        if expected.insert(key.into(), value).is_some() {
+            return Err(Error::invalid("fixture redeclares reserved host context"));
         }
     }
-    instructions::assemble(input)
+    if context != &Value::Object(expected) {
+        return Err(Error::new(
+            "evaluation_fidelity",
+            "fixture task or canonical host context was substituted",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1033,6 +1108,7 @@ pub fn grade(
     prohibited: &[String],
 ) -> Result<Grade> {
     scorer.validate()?;
+    fixture.verify_preparation()?;
     verify_grader_boundary(isolation, std::slice::from_ref(&fixture.grader_root))?;
     let after = snapshot(&fixture.repository)?;
     let delta = changed(&fixture.before, &after);
@@ -1354,9 +1430,46 @@ impl TrialReport {
     }
 }
 struct AuditedHost<'a> {
-    host: &'a mut dyn TrialHost,
+    host: &'a mut crate::worker::ScopedWorker,
     lease: &'a dyn LiveLease,
     trace: Vec<TraceEntry>,
+}
+impl TrialHost for AuditedHost<'_> {
+    fn observe(&self) -> Result<ObservedFacts> {
+        self.host.observe()
+    }
+    fn reconcile_prior(&mut self, prior: Option<&Value>) -> Result<()> {
+        self.host.reconcile_prior(prior)
+    }
+    fn rate_limits(&mut self, value: &Value) -> Result<()> {
+        self.host.rate_limits(value)
+    }
+    fn correction_event(&mut self, watermark: u64, input: &str) -> Result<()> {
+        self.host.correction_event(watermark, input)
+    }
+    fn checkpoint(&mut self, state: &SessionState, pending: Option<&str>) -> Result<()> {
+        self.host.checkpoint(state, pending)
+    }
+}
+impl crate::worker_run::CorrectionBroker for AuditedHost<'_> {
+    fn correction_waiting(&self) -> Result<bool> {
+        self.host.correction_waiting()
+    }
+    fn pending_correction(
+        &self,
+    ) -> Result<Option<std::sync::Arc<crate::corrections::VerifiedCorrectionTransition>>> {
+        self.host.pending_correction()
+    }
+    fn deliver_correction(
+        &mut self,
+        state: &SessionState,
+        transition: std::sync::Arc<crate::corrections::VerifiedCorrectionTransition>,
+    ) -> Result<bool> {
+        self.host.deliver_correction(state, transition)
+    }
+    fn finalize_correction(&mut self, state: &mut SessionState) -> Result<()> {
+        self.host.finalize_correction(state)
+    }
 }
 impl ToolBroker for AuditedHost<'_> {
     fn observe_session(&mut self, state: &SessionState) -> Result<()> {
@@ -1473,6 +1586,8 @@ pub struct TrialOperation<'a> {
     /// Issued by this actual admitted ScopedWorker; a caller cannot supply an
     /// unjournaled subprocess or substitute a separate provider authority.
     pub provider: &'a crate::worker_run::WorkerProviderLaunch,
+    /// Minted by the same admitted worker; contains the real scoped hooks.
+    pub(crate) lifecycle: &'a crate::worker_run::TrialLifecycle,
     pub host: &'a mut crate::worker::ScopedWorker,
     pub report_root: &'a Path,
 }
@@ -1500,6 +1615,28 @@ impl<F: FnOnce()> Drop for CancelTrialOnDrop<F> {
         }
     }
 }
+fn verify_trial_declaration(
+    suite: &SuiteManifest,
+    variant: &Variant,
+    trial: &TrialKey,
+) -> Result<()> {
+    let declared = suite
+        .variants
+        .iter()
+        .find(|declared| declared.id == trial.variant && declared.case_id == trial.case_id)
+        .ok_or_else(|| Error::invalid("trial is not declared by this variant"))?;
+    if !suite.plan()?.contains(trial)
+        || trial.profile != variant.profile
+        || canonical_digest(SUITE_SCHEMA, declared)? != canonical_digest(SUITE_SCHEMA, variant)?
+    {
+        return Err(Error::new(
+            "evaluation_fidelity",
+            "trial bounds, fixture, rubric or profile differs from its declared variant",
+        ));
+    }
+    Ok(())
+}
+
 /// Invoked explicitly, once per fresh trial. There is no retry-until-pass loop.
 pub async fn run_live_trial(
     suite: &SuiteManifest,
@@ -1510,6 +1647,7 @@ pub async fn run_live_trial(
     remaining: Duration,
 ) -> Result<TrialReport> {
     suite.validate()?;
+    verify_trial_declaration(suite, variant, &trial)?;
     let mut report = TrialReport::unrun(
         suite,
         variant,
@@ -1517,12 +1655,6 @@ pub async fn run_live_trial(
         TrialOutcome::Blocked,
         "live prerequisites not established",
     )?;
-    if !suite.plan()?.contains(&trial)
-        || trial.variant != variant.id
-        || trial.case_id != variant.case_id
-    {
-        return Err(Error::invalid("trial is not declared by this variant"));
-    }
     let Some(profile) = suite
         .profiles
         .iter()
@@ -1538,6 +1670,14 @@ pub async fn run_live_trial(
         operation.isolation,
         operation.tools,
         operation.work_identity,
+    )?;
+    verify_fixture_context(
+        operation.host.bound_context(),
+        operation.fixture,
+        operation.assembled.manifest.workspace_id,
+        operation.assembled.manifest.operation_id,
+        &operation.assembled.manifest.profile,
+        &operation.assembled.manifest.phase,
     )?;
     verify_grader_boundary(
         operation.isolation,
@@ -1609,6 +1749,14 @@ pub async fn run_live_trial(
         }
     };
     lease.check()?;
+    if operation.lifecycle.operation_id() != operation.provider.operation_id()
+        || variant.bounds.max_seconds > operation.lifecycle.max_seconds()
+    {
+        return Err(Error::new(
+            "admission_budget",
+            "evaluation lifecycle or duration differs from the admitted worker",
+        ));
+    }
     if variant.bounds.max_turns > operation.provider.max_turns() {
         return Err(Error::new(
             "admission_budget",
@@ -1673,6 +1821,8 @@ pub async fn run_live_trial(
             }
         }
     }
+    state.observe_correction(operation.host.correction_requirement().watermark);
+    let correction_wake = operation.host.correction_wake()?;
     let corrections = correction_timeline(operation.fixture)?;
     let mut client = None;
     // Declared after `client`, so cancellation runs first when this future is
@@ -1686,7 +1836,9 @@ pub async fn run_live_trial(
         lease: lease.as_ref(),
         trace: vec![],
     };
+    let operation_deadline = tokio::time::Instant::now() + limit;
     let execution=tokio::time::timeout(limit,async {
+        operation.lifecycle.before().await?;
         let spawned=operation.provider.launch().await?;
         client=Some(spawned);
         let client=client.as_mut().ok_or_else(||Error::invalid("adapter unavailable"))?;
@@ -1700,6 +1852,7 @@ pub async fn run_live_trial(
         audited.host.checkpoint(&state, Some("thread/start"))?;
         client.start_thread(&mut state,operation.isolation,operation.permissions,&operation.assembled.prompt,operation.tools.definitions().to_vec()).await?;
         audited.host.checkpoint(&state, None)?;
+        operation.lifecycle.launched().await?;
         report.evidence_class=EvidenceClass::ActualAgent;
         audited.host.checkpoint(&state, Some(if matches!(variant.role,AgentRole::Review|AgentRole::IndependentReview) {"review/start"} else {"turn/start"}))?;
         if matches!(variant.role,AgentRole::Review|AgentRole::IndependentReview) {
@@ -1708,36 +1861,27 @@ pub async fn run_live_trial(
             client.start_turn(&mut state,operation.permissions,"Execute the admitted task using the supplied actual state and repository instructions. Submit truthful evidence through the available scoped tools.",&mut audited).await?;
         }
         audited.host.checkpoint(&state, None)?;
-        let mut queued = Vec::new();
         for correction in &corrections {
             lease.check()?;
             audited.host.correction_event(correction.watermark, &correction.input)?;
-            audited.host.checkpoint(&state, Some("turn/steer"))?;
-            let delivered = client.steer(&mut state, correction.watermark, &correction.input, &mut audited).await?;
-            if !delivered { queued.push(correction.input.clone()); }
-            audited.host.checkpoint(&state, None)?;
+            if !crate::worker_run::advance_correction(client, &mut state, operation.permissions, &mut audited).await? {
+                return Err(Error::new("correction_provenance_unavailable", "declared correction has no current installed native route"));
+            }
         }
         loop {
             lease.check()?;
-            if let Some(consumed) = audited.host.observe()?.state.get("correction_consumed").and_then(Value::as_u64)
-                && consumed <= state.correction_required {
-                state.acknowledge_correction(consumed)?;
-            }
+            if crate::worker_run::advance_correction(client, &mut state, operation.permissions, &mut audited).await? { continue; }
+            audited.host.finalize_correction(&mut state)?;
             audited.host.checkpoint(&state, None)?;
-            if state.turn_id.is_none() && !queued.is_empty() {
-                let input = queued.join("\n");
-                queued.clear();
-                audited.host.checkpoint(&state, Some("turn/start"))?;
-                client.start_turn(&mut state,operation.permissions,&input,&mut audited).await?;
-                audited.host.checkpoint(&state, None)?;
-            }
             if state.intervention.is_some() { return Err(Error::new("provider_intervention","provider resolution is required")); }
             if state.input_required { return Err(Error::new("input_required","worker requested interactive input")); }
-            if let Some(status)=&state.terminal {
+            if let Some(status)=&state.terminal && !audited.host.correction_waiting()? {
                 return if status=="completed" && state.completion_is_current() {Ok(())} else {Err(Error::new("turn_incomplete","turn did not complete with current corrections"))};
             }
-            let event=client.pump(&mut state,&mut audited,Duration::from_secs(30),Duration::from_secs(60)).await?;
-            if matches!(event.kind,EventKind::TurnCancelled|EventKind::ProcessExit) { return Err(Error::new("interrupted","worker was interrupted")); }
+            let event=if state.turn_id.is_none() && audited.host.correction_waiting()? {
+                client.pump_waiting(&mut state,&mut audited,operation_deadline,correction_wake.as_deref()).await?
+            } else { client.pump_or_wake(&mut state,&mut audited,Duration::from_secs(30),Duration::from_secs(60),correction_wake.as_deref()).await? };
+            if event.is_some_and(|event|matches!(event.kind,EventKind::TurnCancelled|EventKind::ProcessExit)) { return Err(Error::new("interrupted","worker was interrupted")); }
         }
     }).await;
     let cancel_error = if !matches!(&execution, Ok(Ok(()))) {
@@ -1836,6 +1980,28 @@ pub async fn run_live_trial(
             report
                 .reason
                 .push_str(&format!("; cancellation failed: {}", error.code));
+        }
+    }
+    if state.completion_is_current() && !report.unresolved_remote_effects {
+        match tokio::time::timeout(
+            limit.saturating_sub(start.elapsed()),
+            operation.lifecycle.after(&state),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            result => {
+                let _ = operation.provider.cancel();
+                report.outcome = TrialOutcome::Interrupted;
+                report.unresolved_remote_effects = true;
+                report.reason = match result {
+                    Ok(Err(error)) => {
+                        format!("actual after-run hook did not complete: {}", error.code)
+                    }
+                    Err(_) => "finite trial duration expired during actual after-run hook".into(),
+                    Ok(Ok(())) => unreachable!(),
+                };
+            }
         }
     }
     // Owned termination has been observed, or cancellation was explicitly
@@ -2107,6 +2273,52 @@ pub fn assess(suite: &SuiteManifest, reports: &[TrialReport]) -> Result<SuiteAss
         }
     }
     Ok(SuiteAssessment {planned_trials:planned.len(),actual_agent_trials:actual,outcome_counts:counts,blocking_trials:blocking,case_variability:variability,human_review:"pending; human review/calibration records are required and cannot be generated by an agent".into(),qualified:false})
+}
+
+#[cfg(test)]
+mod fidelity_tests {
+    use super::*;
+
+    #[test]
+    fn live_variant_must_match_the_complete_declared_contract() {
+        let suite = SuiteManifest::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("evaluations/manifest.json"),
+        )
+        .unwrap();
+        let key = suite.plan().unwrap().remove(0);
+        let variant = suite.variants.iter().find(|v| v.id == key.variant).unwrap();
+        verify_trial_declaration(&suite, variant, &key).unwrap();
+        for field in [
+            "duration",
+            "turns",
+            "repetitions",
+            "fixture",
+            "scorer",
+            "profile",
+            "outcomes",
+            "rubric",
+        ] {
+            let mut altered = variant.clone();
+            match field {
+                "duration" => altered.bounds.max_seconds += 1,
+                "turns" => altered.bounds.max_turns += 1,
+                "repetitions" => altered.bounds.repetitions += 1,
+                "fixture" => altered.fixture_digest = bytes_digest(b"substitute"),
+                "scorer" => altered.scorer_digest = bytes_digest(b"substitute"),
+                "profile" => altered.profile = "other".into(),
+                "outcomes" => altered.expected_outcomes = vec!["anything".into()],
+                "rubric" => altered.qualitative[0].criterion = "anything".into(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                verify_trial_declaration(&suite, &altered, &key)
+                    .unwrap_err()
+                    .code,
+                "evaluation_fidelity",
+                "substituted {field}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

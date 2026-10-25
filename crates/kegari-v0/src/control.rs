@@ -14,6 +14,11 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "control_release.rs"]
+mod release_recovery;
+pub use release_recovery::ReleaseResumeReference;
+pub(crate) use release_recovery::VerifiedReleaseResume;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Intent {
@@ -241,8 +246,10 @@ impl MetadataReference {
             .transpose()
     }
     fn validate(&self) -> Result<()> {
-        if self.purpose != "parent_authorization"
-            || self.attempt == 0
+        if !matches!(
+            self.purpose.as_str(),
+            "parent_authorization" | "no_release_required"
+        ) || self.attempt == 0
             || self.attempt > self.max_attempts
         {
             return Err(Error::new(
@@ -262,6 +269,7 @@ pub struct MetadataAdmission {
 enum AdmissionReference {
     Run(RunReference),
     Metadata(MetadataReference),
+    ReleaseResume(ReleaseResumeReference),
 }
 
 /// Only created after a durable Sent receipt and a synchronous owned launch.
@@ -702,6 +710,30 @@ impl ControlHost {
         Ok(s.snapshot())
     }
 
+    /// Observe the actually attached running owner; this never restores a
+    /// serialized lease or grants a permit. Admission rechecks it atomically.
+    pub(crate) fn active_lease(&self) -> Result<Lease> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("control_failed", "control serialization failed"))?;
+        if !state.open
+            || !state.alive
+            || !state.reconciled
+            || state.intent.desired != Intent::Running
+            || state.service_stopping
+        {
+            return Err(Error::new(
+                "admission_closed",
+                "no current running reconciled owner",
+            ));
+        }
+        state
+            .lease
+            .clone()
+            .ok_or_else(|| Error::new("ownership_conflict", "running host has no attached lease"))
+    }
+
     /// Atomically publish a completed read-only observation relative to mutation
     /// admission/dispatch. The callback must not reenter ControlHost or await I/O.
     pub fn serialize_observation<T>(
@@ -1076,6 +1108,12 @@ impl ControlHost {
                 "metadata".into(),
                 serde_json::to_string(&reference)
                     .map_err(|_| Error::invalid("metadata reference encoding"))?,
+            );
+        } else if let Some(AdmissionReference::ReleaseResume(reference)) = reference {
+            expected.insert(
+                "release_resume".into(),
+                serde_json::to_string(&reference)
+                    .map_err(|_| Error::invalid("release resume reference encoding"))?,
             );
         }
         let request = MutationRequest {
@@ -2044,6 +2082,81 @@ impl ControlHost {
         read_provider: impl FnOnce(&Receipt) -> Result<Reconciliation>,
     ) -> Result<Receipt> {
         self.reconcile_operation_observed(actor, id, |receipt, _| read_provider(receipt))
+    }
+
+    /// Copy the already reconciled requested receipt into its operator command
+    /// result. Other unresolved effects cannot block this metadata-only result,
+    /// and this closed method cannot reconcile them or transmit an effect.
+    pub(crate) fn record_operation_reconciliation_completion(
+        &self,
+        request: MutationRequest,
+        parent: &Receipt,
+        result: Value,
+        fresh: impl FnOnce(&ControlSnapshot) -> Result<()>,
+    ) -> Result<Receipt> {
+        let backend: Receipt = serde_json::from_value(result["receipt"].clone()).map_err(|_| {
+            Error::new(
+                "missing_evidence",
+                "reconciliation needs its actual target receipt",
+            )
+        })?;
+        let operation = request.payload["operation"]
+            .as_str()
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .ok_or_else(|| Error::invalid("reconciliation target is invalid"))?;
+        let targets = vec![operation.to_string()];
+        if request.kind != "decision/OperationReconcile"
+            || operation == parent.operation_id
+            || operation == request.request_id
+            || backend.operation_id != operation
+            || result["reconciled_operation"] != serde_json::json!(operation)
+            || request.canonical_targets != targets
+            || request.expected.get("parent_command_id") != Some(&parent.operation_id.to_string())
+            || request.expected.get("parent_payload_digest") != Some(&parent.payload_digest)
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "completion differs from the requested reconciliation",
+            ));
+        }
+        self.mutate_synchronous(
+            request.clone(),
+            None,
+            Some("recover"),
+            |snapshot| {
+                let command = self.receipts.get(parent.operation_id)?;
+                let actual = self.receipts.get(operation)?;
+                if command.runtime_id != request.runtime_id
+                    || command.kind != "command/OperationReconcile"
+                    || command.actor != request.actor.identity
+                    || command.payload_digest != parent.payload_digest
+                    || command.canonical_targets != targets
+                    || command.phase != ReceiptPhase::Prepared
+                    || !snapshot.background_commands.contains(&command.operation_id)
+                    || actual.runtime_id != request.runtime_id
+                    || canonical_digest(1, &actual)? != canonical_digest(1, &backend)?
+                {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "reconciliation result differs from its owned command or actual target",
+                    ));
+                }
+                if actual.phase != ReceiptPhase::Reconciled || actual.observed_result.is_none() {
+                    return Err(Error::new(
+                        "missing_evidence",
+                        "reconciliation target has no durable terminal observation",
+                    ));
+                }
+                fresh(snapshot)
+            },
+            |_| {
+                Ok((
+                    BTreeMap::new(),
+                    serde_json::json!({"reconciled_operation":operation,"receipt":backend}),
+                ))
+            },
+            true,
+        )
     }
     /// Apply a previously collected provider observation only after rechecking
     /// the current actor/configuration/lifecycle against this serialized snapshot.

@@ -212,6 +212,35 @@ impl WorkerAuthority {
     }
 }
 
+pub(crate) fn effective_authority(
+    host: &dyn WorkerHost,
+    operation: Uuid,
+    original: &WorkerAuthority,
+) -> Result<WorkerAuthority> {
+    if let Some(transition) = host.correction_transition(operation)? {
+        let WorkerAuthority::Authorized(admitted) = original else {
+            return Err(Error::new(
+                "scope_violation",
+                "independent review cannot acquire Linear correction authority",
+            ));
+        };
+        if transition.original_authority().digest()? != admitted.digest()? {
+            return Err(Error::new(
+                "worker_binding",
+                "correction transition belongs to another original worker contract",
+            ));
+        }
+        let expected = WorkerAuthority::Authorized(transition.current_authority().clone());
+        let current = host.current_authority(&expected)?;
+        expected.compare(&current)?;
+        Ok(current)
+    } else {
+        let current = host.current_authority(original)?;
+        original.compare(&current)?;
+        Ok(current)
+    }
+}
+
 /// Trusted host integration, never implemented by worker input. These callbacks
 /// used by fresh-gate validation run inside ControlHost's serialized gate and
 /// MUST NOT reenter it. Session observations explicitly run outside that gate.
@@ -222,6 +251,22 @@ pub trait WorkerHost: Send + Sync {
     /// control gate. The host serializes account/work holds against new admission.
     fn observed_session(&self, operation: Uuid, state: &SessionState) -> Result<()>;
     fn current_authority(&self, expected: &WorkerAuthority) -> Result<WorkerAuthority>;
+    /// Absence grants no transition; ordinary strict original authority checks
+    /// still apply. Production returns only installed, freshly revalidated proof.
+    fn correction_transition(
+        &self,
+        _operation: Uuid,
+    ) -> Result<Option<Arc<crate::corrections::VerifiedCorrectionTransition>>> {
+        Ok(None)
+    }
+    /// A finite wait keeps this worker owned while native input is classified;
+    /// it grants no effects and never bypasses the ordinary current gate.
+    fn correction_waiting(&self, _operation: Uuid) -> Result<bool> {
+        Ok(false)
+    }
+    fn correction_wake(&self, _operation: Uuid) -> Result<Option<Arc<tokio::sync::Notify>>> {
+        Ok(None)
+    }
     fn verify_owner(&self, lease: &Lease) -> Result<()>;
     fn rate_limits(&self, operation: Uuid, observed: &Value) -> Result<()>;
     fn reconcile_prior(&self, operation: Uuid, prior: Option<&Value>) -> Result<()>;
@@ -243,6 +288,13 @@ pub struct ReviewTarget {
 
 /// Diagnostic proposal with exact host provenance. The delivery coordinator
 /// stores this as pending; deserializing it does not establish any passed gate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessedCorrection {
+    pub watermark: u64,
+    pub input_digest: String,
+    pub transition_digest: Option<String>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerOutcome {
@@ -258,6 +310,8 @@ pub struct WorkerOutcome {
     pub instruction_digest: String,
     pub tool_contract_digest: String,
     pub fresh_gate_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_correction: Option<ProcessedCorrection>,
     pub claim: Value,
     pub artifact_refs: Vec<String>,
     pub checks: Vec<Value>,
@@ -346,7 +400,7 @@ pub fn operation_tool_definitions(
             tool(
                 "outcome_submit",
                 "Submit an untrusted outcome proposal and observed evidence references. Host verification and turn completion remain required; this does not pass a delivery gate.",
-                json!({"claim":{"type":"object"},"artifact_refs":{"type":"array","items":{"type":"string"},"maxItems":128}}),
+                json!({"claim":{"type":"object"},"artifact_refs":{"type":"array","items":{"type":"string"},"maxItems":128},"processed_correction":{"type":"object","properties":{"watermark":{"type":"integer","minimum":0},"input_digest":{"type":"string"},"transition_digest":{"type":["string","null"]}},"required":["watermark","input_digest","transition_digest"],"additionalProperties":false}}),
                 &["claim", "artifact_refs"],
             ),
         ),
@@ -734,6 +788,8 @@ struct Proposal {
     turn: String,
     claim: Value,
     artifact_refs: Vec<String>,
+    #[serde(default)]
+    processed_correction: Option<ProcessedCorrection>,
 }
 #[derive(Clone)]
 struct CallReceipt {
@@ -762,11 +818,14 @@ pub struct ScopedWorker {
     journal: Arc<Journal>,
     executions: Arc<ExecutionRegistry>,
     session: Option<SessionState>,
+    applied_transition: Option<Arc<crate::corrections::VerifiedCorrectionTransition>>,
+    correction_turn: Option<(String, String)>,
     pending: Option<String>,
     calls: BTreeMap<String, CallReceipt>,
     proposals: Vec<Proposal>,
     published: BTreeSet<Uuid>,
     checks: Vec<VerifiedCheckExecution>,
+    failed_checks: Vec<crate::execution::FailedCheckExecution>,
     check_records: Vec<Value>,
     retained: Vec<RetainedArtifact>,
     effects: Vec<String>,
@@ -843,11 +902,14 @@ impl ScopedWorker {
             journal,
             executions,
             session: None,
+            applied_transition: None,
+            correction_turn: None,
             pending: None,
             calls: BTreeMap::new(),
             proposals: vec![],
             published: BTreeSet::new(),
             checks: vec![],
+            failed_checks: vec![],
             check_records: vec![],
             retained: vec![],
             effects: vec![],
@@ -880,8 +942,171 @@ impl ScopedWorker {
             self.executions.clone(),
         )
     }
+    pub(crate) fn correction_wake(&self) -> Result<Option<Arc<tokio::sync::Notify>>> {
+        self.host.correction_wake(self.permit.operation_id)
+    }
+    pub(crate) fn bound_context(&self) -> &Value {
+        &self.contract.context
+    }
+    pub fn correction_requirement(&self) -> ProcessedCorrection {
+        self.applied_transition.as_ref().map_or_else(
+            || ProcessedCorrection {
+                watermark: match &self.contract.authority {
+                    WorkerAuthority::Authorized(gate) => gate.correction_watermark(),
+                    WorkerAuthority::Independent(_) => 0,
+                },
+                input_digest: self.contract.assembled.manifest.context_digest.clone(),
+                transition_digest: None,
+            },
+            |transition| ProcessedCorrection {
+                watermark: transition.watermark(),
+                input_digest: transition.input_digest(),
+                transition_digest: Some(transition.digest().into()),
+            },
+        )
+    }
+    pub(crate) fn correction_waiting(&self) -> Result<bool> {
+        self.control
+            .validate_permit(&self.permit, || self.host.verify_owner(&self.permit.lease))?;
+        self.host.correction_waiting(self.permit.operation_id)
+    }
+    pub(crate) fn pending_correction(
+        &self,
+    ) -> Result<Option<Arc<crate::corrections::VerifiedCorrectionTransition>>> {
+        if self.correction_waiting()? {
+            return Ok(None);
+        }
+        let current = self.host.correction_transition(self.permit.operation_id)?;
+        if current.is_none() {
+            return Ok(None);
+        }
+        self.control.validate_permit(&self.permit, || {
+            self.host.verify_owner(&self.permit.lease)?;
+            effective_authority(
+                self.host.as_ref(),
+                self.permit.operation_id,
+                &self.contract.authority,
+            )
+            .map(|_| ())
+        })?;
+        Ok(current.filter(|transition| {
+            self.applied_transition
+                .as_ref()
+                .is_none_or(|applied| applied.digest() != transition.digest())
+        }))
+    }
+    /// Called only after the adapter acknowledges this exact turn. An observed
+    /// completion racing the acknowledgement leaves the input queued.
+    pub(crate) fn deliver_correction(
+        &mut self,
+        state: &SessionState,
+        transition: Arc<crate::corrections::VerifiedCorrectionTransition>,
+    ) -> Result<bool> {
+        let (Some(thread), Some(turn)) = (&state.thread_id, &state.turn_id) else {
+            return Ok(false);
+        };
+        if state.completed_turns.contains_key(turn) {
+            return Ok(false);
+        }
+        self.control.validate_permit(&self.permit, || {
+            self.host.verify_owner(&self.permit.lease)?;
+            if self
+                .host
+                .correction_transition(self.permit.operation_id)?
+                .as_ref()
+                .map(|p| p.digest())
+                != Some(transition.digest())
+            {
+                return Err(Error::new(
+                    "stale_result",
+                    "correction delivery was superseded before acknowledgement",
+                ));
+            }
+            effective_authority(
+                self.host.as_ref(),
+                self.permit.operation_id,
+                &self.contract.authority,
+            )
+            .map(|_| ())
+        })?;
+        self.journal.append("correction_delivered", &json!({"thread":thread,"turn":turn,"watermark":transition.watermark(),"transition":transition.digest(),"input_digest":transition.input_digest()}))?;
+        self.correction_turn = Some((thread.clone(), turn.clone()));
+        self.applied_transition = Some(transition);
+        Ok(true)
+    }
+    /// A worker report is consumed only with the actual matching completed turn
+    /// and still-current native correction proof, never on steer acknowledgement.
+    pub(crate) fn finalize_correction(&mut self, state: &mut SessionState) -> Result<()> {
+        if self.correction_waiting()? || self.pending_correction()?.is_some() {
+            return Ok(());
+        }
+        if state.terminal.as_deref() != Some("completed")
+            || state.turn_id.is_some()
+            || state.intervention.is_some()
+            || state.input_required
+        {
+            return Ok(());
+        }
+        let Some(turn) = state.last_completed_turn.as_deref() else {
+            return Ok(());
+        };
+        let Some(thread) = state.thread_id.as_deref() else {
+            return Ok(());
+        };
+        let required = self.correction_requirement();
+        if state.correction_required != required.watermark
+            || state.correction_consumed == required.watermark
+        {
+            return Ok(());
+        }
+        if self.applied_transition.is_some()
+            && self
+                .correction_turn
+                .as_ref()
+                .is_none_or(|(t, r)| t != thread || r != turn)
+        {
+            return Ok(());
+        }
+        if !self.proposals.iter().any(|proposal| {
+            proposal.thread == thread
+                && proposal.turn == turn
+                && proposal.processed_correction.as_ref() == Some(&required)
+        }) {
+            return Ok(());
+        }
+        self.control
+            .validate_permit(&self.permit, || self.fresh())?;
+        self.journal.append(
+            "correction_processed",
+            &json!({"thread":thread,"turn":turn,"processed":required}),
+        )?;
+        state.acknowledge_correction(required.watermark)
+    }
+    pub(crate) fn completed_checkpoint(&self) -> Result<SessionState> {
+        let state = self.session.as_ref().ok_or_else(|| {
+            Error::new(
+                "reconciliation_required",
+                "worker has no durable final checkpoint",
+            )
+        })?;
+        if self.pending.is_some()
+            || state.turn_id.is_some()
+            || !state.completion_is_current()
+            || state.turns_started == 0
+            || state.thread_id.is_none()
+        {
+            return Err(Error::new(
+                "reconciliation_required",
+                "worker checkpoint is not a current completed provider turn",
+            ));
+        }
+        Ok(state.clone())
+    }
     pub fn take_verified_checks(&mut self) -> Vec<VerifiedCheckExecution> {
         std::mem::take(&mut self.checks)
+    }
+    pub fn take_failed_checks(&mut self) -> Vec<crate::execution::FailedCheckExecution> {
+        std::mem::take(&mut self.failed_checks)
     }
     pub fn validate_live_operation(
         &self,
@@ -914,9 +1139,24 @@ impl ScopedWorker {
     }
     fn fresh(&self) -> Result<()> {
         self.host.verify_owner(&self.permit.lease)?;
-        self.contract
-            .authority
-            .compare(&self.host.current_authority(&self.contract.authority)?)
+        effective_authority(
+            self.host.as_ref(),
+            self.permit.operation_id,
+            &self.contract.authority,
+        )?;
+        if self
+            .host
+            .correction_transition(self.permit.operation_id)?
+            .as_ref()
+            .map(|p| p.digest())
+            != self.applied_transition.as_ref().map(|p| p.digest())
+        {
+            return Err(Error::new(
+                "correction_pending",
+                "current correction input has not reached this provider turn",
+            ));
+        }
+        Ok(())
     }
     fn validate_call(&self, call: &ToolCall) -> Result<()> {
         if serde_json::to_vec(&call.arguments)
@@ -1017,6 +1257,7 @@ impl ScopedWorker {
         id: Uuid,
         claim: Value,
         artifact_refs: Vec<String>,
+        processed_correction: Option<ProcessedCorrection>,
     ) -> Result<Value> {
         if artifact_refs.len() > 128
             || artifact_refs
@@ -1034,6 +1275,7 @@ impl ScopedWorker {
             turn: call.turn_id.clone(),
             claim,
             artifact_refs,
+            processed_correction,
         };
         let reference = self.journal.append("proposal_pending", &p)?;
         self.proposals.push(p);
@@ -1043,6 +1285,10 @@ impl ScopedWorker {
         match call.name.as_str() {
             "context_read" => {
                 let a: ContextRead = parse(&call.arguments)?;
+                if a.key == "correction_state" {
+                    return serde_json::to_value(self.correction_requirement())
+                        .map_err(|_| Error::invalid("correction reference encoding"));
+                }
                 let v = self.contract.context.get(&a.key).ok_or_else(|| {
                     Error::new("missing_context", "named context entry unavailable")
                 })?;
@@ -1060,7 +1306,7 @@ impl ScopedWorker {
                         "outcome claim must be an object",
                     ));
                 }
-                self.proposal(call, id, a.claim, a.artifact_refs)
+                self.proposal(call, id, a.claim, a.artifact_refs, a.processed_correction)
             }
             "correction_propose" => {
                 let a: CorrectionArgs = parse(&call.arguments)?;
@@ -1089,6 +1335,7 @@ impl ScopedWorker {
                     id,
                     json!({"kind":"correction_proposal","proposal":a}),
                     vec![],
+                    None,
                 )
             }
             "review_feedback" => {
@@ -1102,10 +1349,15 @@ impl ScopedWorker {
                         id,
                         json!({"kind":"no_change_review","body":a.body}),
                         vec![],
+                        None,
                     );
                 };
                 let host = self.host.clone();
-                let authority = self.contract.authority.clone();
+                let authority = effective_authority(
+                    self.host.as_ref(),
+                    self.permit.operation_id,
+                    &self.contract.authority,
+                )?;
                 let lease = self.permit.lease.clone();
                 let response = self
                     .providers
@@ -1167,6 +1419,11 @@ impl ScopedWorker {
                     .clone()
                     .ok_or_else(|| Error::new("unsupported_tool", "owned execution unavailable"))?;
                 let contract = self.contract.clone();
+                let expected_authority = effective_authority(
+                    self.host.as_ref(),
+                    self.permit.operation_id,
+                    &self.contract.authority,
+                )?;
                 let journal = self.journal.clone();
                 let control = self.control.clone();
                 let host = self.host.clone();
@@ -1179,9 +1436,11 @@ impl ScopedWorker {
                         None,
                         || {
                             host.verify_owner(&permit.lease)?;
-                            contract
-                                .authority
-                                .compare(&host.current_authority(&contract.authority)?)
+                            expected_authority.compare(&effective_authority(
+                                host.as_ref(),
+                                permit.operation_id,
+                                &contract.authority,
+                            )?)
                         },
                         |_| {
                             let record = execution.executor(&contract.isolation).write_source(
@@ -1256,6 +1515,32 @@ impl ScopedWorker {
             .clone()
             .ok_or_else(|| Error::new("unsupported_tool", "owned execution unavailable"))?;
         let contract = self.contract.clone();
+        let expected_authority = effective_authority(
+            self.host.as_ref(),
+            self.permit.operation_id,
+            &self.contract.authority,
+        )?;
+        let effective = self
+            .applied_transition
+            .clone()
+            .map(|transition| {
+                crate::execution::EffectiveExecutionBinding::new(
+                    &execution.binding,
+                    &execution.ownership,
+                    &contract.isolation,
+                    transition,
+                )
+            })
+            .transpose()?;
+        let checked_work = effective
+            .as_ref()
+            .map_or(&execution.binding.work, |binding| &binding.binding().work);
+        if expected_authority.work() != Some(checked_work) {
+            return Err(Error::new(
+                "correction_execution_binding",
+                "validation requires the exact acknowledged correction input and current execution binding",
+            ));
+        }
         let journal = self.journal.clone();
         let control = self.control.clone();
         let host = self.host.clone();
@@ -1264,32 +1549,42 @@ impl ScopedWorker {
         let request = self.mutation(id, "worker_validation", call.arguments.clone());
         let handle = tokio::runtime::Handle::current();
         let executions = self.executions.clone();
-        let (receipt, verified, retained) = tokio::task::spawn_blocking(move || {
+        let (receipt, verified, failed, retained) = tokio::task::spawn_blocking(move || {
             let executor = execution.executor(&contract.isolation);
             let outputs = execution
                 .check_outputs
                 .get(&a.name)
                 .cloned()
                 .unwrap_or_default();
-            let prepared = executor.prepare_check(
-                CheckInvocation {
-                    binding: &execution.binding,
-                    workflow: &contract.workflow,
-                    name: &a.name,
-                    kind,
-                    additional_outputs: &outputs,
-                    previous_outputs: &prior,
-                },
-                |entry| journal.append("check", entry).map(|_| ()),
-            )?;
+            let invocation = CheckInvocation {
+                binding: effective
+                    .as_ref()
+                    .map_or(&execution.binding, |binding| binding.binding()),
+                workflow: &contract.workflow,
+                name: &a.name,
+                kind,
+                additional_outputs: &outputs,
+                previous_outputs: &prior,
+            };
+            let persist = |entry: &crate::execution::CheckJournalEntry| {
+                journal.append("check", entry).map(|_| ())
+            };
+            let prepared = match &effective {
+                Some(effective) => {
+                    executor.prepare_effective_check(invocation, effective, persist)?
+                }
+                None => executor.prepare_check(invocation, persist)?,
+            };
             let (effect, running) = control.begin_effect(
                 request,
                 &permit,
                 || {
                     host.verify_owner(&permit.lease)?;
-                    contract
-                        .authority
-                        .compare(&host.current_authority(&contract.authority)?)
+                    expected_authority.compare(&effective_authority(
+                        host.as_ref(),
+                        permit.operation_id,
+                        &contract.authority,
+                    )?)
                 },
                 |_| {
                     let running = executor.start_check(prepared)?;
@@ -1307,12 +1602,12 @@ impl ScopedWorker {
                 executor
                     .complete_check(running, |entry| journal.append("check", entry).map(|_| ())),
             )?;
-            let (value, verified, retained) = match completion {
+            let (value, verified, failed, retained) = match completion {
                 crate::execution::CheckCompletion::Passed(checked) => {
                     let retained = checked.retain_outputs(&contract.isolation, &journal.dir)?;
                     let value = serde_json::to_value(checked.record())
                         .map_err(|_| Error::invalid("check receipt encoding"))?;
-                    (value, Some(checked), retained)
+                    (value, Some(checked), None, retained)
                 }
                 crate::execution::CheckCompletion::Failed(failed) => {
                     let retained = failed.retain_outputs(&contract.isolation, &journal.dir)?;
@@ -1320,6 +1615,7 @@ impl ScopedWorker {
                         serde_json::to_value(failed.record())
                             .map_err(|_| Error::invalid("check receipt encoding"))?,
                         None,
+                        Some(failed),
                         retained,
                     )
                 }
@@ -1330,13 +1626,15 @@ impl ScopedWorker {
                 &permit,
                 || {
                     host.verify_owner(&permit.lease)?;
-                    contract
-                        .authority
-                        .compare(&host.current_authority(&contract.authority)?)
+                    expected_authority.compare(&effective_authority(
+                        host.as_ref(),
+                        permit.operation_id,
+                        &contract.authority,
+                    )?)
                 },
                 value,
             )?;
-            Ok::<_, Error>((receipt, verified, retained))
+            Ok::<_, Error>((receipt, verified, failed, retained))
         })
         .await
         .map_err(|_| Error::new("operation_uncertain", "validation dispatcher interrupted"))??;
@@ -1349,6 +1647,9 @@ impl ScopedWorker {
         if let Some(verified) = verified {
             self.checks.push(verified);
         }
+        if let Some(failed) = failed {
+            self.failed_checks.push(failed);
+        }
         self.effects.push("validation_run".into());
         bounded_value(record)
     }
@@ -1360,22 +1661,36 @@ impl ScopedWorker {
         {
             return Ok(());
         }
+        if self.correction_waiting()? || self.pending_correction()?.is_some() {
+            return Ok(());
+        }
         self.control
             .validate_permit(&self.permit, || self.fresh())?;
         for proposal in &self.proposals {
             if self.published.contains(&proposal.id)
                 || state.thread_id.as_deref() != Some(&proposal.thread)
                 || proposal.turn != completed_turn
+                || self.correction_requirement().watermark > 0
+                    && proposal.processed_correction.as_ref()
+                        != Some(&self.correction_requirement())
+                || state
+                    .last_completed_turn
+                    .as_deref()
+                    .is_some_and(|turn| turn != completed_turn)
             {
                 continue;
             }
             let outcome = WorkerOutcome {
-                schema_version: 1,
+                schema_version: 2,
                 runtime_id: self.permit.lease.runtime_id,
                 operation_id: self.permit.operation_id,
                 proposal_id: proposal.id,
                 completed_turn: completed_turn.into(),
-                work: self.contract.authority.work().cloned(),
+                work: self
+                    .applied_transition
+                    .as_ref()
+                    .map(|p| p.effective_work().clone())
+                    .or_else(|| self.contract.authority.work().cloned()),
                 independent_review: matches!(
                     self.contract.authority,
                     WorkerAuthority::Independent(_)
@@ -1386,7 +1701,12 @@ impl ScopedWorker {
                 instructions: self.contract.assembled.manifest.clone(),
                 instruction_digest: self.contract.assembled.manifest_digest.clone(),
                 tool_contract_digest: self.contract.tools.digest().into(),
-                fresh_gate_digest: self.contract.authority.digest()?,
+                fresh_gate_digest: self
+                    .applied_transition
+                    .as_ref()
+                    .map(|p| p.current_authority().digest())
+                    .unwrap_or_else(|| self.contract.authority.digest())?,
+                processed_correction: proposal.processed_correction.clone(),
                 claim: proposal.claim.clone(),
                 artifact_refs: proposal.artifact_refs.clone(),
                 checks: self.check_records.clone(),
@@ -1500,7 +1820,16 @@ impl TrialHost for ScopedWorker {
                 serde_json::from_value(value.clone())
                     .map_err(|_| Error::new("record_corrupt", "host check record malformed"))?;
             let digest = canonical_digest(1, &record)?;
-            let observed = crate::evaluation::observed_check(&record, &current, &revision)?;
+            let mut observed = crate::evaluation::observed_check(&record, &current, &revision)?;
+            let effective_work = self
+                .applied_transition
+                .as_ref()
+                .map(|transition| transition.effective_work())
+                .or_else(|| self.contract.authority.work());
+            if effective_work != Some(&record.binding.work) {
+                // Equal bytes do not make pre-correction evidence current.
+                observed.status = CheckStatus::Unknown;
+            }
             let checked_candidate = observed.candidate_digest.clone();
             checks.insert(record.check_name.clone(), observed);
             for artifact in record.artifacts {
@@ -1578,8 +1907,15 @@ impl TrialHost for ScopedWorker {
                 "correction event is not bounded and actionable",
             ));
         }
-        self.control
-            .validate_permit(&self.permit, || self.fresh())?;
+        self.control.validate_permit(&self.permit, || {
+            self.host.verify_owner(&self.permit.lease)?;
+            effective_authority(
+                self.host.as_ref(),
+                self.permit.operation_id,
+                &self.contract.authority,
+            )
+            .map(|_| ())
+        })?;
         self.journal.append(
             "correction_pending",
             &json!({"watermark":watermark,"input_digest":bytes_digest(input.as_bytes())}),
@@ -1654,7 +1990,7 @@ impl TrialHost for ScopedWorker {
         self.session = Some(state.clone());
         self.pending = pending_method.map(str::to_owned);
         if pending_method.is_none()
-            && let Some(turn) = completed_turn
+            && let Some(turn) = state.last_completed_turn.clone().or(completed_turn)
         {
             self.finish_proposals(state, &turn)?;
         }
@@ -1810,6 +2146,8 @@ struct SourceRead {
 struct OutcomeArgs {
     claim: Value,
     artifact_refs: Vec<String>,
+    #[serde(default)]
+    processed_correction: Option<ProcessedCorrection>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

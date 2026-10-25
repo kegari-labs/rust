@@ -281,6 +281,7 @@ pub struct AuthorizedDecision {
     token: Option<String>,
     config_revision: String,
     control_generation: u64,
+    authorization: Option<Receipt>,
 }
 impl AuthorizedDecision {
     pub fn actor(&self) -> &Actor {
@@ -303,6 +304,16 @@ impl AuthorizedDecision {
     }
     pub fn token(&self) -> Option<&str> {
         self.token.as_deref()
+    }
+    /// Actual durable authorization stage, distinct from the still-running
+    /// parent command. Backend effects cannot replace it with an asserted role.
+    pub fn authorization_receipt(&self) -> Result<&Receipt> {
+        self.authorization.as_ref().ok_or_else(|| {
+            Error::new(
+                "decision_pending",
+                "decision authorization is not acknowledged",
+            )
+        })
     }
     /// Release adapters call this again inside every serialized mutation gate,
     /// after their own complete last-moment provider observation and evidence test.
@@ -748,7 +759,11 @@ impl DecisionManager {
                 ));
             }
         } else {
-            require_work(&p, &ctx.work, true)?;
+            require_work(
+                &p,
+                &ctx.work,
+                ctx.request.command != CommandName::ReleaseRecover,
+            )?;
         }
         Ok(p)
     }
@@ -1339,7 +1354,7 @@ impl DecisionManager {
         if ctx.request.command == CommandName::Release {
             self.current_parent_evidence(ctx, &fresh)?;
         }
-        let decision = AuthorizedDecision {
+        let mut decision = AuthorizedDecision {
             actor: ctx.actor.clone(),
             request: ctx.request.clone(),
             parent_command: ctx.parent_command.clone(),
@@ -1354,6 +1369,7 @@ impl DecisionManager {
                 .map(str::to_owned),
             config_revision: ctx.config.revision()?,
             control_generation: ctx.generation,
+            authorization: None,
         };
         let this = self.clone();
         let checked = ctx.clone();
@@ -1363,35 +1379,42 @@ impl DecisionManager {
         let request = self.stage_request(ctx, "release_admission")?;
         let role = ctx.request.command.role(&ctx.request.args).to_owned();
         let command = ctx.request.command.clone();
-        tokio::task::spawn_blocking(move || {
-            control.mutate_observed(
-                request,
-                None,
-                Some(&role),
-                |snapshot| {
-                    this.current_control(&checked, snapshot)?;
-                    let fresh = this.cached_same(&checked, &prepared)?;
-                    require_work(&fresh, &checked.work, true)?;
-                    if proof.request.command == CommandName::Release
-                        && snapshot.intent.desired != Intent::Running
-                    {
-                        return Err(Error::new(
-                            "not_running",
-                            "new manual release requires RUNNING intent",
-                        ));
-                    }
-                    Ok(())
-                },
-                |_| {
-                    Ok((
-                        BTreeMap::new(),
-                        json!({"decision":"authorized","command":command}),
-                    ))
-                },
-            )
+        let authorization = tokio::task::spawn_blocking(move || {
+            let gate = |snapshot: &ControlSnapshot| {
+                this.current_control(&checked, snapshot)?;
+                let fresh = this.cached_same(&checked, &prepared)?;
+                require_work(
+                    &fresh,
+                    &checked.work,
+                    proof.request.command == CommandName::Release,
+                )?;
+                if proof.request.command == CommandName::Release
+                    && snapshot.intent.desired != Intent::Running
+                {
+                    return Err(Error::new(
+                        "not_running",
+                        "new manual release requires RUNNING intent",
+                    ));
+                }
+                Ok(())
+            };
+            if command == CommandName::ReleaseRecover {
+                return control.record_release_recovery_intent(
+                    request,
+                    &checked.parent_command,
+                    gate,
+                );
+            }
+            control.mutate_observed(request, None, Some(&role), gate, |_| {
+                Ok((
+                    BTreeMap::new(),
+                    json!({"decision":"authorized","command":command}),
+                ))
+            })
         })
         .await
         .map_err(|_| Error::new("control_failed", "release admission task failed"))??;
+        decision.authorization = Some(authorization);
         let receipt = if ctx.request.command == CommandName::Release {
             self.services.evidence.release(decision).await?
         } else {
@@ -1407,6 +1430,34 @@ impl DecisionManager {
         effect: MutationRequest,
         result: Value,
     ) -> Result<Receipt> {
+        if matches!(
+            request.command,
+            CommandName::ReleaseRecover | CommandName::OperationReconcile
+        ) {
+            let current = |snapshot: &ControlSnapshot| {
+                self.services
+                    .configuration
+                    .authority_fences()?
+                    .check_actor(actor, "recover")?;
+                verify_current_actor(&self.services.configuration.snapshot()?, actor, "recover")?;
+                if !snapshot.background_commands.contains(&parent.operation_id) {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "recovery background task is no longer active",
+                    ));
+                }
+                Ok(())
+            };
+            return if request.command == CommandName::ReleaseRecover {
+                self.services
+                    .control
+                    .record_release_recovery_completion(effect, parent, result, current)
+            } else {
+                self.services
+                    .control
+                    .record_operation_reconciliation_completion(effect, parent, result, current)
+            };
+        }
         self.services.control.mutate_observed(
             effect,
             None,

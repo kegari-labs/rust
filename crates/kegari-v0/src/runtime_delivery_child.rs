@@ -205,7 +205,7 @@ impl RuntimeDelivery {
                     continue;
                 }
             };
-            let work = outcome.original_authority().work();
+            let work = outcome.effective_authority().work();
             let Some(child) = work.child else { continue };
             let parent = match projection.parent(run.workspace, work.parent) {
                 Ok(parent) => parent,
@@ -228,11 +228,20 @@ impl RuntimeDelivery {
                     Duration::seconds(30),
                 )?;
                 let workspace = self.workspace(projection, run.workspace)?;
-                let claim = workspace.coordinator.accept_child_completion(
-                    &gate,
-                    outcome.clone(),
-                    completion.clone(),
-                )?;
+                let transition = self.runtime.completed_correction_transition(&outcome)?;
+                let claim = match transition {
+                    Some(transition) => workspace.coordinator.accept_corrected_child_completion(
+                        &gate,
+                        outcome.clone(),
+                        completion.clone(),
+                        transition,
+                    )?,
+                    None => workspace.coordinator.accept_child_completion(
+                        &gate,
+                        outcome.clone(),
+                        completion.clone(),
+                    )?,
+                };
                 if completion.execution.is_none() {
                     return Err(Error::new(
                         "reconciliation_required",
@@ -1231,16 +1240,20 @@ impl RuntimeDelivery {
             }
             Stage::ObserveStaging => {
                 let source = required(&child.source, "sealed source")?;
-                let repository = workspace
-                    .contracts
-                    .iter()
-                    .find(|c| c.repository == admission.scope().repository)
-                    .unwrap();
+                let objects = coordinator
+                    .acquire_staging_source(
+                        &admission,
+                        required(&child.pr, "pull request")?,
+                        required(&child.pending, "pending staging receipt")?,
+                        self.processes.clone(),
+                        self.runtime.executions.clone(),
+                    )
+                    .await?;
                 child.staged = Some(
                     coordinator
                         .observe_staging_merge(
                             &admission,
-                            PathBuf::from(&repository.configuration.source).as_path(),
+                            objects.root(),
                             source.change().ok_or_else(|| {
                                 Error::new("candidate_provenance", "staging lacks patch")
                             })?,

@@ -218,6 +218,7 @@ struct Fixture {
     environment_replaced: bool,
     production: String,
     production_tree: String,
+    merge_parent: Option<String>,
     main_reads: usize,
     move_main_on_read: Option<usize>,
     object_blobs: BTreeMap<String, String>,
@@ -263,6 +264,7 @@ impl Fixture {
             environment_replaced: false,
             production: "a".repeat(40),
             production_tree: "b".repeat(40),
+            merge_parent: None,
             main_reads: 0,
             move_main_on_read: None,
             object_blobs: BTreeMap::new(),
@@ -388,7 +390,9 @@ impl HttpTransport for Wire {
                     "/repos/fixture/repo/pulls/17/merge" => {
                         assert_eq!(body["merge_method"], "squash");
                         assert_eq!(body["sha"], f.prs[0]["head"]["sha"]);
+                        f.merge_parent = Some(f.production.clone());
                         f.prs[0]["merged"] = json!(true);
+                        f.prs[0]["state"] = json!("closed");
                         f.prs[0]["merge_commit_sha"] = json!("c".repeat(40));
                         if f.lose_write {
                             return Err(Error::new(
@@ -443,7 +447,7 @@ impl HttpTransport for Wire {
                         {
                             json!({"sha":f.object_commit["sha"],"tree":{"sha":f.object_tree},"parents":[{"sha":f.production}]})
                         } else if path.ends_with(&"c".repeat(40)) {
-                            json!({"sha":"c".repeat(40),"tree":{"sha":if f.object_tree.is_empty(){&f.production_tree}else{&f.object_tree}},"parents":[{"sha":f.production}]})
+                            json!({"sha":"c".repeat(40),"tree":{"sha":if f.object_tree.is_empty(){&f.production_tree}else{&f.object_tree}},"parents":[{"sha":f.merge_parent.as_ref().unwrap_or(&f.production)}]})
                         } else {
                             json!({"sha":f.production,"tree":{"sha":f.production_tree},"parents":[]})
                         }
@@ -1060,6 +1064,8 @@ async fn release_fixture() -> (DeliveryFixture, ReleasePlan, ReleaseEffectRecord
         payload: crate::release::StepPayload {
             operation_id: plan.operation_id,
             step_id: "merge".into(),
+            attempt: 1,
+            prerequisite_attempts: BTreeMap::new(),
             plan_digest: plan.digest().unwrap(),
             kind,
             exact_source_commit: None,
@@ -1080,7 +1086,7 @@ async fn release_fixture() -> (DeliveryFixture, ReleasePlan, ReleaseEffectRecord
     f.coordinator
         .records
         .write(
-            &release_effect_leaf(plan.operation_id, "merge"),
+            &release_effect_leaf(plan.operation_id, "merge", 1),
             &f.key.sign("release_effect", &record).unwrap(),
         )
         .unwrap();
@@ -1097,6 +1103,13 @@ async fn release_fixture() -> (DeliveryFixture, ReleasePlan, ReleaseEffectRecord
     (f, plan, record)
 }
 async fn send_fixture_merge(f: &DeliveryFixture, record: &ReleaseEffectRecord) -> Result<Receipt> {
+    send_fixture_merge_gate(f, record, true).await
+}
+async fn send_fixture_merge_gate(
+    f: &DeliveryFixture,
+    record: &ReleaseEffectRecord,
+    admitted: bool,
+) -> Result<Receipt> {
     f.coordinator
         .broker
         .mutate(
@@ -1114,6 +1127,7 @@ async fn send_fixture_merge(f: &DeliveryFixture, record: &ReleaseEffectRecord) -
                 expected: BTreeMap::from([
                     ("release_plan".into(), record.plan_digest.clone()),
                     ("release_step".into(), record.payload.step_id.clone()),
+                    ("release_attempt".into(), record.payload.attempt.to_string()),
                     ("delivery_scope".into(), record.scope.digest().unwrap()),
                 ]),
                 payload: Value::Null,
@@ -1121,10 +1135,58 @@ async fn send_fixture_merge(f: &DeliveryFixture, record: &ReleaseEffectRecord) -
             Some(f.admission.permit.clone()),
             None,
             record.command.clone().unwrap(),
-            || Ok(()),
+            move || {
+                if admitted {
+                    Ok(())
+                } else {
+                    Err(Error::new("stale_result", "fixture final gate rejected"))
+                }
+            },
         )
         .await
 }
+#[tokio::test]
+async fn known_broker_rejection_recovers_without_remote_probe_or_replay_after_receipt_reconciliation()
+ {
+    let (f, plan, record) = release_fixture().await;
+    assert!(send_fixture_merge_gate(&f, &record, false).await.is_err());
+    let receipt = f.host.operation(record.request_id.unwrap()).unwrap();
+    assert_eq!(receipt.phase, crate::control::ReceiptPhase::Reconciled);
+    assert_eq!(
+        receipt.observed_result.as_ref().unwrap()["effect"],
+        "not_sent"
+    );
+    let requests_before = f.wire.lock().unwrap().requests.len();
+    let first = f
+        .coordinator
+        .recover_owned_release_step(&plan, "merge", 1, &f.observer)
+        .await
+        .unwrap();
+    assert!(matches!(first.outcome(), ReleaseStepOutcome::Failed(_)));
+    assert_eq!(f.wire.lock().unwrap().requests.len(), requests_before);
+    f.host
+        .reconcile_owned_checked(
+            &receipt,
+            crate::control::Reconciliation::UniqueVerified {
+                remote_ids: BTreeMap::new(),
+                result: json!({"release":"known failure observed"}),
+                payload_digest: receipt.payload_digest.clone(),
+                actor: receipt.actor.clone(),
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    let again = f
+        .coordinator
+        .recover_owned_release_step(&plan, "merge", 1, &f.observer)
+        .await
+        .unwrap();
+    assert_eq!(again.outcome(), first.outcome());
+    assert_eq!(again.observed_at(), first.observed_at());
+    assert_eq!(again.receipt().unwrap().operation_id, receipt.operation_id);
+    assert_eq!(f.wire.lock().unwrap().requests.len(), requests_before);
+}
+
 #[tokio::test]
 async fn production_merge_lost_ack_is_observed_without_resending_and_checks_actual_parent_tree() {
     let (f, plan, record) = release_fixture().await;
@@ -1140,7 +1202,7 @@ async fn production_merge_lost_ack_is_observed_without_resending_and_checks_actu
         .count();
     let observed = f
         .coordinator
-        .recover_release_step(&f.admission, &plan, "merge", &f.observer)
+        .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
         .await
         .unwrap();
     assert_eq!(observed.outcome(), &ReleaseStepOutcome::Succeeded);
@@ -1164,7 +1226,7 @@ async fn production_merge_lost_ack_is_observed_without_resending_and_checks_actu
         crate::control::ReceiptPhase::Sent
     );
     f.coordinator
-        .recover_release_step(&f.admission, &plan, "merge", &f.observer)
+        .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
         .await
         .unwrap();
     assert_eq!(
@@ -1180,7 +1242,7 @@ async fn production_merge_lost_ack_is_observed_without_resending_and_checks_actu
     f.wire.lock().unwrap().production_tree = "f".repeat(40);
     assert_eq!(
         f.coordinator
-            .recover_release_step(&f.admission, &plan, "merge", &f.observer)
+            .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
             .await
             .err()
             .unwrap()
@@ -1200,14 +1262,14 @@ async fn production_merge_observation_rejects_wrong_plan_pr_and_signed_intent_ta
     wrong.evidence_token = canonical_digest(1, &json!("another candidate")).unwrap();
     assert!(
         f.coordinator
-            .recover_release_step(&f.admission, &wrong, "merge", &f.observer)
+            .recover_release_step(&f.admission, &wrong, "merge", 1, &f.observer)
             .await
             .is_err()
     );
     f.wire.lock().unwrap().prs[0]["head"]["sha"] = json!("f".repeat(40));
     assert!(
         f.coordinator
-            .recover_release_step(&f.admission, &plan, "merge", &f.observer)
+            .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
             .await
             .is_err()
     );
@@ -1215,11 +1277,11 @@ async fn production_merge_observation_rejects_wrong_plan_pr_and_signed_intent_ta
     signed.payload.request_id = Some(Uuid::new_v4());
     f.coordinator
         .records
-        .write(&release_effect_leaf(plan.operation_id, "merge"), &signed)
+        .write(&release_effect_leaf(plan.operation_id, "merge", 1), &signed)
         .unwrap();
     assert!(
         f.coordinator
-            .recover_release_step(&f.admission, &plan, "merge", &f.observer)
+            .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
             .await
             .is_err()
     );
@@ -1228,10 +1290,14 @@ async fn production_merge_observation_rejects_wrong_plan_pr_and_signed_intent_ta
 async fn production_merge_pending_and_closed_are_not_successful_effects() {
     let (f, plan, record) = release_fixture().await;
     send_fixture_merge(&f, &record).await.unwrap();
-    f.wire.lock().unwrap().prs[0]["merged"] = json!(false);
+    {
+        let mut wire = f.wire.lock().unwrap();
+        wire.prs[0]["merged"] = json!(false);
+        wire.prs[0]["state"] = json!("open");
+    }
     let pending = f
         .coordinator
-        .recover_release_step(&f.admission, &plan, "merge", &f.observer)
+        .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
         .await
         .unwrap();
     assert_eq!(pending.outcome(), &ReleaseStepOutcome::Pending);
@@ -1239,7 +1305,7 @@ async fn production_merge_pending_and_closed_are_not_successful_effects() {
     f.wire.lock().unwrap().prs[0]["state"] = json!("closed");
     let failed = f
         .coordinator
-        .recover_release_step(&f.admission, &plan, "merge", &f.observer)
+        .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
         .await
         .unwrap();
     assert!(matches!(failed.outcome(), ReleaseStepOutcome::Failed(_)));
@@ -1274,7 +1340,7 @@ async fn production_recovery_is_read_only_when_stopped_and_fails_revoked_current
     observation.scope.phase = DeliveryPhase::Recovery;
     assert_eq!(
         f.coordinator
-            .recover_release_step(&observation, &plan, "merge", &f.observer)
+            .recover_release_step(&observation, &plan, "merge", 1, &f.observer)
             .await
             .unwrap()
             .outcome(),
@@ -1283,12 +1349,48 @@ async fn production_recovery_is_read_only_when_stopped_and_fails_revoked_current
     f.current.store(false, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(
         f.coordinator
-            .recover_release_step(&observation, &plan, "merge", &f.observer)
+            .recover_release_step(&observation, &plan, "merge", 1, &f.observer)
             .await
             .err()
             .unwrap()
             .code,
         "stale_result"
+    );
+    let writes_before = f
+        .wire
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|(url, _)| url.ends_with("/merge"))
+        .count();
+    let readback = f
+        .coordinator
+        .recover_owned_release_step(&plan, "merge", 1, &f.observer)
+        .await
+        .unwrap();
+    assert_eq!(readback.outcome(), &ReleaseStepOutcome::Succeeded);
+    assert_eq!(
+        readback.receipt().unwrap().operation_id,
+        record.request_id.unwrap()
+    );
+    assert_eq!(
+        f.wire
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|(url, _)| url.ends_with("/merge"))
+            .count(),
+        writes_before
+    );
+    // This narrow observation has no authority to promote readiness or create
+    // a replacement dispatch when the original work has been corrected.
+    assert!(
+        f.coordinator
+            .recover_owned_release_step(&plan, "merge", 2, &f.observer)
+            .await
+            .is_err()
     );
 }
 
@@ -2257,6 +2359,154 @@ async fn actual_isolated_objects_publish_one_owned_production_pr_with_derived_ch
         force_stopped: false,
         current_revisions: &revisions,
     };
+    let mut retry = attempt.clone();
+    let first_payload = retry
+        .prepare_step(&plan.steps[0].id, &fresh, |_| Ok(()))
+        .unwrap();
+    assert_eq!(first_payload.attempt, 1);
+    retry.mark_sent(&first_payload, &fresh, |_| Ok(())).unwrap();
+    retry
+        .observe_failure(
+            &plan.steps[0].id,
+            "known provider rejection".into(),
+            Some("fixture-effect".into()),
+            Utc::now(),
+            |_| Ok(()),
+        )
+        .unwrap();
+    // A corrected plan can inherit an exact known hold before it receives
+    // execution authority. These are domain observations, not a new Permit.
+    let mut predecessor = retry.clone();
+    predecessor.plan.operation_id = Uuid::new_v4();
+    predecessor.plan.generation.correction =
+        crate::digest::canonical_digest(1, &"prior corrective generation").unwrap();
+    let baseline = crate::release::ReconciledBaseline {
+        provider_reads_complete: true,
+        coherent: true,
+        observed_at: Utc::now(),
+        observations: parent
+            .manifest()
+            .baselines
+            .iter()
+            .map(|b| crate::release::BaselineObservation {
+                resource: crate::release::ResourceKey::Repository {
+                    repository: b.repository.clone(),
+                },
+                production_commit: b.production.commit.clone(),
+                deployed_commit: None,
+                artifact_digest: None,
+                provider_record: "synthetic current main fixture observation".into(),
+            })
+            .collect(),
+    };
+    predecessor
+        .supersede_plan(
+            crate::release::RecoveryDecision {
+                actor: "fixture-corrector",
+                reason: "fresh accepted corrected plan",
+                now: Utc::now(),
+            },
+            &plan,
+            &acceptance,
+            &baseline,
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(predecessor.assigned_successor, Some(plan.operation_id));
+    assert!(predecessor.hold_reason.is_some());
+    assert!(!predecessor.completed());
+    let mut successor_queue = crate::release::ReleaseQueue::default();
+    successor_queue.restore_hold(&predecessor).unwrap();
+    successor_queue.eligible(&plan, Utc::now()).unwrap();
+    let mut unassigned = plan.clone();
+    unassigned.operation_id = Uuid::new_v4();
+    assert!(successor_queue.eligible(&unassigned, Utc::now()).is_err());
+    assert!(
+        predecessor
+            .supersede_plan(
+                crate::release::RecoveryDecision {
+                    actor: "fixture-corrector",
+                    reason: "cannot reassign",
+                    now: Utc::now(),
+                },
+                &unassigned,
+                &acceptance,
+                &baseline,
+                |_| Ok(())
+            )
+            .is_err()
+    );
+    let first_failure = retry.clone();
+    retry
+        .observe_failure(
+            &plan.steps[0].id,
+            "known provider rejection".into(),
+            Some("fixture-effect".into()),
+            Utc::now(),
+            |_| panic!("idempotent observation cannot rewrite history"),
+        )
+        .unwrap();
+    assert_eq!(retry, first_failure);
+    let mut resumed_queue = crate::release::ReleaseQueue::default();
+    resumed_queue.reconcile_attempt(&retry).unwrap();
+    assert!(resumed_queue.eligible(&plan, Utc::now()).is_err());
+    crate::release::verify_release_resume_eligibility(
+        &retry,
+        proof(),
+        facts(),
+        &resumed_queue,
+        Utc::now(),
+    )
+    .unwrap();
+    let mut competing = retry.clone();
+    competing.plan.operation_id = Uuid::new_v4();
+    competing.plan.parent_id = Uuid::new_v4();
+    let mut overlapping = resumed_queue.clone();
+    overlapping.restore_hold(&competing).unwrap();
+    assert!(
+        crate::release::verify_release_resume_eligibility(
+            &retry,
+            proof(),
+            facts(),
+            &overlapping,
+            Utc::now()
+        )
+        .is_err()
+    );
+    retry
+        .resume(
+            "fixture-operator",
+            "provider prerequisite repaired",
+            &parent,
+            true,
+            Utc::now(),
+            |_| Ok(()),
+        )
+        .unwrap();
+    resumed_queue.reconcile_attempt(&retry).unwrap();
+    assert!(resumed_queue.owns_all(&plan));
+    resumed_queue.eligible(&plan, Utc::now()).unwrap();
+    let second_payload = retry
+        .prepare_step(&plan.steps[0].id, &fresh, |_| Ok(()))
+        .unwrap();
+    assert_eq!(second_payload.attempt, 2);
+    assert_ne!(
+        canonical_digest(1, &first_payload).unwrap(),
+        canonical_digest(1, &second_payload).unwrap()
+    );
+    assert!(retry.mark_sent(&first_payload, &fresh, |_| Ok(())).is_err());
+    let second_dispatch = retry
+        .mark_sent(&second_payload, &fresh, |_| Ok(()))
+        .unwrap();
+    let mut recovered: crate::release::ReleaseAttempt =
+        serde_json::from_value(serde_json::to_value(&retry).unwrap()).unwrap();
+    recovered.validate_recovered().unwrap();
+    assert_eq!(recovered.step_attempt(&plan.steps[0].id).unwrap(), 2);
+    recovered.recovery_records.clear();
+    assert_eq!(
+        recovered.validate_recovered().unwrap_err().code,
+        "corrupt_record"
+    );
     let payload = attempt
         .prepare_step(&plan.steps[0].id, &fresh, |_| Ok(()))
         .unwrap();
@@ -2343,6 +2593,105 @@ async fn actual_isolated_objects_publish_one_owned_production_pr_with_derived_ch
         .unwrap();
     assert!(attempt.completed());
     assert!(queue.record_success(&attempt).is_ok());
+    // Current main has genuinely advanced to this plan's observed squash. The
+    // original signed policy/CI is recoverable only through the owned path.
+    {
+        let mut wire = f.wire.lock().unwrap();
+        wire.production = "c".repeat(40);
+        wire.production_tree = slice.manifest().result.as_ref().unwrap().tree.clone();
+    }
+    let recovery = f
+        .coordinator
+        .observation(f.admission.gate.clone(), production.revision().clone())
+        .unwrap();
+    assert!(
+        f.coordinator
+            .hydrate_production_validation(&recovery, &prepared, &parent)
+            .await
+            .is_err()
+    );
+    let (_, historical) = f
+        .coordinator
+        .hydrate_owned_merge_production(MergedProductionRecovery {
+            observation: &recovery,
+            parent: &parent,
+            preparation: prepared.operation_id(),
+            plan: &plan,
+            merge_step: &plan.steps[0].id,
+            attempt: 1,
+            observer: &f.observer,
+        })
+        .await
+        .unwrap();
+    assert_eq!(historical.digest().unwrap(), production.digest().unwrap());
+    f.wire.lock().unwrap().production = "d".repeat(40);
+    assert!(
+        f.coordinator
+            .hydrate_owned_merge_production(MergedProductionRecovery {
+                observation: &recovery,
+                parent: &parent,
+                preparation: prepared.operation_id(),
+                plan: &plan,
+                merge_step: &plan.steps[0].id,
+                attempt: 1,
+                observer: &f.observer,
+            })
+            .await
+            .is_err()
+    );
+    f.wire.lock().unwrap().production = "c".repeat(40);
+    let retry_admission = f
+        .coordinator
+        .bind_release_step(
+            &permit,
+            &f.admission.gate,
+            f.admission.scope.clone(),
+            &plan,
+            &second_dispatch,
+            &eligibility,
+        )
+        .unwrap();
+    f.current.store(false, std::sync::atomic::Ordering::SeqCst);
+    let not_sent = f
+        .coordinator
+        .dispatch_release_step(ReleaseStepRequest {
+            admission: &retry_admission,
+            dispatch: &second_dispatch,
+            plan: &plan,
+            parent: &parent,
+            acceptance: &acceptance,
+            carried: None,
+            evidence: ReleaseStepEvidence::Changed {
+                prepared: &prepared,
+                production: &production,
+            },
+            observer: &f.observer,
+            verifier: &verifier(),
+            final_gate: Arc::new(|_, _| Ok(())),
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(not_sent.outcome(), ReleaseStepOutcome::Failed(reason) if reason.contains("preflight did not dispatch"))
+    );
+    assert_eq!(not_sent.attempt(), 2);
+    assert!(not_sent.receipt().is_none());
+    let recovered_no_send = f
+        .coordinator
+        .recover_owned_release_step(&plan, &plan.steps[0].id, 2, &f.observer)
+        .await
+        .unwrap();
+    assert_eq!(recovered_no_send.outcome(), not_sent.outcome());
+    assert!(
+        f.coordinator
+            .records
+            .read::<Signed<ReleaseEffectRecord>>(&release_effect_leaf(
+                plan.operation_id,
+                &plan.steps[0].id,
+                2
+            ))
+            .is_err()
+    );
     assert_eq!(
         f.wire
             .lock()
@@ -2391,8 +2740,79 @@ pub(crate) async fn observed_merge_for_runtime() -> (
     send_fixture_merge(&f, &record).await.unwrap();
     let observed = f
         .coordinator
-        .recover_release_step(&f.admission, &plan, "merge", &f.observer)
+        .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
         .await
         .unwrap();
     (plan, f.admission.scope.work.clone(), observed)
+}
+
+#[tokio::test]
+async fn release_effect_recovery_requires_exact_attempt_and_preserves_older_intent() {
+    let (f, plan, record) = release_fixture().await;
+    send_fixture_merge(&f, &record).await.unwrap();
+    let first = f
+        .coordinator
+        .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
+        .await
+        .unwrap();
+    assert_eq!(first.attempt(), 1);
+    assert!(
+        f.coordinator
+            .recover_release_step(&f.admission, &plan, "merge", 2, &f.observer)
+            .await
+            .is_err()
+    );
+    let first_bytes = f
+        .coordinator
+        .records
+        .read_bytes(
+            &release_effect_leaf(plan.operation_id, "merge", 1),
+            1024 * 1024,
+        )
+        .unwrap();
+    let mut altered = record.clone();
+    altered.payload.attempt = 2;
+    // Copying an old receipt to a newer ordinal is not a valid dispatch lineage.
+    f.coordinator
+        .records
+        .write(
+            &release_effect_leaf(plan.operation_id, "merge", 2),
+            &f.key.sign("release_effect", &altered).unwrap(),
+        )
+        .unwrap();
+    assert!(
+        f.coordinator
+            .recover_release_step(&f.admission, &plan, "merge", 2, &f.observer)
+            .await
+            .is_err()
+    );
+    let again = f
+        .coordinator
+        .recover_release_step(&f.admission, &plan, "merge", 1, &f.observer)
+        .await
+        .unwrap();
+    assert_eq!(
+        again.receipt().unwrap().operation_id,
+        first.receipt().unwrap().operation_id
+    );
+    assert_eq!(
+        first_bytes,
+        f.coordinator
+            .records
+            .read_bytes(
+                &release_effect_leaf(plan.operation_id, "merge", 1),
+                1024 * 1024
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        f.wire
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|(url, _)| url.ends_with("/merge"))
+            .count(),
+        1
+    );
 }

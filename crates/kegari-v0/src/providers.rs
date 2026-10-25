@@ -93,6 +93,22 @@ pub trait HttpTransport: Send + Sync {
         &self,
         request: HttpRequest,
     ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>>;
+    fn send_bounded(
+        &self,
+        request: HttpRequest,
+        max_body: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
+        Box::pin(async move {
+            let response = self.send(request).await?;
+            if response.body.len() > max_body {
+                return Err(Error::new(
+                    "source_limit_exceeded",
+                    "HTTP response exceeds its exact bound",
+                ));
+            }
+            Ok(response)
+        })
+    }
 }
 #[derive(Clone)]
 pub struct ReqwestTransport {
@@ -132,6 +148,17 @@ impl ReqwestTransport {
     }
 }
 impl HttpTransport for ReqwestTransport {
+    fn send_bounded(
+        &self,
+        request: HttpRequest,
+        max_body: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
+        let bounded = Self {
+            client: self.client.clone(),
+            max_body: self.max_body.min(max_body),
+        };
+        Box::pin(async move { bounded.send(request).await })
+    }
     fn send(
         &self,
         request: HttpRequest,
@@ -190,6 +217,9 @@ impl HttpTransport for ReqwestTransport {
         })
     }
 }
+
+#[path = "providers_object_transfer.rs"]
+mod object_transfer;
 #[derive(Clone, Debug)]
 pub struct HttpPolicy {
     pub endpoint: Url,
@@ -1417,6 +1447,7 @@ pub struct WorkflowJob {
 pub struct GithubClient {
     http: HttpCore,
     selection: GithubSelection,
+    object_transport: Arc<dyn HttpTransport>,
 }
 impl GithubClient {
     pub fn new(
@@ -1446,7 +1477,12 @@ impl GithubClient {
                 "GitHub needs a nonempty repository/organization selection",
             ));
         }
+        let object_transport = match &transport {
+            Some(transport) => transport.clone(),
+            None => Arc::new(ReqwestTransport::bounded(policy.timeout, MAX_VIDEO_BYTES)?),
+        };
         Ok(Self {
+            object_transport,
             http: HttpCore::new(policy, credential, true, transport)?,
             selection,
         })

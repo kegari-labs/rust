@@ -1036,6 +1036,9 @@ impl SupervisorDriver for RuntimeDriver {
             self.drain_finished().await?;
             self.fresh(lease)?;
             self.refresh(false).await?;
+            self.runtime
+                .refresh_active_corrections(&self.corrections)
+                .await?;
             self.delivery.advance(lease).await?;
             for completed in self.runtime.pending_coordination_outcomes()? {
                 self.launch_correction(lease, completed).await?;
@@ -1101,6 +1104,9 @@ impl SupervisorDriver for RuntimeDriver {
             self.delivery.maintain().await?;
             self.recover_processes()?;
             self.refresh(false).await?;
+            self.runtime
+                .refresh_active_corrections(&self.corrections)
+                .await?;
             self.drain_state(&self.runtime.control.snapshot()?)
         })
     }

@@ -1,5 +1,5 @@
 {
-  "version": "kegari-observable-v1",
+  "version": "kegari-observable-v2",
   "assertions": [
     {
       "kind": "changed_paths",

@@ -154,10 +154,15 @@ impl Harness {
         } else {
             json!([])
         };
-        crate::runtime_claims::test_coordination_fixture(
+        let claim = json!({"kind":"correction_classification","classifications":[{"source_comment":id(960),"source_revision":source.body_digest,"class":class,"rationale":"Interpret the native comment in authorized parent context","routes":routes}]});
+        let digest = canonical_digest(1, &claim).unwrap();
+        let bytes = hex::decode(digest.rsplit(':').next().unwrap()).unwrap();
+        let proposal = Uuid::from_bytes(bytes[..16].try_into().unwrap());
+        crate::runtime_claims::test_coordination_fixture_with_proposal(
             gate,
-            json!({"kind":"correction_classification","classifications":[{"source_comment":id(960),"source_revision":source.body_digest,"class":class,"rationale":"Interpret the native comment in authorized parent context","routes":routes}]}),
+            claim,
             "codex-fixture",
+            proposal,
         )
     }
     fn posts(&self) -> Vec<Value> {
@@ -544,4 +549,202 @@ async fn stopped_prefix_recovery_observes_routes_without_publishing_missing_fina
     );
     assert!(h.publisher.publish(&h.lease, &completed).await.is_err());
     assert_eq!(h.posts().len(), 1);
+}
+
+async fn admitted_child(
+    h: &Harness,
+) -> (
+    crate::observations::ActiveSnapshot,
+    crate::reconcile::FreshGate,
+) {
+    let (_temp, informational) = h.completed(CommentClass::Informational).await;
+    h.publisher.publish(&h.lease, &informational).await.unwrap();
+    let projection = h.cache.refresh().await.unwrap();
+    let parent = projection.parent(id(2), id(100)).unwrap();
+    let gate = parent
+        .fresh_gate(
+            Some(id(101)),
+            GatePurpose::NewOperation,
+            &DependencyOutcomes::default(),
+            Utc::now(),
+            chrono::Duration::seconds(30),
+        )
+        .unwrap();
+    let active = h
+        .cache
+        .capture_active(id(2), gate.config_revision(), gate.workflow_digest())
+        .unwrap();
+    (active, gate)
+}
+fn edit_correction(h: &Harness, body: &str, day: u32) {
+    let mut wire = h.wire.lock().unwrap();
+    let source = wire
+        .comments
+        .get_mut(&id(100))
+        .unwrap()
+        .iter_mut()
+        .find(|value| value["id"] == json!(id(960)))
+        .unwrap();
+    source["body"] = json!(body);
+    source["editedAt"] = json!(format!("2026-01-{day:02}T00:00:00Z"));
+}
+#[tokio::test]
+async fn correction_transition_retains_original_gate_and_exact_signed_predecessor_chain() {
+    let h = Harness::new().await;
+    let (_active, admitted) = admitted_child(&h).await;
+    let original = admitted.digest().unwrap();
+    edit_correction(&h, "Assert the bounded error response", 5);
+    let (_temp, correction) = h.completed(CommentClass::Corrective).await;
+    h.publisher.publish(&h.lease, &correction).await.unwrap();
+    let transition = Arc::new(
+        h.publisher
+            .transition(&admitted, None, &DependencyOutcomes::default())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(transition.watermark(), 1);
+    assert_eq!(transition.original_authority().digest().unwrap(), original);
+    assert_ne!(transition.original_work(), transition.effective_work());
+    assert!(
+        transition
+            .input()
+            .contains("Assert the required error response")
+    );
+    assert!(
+        h.cache
+            .active_gate(&admitted, &DependencyOutcomes::default())
+            .is_err()
+    );
+    assert!(
+        h.cache
+            .active_gate(
+                transition.current_authority(),
+                &DependencyOutcomes::default()
+            )
+            .is_ok()
+    );
+    let posts = h.posts().len();
+    // Polling the same history does not create another effective work epoch.
+    assert!(
+        h.publisher
+            .transition(
+                &admitted,
+                Some(transition.clone()),
+                &DependencyOutcomes::default()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(h.posts().len(), posts);
+
+    edit_correction(&h, "Also assert the new follow-up error", 6);
+    let (_temp, correction) = h.completed(CommentClass::Corrective).await;
+    h.publisher.publish(&h.lease, &correction).await.unwrap();
+    let next = h
+        .publisher
+        .transition(
+            &admitted,
+            Some(transition.clone()),
+            &DependencyOutcomes::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.watermark(), 2);
+    assert_eq!(next.previous().unwrap().digest(), transition.digest());
+    assert_eq!(next.original_authority().digest().unwrap(), original);
+    assert!(
+        h.cache
+            .active_gate(
+                transition.current_authority(),
+                &DependencyOutcomes::default()
+            )
+            .is_err()
+    );
+    assert_eq!(next.current_authority().profile(), admitted.profile());
+    assert_eq!(
+        next.current_authority().child_scope_digest(),
+        admitted.child_scope_digest()
+    );
+    assert_eq!(
+        next.current_authority().dependency_digest(),
+        admitted.dependency_digest()
+    );
+    let input: Value = serde_json::from_str(next.input()).unwrap();
+    assert_eq!(input["classifications"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        input["classifications"][0]["source_revision"],
+        json!(bytes_digest(b"Also assert the new follow-up error"))
+    );
+}
+#[tokio::test]
+async fn correction_transition_rejects_edited_native_routes_and_racing_revisions() {
+    for route_edit in [false, true] {
+        let h = Harness::new().await;
+        let (_active, admitted) = admitted_child(&h).await;
+        edit_correction(&h, "Assert corrected behavior", 5);
+        let (_temp, correction) = h.completed(CommentClass::Corrective).await;
+        h.publisher.publish(&h.lease, &correction).await.unwrap();
+        let routes = h.publisher.current_routes(&admitted).await.unwrap();
+        let posts = h.posts().len();
+        if route_edit {
+            h.wire.lock().unwrap().comments.get_mut(&id(101)).unwrap()[0]["body"] =
+                json!("altered published instruction");
+        } else {
+            edit_correction(&h, "A newer unclassified correction", 6);
+        }
+        h.cache.refresh().await.unwrap();
+        assert!(
+            h.cache
+                .active_corrected_gate(&admitted, &routes, &DependencyOutcomes::default())
+                .is_err()
+        );
+        assert!(
+            h.publisher
+                .transition(&admitted, None, &DependencyOutcomes::default())
+                .await
+                .is_err()
+        );
+        assert_eq!(h.posts().len(), posts);
+    }
+}
+
+/// Exact native signed correction proof for execution boundary regressions.
+pub(crate) async fn test_transition_fixture()
+-> (tempfile::TempDir, Arc<VerifiedCorrectionTransition>) {
+    let h = Harness::new().await;
+    let (_active, admitted) = admitted_child(&h).await;
+    edit_correction(&h, "Assert the corrected bounded behavior", 5);
+    let (_temp, correction) = h.completed(CommentClass::Corrective).await;
+    h.publisher.publish(&h.lease, &correction).await.unwrap();
+    let transition = h
+        .publisher
+        .transition(&admitted, None, &DependencyOutcomes::default())
+        .await
+        .unwrap();
+    (h._temp, Arc::new(transition))
+}
+
+pub(crate) async fn test_pending_transition_fixture() -> (
+    tempfile::TempDir,
+    Arc<VerifiedCorrectionTransition>,
+    crate::reconcile::ParentProjection,
+) {
+    let h = Harness::new().await;
+    let (_active, admitted) = admitted_child(&h).await;
+    edit_correction(&h, "Assert the corrected bounded behavior", 5);
+    let (_temp, correction) = h.completed(CommentClass::Corrective).await;
+    h.publisher.publish(&h.lease, &correction).await.unwrap();
+    let transition = Arc::new(
+        h.publisher
+            .transition(&admitted, None, &DependencyOutcomes::default())
+            .await
+            .unwrap(),
+    );
+    edit_correction(&h, "A second revision needs classification", 6);
+    h.cache.refresh().await.unwrap();
+    let (_, parent) = h
+        .cache
+        .active_correction_context(transition.current_authority())
+        .unwrap();
+    (h._temp, transition, parent)
 }

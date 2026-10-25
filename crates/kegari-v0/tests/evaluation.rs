@@ -458,6 +458,40 @@ fn scope_diff_and_missing_validation_receipt_cannot_pass() {
         .deterministic_pass
     );
 }
+
+#[test]
+fn nested_git_names_cannot_hide_source_changes_from_grading() {
+    let suite = suite();
+    let variant = &suite.variants[0];
+    let (_temp, fixture, isolation, _) = setup(variant);
+    let mut facts = good(&fixture, &trace(&variant.id));
+    let hidden = fixture.repository.join("extra/.git");
+    std::fs::create_dir_all(&hidden).unwrap();
+    std::fs::write(hidden.join("hidden.txt"), "outside the admitted write set").unwrap();
+    facts.candidate_digest = tree_digest(&fixture.repository).unwrap();
+    let result = grade(
+        &scorer(variant),
+        &fixture,
+        &isolation,
+        &facts,
+        &variant.prohibited_effects,
+    )
+    .unwrap();
+    assert!(!result.deterministic_pass);
+    assert!(
+        !result
+            .assertions
+            .iter()
+            .find(|a| a.id == "runtime_scope")
+            .unwrap()
+            .passed
+    );
+    assert!(
+        snapshot(&fixture.repository)
+            .unwrap()
+            .contains_key("extra/.git/hidden.txt")
+    );
+}
 #[cfg(unix)]
 #[test]
 fn symlink_and_hardlink_cannot_expose_scorer_through_fixture() {
@@ -541,6 +575,58 @@ fn assembly_uses_real_workflow_assets_scoped_guidance_and_context() {
         },
         known_secrets: &[],
     };
+    // Both the direct assembler and admitted-worker path use this exact task
+    // context check. A valid profile or operation binding cannot substitute an
+    // easier issue, an empty correction set or different initial evidence.
+    for key in [
+        "issue",
+        "parent",
+        "children",
+        "scope",
+        "dependencies",
+        "corrections",
+        "evidence",
+        "attempt",
+    ] {
+        let mut substituted = context.clone();
+        substituted[key] = json!({"substituted":true});
+        let mut altered = input.clone();
+        altered.context = &substituted;
+        assert_eq!(
+            assemble_trial(altered, variant, &fixture, &isolation, &reports)
+                .unwrap_err()
+                .code,
+            "evaluation_fidelity",
+            "substituted {key}"
+        );
+    }
+    for pointer in [
+        "/operation/answer_hint",
+        "/workspace/extra_guidance",
+        "/workspace/name",
+        "/profile/answer_hint",
+        "/phase",
+        "/timeline",
+        "/native_context",
+    ] {
+        let mut substituted = context.clone();
+        let (parent, key) = pointer.rsplit_once('/').unwrap();
+        let target = if parent.is_empty() {
+            &mut substituted
+        } else {
+            substituted.pointer_mut(parent).unwrap()
+        };
+        target[key] = json!("Undeclared answer guidance");
+        let mut altered = input.clone();
+        altered.context = &substituted;
+        assert_eq!(
+            assemble_trial(altered, variant, &fixture, &isolation, &reports)
+                .unwrap_err()
+                .code,
+            "evaluation_fidelity",
+            "substituted {pointer}"
+        );
+    }
     let assembled = assemble_trial(input, variant, &fixture, &isolation, &reports).unwrap();
     assert!(assembled.prompt.contains("ROOT_V1"));
     assert!(assembled.prompt.contains("NESTED_V1"));
@@ -564,6 +650,45 @@ fn assembly_uses_real_workflow_assets_scoped_guidance_and_context() {
     let mut changed_description = definitions;
     changed_description[0]["description"] = json!("Different operational meaning");
     assert!(bound.verify(&assembled, &changed_description).is_err());
+}
+
+#[test]
+fn prepared_fixture_provenance_cannot_be_replaced_before_grading() {
+    let suite = suite();
+    let variant = &suite.variants[0];
+    for field in [
+        "input",
+        "prior",
+        "before",
+        "digest",
+        "repository",
+        "scratch",
+    ] {
+        let (_temp, mut fixture, isolation, _) = setup(variant);
+        let facts = good(&fixture, &trace(&variant.id));
+        match field {
+            "input" => fixture.input["issue"]["description"] = json!("An easier task"),
+            "prior" => fixture.prior = Some(json!({"assume_completed":true})),
+            "before" => fixture.before = snapshot(&fixture.repository).unwrap(),
+            "digest" => fixture.fixture_digest = bytes_digest(b"another fixture"),
+            "repository" => fixture.repository = fixture.scratch.clone(),
+            "scratch" => fixture.scratch = fixture.repository.clone(),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            grade(
+                &scorer(variant),
+                &fixture,
+                &isolation,
+                &facts,
+                &variant.prohibited_effects
+            )
+            .unwrap_err()
+            .code,
+            "evaluation_fidelity",
+            "substituted {field}"
+        );
+    }
 }
 #[tokio::test]
 async fn unresolved_profile_records_all_56_blockers_without_calling_executor() {

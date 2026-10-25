@@ -318,6 +318,7 @@ pub struct RunCompletion {
     pub elapsed_ms: u64,
     pub hook_error: Option<Error>,
     pub checks: Vec<VerifiedCheckExecution>,
+    pub failed_checks: Vec<crate::execution::FailedCheckExecution>,
     /// Original host-owned checkout capability, retained for separately admitted source sealing.
     pub execution: Option<Arc<WorkerExecution>>,
     pub contract: Option<Arc<WorkerContract>>,
@@ -327,7 +328,7 @@ pub struct RunCompletion {
 }
 impl RunCompletion {
     pub fn observation(&self) -> Value {
-        json!({"operation_id":self.operation_id,"outcome":self.outcome,"error":self.error,"hook_error":self.hook_error,"session":self.state,"elapsed_ms":self.elapsed_ms,"verified_check_count":self.checks.len(),"local_exit_confirmed":self.local_exit_confirmed,"completion":"worker_claim_requires_host_delivery_verification"})
+        json!({"operation_id":self.operation_id,"outcome":self.outcome,"error":self.error,"hook_error":self.hook_error,"session":self.state,"elapsed_ms":self.elapsed_ms,"verified_check_count":self.checks.len(),"failed_check_count":self.failed_checks.len(),"local_exit_confirmed":self.local_exit_confirmed,"completion":"worker_claim_requires_host_delivery_verification"})
     }
 }
 struct Cancellation {
@@ -471,13 +472,21 @@ struct ProtocolGate {
     permit: Permit,
     host: Arc<dyn WorkerHost>,
     authority: WorkerAuthority,
-    pending: Mutex<BTreeMap<u64, InFlightEffect>>,
+    pending: Mutex<BTreeMap<u64, PendingProtocol>>,
+}
+struct PendingProtocol {
+    method: String,
+    effect: InFlightEffect,
 }
 impl ProtocolGate {
     fn fresh(&self) -> Result<()> {
         self.host.verify_owner(&self.permit.lease)?;
-        self.authority
-            .compare(&self.host.current_authority(&self.authority)?)
+        crate::worker::effective_authority(
+            self.host.as_ref(),
+            self.permit.operation_id,
+            &self.authority,
+        )
+        .map(|_| ())
     }
 }
 impl RequestGate for ProtocolGate {
@@ -510,7 +519,13 @@ impl RequestGate for ProtocolGate {
         self.pending
             .lock()
             .map_err(|_| Error::new("ownership_conflict", "provider effect registry failed"))?
-            .insert(id, effect);
+            .insert(
+                id,
+                PendingProtocol {
+                    method: method.into(),
+                    effect,
+                },
+            );
         Ok(())
     }
     fn observed(&self, id: u64, method: &str, result: &Result<Value>) -> Result<()> {
@@ -525,11 +540,17 @@ impl RequestGate for ProtocolGate {
                     "provider response lacks its dispatched effect",
                 )
             })?;
+        if effect.method != method {
+            return Err(Error::new(
+                "ownership_conflict",
+                "provider acknowledgement method differs from dispatched request",
+            ));
+        }
         let digest = match result {
             Ok(value) => canonical_digest(1, value)?,
             Err(error) => canonical_digest(1, error)?,
         };
-        self.control.complete_effect(effect,&self.permit,||self.fresh(),json!({"method":method,"rpc_id":id,"provider_acknowledged":result.is_ok(),"response_digest":digest}))?;
+        self.control.complete_effect(effect.effect,&self.permit,||self.host.verify_owner(&self.permit.lease),json!({"method":method,"rpc_id":id,"provider_acknowledged":result.is_ok(),"response_digest":digest}))?;
         Ok(())
     }
     fn uncertain(&self, _: u64, _: &str) -> Result<()> {
@@ -784,14 +805,236 @@ async fn launch_provider(
     Ok(rpc)
 }
 
-/// Starts exactly one already-admitted operation. The registry insertion and task
-/// launch occur under the serialized permit gate, before any provider request.
-pub fn run(
+/// The immutable, already admitted production hook lifecycle. Only a real
+/// bound session can create it; evaluation callers cannot supply no-op hooks.
+pub struct TrialLifecycle {
+    permit: Permit,
+    hooks: Arc<dyn RunHooks>,
+    before_started: AtomicBool,
+    before_finished: AtomicBool,
+    after_started: AtomicBool,
+    launched: AtomicBool,
+    after_finished: AtomicBool,
+    max_seconds: u64,
+}
+impl TrialLifecycle {
+    pub fn operation_id(&self) -> Uuid {
+        self.permit.operation_id
+    }
+    pub fn max_seconds(&self) -> u64 {
+        self.max_seconds
+    }
+    pub async fn before(&self) -> Result<()> {
+        if self.before_started.swap(true, Ordering::SeqCst) {
+            return Err(Error::new(
+                "operation_uncertain",
+                "trial before hook is single-use",
+            ));
+        }
+        self.hooks.before(&self.permit).await?;
+        self.before_finished.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    pub async fn launched(&self) -> Result<()> {
+        if !self.before_finished.load(Ordering::SeqCst)
+            || self.launched.swap(true, Ordering::SeqCst)
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "trial launch hook lacks its unique preparation",
+            ));
+        }
+        self.hooks.launched(&self.permit).await
+    }
+    pub async fn after(&self, state: &SessionState) -> Result<()> {
+        if !self.launched.load(Ordering::SeqCst)
+            || state.binding.operation_id != self.permit.operation_id.to_string()
+            || self.after_started.swap(true, Ordering::SeqCst)
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "trial after hook lacks its exact launched session",
+            ));
+        }
+        self.hooks.after(&self.permit, state).await?;
+        self.after_finished.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+/// Consumes one actual prepared/admitted worker into the evaluator's ordinary
+/// broker and guarded provider path. There is no raw-parts constructor.
+pub struct AdmittedTrial {
+    session: Option<BoundSession>,
+    provider: WorkerProviderLaunch,
+    lifecycle: TrialLifecycle,
+    started: std::time::Instant,
+}
+impl AdmittedTrial {
+    pub(crate) fn new(
+        prepared: PreparedRun,
+        permit: Permit,
+        services: RunServices,
+        options: RunOptions,
+    ) -> Result<Self> {
+        let session = bind_session(prepared, permit, services, options)?;
+        let provider = session.broker.provider_launch(
+            session.processes.clone(),
+            &session.prepared.executable.path,
+            &session.prepared.auth_home,
+            &session.prepared.permissions,
+            Duration::from_millis(session.prepared.runtime.request_timeout_ms),
+        )?;
+        let lifecycle = TrialLifecycle {
+            permit: session.permit.clone(),
+            hooks: session.hooks.clone(),
+            before_started: AtomicBool::new(false),
+            before_finished: AtomicBool::new(false),
+            after_started: AtomicBool::new(false),
+            launched: AtomicBool::new(false),
+            after_finished: AtomicBool::new(false),
+            max_seconds: session.options.max_seconds,
+        };
+        Ok(Self {
+            session: Some(session),
+            provider,
+            lifecycle,
+            started: std::time::Instant::now(),
+        })
+    }
+    pub fn operation_id(&self) -> Uuid {
+        self.lifecycle.operation_id()
+    }
+    pub fn max_seconds(&self) -> u64 {
+        self.lifecycle.max_seconds
+    }
+    pub fn operation<'a>(
+        &'a mut self,
+        fixture: &'a crate::evaluation::PreparedFixture,
+        report_root: &'a std::path::Path,
+    ) -> Result<crate::evaluation::TrialOperation<'a>> {
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| Error::new("ownership_conflict", "trial has already been consumed"))?;
+        Ok(crate::evaluation::TrialOperation {
+            work_identity: &session.permit.work_key,
+            fixture,
+            assembled: session.prepared.contract.instructions(),
+            isolation: &session.prepared.isolation,
+            permissions: &session.prepared.permissions,
+            tools: session.prepared.contract.tools(),
+            executable: &session.prepared.executable.path,
+            provider: &self.provider,
+            lifecycle: &self.lifecycle,
+            host: &mut session.broker,
+            report_root,
+        })
+    }
+    pub fn finish(mut self) -> Result<VerifiedTrialCompletion> {
+        if !self.provider.launched.load(Ordering::SeqCst)
+            || !self.lifecycle.after_finished.load(Ordering::SeqCst)
+        {
+            return Err(Error::new(
+                "reconciliation_required",
+                "trial has not completed its actual provider and hook lifecycle",
+            ));
+        }
+        self.provider.finish()?;
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| Error::new("ownership_conflict", "trial already consumed"))?;
+        let state = session.broker.completed_checkpoint()?;
+        session
+            .registry
+            .observe_exited(session.permit.operation_id)?;
+        if session
+            .registry
+            .active_operations()?
+            .contains(&session.permit.operation_id)
+        {
+            return Err(Error::new(
+                "operation_uncertain",
+                "trial retains an unconfirmed owned local effect",
+            ));
+        }
+        let checks = session.broker.take_verified_checks();
+        let failed_checks = session.broker.take_failed_checks();
+        let session = self
+            .session
+            .take()
+            .ok_or_else(|| Error::new("ownership_conflict", "trial already consumed"))?;
+        Ok(VerifiedTrialCompletion {
+            completion: RunCompletion {
+                operation_id: session.permit.operation_id,
+                state,
+                outcome: RunOutcome::Completed,
+                error: None,
+                elapsed_ms: self.started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                hook_error: None,
+                checks,
+                failed_checks,
+                execution: session.execution,
+                contract: Some(session.prepared.contract),
+                local_exit_confirmed: true,
+            },
+        })
+    }
+}
+impl Drop for AdmittedTrial {
+    fn drop(&mut self) {
+        if let Some(session) = &self.session {
+            // Fence before cancelling any registered provider, hook or check.
+            if session.control.fence(session.permit.operation_id).is_ok() {
+                let _ = session
+                    .registry
+                    .cancel_fenced(&session.control, session.permit.operation_id);
+                if !self.provider.launched.load(Ordering::SeqCst)
+                    && !self.lifecycle.before_started.load(Ordering::SeqCst)
+                    && session
+                        .registry
+                        .active_operations()
+                        .is_ok_and(|active| !active.contains(&session.permit.operation_id))
+                {
+                    let _ = session.control.retire_local(
+                        session.permit.operation_id,
+                        json!({"outcome":"not_started","phase":"evaluation_admission_abandoned"}),
+                    );
+                }
+            }
+        }
+    }
+}
+/// Only actual provider/hook completion and the bound broker's durable final
+/// checkpoint can construct this retained result. Ordinary JSON cannot.
+pub struct VerifiedTrialCompletion {
+    completion: RunCompletion,
+}
+impl VerifiedTrialCompletion {
+    pub(crate) fn into_completion(self) -> RunCompletion {
+        self.completion
+    }
+}
+struct BoundSession {
+    prepared: PreparedRun,
+    permit: Permit,
+    broker: ScopedWorker,
+    state: SessionState,
+    options: RunOptions,
+    hooks: Arc<dyn RunHooks>,
+    processes: Arc<crate::process_records::ProcessJournal>,
+    execution: Option<Arc<WorkerExecution>>,
+    control: Arc<ControlHost>,
+    host: Arc<dyn WorkerHost>,
+    registry: Arc<ExecutionRegistry>,
+    authority: WorkerAuthority,
+}
+fn bind_session(
     prepared: PreparedRun,
     permit: Permit,
     services: RunServices,
     options: RunOptions,
-) -> Result<OwnedWorkerRun> {
+) -> Result<BoundSession> {
     if options.max_seconds == 0
         || options.max_seconds > 86_400
         || options.max_turns == 0
@@ -867,6 +1110,7 @@ pub fn run(
         cwd: m.cwd.clone(),
     };
     let mut state = SessionState::new(binding, options.max_turns)?;
+    state.observe_correction(broker.correction_requirement().watermark);
     if let Some(resume) = &options.resume {
         state.binding.compatible_resume(&resume.state.binding)?;
         if resume.findings.trim().is_empty() || resume.state.turn_id.is_some() {
@@ -885,6 +1129,42 @@ pub fn run(
         broker.reconcile_prior(None)?;
     }
     broker.checkpoint(&state, None)?;
+    Ok(BoundSession {
+        prepared,
+        permit,
+        broker,
+        state,
+        options,
+        hooks: services.hooks,
+        processes: services.processes,
+        execution,
+        control,
+        host,
+        registry,
+        authority,
+    })
+}
+/// Consume the same admitted session binding used by production and evaluations.
+pub fn run(
+    prepared: PreparedRun,
+    permit: Permit,
+    services: RunServices,
+    options: RunOptions,
+) -> Result<OwnedWorkerRun> {
+    let BoundSession {
+        prepared,
+        permit,
+        broker,
+        state,
+        options,
+        hooks,
+        processes,
+        execution,
+        control,
+        host,
+        registry,
+        authority,
+    } = bind_session(prepared, permit, services, options)?;
     let cancellation = Arc::new(Cancellation {
         requested: AtomicBool::new(false),
         task_finished: AtomicBool::new(false),
@@ -903,12 +1183,10 @@ pub fn run(
     let mut join = None;
     control.validate_permit(&permit, || {
         host.verify_owner(&permit.lease)?;
-        authority.compare(&host.current_authority(&authority)?)?;
+        crate::worker::effective_authority(host.as_ref(), permit.operation_id, &authority)?;
         registry.register(operation, effect, cancellation.clone())?;
         let registry = registry.clone();
         let control = control.clone();
-        let hooks = services.hooks;
-        let processes = services.processes;
         let permit = permit.clone();
         let task_cancellation = cancellation.clone();
         join = Some(tokio::spawn(async move {
@@ -936,6 +1214,7 @@ pub fn run(
                     completion.outcome = RunOutcome::Interrupted;
                     completion.error = Some(Error::new("operation_uncertain", "owned worker ended with unconfirmed local effects; retain ownership until actual exit observation"));
                     completion.checks.clear();
+                    completion.failed_checks.clear();
                 }
             }
             result
@@ -947,6 +1226,72 @@ pub fn run(
         registry,
         join,
     })
+}
+pub(crate) trait CorrectionBroker: TrialHost {
+    fn correction_waiting(&self) -> Result<bool>;
+    fn pending_correction(
+        &self,
+    ) -> Result<Option<Arc<crate::corrections::VerifiedCorrectionTransition>>>;
+    fn deliver_correction(
+        &mut self,
+        state: &SessionState,
+        transition: Arc<crate::corrections::VerifiedCorrectionTransition>,
+    ) -> Result<bool>;
+    fn finalize_correction(&mut self, state: &mut SessionState) -> Result<()>;
+}
+impl CorrectionBroker for ScopedWorker {
+    fn correction_waiting(&self) -> Result<bool> {
+        ScopedWorker::correction_waiting(self)
+    }
+    fn pending_correction(
+        &self,
+    ) -> Result<Option<Arc<crate::corrections::VerifiedCorrectionTransition>>> {
+        ScopedWorker::pending_correction(self)
+    }
+    fn deliver_correction(
+        &mut self,
+        state: &SessionState,
+        transition: Arc<crate::corrections::VerifiedCorrectionTransition>,
+    ) -> Result<bool> {
+        ScopedWorker::deliver_correction(self, state, transition)
+    }
+    fn finalize_correction(&mut self, state: &mut SessionState) -> Result<()> {
+        ScopedWorker::finalize_correction(self, state)
+    }
+}
+/// One bounded current correction delivery, shared by the production runner
+/// and actual evaluator. Unknown/rejected writes never become consumed input.
+pub(crate) async fn advance_correction(
+    rpc: &mut RpcClient,
+    state: &mut SessionState,
+    permissions: &PermissionConfiguration,
+    broker: &mut dyn CorrectionBroker,
+) -> Result<bool> {
+    if broker.correction_waiting()? {
+        return Ok(false);
+    }
+    let Some(transition) = broker.pending_correction()? else {
+        return Ok(false);
+    };
+    state.observe_correction(transition.watermark());
+    broker.correction_event(transition.watermark(), transition.input())?;
+    if state.turn_id.is_some() {
+        broker.checkpoint(state, Some("turn/steer"))?;
+        let accepted = rpc
+            .steer(state, transition.watermark(), transition.input(), broker)
+            .await?;
+        if accepted {
+            broker.deliver_correction(state, transition)?;
+        }
+    } else {
+        broker.checkpoint(state, Some("turn/start"))?;
+        rpc.start_turn(state, permissions, transition.input(), broker)
+            .await?;
+        broker.deliver_correction(state, transition)?;
+    }
+    broker.finalize_correction(state)?;
+    broker.checkpoint(state, None)?;
+    Ok(true)
 }
 struct ExecutionTask {
     execution: Option<Arc<WorkerExecution>>,
@@ -1023,6 +1368,7 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
                 &prepared.isolation,
                 &prepared.permissions,
                 &resume.findings,
+                &mut broker,
             )
             .await?;
         } else {
@@ -1059,6 +1405,7 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
             .await?;
         }
         broker.checkpoint(&state, None)?;
+        let correction_wake = broker.correction_wake()?;
         loop {
             if cancel.requested.load(Ordering::SeqCst) {
                 return Err(Error::new("interrupted", "owned worker was cancelled"));
@@ -1075,7 +1422,14 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
                     "worker requested unavailable interactive input",
                 ));
             }
-            if let Some(terminal) = &state.terminal {
+            if advance_correction(rpc, &mut state, &prepared.permissions, &mut broker).await? {
+                continue;
+            }
+            broker.finalize_correction(&mut state)?;
+            broker.checkpoint(&state, None)?;
+            if let Some(terminal) = &state.terminal
+                && !broker.correction_waiting()?
+            {
                 return if terminal == "completed" && state.completion_is_current() {
                     Ok(())
                 } else {
@@ -1085,13 +1439,24 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
                     ))
                 };
             }
-            rpc.pump(
-                &mut state,
-                &mut broker,
-                Duration::from_millis(prepared.runtime.stream_silence_ms),
-                Duration::from_millis(prepared.runtime.stall_ms),
-            )
-            .await?;
+            if state.turn_id.is_none() && broker.correction_waiting()? {
+                rpc.pump_waiting(
+                    &mut state,
+                    &mut broker,
+                    deadline,
+                    correction_wake.as_deref(),
+                )
+                .await?;
+            } else {
+                rpc.pump_or_wake(
+                    &mut state,
+                    &mut broker,
+                    Duration::from_millis(prepared.runtime.stream_silence_ms),
+                    Duration::from_millis(prepared.runtime.stall_ms),
+                    correction_wake.as_deref(),
+                )
+                .await?;
+            }
             broker.checkpoint(&state, None)?;
         }
     });
@@ -1163,6 +1528,7 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
         elapsed_ms: start.elapsed().as_millis().min(u64::MAX as u128) as u64,
         hook_error,
         checks: broker.take_verified_checks(),
+        failed_checks: broker.take_failed_checks(),
         execution,
         contract: Some(prepared.contract.clone()),
         local_exit_confirmed: false,
@@ -1208,9 +1574,12 @@ impl NonExecutingRunHooks {
         }
         self.control.validate_permit(permit, || {
             self.host.verify_owner(&permit.lease)?;
-            self.contract
-                .authority()
-                .compare(&self.host.current_authority(self.contract.authority())?)
+            crate::worker::effective_authority(
+                self.host.as_ref(),
+                permit.operation_id,
+                self.contract.authority(),
+            )
+            .map(|_| ())
         })
     }
 }
@@ -1328,9 +1697,12 @@ impl ExecutorRunHooks {
             ));
         }
         self.host.verify_owner(&permit.lease)?;
-        self.contract
-            .authority()
-            .compare(&self.host.current_authority(self.contract.authority())?)
+        crate::worker::effective_authority(
+            self.host.as_ref(),
+            permit.operation_id,
+            self.contract.authority(),
+        )
+        .map(|_| ())
     }
     fn executor(&self) -> crate::execution::LocalExecutor<'_> {
         crate::execution::LocalExecutor {
@@ -1463,3 +1835,7 @@ impl RunHooks for ExecutorRunHooks {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "worker_protocol_tests.rs"]
+mod protocol_tests;

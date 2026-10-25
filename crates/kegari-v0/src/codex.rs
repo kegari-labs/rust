@@ -479,6 +479,8 @@ pub struct SessionState {
     pub input_required: bool,
     pub terminal: Option<String>,
     pub completed_turns: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_completed_turn: Option<String>,
     pub provider_instruction_sources: Vec<String>,
     pub advertised_tools: BTreeSet<String>,
     pub reconciliation_digest: Option<String>,
@@ -503,6 +505,7 @@ impl SessionState {
             input_required: false,
             terminal: None,
             completed_turns: BTreeMap::new(),
+            last_completed_turn: None,
             provider_instruction_sources: Vec::new(),
             advertised_tools: BTreeSet::new(),
             reconciliation_digest: None,
@@ -518,6 +521,10 @@ impl SessionState {
             || state.turns_started > state.max_turns
             || state.correction_consumed > state.correction_required
             || state.completed_turns.len() > state.max_turns as usize
+            || state
+                .last_completed_turn
+                .as_ref()
+                .is_some_and(|id| !state.completed_turns.contains_key(id))
         {
             return Err(Error::new(
                 "corrupt_receipt",
@@ -768,6 +775,7 @@ impl SessionState {
                 }
                 self.turn_id = None;
                 self.completed_turns.insert(id.into(), status.into());
+                self.last_completed_turn = Some(id.into());
                 kind = if self.intervention.is_some() {
                     EventKind::ProviderIntervention
                 } else {
@@ -1768,6 +1776,142 @@ impl RpcClient {
         ))?;
         Ok(())
     }
+    /// Reobserve only the exact already-owned thread through the authenticated
+    /// account. This is read-only reconciliation, never an adoption mechanism.
+    /// Unknown, active, divergent or provider-blocked histories cannot resume.
+    pub async fn observe_owned_thread(
+        &mut self,
+        state: &mut SessionState,
+        broker: &mut dyn ToolBroker,
+    ) -> Result<String> {
+        if self.account_id.as_deref() != Some(&state.binding.account_id)
+            || state.thread_id.is_none()
+        {
+            return Err(Error::new(
+                "identity_mismatch",
+                "thread observation requires the actual bound account and recorded thread",
+            ));
+        }
+        if state.intervention.is_some() || state.input_required {
+            return Err(Error::new(
+                "provider_intervention",
+                "recorded provider intervention/input requirement cannot be cleared by reading a thread",
+            ));
+        }
+        if state.turn_id.is_some()
+            || state.completed_turns.is_empty()
+            || state.last_completed_turn.is_none()
+        {
+            return Err(Error::new(
+                "reconciliation_required",
+                "prior active or unobserved turn needs separate exact outcome reconciliation",
+            ));
+        }
+        let response = self
+            .request(
+                "thread/read",
+                json!({"threadId":state.thread_id,"includeTurns":true}),
+                Some(state),
+                broker,
+            )
+            .await?;
+        let thread = response
+            .get("thread")
+            .ok_or_else(|| Error::new("provider_response", "owned thread read lacks thread"))?;
+        if thread.get("id").and_then(Value::as_str) != state.thread_id.as_deref()
+            || thread.get("cwd").and_then(Value::as_str) != state.binding.cwd.to_str()
+            || thread.get("modelProvider").and_then(Value::as_str) != Some("openai")
+        {
+            return Err(Error::new(
+                "identity_mismatch",
+                "provider thread differs from recorded identity, cwd or provider",
+            ));
+        }
+        let turns = thread
+            .get("turns")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                Error::new(
+                    "provider_response",
+                    "thread read lacks bounded complete turn history",
+                )
+            })?;
+        if turns.len() > 4096 {
+            return Err(Error::new(
+                "reconciliation_required",
+                "provider thread history differs from retained completed turns",
+            ));
+        }
+        for turn in turns {
+            if let Some(error) = turn.get("error").filter(|error| !error.is_null()) {
+                let code = error
+                    .get("codexErrorInfo")
+                    .and_then(Value::as_str)
+                    .unwrap_or("provider_error");
+                if [
+                    "cyberPolicy",
+                    "misalignmentPolicyViolation",
+                    "tooManyDenials",
+                ]
+                .contains(&code)
+                    || error
+                        .get("misalignment")
+                        .is_some_and(|value| !value.is_null())
+                {
+                    let source = json!({"threadId":state.thread_id,"turnId":required_str(turn,"id")?,"error":error});
+                    state.block_provider("thread/read", &source, code)?;
+                    broker.observe_session(state)?;
+                    return Err(Error::new(
+                        "provider_intervention",
+                        "actual retained provider history requires intervention",
+                    ));
+                }
+            }
+        }
+        let mut observed = BTreeMap::new();
+        let mut last = None;
+        for turn in turns {
+            let id = required_str(turn, "id")?;
+            let status = required_str(turn, "status")?;
+            if turn.get("error").is_some_and(|error| !error.is_null()) {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "provider history contains an unresolved turn failure",
+                ));
+            }
+            if status != "completed" || observed.insert(id.to_owned(), status.to_owned()).is_some()
+            {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "provider history has active, failed or duplicate turns",
+                ));
+            }
+            last = Some(id);
+        }
+        if state.turn_id.is_some()
+            || observed != state.completed_turns
+            || last != state.last_completed_turn.as_deref()
+            || !matches!(
+                thread.pointer("/status/type").and_then(Value::as_str),
+                Some("idle" | "notLoaded")
+            )
+        {
+            return Err(Error::new(
+                "reconciliation_required",
+                "provider thread is active or no longer matches the exact completed history",
+            ));
+        }
+        if state.intervention.is_some() || state.input_required {
+            return Err(Error::new(
+                "provider_intervention",
+                "thread observation received a new provider blocker",
+            ));
+        }
+        canonical_digest(
+            1,
+            &json!({"binding":state.binding,"thread":state.thread_id,"turns":observed,"last_turn":last,"status":thread["status"],"response_digest":canonical_digest(1,&response)?}),
+        )
+    }
     pub async fn resume_thread(
         &mut self,
         state: &mut SessionState,
@@ -1775,6 +1919,7 @@ impl RpcClient {
         isolation: &ValidatedIsolation,
         permissions: &PermissionConfiguration,
         reconciliation: &str,
+        broker: &mut dyn ToolBroker,
     ) -> Result<()> {
         self.validate_session(state, isolation, permissions)?;
         state.binding.compatible_resume(previous)?;
@@ -1793,7 +1938,10 @@ impl RpcClient {
             .thread_id
             .clone()
             .ok_or_else(|| Error::new("resume_incompatible", "no owned thread is recorded"))?;
-        let response=self.request("thread/resume",json!({"threadId":thread,"cwd":state.binding.cwd,"model":state.binding.profile.model,"modelProvider":"openai","serviceTier":state.binding.profile.service_tier()?,"permissions":permissions.profile_id,"approvalPolicy":"never","approvalsReviewer":"user","config":permissions.settings,"excludeTurns":true}),Some(state),&mut DenyTools).await?;
+        let observed_thread = self.observe_owned_thread(state, broker).await?;
+        let reconciliation =
+            format!("{reconciliation}\nVerified owned provider history: {observed_thread}");
+        let response=self.request("thread/resume",json!({"threadId":thread,"cwd":state.binding.cwd,"model":state.binding.profile.model,"modelProvider":"openai","serviceTier":state.binding.profile.service_tier()?,"permissions":permissions.profile_id,"approvalPolicy":"never","approvalsReviewer":"user","config":permissions.settings,"excludeTurns":true}),Some(state),broker).await?;
         validate_thread_response(&response, state, permissions)?;
         if response.pointer("/thread/id").and_then(Value::as_str) != Some(&thread) {
             return Err(Error::new(
@@ -1806,7 +1954,7 @@ impl RpcClient {
         // itself must not launch work or pretend remembered completion is current.
         state.terminal = None;
         state.reconciliation_digest = Some(canonical_digest(1, &reconciliation)?);
-        self.pending_reconciliation = Some(reconciliation.into());
+        self.pending_reconciliation = Some(reconciliation);
         self.allowed_tools = state.advertised_tools.clone();
         Ok(())
     }
@@ -1882,7 +2030,13 @@ impl RpcClient {
                 "protocol_error",
                 "steer response has another turn ID",
             )),
-            Err(e) if e.code == "provider_response" => Ok(false),
+            Err(e)
+                if e.code == "provider_response"
+                    && state.turn_id.is_none()
+                    && state.completed_turns.contains_key(&turn) =>
+            {
+                Ok(false)
+            }
             Err(e) => Err(e),
         }
         // Accepted delivery is not proof the worker processed the watermark.
@@ -1955,23 +2109,72 @@ impl RpcClient {
         silence: Duration,
         stall: Duration,
     ) -> Result<SessionEvent> {
+        self.pump_or_wake(state, broker, silence, stall, None)
+            .await?
+            .ok_or_else(|| {
+                Error::new(
+                    "protocol_error",
+                    "unexpected host wake without a wake source",
+                )
+            })
+    }
+    pub async fn pump_or_wake(
+        &mut self,
+        state: &mut SessionState,
+        broker: &mut dyn ToolBroker,
+        silence: Duration,
+        stall: Duration,
+        wake: Option<&tokio::sync::Notify>,
+    ) -> Result<Option<SessionEvent>> {
         if silence.is_zero() || stall.is_zero() {
             return Err(Error::invalid("watchdog intervals must be positive"));
         }
         let deadline = (self.last_valid_output + silence).min(self.last_semantic_event + stall);
-        let incoming = timeout_at(deadline, self.read_message()).await;
+        self.pump_until(state, broker, deadline, wake).await
+    }
+    /// The provider has completed its turn while the host is classifying new
+    /// native input. Keep reading intervention/tool messages without applying an
+    /// agent-progress watchdog to host work; the original operation deadline is
+    /// still absolute and cannot be extended by this wait.
+    pub(crate) async fn pump_waiting(
+        &mut self,
+        state: &mut SessionState,
+        broker: &mut dyn ToolBroker,
+        deadline: tokio::time::Instant,
+        wake: Option<&tokio::sync::Notify>,
+    ) -> Result<Option<SessionEvent>> {
+        if state.turn_id.is_some() {
+            return Err(Error::invalid(
+                "host classification wait requires no active provider turn",
+            ));
+        }
+        self.pump_until(state, broker, deadline, wake).await
+    }
+    async fn pump_until(
+        &mut self,
+        state: &mut SessionState,
+        broker: &mut dyn ToolBroker,
+        deadline: tokio::time::Instant,
+        wake: Option<&tokio::sync::Notify>,
+    ) -> Result<Option<SessionEvent>> {
+        let incoming = match wake {
+            Some(wake) => {
+                tokio::select! { value=timeout_at(deadline,self.read_message())=>value, _=wake.notified()=>return Ok(None) }
+            }
+            None => timeout_at(deadline, self.read_message()).await,
+        };
         match incoming {
             Err(_) => {
                 let _ = self.interrupt(state).await;
-                Ok(state.interruption("watchdog_expired"))
+                Ok(Some(state.interruption("watchdog_expired")))
             }
-            Ok(Err(e)) if e.code == "process_exit" => Ok(state.interruption("process_exit")),
+            Ok(Err(e)) if e.code == "process_exit" => Ok(Some(state.interruption("process_exit"))),
             Ok(Err(e)) => Err(e),
             Ok(Ok(RpcMessage::Notification { method, params })) => {
                 let event = state.notification(&method, &params)?;
                 broker.observe_session(state)?;
                 self.emit(event.clone())?;
-                Ok(event)
+                Ok(Some(event))
             }
             Ok(Ok(RpcMessage::Request { id, method, params })) => {
                 self.service_request(id, &method, params, Some(state), broker)
@@ -1979,6 +2182,7 @@ impl RpcClient {
                 self.events
                     .back()
                     .cloned()
+                    .map(Some)
                     .ok_or_else(|| Error::new("protocol_error", "missing tool event"))
             }
             Ok(Ok(_)) => Err(Error::new(

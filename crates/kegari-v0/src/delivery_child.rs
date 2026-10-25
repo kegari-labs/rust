@@ -25,6 +25,7 @@ pub struct CompletedChildClaim {
     outcome: VerifiedAuthorizedOutcome,
     completion: Arc<RunCompletion>,
     claim: ChildResultClaim,
+    correction: Option<Arc<crate::corrections::VerifiedCorrectionTransition>>,
 }
 impl CompletedChildClaim {
     pub fn claim(&self) -> &ChildResultClaim {
@@ -37,7 +38,7 @@ impl CompletedChildClaim {
         self.outcome.digest()
     }
     fn work(&self) -> &WorkIdentity {
-        self.outcome.original_authority().work()
+        self.outcome.effective_authority().work()
     }
 }
 pub(super) fn completed_run(
@@ -71,8 +72,43 @@ impl DeliveryCoordinator {
         outcome: VerifiedAuthorizedOutcome,
         completion: Arc<RunCompletion>,
     ) -> Result<CompletedChildClaim> {
+        self.accept_child_completion_inner(gate, outcome, completion, None)
+    }
+    pub fn accept_corrected_child_completion(
+        &self,
+        gate: &FreshGate,
+        outcome: VerifiedAuthorizedOutcome,
+        completion: Arc<RunCompletion>,
+        transition: Arc<crate::corrections::VerifiedCorrectionTransition>,
+    ) -> Result<CompletedChildClaim> {
+        self.accept_child_completion_inner(gate, outcome, completion, Some(transition))
+    }
+    fn accept_child_completion_inner(
+        &self,
+        gate: &FreshGate,
+        outcome: VerifiedAuthorizedOutcome,
+        completion: Arc<RunCompletion>,
+        correction: Option<Arc<crate::corrections::VerifiedCorrectionTransition>>,
+    ) -> Result<CompletedChildClaim> {
         (self.current_gate)(gate)?;
-        outcome.original_authority().compare_current(
+        match &correction {
+            Some(transition)
+                if outcome.correction_transition_digest() == Some(transition.digest())
+                    && outcome.original_authority().digest()?
+                        == transition.original_authority().digest()?
+                    && outcome.effective_authority().digest()?
+                        == transition.current_authority().digest()? => {}
+            None if outcome.correction_transition_digest().is_none()
+                && outcome.original_authority().digest()?
+                    == outcome.effective_authority().digest()? => {}
+            _ => {
+                return Err(Error::new(
+                    "correction_execution_binding",
+                    "completed correction lacks its actual current native transition",
+                ));
+            }
+        }
+        outcome.effective_authority().compare_current(
             gate,
             Utc::now(),
             chrono::Duration::seconds(60),
@@ -116,6 +152,7 @@ impl DeliveryCoordinator {
             outcome,
             completion,
             claim,
+            correction,
         })
     }
     fn current_child_claim(
@@ -439,6 +476,8 @@ struct SourceSealIntent {
     claim_digest: String,
     source: PathBuf,
     binding: crate::execution::ExecutionBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    correction: Option<crate::execution::CorrectionExecutionProvenance>,
     metadata: crate::git::SourceCommitMetadata,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -465,7 +504,24 @@ impl DeliveryCoordinator {
         let scope = admission.gate.child_scope().ok_or_else(|| {
             Error::new("scope_violation", "source sealing lacks exact child scope")
         })?;
-        if execution.binding.work != admission.scope.work
+        let effective = claim
+            .correction
+            .as_ref()
+            .map(|transition| {
+                crate::execution::EffectiveExecutionBinding::new(
+                    &execution.binding,
+                    &execution.ownership,
+                    isolation,
+                    transition.clone(),
+                )
+            })
+            .transpose()?;
+        let effective_work = effective
+            .as_ref()
+            .map(|binding| &binding.binding().work)
+            .unwrap_or(&execution.binding.work);
+        if effective_work != &admission.scope.work
+            || execution.binding.work != *claim.outcome.original_authority().work()
             || execution.binding.operation_id != claim.operation_id()
             || execution.binding.repository != admission.scope.repository
             || execution.binding.revision.commit != admission.scope.revision.head
@@ -488,13 +544,17 @@ impl DeliveryCoordinator {
         }
         execution.ownership.verify(&execution.binding, isolation)?;
         let intent = SourceSealIntent {
-            schema_version: 1,
+            schema_version: if effective.is_some() { 2 } else { 1 },
             operation_id: admission.operation_id(),
             request_id: Uuid::new_v4(),
             scope: admission.scope.clone(),
             claim_digest: claim.digest().into(),
             source: isolation.plan().repository.clone(),
             binding: execution.binding.clone(),
+            correction: effective
+                .as_ref()
+                .map(crate::execution::EffectiveExecutionBinding::provenance)
+                .transpose()?,
             metadata,
         };
         let leaf = format!("source-seal-intent-{}.json", admission.operation_id());
@@ -859,7 +919,8 @@ impl DeliveryCoordinator {
             .read(&format!("source-seal-intent-{operation}.json"))?;
         self.key.verify("child_source_intent", &original)?;
         if canonical_digest(1, &record.intent)? != canonical_digest(1, &original.payload)?
-            || record.intent.schema_version != 1
+            || !matches!(record.intent.schema_version, 1 | 2)
+            || (record.intent.schema_version == 2) != record.intent.correction.is_some()
             || record.intent.operation_id != operation
             || record.intent.scope.work != admission.scope.work
             || record.intent.claim_digest != claim.digest()

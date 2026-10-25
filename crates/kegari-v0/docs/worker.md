@@ -77,13 +77,36 @@ mint production evidence.
 The evaluation runner accepts this concrete broker, checks the exact admitted
 work/instruction/tool/isolation contract and rejects a deterministic command
 boundary for actual-agent qualification. Its correction timeline must enter the
-host's normal authorized correction path before steering. A correction changing
-authority or generation invalidates the old immutable contract: production
-readmission/reassembly is required. The single-operation trial runner currently
-fails closed on that transition; completing those continuation/correction trials
-requires the application trial coordinator to supply the real readmission path.
-No completed fixture-only result or skipped human calibration establishes live
-qualification.
+host's normal authorized correction path before steering. An active child may
+advance through an opaque `VerifiedCorrectionTransition` only when actual native
+route publications prove an exact signed predecessor/history chain and unchanged
+authorization, scope, profile, workflow and dependency contracts. The original
+assembly and session binding remain immutable. A later input carries the effective
+work and exact revision; it is recorded against the acknowledged provider turn.
+Steer acknowledgement does not consume a correction. The matching completed turn
+must submit `processed_correction` with the actual watermark, input digest and
+transition digest, and the native gate must still be current.
+
+Pending native classification keeps effect/source gates closed while retaining
+an existing bounded worker. A completed provider turn waits for host routing
+within the original operation deadline; it does not run a new session or reset
+its turn budget. Actual provider acknowledgements are retained against the exact
+sent request even if native task generation changes between transmission and ACK.
+Revoked ownership and fenced permits still reject further effects.
+
+Corrected local checks use `EffectiveExecutionBinding`: the original owned
+marker remains unchanged, new evidence names the effective work, and older checks
+remain historical even if source bytes happen to be identical. Schema-2 outcome
+recovery verifies the original assembly, signed transition chain and ordered
+actual delivery/processing/completed-turn journal records. A historical record
+alone cannot recreate a live execution capability.
+
+`prepare_admitted` returns a consuming `AdmittedWorker` shared by production and
+evaluation. Its trial path exposes the same ScopedWorker/provider launch and real
+hook lifecycle. Trial completion is opaque and requires a current final checkpoint
+and actual owned exits. The declared native evaluation fixture mapping and full
+recovered-thread continuation remain incomplete. No completed fixture-only result
+or skipped human calibration establishes live qualification.
 
 Deterministic validation:
 

@@ -859,6 +859,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "flate2",
  "fs2",
  "hex",
  "hmac",

@@ -60,3 +60,21 @@ human calibration remain separate.
 RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache \
   cargo test --lib corrections::tests
 ```
+
+Active child steering retains the original instruction/tool/isolation contract.
+`VerifiedCorrectionTransition` requires the old correction generation to be an
+exact signed history checkpoint, a strict current-history extension, intact native
+classification and route records, and unchanged authorization/scope/settings and
+dependencies. Editing or deleting a routed source/record closes the gate. The
+per-turn input includes current definitions and latest relevant native revisions;
+an informational classification grants no new source change or inferred reversal.
+
+Installation durably signs an immutable per-operation transition record before
+exposing the effective epoch or waking the worker. The provider loop and evaluator
+share delivery logic. Completion races leave the correction queued for a bounded
+next turn. Watermarks are consumed only after the exact delivered turn completes
+with its matching processed input report. Pending classification defers publication
+without weakening effect gates. Schema-1 claims remain historical; schema-2 claims
+require an exact original assembly, signed predecessor chain and ordered actual
+turn delivery/processing journal entries. Native restart resumption and verified
+unfinished-progress continuation still require additional host integration.

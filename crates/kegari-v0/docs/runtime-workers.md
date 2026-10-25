@@ -60,3 +60,19 @@ available there for a local owned clone; an authenticated owned remote-object
 cache is pending. Git metadata and clone commands use the preparation permit's
 journaled process path. After model admission the execution boundary is rebuilt
 with the model permit, so preparation authority is never reused for later checks.
+
+Worker source preparation now uses the admitted exact-object acquisition broker
+for initial configured staging and independent PR sources. The request binds the
+preparation permit, current repository contract and sealed work authority. The
+opaque imported source supplies actual head/base objects to the acquired-clone
+APIs; its cache root is separate from the configured operator checkout retained
+for attribution. Repository instruction discovery reads the resulting exact
+commit clone. Owned delivery assignments continue to use their sealed local
+source capability. Host metadata authority cannot perform cache-miss imports.
+
+The common `prepare_admitted` / `AdmittedWorker` path stops after exact assembly
+and final durable worker admission. Production consumes `.run()`; evaluation
+consumes `.into_trial()`, which exposes actual `TrialOperation` references and
+real hooks. Dropping either admitted capability fences before cancellation and
+preserves uncertain process/effect ownership. This composition does not itself
+satisfy actual-agent qualification or the pending native fixture mapping.

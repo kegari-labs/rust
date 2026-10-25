@@ -514,6 +514,8 @@ pub struct FreshReleaseFacts<'a> {
 pub struct StepPayload {
     pub operation_id: Uuid,
     pub step_id: String,
+    pub attempt: u32,
+    pub prerequisite_attempts: BTreeMap<String, u32>,
     pub plan_digest: String,
     pub kind: StepKind,
     pub exact_source_commit: Option<String>,
@@ -613,6 +615,40 @@ pub fn verify_release_eligibility(
         checked_at: now,
         awaiting_manual_command,
     })
+}
+
+/// Re-evaluate an explicit continuation without waiving another attempt's hold.
+/// The returned proof remains read-only; the control host must separately admit
+/// the authenticated resume lineage before any uncompleted step can dispatch.
+pub fn verify_release_resume_eligibility(
+    attempt: &ReleaseAttempt,
+    evidence: DeliveryEvidence<'_>,
+    facts: AdmissionFacts,
+    queue: &ReleaseQueue,
+    now: DateTime<Utc>,
+) -> Result<VerifiedReleaseEligibility> {
+    attempt.validate_recovered()?;
+    if attempt.has_unknown()
+        || attempt.abandoned
+        || attempt.resolved
+        || attempt.assigned_successor.is_some()
+        || attempt.completed()
+    {
+        return Err(Error::new(
+            "recovery_blocked",
+            "resume requires an unfinished current plan with known outcomes",
+        ));
+    }
+    let mut continuation = queue.clone();
+    if let Some(hold) = continuation.holds.remove(&attempt.plan.operation_id)
+        && (hold.resources != attempt.plan.resources || hold.parent_id != attempt.plan.parent_id)
+    {
+        return Err(Error::new(
+            "ownership_conflict",
+            "retained hold differs from original release plan",
+        ));
+    }
+    verify_release_eligibility(&attempt.plan, evidence, facts, &continuation, now)
 }
 
 impl ReleaseAttempt {
@@ -851,6 +887,7 @@ impl ReleaseAttempt {
             ));
         }
         for (id, state) in &self.steps {
+            self.step_attempt(id)?;
             match state {
                 StepState::Prepared { payload_digest }
                 | StepState::SentUnknown { payload_digest }
@@ -997,6 +1034,38 @@ impl ReleaseAttempt {
         }
     }
 
+    /// Ordinals change only after explicit resume archives a known terminal
+    /// failure/cancellation. Pending and repeatedly observed effects retain the
+    /// same immutable identity; a prepared-but-unsent retry does not invent one.
+    pub fn step_attempt(&self, id: &str) -> Result<u32> {
+        if !self.steps.contains_key(id) {
+            return Err(Error::invalid("unknown release step"));
+        }
+        let failures = self
+            .step_history
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter(|state| {
+                matches!(
+                    state,
+                    StepState::Failed { .. } | StepState::Cancelled { .. }
+                )
+            })
+            .count();
+        let resumes = self
+            .recovery_records
+            .iter()
+            .filter(|record| record.action == "resume")
+            .count();
+        if failures > resumes || failures >= 4096 {
+            return Err(Error::new(
+                "corrupt_record",
+                "release attempt history lacks explicit resume lineage or exceeds its retained bound",
+            ));
+        }
+        Ok(failures as u32 + 1)
+    }
     pub fn prepare_step(
         &mut self,
         id: &str,
@@ -1017,6 +1086,12 @@ impl ReleaseAttempt {
         let payload = StepPayload {
             operation_id: self.plan.operation_id,
             step_id: id.into(),
+            attempt: self.step_attempt(id)?,
+            prerequisite_attempts: step
+                .depends_on
+                .iter()
+                .map(|id| Ok((id.clone(), self.step_attempt(id)?)))
+                .collect::<Result<_>>()?,
             plan_digest: self.plan.digest()?,
             kind: step.kind.clone(),
             exact_source_commit: self.source_commit(step)?,
@@ -1051,6 +1126,13 @@ impl ReleaseAttempt {
             || self.abandoned
             || self.assigned_successor.is_some()
             || payload.operation_id != self.plan.operation_id
+            || payload.attempt != self.step_attempt(&payload.step_id)?
+            || payload.prerequisite_attempts
+                != step
+                    .depends_on
+                    .iter()
+                    .map(|id| Ok((id.clone(), self.step_attempt(id)?)))
+                    .collect::<Result<BTreeMap<_, _>>>()?
             || payload.plan_digest != self.plan.digest()?
             || payload.kind != step.kind
             || payload.exact_source_commit != self.source_commit(step)?
@@ -1292,6 +1374,10 @@ impl ReleaseAttempt {
         now: DateTime<Utc>,
         persist: impl FnOnce(&Self) -> Result<()>,
     ) -> Result<()> {
+        if matches!(self.steps.get(id), Some(StepState::Failed {reason: old, remote_id: existing, ..}) if old == &reason && existing == &remote_id)
+        {
+            return Ok(());
+        }
         if reason.trim().is_empty()
             || !matches!(
                 self.steps.get(id),
@@ -1509,6 +1595,20 @@ impl ReleaseAttempt {
         baseline: &ReconciledBaseline,
         persist: impl FnOnce(&Self) -> Result<()>,
     ) -> Result<()> {
+        self.supersede_plan(decision, &successor.plan, acceptance, baseline, persist)
+    }
+
+    /// Bind a corrected successor plan without claiming it has an execution
+    /// admission. A control-host permit is still required before dispatch.
+    pub fn supersede_plan(
+        &mut self,
+        decision: RecoveryDecision<'_>,
+        successor: &ReleasePlan,
+        acceptance: &VerifiedAcceptance,
+        baseline: &ReconciledBaseline,
+        persist: impl FnOnce(&Self) -> Result<()>,
+    ) -> Result<()> {
+        successor.validate()?;
         let RecoveryDecision { actor, reason, now } = decision;
         validate_recovery_actor(actor, reason)?;
         baseline.validate(&self.plan.resources)?;
@@ -1516,15 +1616,19 @@ impl ReleaseAttempt {
         if self.has_unknown()
             || self.hold_reason.is_none()
             || self.resolved
-            || successor.plan.parent_id != self.plan.parent_id
-            || successor.plan.linear_workspace != self.plan.linear_workspace
-            || successor.plan.generation == self.plan.generation
-            || successor.plan.operation_id == self.plan.operation_id
-            || successor.plan.generation != a.work.generation
-            || successor.plan.evidence_token != a.reviewed_token
-            || successor.plan.acceptance_digest != acceptance.digest()
-            || successor.plan.carried_acceptance.is_some()
-            || successor.plan.resources != self.plan.resources
+            || self
+                .assigned_successor
+                .is_some_and(|id| id != successor.operation_id)
+            || successor.runtime_id != self.plan.runtime_id
+            || successor.parent_id != self.plan.parent_id
+            || successor.linear_workspace != self.plan.linear_workspace
+            || successor.generation == self.plan.generation
+            || successor.operation_id == self.plan.operation_id
+            || successor.generation != a.work.generation
+            || successor.evidence_token != a.reviewed_token
+            || successor.acceptance_digest != acceptance.digest()
+            || successor.carried_acceptance.is_some()
+            || successor.resources != self.plan.resources
         {
             return Err(Error::new(
                 "recovery_blocked",
@@ -1547,7 +1651,7 @@ impl ReleaseAttempt {
                 );
             }
         }
-        next.assigned_successor = Some(successor.plan.operation_id);
+        next.assigned_successor = Some(successor.operation_id);
         next.recovery_records.push(RecoveryRecord {
             actor: actor.into(),
             action: "supersede".into(),
@@ -1661,7 +1765,7 @@ pub struct ResourceHold {
 /// Rebuilt from verified release records on recovery; this is an in-memory
 /// projection, not an editable workflow database. Mutations require `&mut self`
 /// under the single control-host mutation gate.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct ReleaseQueue {
     owners: BTreeMap<ResourceKey, Uuid>,
     holds: BTreeMap<Uuid, ResourceHold>,
@@ -1743,6 +1847,7 @@ impl ReleaseQueue {
         verified: &VerifiedNoReleaseRequired,
     ) -> Result<SuccessfulRelease> {
         let proof = verified.record();
+        self.check_no_release_resources(proof)?;
         let mut resources: BTreeSet<_> = proof
             .baselines
             .iter()
@@ -1754,17 +1859,6 @@ impl ReleaseQueue {
             provider: t.provider.clone(),
             id: t.target.clone(),
         }));
-        if self.owners.keys().any(|r| resources.contains(r))
-            || self
-                .holds
-                .values()
-                .any(|h| !h.resources.is_disjoint(&resources))
-        {
-            return Err(Error::new(
-                "release_hold",
-                "already-production classification cannot clear active or unresolved delivery",
-            ));
-        }
         let record = SuccessfulRelease {
             operation_id: proof.operation_id,
             parent_id: proof.work.parent,
@@ -1790,6 +1884,35 @@ impl ReleaseQueue {
         }
         self.successes.push(record.clone());
         Ok(record)
+    }
+
+    pub(crate) fn check_no_release_resources(
+        &self,
+        record: &crate::evidence::NoReleaseRequired,
+    ) -> Result<()> {
+        let mut resources: BTreeSet<_> = record
+            .baselines
+            .iter()
+            .map(|b| ResourceKey::Repository {
+                repository: b.repository.clone(),
+            })
+            .collect();
+        resources.extend(record.targets.iter().map(|t| ResourceKey::Target {
+            provider: t.provider.clone(),
+            id: t.target.clone(),
+        }));
+        if self.owners.keys().any(|r| resources.contains(r))
+            || self
+                .holds
+                .values()
+                .any(|h| !h.resources.is_disjoint(&resources))
+        {
+            return Err(Error::new(
+                "release_hold",
+                "already-production classification cannot clear active or unresolved delivery",
+            ));
+        }
+        Ok(())
     }
 
     pub fn earliest_start(&self, plan: &ReleasePlan, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
@@ -1901,6 +2024,7 @@ impl ReleaseQueue {
         } else if attempt.hold_reason.is_some() {
             self.restore_hold(attempt)?;
         } else if !attempt.completed() {
+            self.holds.remove(&attempt.plan.operation_id);
             for resource in &attempt.plan.resources {
                 self.owners
                     .insert(resource.clone(), attempt.plan.operation_id);

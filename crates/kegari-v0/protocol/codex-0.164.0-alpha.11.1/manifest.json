@@ -203,6 +203,18 @@
       "source_path": "McpServerElicitationRequestResponse.json",
       "source_sha256": "792a012fdfe53ac211575a6c37ffbd492be848d15cb313d1bb4b534ade1f54ac",
       "sha256": "5146f6d291416de82c0d19e7a32348adb4b68ee35c40351f2e68d62d8592608a"
+    },
+    {
+      "file": "v2_ThreadReadParams.json",
+      "source_path": "v2/ThreadReadParams.json",
+      "source_sha256": "dfe040c6ac71d30795b8be3f3ff232e66f362a37f883b491e5d1ea367f470db4",
+      "sha256": "1fed979df25d616d628d03107348c7dbd66542c764570f6ba233eb52f88de5e0"
+    },
+    {
+      "file": "v2_ThreadReadResponse.json",
+      "source_path": "v2/ThreadReadResponse.json",
+      "source_sha256": "1bfe56f686a9810f9e28ff7e025b2d30662866f140f7430d606a03638e01c5a8",
+      "sha256": "06f1a6079d02a56e5c09a4008695b1c94753ed11846f0aa0257ec5d3f247cf56"
     }
   ],
   "attribution": {

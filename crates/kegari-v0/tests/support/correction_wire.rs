@@ -43,6 +43,8 @@ fn connection(nodes: Vec<Value>) -> Value {
 pub(crate) struct Fixture {
     issues: BTreeMap<Uuid, Value>,
     pub(crate) comments: BTreeMap<Uuid, Vec<Value>>,
+    pub(crate) github_values: BTreeMap<String, Value>,
+    pub(crate) before_issue_read: Option<Arc<dyn Fn() -> Result<()> + Send + Sync>>,
     relations: Vec<Value>,
     history: BTreeMap<Uuid, Vec<Value>>,
     selected: bool,
@@ -64,6 +66,8 @@ impl Fixture {
                 (id(101), issue(101, Some(100))),
             ]),
             comments: BTreeMap::new(),
+            github_values: BTreeMap::new(),
+            before_issue_read: None,
             relations: Vec::new(),
             history: BTreeMap::from([(
                 id(100),
@@ -99,20 +103,24 @@ impl HttpTransport for Wire {
             };
             f.requests.push((request.url.to_string(), body.clone()));
             let value = if request.url.host_str() == Some("github.invalid") {
-                match request.url.path() {
-                    "/user" => json!({"id":7,"login":"fixture","type":"User"}),
-                    "/repos/fixture/repo" => {
-                        json!({"id":42,"owner":{"id":7,"login":"fixture","type":"User"},"name":"repo","default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":true,"push":true}})
-                    }
-                    "/user/repos" => {
-                        if f.repository_available {
-                            json!([{"id":42,"owner":{"id":7,"login":"fixture","type":"User"},"name":"repo","default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":true,"push":true}}])
-                        } else {
-                            json!([])
+                if let Some(value) = f.github_values.get(request.url.path()) {
+                    value.clone()
+                } else {
+                    match request.url.path() {
+                        "/user" => json!({"id":7,"login":"fixture","type":"User"}),
+                        "/repos/fixture/repo" => {
+                            json!({"id":42,"owner":{"id":7,"login":"fixture","type":"User"},"name":"repo","default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":true,"push":true}})
                         }
+                        "/user/repos" => {
+                            if f.repository_available {
+                                json!([{"id":42,"owner":{"id":7,"login":"fixture","type":"User"},"name":"repo","default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":true,"push":true}}])
+                            } else {
+                                json!([])
+                            }
+                        }
+                        "/repos/fixture/repo/pulls" => json!(f.prs),
+                        path => panic!("unexpected GitHub path {path}"),
                     }
-                    "/repos/fixture/repo/pulls" => json!(f.prs),
-                    path => panic!("unexpected GitHub path {path}"),
                 }
             } else {
                 let query = body["query"].as_str().unwrap();
@@ -142,6 +150,9 @@ impl HttpTransport for Wire {
                     }
                     json!({"commentCreate":{"success":true,"comment":{"id":comment,"issue":{"id":issue},"user":{"id":id(5)}}}})
                 } else if query.contains("KegariIssue(") {
+                    if let Some(before) = &f.before_issue_read {
+                        before()?;
+                    }
                     json!({"issue":f.issues[&input_id.unwrap()]})
                 } else if query.contains("KegariParents") {
                     f.discovery_count += 1;

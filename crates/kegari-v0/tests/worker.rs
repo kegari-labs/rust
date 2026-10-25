@@ -84,6 +84,7 @@ struct Host {
     revoked: AtomicBool,
     owner: AtomicBool,
     rates: AtomicBool,
+    waiting: AtomicBool,
 }
 impl WorkerHost for Host {
     fn observed_session(&self, _: Uuid, _: &SessionState) -> Result<()> {
@@ -93,7 +94,16 @@ impl WorkerHost for Host {
         if self.revoked.load(Ordering::SeqCst) {
             return Err(Error::new("access_denied", "fixture revoked authorization"));
         }
+        if self.waiting.load(Ordering::SeqCst) {
+            return Err(Error::new(
+                "correction_classification_pending",
+                "fixture native input pending",
+            ));
+        }
         Ok(self.authority.lock().unwrap().clone())
+    }
+    fn correction_waiting(&self, _: Uuid) -> Result<bool> {
+        Ok(self.waiting.load(Ordering::SeqCst))
     }
     fn verify_owner(&self, _: &Lease) -> Result<()> {
         if !self.owner.load(Ordering::SeqCst) {
@@ -595,6 +605,7 @@ impl Fixture {
             revoked: AtomicBool::new(false),
             owner: AtomicBool::new(true),
             rates: AtomicBool::new(false),
+            waiting: AtomicBool::new(false),
         });
         let sink = Arc::new(Sink::default());
         let boundary = Arc::new(Boundary {
@@ -994,6 +1005,14 @@ async fn failed_check_is_retained_as_failed_and_corrected_rerun_keeps_old_bytes(
     let call = f.call("validation_run", json!({"name":"suite","kind":"local"}));
     assert_eq!(f.worker.call(&call).await.unwrap()["successful"], true);
     assert_eq!(f.worker.take_verified_checks().len(), 1);
+    let failures = f.worker.take_failed_checks();
+    assert_eq!(failures.len(), 1);
+    assert!(!failures[0].record().successful);
+    assert_eq!(
+        failures[0].record().binding.work,
+        f.contract.authority().work().unwrap().clone()
+    );
+    assert!(f.worker.take_failed_checks().is_empty());
 }
 #[tokio::test]
 async fn independent_review_has_no_linear_authority_or_execution_and_pins_pr() {
@@ -2338,4 +2357,31 @@ fn correction_context_contains_exact_native_text_and_rejects_stale_or_missing_re
             .code,
         "incompletely_observed"
     );
+}
+
+#[tokio::test]
+async fn pending_classification_defers_actual_completed_proposal_and_closes_source_gate() {
+    let mut fixture = Fixture::new(AgentRole::Implementation);
+    let claim = fixture.call(
+        "outcome_submit",
+        json!({"claim":{"summary":"completed original input"},"artifact_refs":[]}),
+    );
+    fixture.worker.call(&claim).await.unwrap();
+    fixture.host.waiting.store(true, Ordering::SeqCst);
+    let write=fixture.call("source_write",json!({"path":"a.txt","expected_digest":bytes_digest(b"original\n"),"content":"unexpected","executable":false}));
+    assert_eq!(
+        fixture.worker.call(&write).await.unwrap_err().code,
+        "correction_classification_pending"
+    );
+    fixture.state.notification("turn/completed",&json!({"threadId":"thread","turn":{"id":"turn","status":"completed","items":[],"error":null}})).unwrap();
+    fixture.worker.checkpoint(&fixture.state, None).unwrap();
+    assert!(fixture.sink.0.lock().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(fixture.input.isolation.plan().repository.join("a.txt")).unwrap(),
+        "original\n"
+    );
+    // Informational resolution does not change the work or consume a correction.
+    fixture.host.waiting.store(false, Ordering::SeqCst);
+    fixture.worker.checkpoint(&fixture.state, None).unwrap();
+    assert_eq!(fixture.sink.0.lock().unwrap().len(), 1);
 }

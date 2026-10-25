@@ -205,6 +205,7 @@ fn require_current_review(
     }
     Ok(())
 }
+#[derive(Clone)]
 pub struct LaunchRequest {
     pub lease: Lease,
     pub operation_id: Uuid,
@@ -308,6 +309,15 @@ pub(crate) fn preparation_operation(worker: Uuid) -> Result<Uuid> {
 /// cancellation cannot be mistaken for completion: preparation handles remain in
 /// the shared owned-process registry and Sent receipts keep the canonical hold.
 pub async fn launch(runtime: Arc<RuntimeCoordinator>, request: LaunchRequest) -> Result<Uuid> {
+    prepare_admitted(runtime, request).await?.run()
+}
+/// Perform actual owned preparation, immutable assembly and atomic admission.
+/// The returned capability can enter production or an explicitly authorized
+/// evaluation; neither path reconstructs a permit or substitutes a tool broker.
+pub async fn prepare_admitted(
+    runtime: Arc<RuntimeCoordinator>,
+    request: LaunchRequest,
+) -> Result<AdmittedWorker> {
     let mut plan = Plan::read(&runtime, request)?;
     let initial_schedule =
         runtime.next_attempt(&plan.request.phase, plan.workspace.id, &plan.account)?;
@@ -402,7 +412,7 @@ pub async fn launch(runtime: Arc<RuntimeCoordinator>, request: LaunchRequest) ->
         },
         &contract,
     )?;
-    let start = (|| {
+    let start: Result<AdmittedWorker> = (|| {
         runtime.register_run(permit.clone(), contract.clone())?;
         // Preparation and model execution have distinct permits. Reusing an
         // owned checkout never transfers the preparation process authority.
@@ -458,35 +468,36 @@ pub async fn launch(runtime: Arc<RuntimeCoordinator>, request: LaunchRequest) ->
             )?)
         };
         let providers = providers(&runtime, &plan.config, plan.workspace.id)?;
-        let run = worker_run::run(
-            prepared.run,
-            permit.clone(),
-            RunServices {
-                processes: prepared.processes,
-                worker: WorkerServices {
-                    control: runtime.control.clone(),
-                    providers,
-                    host: runtime.clone(),
-                    sink: runtime.clone(),
-                    execution: prepared.execution,
-                    journal: prepared.records.child("journal")?,
-                    executions: runtime.executions.clone(),
-                },
-                hooks,
+        let services = RunServices {
+            processes: prepared.processes,
+            worker: WorkerServices {
+                control: runtime.control.clone(),
+                providers,
+                host: runtime.clone(),
+                sink: runtime.clone(),
+                execution: prepared.execution,
+                journal: prepared.records.child("journal")?,
+                executions: runtime.executions.clone(),
             },
-            RunOptions {
-                initial_input: format!(
-                    "Perform the admitted {} phase using the supplied current task context and tools. Submit an honest scoped outcome proposal with observed evidence and blockers.",
-                    plan.request.phase.phase
-                ),
-                max_seconds: plan.request.max_seconds,
-                max_turns: plan.request.max_turns,
-                resume: None,
-            },
-        )?;
-        runtime.track_run(run)
+            hooks,
+        };
+        let options = RunOptions {
+            initial_input: format!(
+                "Perform the admitted {} phase using the supplied current task context and tools. Submit an honest scoped outcome proposal with observed evidence and blockers.",
+                plan.request.phase.phase
+            ),
+            max_seconds: plan.request.max_seconds,
+            max_turns: plan.request.max_turns,
+            resume: None,
+        };
+        Ok(AdmittedWorker {
+            runtime: runtime.clone(),
+            permit: permit.clone(),
+            input: Some((prepared.run, services, options)),
+            transferred: false,
+        })
     })();
-    if let Err(error) = start {
+    if let Err(error) = &start {
         runtime.control.fence(permit.operation_id)?;
         runtime
             .executions
@@ -503,9 +514,69 @@ pub async fn launch(runtime: Arc<RuntimeCoordinator>, request: LaunchRequest) ->
                 json!({"outcome":"failed","error":error,"phase":"worker_start"}),
             )?;
         }
-        return Err(error);
+        return Err(error.clone());
     }
-    Ok(plan.request.operation_id)
+    start
+}
+
+/// One concrete registered admission, consumed once. Abandonment fences before
+/// cancelling owned handles and never clears uncertain native or remote effects.
+pub struct AdmittedWorker {
+    runtime: Arc<RuntimeCoordinator>,
+    permit: Permit,
+    input: Option<(worker_run::PreparedRun, RunServices, RunOptions)>,
+    transferred: bool,
+}
+impl AdmittedWorker {
+    pub fn operation_id(&self) -> Uuid {
+        self.permit.operation_id
+    }
+    pub fn run(mut self) -> Result<Uuid> {
+        let (prepared, services, options) = self
+            .input
+            .take()
+            .ok_or_else(|| Error::new("ownership_conflict", "admitted worker already consumed"))?;
+        let run = worker_run::run(prepared, self.permit.clone(), services, options)?;
+        self.runtime.track_run(run)?;
+        self.transferred = true;
+        Ok(self.permit.operation_id)
+    }
+    pub fn into_trial(mut self) -> Result<worker_run::AdmittedTrial> {
+        let (prepared, services, options) = self
+            .input
+            .take()
+            .ok_or_else(|| Error::new("ownership_conflict", "admitted worker already consumed"))?;
+        let trial =
+            worker_run::AdmittedTrial::new(prepared, self.permit.clone(), services, options)?;
+        self.transferred = true;
+        Ok(trial)
+    }
+}
+impl Drop for AdmittedWorker {
+    fn drop(&mut self) {
+        if !self.transferred && self.runtime.control.fence(self.permit.operation_id).is_ok() {
+            let _ = self
+                .runtime
+                .executions
+                .cancel_fenced(&self.runtime.control, self.permit.operation_id);
+            if self
+                .runtime
+                .executions
+                .observe_exited(self.permit.operation_id)
+                .is_ok()
+                && self
+                    .runtime
+                    .executions
+                    .active_operations()
+                    .is_ok_and(|active| !active.contains(&self.permit.operation_id))
+            {
+                let _ = self.runtime.control.retire_local(
+                    self.permit.operation_id,
+                    json!({"outcome":"not_started","phase":"admitted_worker_abandoned"}),
+                );
+            }
+        }
+    }
 }
 
 fn fresh(runtime: &RuntimeCoordinator, request: &LaunchRequest) -> Result<()> {
@@ -898,7 +969,36 @@ async fn prepare_owned(
                     executions: runtime.executions.clone(),
                 })?,
         ));
-        let owned_source = source_path.clone();
+        let acquired = if plan
+            .request
+            .delivery
+            .as_ref()
+            .and_then(|assignment| assignment.source())
+            .is_none()
+        {
+            Some(Arc::new(
+                acquire_worker_source(
+                    runtime,
+                    plan,
+                    permit,
+                    git_path.as_ref().ok_or_else(|| {
+                        Error::new("source_unavailable", "source Git path is missing")
+                    })?,
+                    processes.clone(),
+                    &records,
+                )
+                .await?,
+            ))
+        } else {
+            None
+        };
+        let owned_source = acquired
+            .as_ref()
+            .map_or_else(|| source_path.clone(), |source| source.root().to_path_buf());
+        let operator_checkout = source_path.clone();
+        if let Some(source) = &acquired {
+            records.write("acquired-source.json",&json!({"source_digest":source.digest()?,"repository":source.repository(),"revision":source.revision(),"operator_checkout":operator_checkout}))?;
+        }
         let root_path = root.path().to_path_buf();
         let revision = source.revision.clone();
         let owned_identity = identity.clone();
@@ -932,6 +1032,7 @@ async fn prepare_owned(
                     permit.clone(),
                     move |git| {
                         if let Some(source)=delivery.as_ref().and_then(|assignment|assignment.source()) {source.verify_for_clone(&git)?;}
+                        if let Some(source)=&acquired { source.verify_for_clone(&git)?; }
                         let mut cloned_reads=Vec::new();
                         if let Some(assignment)=&delivery {
                             if assignment.read_sources().len()>64 {return Err(Error::new("record_limit","delivery assignment read source inventory exceeds limit"));}
@@ -953,17 +1054,15 @@ async fn prepare_owned(
                             ));
                         }
                         if let Some(identity) = owned_identity {
-                            git.prepare_execution_clone(
-                                &owned_source,
-                                &root_path,
-                                &identity,
-                                &revision,
-                            )
-                            .map(|path| (path, None, cloned_reads))
+                            match &acquired {
+                                Some(source)=>git.prepare_acquired_execution_clone(source,&root_path,&identity),
+                                None=>git.prepare_execution_clone(&owned_source,&root_path,&identity,&revision),
+                            }.map(|path| (path, None, cloned_reads))
                         } else if let Some((gate, repository_id, repository_path)) = independent {
-                            let base = git
-                                .exact_revision(&owned_source, &gate.pull_request().base_sha)
-                                .map_err(source_error)?;
+                            let base = match &acquired {
+                                Some(source)=>source.required_revision(&gate.pull_request().base_sha).ok_or_else(||Error::new("source_unavailable","acquired independent review lacks its exact admitted base object"))?,
+                                None=>git.exact_revision(&owned_source,&gate.pull_request().base_sha).map_err(source_error)?,
+                            };
                             let identity = IndependentCloneIdentity {
                                 schema_version: 1,
                                 runtime_id,
@@ -975,15 +1074,12 @@ async fn prepare_owned(
                                 base,
                                 review_identity: gate.review_identity().into(),
                                 repository_path,
-                                operator_checkout: owned_source.clone(),
+                                operator_checkout: operator_checkout.clone(),
                             };
-                            let path = git.prepare_independent_review_clone(
-                                &owned_source,
-                                &root_path,
-                                &identity,
-                            )?;
-                            let proof =
-                                git.observe_independent_review_clone(&root_path, &identity)?;
+                            let (path,proof) = match &acquired {
+                                Some(source)=>(git.prepare_acquired_independent_review_clone(source,&root_path,&identity)?,git.observe_acquired_independent_review_clone(source,&root_path,&identity)?),
+                                None=>(git.prepare_independent_review_clone(&owned_source,&root_path,&identity)?,git.observe_independent_review_clone(&root_path,&identity)?),
+                            };
                             Ok((path, Some(proof), cloned_reads))
                         } else {
                             Err(Error::new(
@@ -1565,6 +1661,132 @@ fn fresh_preparation(runtime: &RuntimeCoordinator, request: &LaunchRequest) -> R
     Ok(())
 }
 
+async fn acquire_worker_source(
+    runtime: &Arc<RuntimeCoordinator>,
+    plan: &Plan,
+    permit: &Permit,
+    git_path: &Path,
+    processes: Arc<crate::process_records::ProcessJournal>,
+    records: &PrivateDir,
+) -> Result<crate::remote_objects::VerifiedObjectSource> {
+    use crate::remote_objects::{
+        AcquisitionServices, AuthorizedObjectRequest, ObjectAcquisition, ObjectLimits,
+    };
+    let selected = plan.source.as_ref().ok_or_else(|| {
+        Error::new(
+            "source_unavailable",
+            "acquisition requires a selected exact source",
+        )
+    })?;
+    let configuration = plan
+        .workspace
+        .repositories
+        .get(&selected.repository)
+        .ok_or_else(|| {
+            Error::new(
+                "scope_violation",
+                "source repository configuration is missing",
+            )
+        })?
+        .clone();
+    let projection = runtime.observations.snapshot()?;
+    let provider = projection
+        .workspaces
+        .get(&plan.workspace.id)
+        .and_then(|workspace| {
+            workspace
+                .repositories
+                .get(&selected.repository.parse::<u64>().ok()?)
+        })
+        .ok_or_else(|| {
+            Error::new(
+                "incompletely_observed",
+                "source acquisition requires current provider repository identity",
+            )
+        })?
+        .identity
+        .clone();
+    let contract = crate::delivery::RepositoryContract {
+        configuration_name: selected.repository.clone(),
+        repository: plan
+            .repository_id
+            .clone()
+            .ok_or_else(|| Error::new("scope_violation", "source repository identity missing"))?,
+        provider,
+        configuration,
+    };
+    let object_request = AuthorizedObjectRequest::for_worker(
+        &contract,
+        selected.revision.clone(),
+        permit,
+        &plan.request.authority,
+    )?;
+    let expected = plan.request.clone();
+    let expected_permit = permit.clone();
+    let expected_contract = contract.clone();
+    let workspace = plan.workspace.id;
+    let current_runtime = runtime.clone();
+    let current = Arc::new(move |request: &AuthorizedObjectRequest| {
+        fresh_preparation(&current_runtime, &expected)?;
+        if request.permit().operation_id != expected_permit.operation_id
+            || request.permit().lease != expected_permit.lease
+            || request.permit().work_key != expected_permit.work_key
+            || request.permit().scope_digest != expected_permit.scope_digest
+            || request.authority_digest() != expected.authority.digest()?
+            || request.contract_digest()? != expected_contract.digest()?
+            || request.repository() != &expected_contract.repository
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "object acquisition differs from original preparation authority",
+            ));
+        }
+        let config = current_runtime.configuration.snapshot()?;
+        let configured = config
+            .workspaces
+            .values()
+            .find(|value| value.id == workspace)
+            .and_then(|workspace| {
+                workspace
+                    .repositories
+                    .get(&expected_contract.configuration_name)
+            })
+            .ok_or_else(|| Error::new("scope_violation", "source repository access was removed"))?;
+        if canonical_digest(1, configured)?
+            != canonical_digest(1, &expected_contract.configuration)?
+        {
+            return Err(Error::new(
+                "stale_config",
+                "source repository contract changed during acquisition",
+            ));
+        }
+        Ok(())
+    });
+    let github = providers(runtime, &plan.config, workspace)?
+        .github
+        .ok_or_else(|| Error::new("missing_secret", "object source provider is unavailable"))?;
+    let mut object_records = None;
+    runtime.control.validate_permit(permit, || {
+        fresh_preparation(runtime, &plan.request)?;
+        object_records = Some(records.child("object-sources")?);
+        Ok(())
+    })?;
+    ObjectAcquisition::new(AcquisitionServices {
+        control: runtime.control.clone(),
+        github,
+        git: Git::from_pinned_executable(git_path)?,
+        records: object_records
+            .ok_or_else(|| Error::new("ownership_conflict", "object records gate did not run"))?,
+        key: runtime.services.key.clone(),
+        processes,
+        executions: runtime.executions.clone(),
+        current,
+        limits: ObjectLimits::default(),
+    })?
+    .acquire(object_request)
+    .await
+}
+
 fn source_error(error: Error) -> Error {
     if error.code == "git_operation_failed" {
         Error::new(
@@ -1584,7 +1806,18 @@ fn scoped_git_gate(
     Arc::new(move |spawn| {
         runtime.control.validate_permit(&permit, || {
             runtime.verify_owner(&permit.lease)?;
-            authority.compare(&runtime.retained_authority(&authority)?)?;
+            if runtime
+                .current_correction_transition(permit.operation_id)?
+                .is_some()
+            {
+                crate::worker::effective_authority(
+                    runtime.as_ref(),
+                    permit.operation_id,
+                    &authority,
+                )?;
+            } else {
+                authority.compare(&runtime.retained_authority(&authority)?)?;
+            }
             spawn()
         })
     })

@@ -736,7 +736,7 @@ impl RuntimeDelivery {
                     satisfied.insert(contract.e2e_child());
                 }
                 let slice = coordinator
-                    .assemble_isolated_slice(
+                    .assemble_remote_isolated_slice(
                         &admission,
                         SliceAssembly {
                             execution_root: execution_root.path(),

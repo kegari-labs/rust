@@ -55,6 +55,65 @@ impl VerifiedProductionBaseline {
         self.observed_at
     }
 }
+/// Complete current native production inventory for an explicit recovery
+/// decision. Divergence is retained as observed state, never promoted to a
+/// successful deployment or an ordinary assembly baseline.
+#[derive(Clone, Debug)]
+pub struct VerifiedRecoveryBaseline {
+    repository: crate::git::RepositoryId,
+    production: Revision,
+    targets: Vec<ProductionTargetBaseline>,
+    contract_digest: String,
+    observed_at: DateTime<Utc>,
+}
+impl VerifiedRecoveryBaseline {
+    pub fn repository(&self) -> &crate::git::RepositoryId {
+        &self.repository
+    }
+    pub fn production(&self) -> &Revision {
+        &self.production
+    }
+    pub fn targets(&self) -> &[ProductionTargetBaseline] {
+        &self.targets
+    }
+    pub fn contract_digest(&self) -> &str {
+        &self.contract_digest
+    }
+    pub fn observed_at(&self) -> DateTime<Utc> {
+        self.observed_at
+    }
+    pub fn coherent(&self) -> bool {
+        self.targets
+            .iter()
+            .all(|target| target.source == self.production)
+    }
+    pub fn observations(&self) -> Vec<crate::release::BaselineObservation> {
+        use crate::release::{BaselineObservation, ResourceKey};
+        let mut observations = vec![BaselineObservation {
+            resource: ResourceKey::Repository {
+                repository: self.repository.clone(),
+            },
+            production_commit: self.production.commit.clone(),
+            deployed_commit: None,
+            artifact_digest: None,
+            provider_record: format!(
+                "github-repository:{}/{}@{}",
+                self.repository.hostname, self.repository.id, self.production.commit
+            ),
+        }];
+        observations.extend(self.targets.iter().map(|target| BaselineObservation {
+            resource: ResourceKey::Target {
+                provider: target.provider.clone(),
+                id: target.target.clone(),
+            },
+            production_commit: self.production.commit.clone(),
+            deployed_commit: Some(target.source.commit.clone()),
+            artifact_digest: Some(target.artifact_digest.clone()),
+            provider_record: target.provider_record.clone(),
+        }));
+        observations
+    }
+}
 #[derive(Clone, Debug)]
 pub struct VerifiedTargetDeployment {
     record: TargetRecord,
@@ -581,6 +640,18 @@ impl ProductionObserver {
         contract: &RepositoryContract,
         step_id: &str,
     ) -> Result<VerifiedTargetDeployment> {
+        let record = self.retained_target_record(contract, step_id)?;
+        self.reobserve_record(contract, &record).await?;
+        Ok(VerifiedTargetDeployment {
+            record,
+            observed_at: Utc::now(),
+        })
+    }
+    fn retained_target_record(
+        &self,
+        contract: &RepositoryContract,
+        step_id: &str,
+    ) -> Result<TargetRecord> {
         step(contract, step_id)?;
         let index: Signed<TargetIndex> = self.records.read(&index_file(contract, step_id)?)
             .map_err(|e| if e.code == "record_missing" { blocked("current target has no retained authenticated deployment proof")
@@ -596,9 +667,51 @@ impl ProductionObserver {
         {
             return Err(blocked("retained target proof/index differ"));
         }
-        self.reobserve_record(contract, &signed.payload).await?;
-        Ok(VerifiedTargetDeployment {
-            record: signed.payload,
+        Ok(signed.payload)
+    }
+    /// Observe every configured environment without hiding a known main/target
+    /// mismatch. Missing or uncertain native proof still fails closed. This is
+    /// read-only and grants no permission to deploy the old source.
+    pub async fn observe_recovery(
+        &self,
+        contract: &RepositoryContract,
+    ) -> Result<VerifiedRecoveryBaseline> {
+        let production = self.main(contract).await?;
+        let mut targets = Vec::new();
+        let mut ids = BTreeSet::new();
+        let mut environments = BTreeSet::new();
+        match &contract.configuration.deployment {
+            Deployment::None(value) if value == "none" => {}
+            Deployment::Steps { steps } if !steps.is_empty() => {
+                for step in steps {
+                    if !ids.insert(step.target_id.clone())
+                        || !environments.insert(environment_id(step)?)
+                    {
+                        return Err(blocked(
+                            "configured recovery target/environment inventory is ambiguous",
+                        ));
+                    }
+                    let record = self.retained_target_record(contract, &step.id)?;
+                    self.reobserve_target_record(contract, &record).await?;
+                    let mut target = record.target;
+                    target.observed_at = Utc::now();
+                    targets.push(target);
+                }
+            }
+            _ => {
+                return Err(blocked(
+                    "recovery requires complete configured deployment behavior",
+                ));
+            }
+        }
+        if self.main(contract).await? != production {
+            return Err(blocked("main changed during recovery baseline observation"));
+        }
+        Ok(VerifiedRecoveryBaseline {
+            repository: contract.repository.clone(),
+            production,
+            targets,
+            contract_digest: contract.digest()?,
             observed_at: Utc::now(),
         })
     }
@@ -934,6 +1047,19 @@ impl ProductionObserver {
         contract: &RepositoryContract,
         record: &TargetRecord,
     ) -> Result<()> {
+        self.reobserve_target_record(contract, record).await?;
+        if self.main(contract).await? != record.challenge.source {
+            return Err(blocked(
+                "current main differs from retained successful deployment source",
+            ));
+        }
+        Ok(())
+    }
+    async fn reobserve_target_record(
+        &self,
+        contract: &RepositoryContract,
+        record: &TargetRecord,
+    ) -> Result<()> {
         self.check_challenge(
             contract,
             &TargetDeploymentChallenge {
@@ -961,10 +1087,9 @@ impl ProductionObserver {
         if facts != record.facts
             || canonical_digest(1, &run)? != canonical_digest(1, &record.run)?
             || canonical_digest(1, &jobs)? != record.jobs_digest
-            || self.main(contract).await? != record.challenge.source
         {
             return Err(blocked(
-                "current deployment/run/main differs from retained successful proof",
+                "current deployment/run differs from retained successful proof",
             ));
         }
         Ok(())

@@ -17,6 +17,10 @@ use std::pin::Pin;
 use std::time::Duration;
 use uuid::Uuid;
 
+#[path = "execution_corrections.rs"]
+mod corrections;
+pub use corrections::{CorrectionExecutionProvenance, EffectiveExecutionBinding};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionEvidenceClass {
@@ -563,6 +567,8 @@ fn executable_role(boundary: &ValidatedIsolation) -> Result<()> {
 #[serde(deny_unknown_fields)]
 pub struct CheckExecutionRecord {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<CorrectionExecutionProvenance>,
     pub binding: ExecutionBinding,
     pub workflow_digest: String,
     pub check_name: String,
@@ -583,6 +589,7 @@ pub struct CheckExecutionRecord {
 pub enum CheckJournalEntry {
     Started {
         binding: Box<ExecutionBinding>,
+        correction: Option<CorrectionExecutionProvenance>,
         workflow_digest: String,
         check_name: String,
         source_digest: String,
@@ -598,13 +605,18 @@ pub enum CheckJournalEntry {
 #[derive(Debug)]
 pub struct VerifiedCheckExecution {
     record: CheckExecutionRecord,
+    effective: Option<EffectiveExecutionBinding>,
 }
 
 #[derive(Debug)]
 pub struct FailedCheckExecution {
     record: CheckExecutionRecord,
+    effective: Option<EffectiveExecutionBinding>,
 }
 impl FailedCheckExecution {
+    pub fn effective_binding(&self) -> Option<&EffectiveExecutionBinding> {
+        self.effective.as_ref()
+    }
     pub fn record(&self) -> &CheckExecutionRecord {
         &self.record
     }
@@ -663,6 +675,9 @@ impl RetainedArtifact {
     }
 }
 impl VerifiedCheckExecution {
+    pub fn effective_binding(&self) -> Option<&EffectiveExecutionBinding> {
+        self.effective.as_ref()
+    }
     pub fn record(&self) -> &CheckExecutionRecord {
         &self.record
     }
@@ -769,6 +784,7 @@ pub struct LocalExecutor<'a> {
 #[derive(Debug)]
 pub struct PreparedCheck {
     binding: ExecutionBinding,
+    effective: Option<EffectiveExecutionBinding>,
     workflow_digest: String,
     check_name: String,
     kind: CheckKind,
@@ -850,9 +866,18 @@ impl LocalExecutor<'_> {
     pub fn prepare_check(
         &self,
         invocation: CheckInvocation<'_>,
+        persist: impl FnMut(&CheckJournalEntry) -> Result<()>,
+    ) -> Result<PreparedCheck> {
+        self.prepare_check_inner(invocation, None, persist)
+    }
+    fn prepare_check_inner(
+        &self,
+        invocation: CheckInvocation<'_>,
+        effective: Option<EffectiveExecutionBinding>,
         mut persist: impl FnMut(&CheckJournalEntry) -> Result<()>,
     ) -> Result<PreparedCheck> {
-        self.preflight(invocation.binding)?;
+        let original = self.check_ownership_binding(invocation.binding, effective.as_ref())?;
+        self.preflight(original)?;
         let checks = match invocation.kind {
             CheckKind::Local => &invocation.workflow.front_matter.checks.local,
             CheckKind::Integrated => &invocation.workflow.front_matter.checks.integrated,
@@ -916,6 +941,10 @@ impl LocalExecutor<'_> {
         let started_at = Utc::now();
         persist(&CheckJournalEntry::Started {
             binding: Box::new(invocation.binding.clone()),
+            correction: effective
+                .as_ref()
+                .map(EffectiveExecutionBinding::provenance)
+                .transpose()?,
             workflow_digest: invocation.workflow.digest.clone(),
             check_name: invocation.name.into(),
             source_digest: before.digest()?,
@@ -923,6 +952,7 @@ impl LocalExecutor<'_> {
         })?;
         Ok(PreparedCheck {
             binding: invocation.binding.clone(),
+            effective,
             workflow_digest: invocation.workflow.digest.clone(),
             check_name: invocation.name.into(),
             kind: invocation.kind,
@@ -937,7 +967,9 @@ impl LocalExecutor<'_> {
     /// Synchronous actual process creation. The host persists sent/unknown and
     /// registers `RunningCheck::cancellation` in the same serialized effect gate.
     pub fn start_check(&self, prepared: PreparedCheck) -> Result<RunningCheck> {
-        self.launch_identity(&prepared.binding)?;
+        let original =
+            self.check_ownership_binding(&prepared.binding, prepared.effective.as_ref())?;
+        self.launch_identity(original)?;
         if self.boundary.evidence_class() != prepared.evidence_class {
             return Err(Error::new(
                 "stale_revision",
@@ -1004,6 +1036,7 @@ impl LocalExecutor<'_> {
         let RunningCheck { prepared, command } = running;
         let PreparedCheck {
             binding,
+            effective,
             workflow_digest,
             check_name,
             kind,
@@ -1025,7 +1058,8 @@ impl LocalExecutor<'_> {
             }
         };
         let after = match self
-            .preflight(&binding)
+            .check_ownership_binding(&binding, effective.as_ref())
+            .and_then(|original| self.preflight(original))
             .and_then(|()| source_snapshot(self.git, self.isolation, &self.limits, &outputs))
         {
             Ok(snapshot) => snapshot,
@@ -1085,7 +1119,11 @@ impl LocalExecutor<'_> {
             ));
         }
         let record = CheckExecutionRecord {
-            schema_version: 1,
+            schema_version: if effective.is_some() { 2 } else { 1 },
+            correction: effective
+                .as_ref()
+                .map(EffectiveExecutionBinding::provenance)
+                .transpose()?,
             binding,
             workflow_digest,
             check_name,
@@ -1108,10 +1146,12 @@ impl LocalExecutor<'_> {
         if !record.successful {
             return Ok(CheckCompletion::Failed(FailedCheckExecution {
                 record: *record,
+                effective,
             }));
         }
         Ok(CheckCompletion::Passed(VerifiedCheckExecution {
             record: *record,
+            effective,
         }))
     }
 }

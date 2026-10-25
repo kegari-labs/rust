@@ -606,7 +606,21 @@ impl crate::worker::OutcomeSink for DeliveryCoordinator {
         let binding = self.worker_binding(outcome.operation_id)?;
         self.host
             .validate_permit(&binding.permit, || (self.current_gate)(&binding.gate))?;
-        if outcome.schema_version != 1
+        let correction_matches = match outcome.schema_version {
+            1 => outcome.processed_correction.is_none(),
+            2 => outcome
+                .processed_correction
+                .as_ref()
+                .is_some_and(|processed| {
+                    processed.transition_digest.is_none()
+                        && processed.watermark == binding.gate.correction_watermark()
+                        && processed.input_digest == outcome.instructions.context_digest
+                }),
+            _ => false,
+        };
+        // Corrected claims require RuntimeCoordinator's verified transition
+        // reader; this direct sink has only the original immutable worker gate.
+        if !correction_matches
             || outcome.proposal_id.is_nil()
             || outcome.runtime_id != binding.permit.lease.runtime_id
             || outcome.work.as_ref() != Some(binding.gate.work())
@@ -1010,13 +1024,16 @@ pub struct ChildPullRequest {
     value: crate::providers::PullRequest,
 }
 impl ChildPullRequest {
+    pub(crate) fn provider(&self) -> &crate::providers::PullRequest {
+        &self.value
+    }
     pub fn number(&self) -> u64 {
         self.value.number
     }
     pub fn url(&self) -> &str {
         &self.value.url
     }
-    fn matches(&self, admission: &DeliveryObservation) -> Result<()> {
+    pub(crate) fn matches(&self, admission: &DeliveryObservation) -> Result<()> {
         if self.work != admission.scope.work || self.revision != admission.scope.revision {
             return Err(Error::new(
                 "stale_result",
@@ -1041,6 +1058,15 @@ pub struct PendingStaging {
     protection: evidence::RepositoryProtection,
 }
 impl PendingStaging {
+    pub(crate) fn matches(&self, admission: &DeliveryObservation) -> Result<()> {
+        if self.work != admission.scope.work || self.revision != admission.scope.revision {
+            return Err(Error::new(
+                "stale_result",
+                "staging receipt belongs to another work generation",
+            ));
+        }
+        Ok(())
+    }
     pub fn receipt(&self) -> &Receipt {
         &self.receipt
     }
@@ -3144,11 +3170,17 @@ impl DeliveryCoordinator {
                 ));
             }
             let artifact = self.retained_delta(delta)?;
+            let retained_source = self.retained_delta_object_source(delta)?;
             self.git.verify_delta(
-                self.retained_git_sources
-                    .get(&contract.repository)
-                    .map(PathBuf::as_path)
-                    .unwrap_or_else(|| Path::new(&contract.configuration.source)),
+                retained_source
+                    .as_ref()
+                    .map(|source| source.root())
+                    .unwrap_or_else(|| {
+                        self.retained_git_sources
+                            .get(&contract.repository)
+                            .map(PathBuf::as_path)
+                            .unwrap_or_else(|| Path::new(&contract.configuration.source))
+                    }),
                 &artifact,
             )?;
         }
@@ -3923,6 +3955,25 @@ impl DeliveryCoordinator {
         admission: &DeliveryAdmission,
         input: SliceAssembly<'_>,
     ) -> Result<IsolatedSlice> {
+        self.assemble_slice_from_source(admission, input, false)
+            .await
+    }
+    /// Native runtime preparation acquires the complete selected remote roots
+    /// into a private substrate before applying the unchanged selected patches.
+    pub async fn assemble_remote_isolated_slice(
+        &self,
+        admission: &DeliveryAdmission,
+        input: SliceAssembly<'_>,
+    ) -> Result<IsolatedSlice> {
+        self.assemble_slice_from_source(admission, input, true)
+            .await
+    }
+    async fn assemble_slice_from_source(
+        &self,
+        admission: &DeliveryAdmission,
+        input: SliceAssembly<'_>,
+        acquire_objects: bool,
+    ) -> Result<IsolatedSlice> {
         self.current(admission, &[DeliveryPhase::CandidateAssembly])?;
         if admission.scope.work.child.is_some()
             || input.required_children.is_empty()
@@ -4042,11 +4093,36 @@ impl DeliveryCoordinator {
             Err(error) => return Err(error),
         }
         let contract = self.contract(admission)?;
-        let source = self
-            .retained_git_sources
-            .get(&contract.repository)
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from(&contract.configuration.source));
+        let acquired = if acquire_objects {
+            let request = crate::remote_objects::AuthorizedObjectRequest::for_candidate(
+                contract,
+                intent.production.clone(),
+                &admission.permit,
+                admission,
+                input.staged,
+                input.production_integrations,
+            )?;
+            Some(
+                self.object_acquisition(
+                    admission,
+                    self.processes.clone(),
+                    self.executions.clone(),
+                )?
+                .acquire(request)
+                .await?,
+            )
+        } else {
+            None
+        };
+        let source = acquired
+            .as_ref()
+            .map(|source| source.root().to_path_buf())
+            .unwrap_or_else(|| {
+                self.retained_git_sources
+                    .get(&contract.repository)
+                    .cloned()
+                    .unwrap_or_else(|| PathBuf::from(&contract.configuration.source))
+            });
         let owned_intent = intent.clone();
         let integrations = input.production_integrations.to_vec();
         let host = self.host.clone();
@@ -4083,6 +4159,9 @@ impl DeliveryCoordinator {
                     self.processes.clone(),
                     admission.permit.clone(),
                     move |git| {
+                        if let Some(source) = &acquired {
+                            source.verify_for_clone(&git)?;
+                        }
                         let order = git.order_deltas(
                             &source,
                             &deltas,
@@ -4483,3 +4562,6 @@ pub use assignment::*;
 
 #[cfg(test)]
 pub(crate) use production_release::tests::observed_merge_for_runtime;
+
+#[path = "delivery_objects.rs"]
+mod objects;

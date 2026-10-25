@@ -36,6 +36,7 @@ pub mod process_records;
 pub mod providers;
 pub mod reconcile;
 pub mod release;
+pub mod remote_objects;
 pub mod runtime;
 mod runtime_actions;
 mod runtime_claims;
@@ -43,6 +44,7 @@ pub mod runtime_delivery;
 pub mod runtime_driver;
 #[cfg(test)]
 mod runtime_fixture;
+pub mod runtime_native;
 pub mod runtime_schedule;
 pub mod runtime_workers;
 pub mod runtime_workflow;

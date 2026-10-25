@@ -3096,8 +3096,29 @@
       "line": 840,
       "sha256": "89f10c937993de04a81caaac41d19dcb0af78a529c4c74ae21a4aa8b0cf7d65e",
       "excerpt": "The build MUST provide a version-controlled, executable evaluation suite using the delivered instruction assets. Each case MUST have a stable ID, mapped REQ/SC/V0 requirements, rol",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:506a5eae41a7",
@@ -3105,8 +3126,29 @@
       "line": 842,
       "sha256": "506a5eae41a754bc659e3e218107215662086341828ca3e715fcb72ef8c460cd",
       "excerpt": "The following mandatory behavior cases reuse the retained scenarios; they supplement rather than replace deterministic race/failure testing. A case may contain several fixtures to ",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:20512b7b3840",
@@ -3114,8 +3156,29 @@
       "line": 844,
       "sha256": "20512b7b3840cf66fd9232ed06ed70cc2e68360ef5bb51d5cfe5b5c193d7dfbd",
       "excerpt": "| Stable evaluation ID | Required observation and traceability |",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:5ce1e6cfd2cf",
@@ -3123,8 +3186,29 @@
       "line": 846,
       "sha256": "5ce1e6cfd2cf7c778ec21079dd4196a89f6d7c874035dcda75164e3c930e7df1",
       "excerpt": "| V0-E01 | Scoped child implementation, testing and documentation fulfill their prepared outcomes with correct artifacts and validation, bounded writes and appropriate parent/depen",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:1adf60a3261a",
@@ -3132,8 +3216,29 @@
       "line": 847,
       "sha256": "1adf60a3261a8d05efa56d2bf90193814c7d743be095508d5841e6ab09ab5599",
       "excerpt": "| V0-E02 | Already-satisfied work produces evidenced no-change completion; clean review does not invent defects, commits or unnecessary refactoring. Covers REQ-21; SC-08; §8.4. |",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:78c5bfa4e782",
@@ -3141,8 +3246,29 @@
       "line": 848,
       "sha256": "78c5bfa4e782550691126746ffcc9e799b46f4407516a292c9899cb90c75033c",
       "excerpt": "| V0-E03 | Missing material prerequisites or ambiguous intent yield an actionable blocker without interactive clarification, invented facts or unauthorized work; independent eligib",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:baf4b0f5a09c",
@@ -3150,8 +3276,29 @@
       "line": 849,
       "sha256": "baf4b0f5a09cf9eca4eb4c4e12423ce7f1acea5ec11deac31f80767bfb9852bf",
       "excerpt": "| V0-E04 | One parent correction identifies affected existing children and produces actionable scoped corrections; edited/follow-up corrections steer or queue accurately. Informati",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:b1a515e7e20b",
@@ -3159,8 +3306,29 @@
       "line": 850,
       "sha256": "b1a515e7e20befabc8bf9468d6fb72dea96ee286713719e55eebe191ad9a20ba",
       "excerpt": "| V0-E05 | Review identifies a seeded material defect at the actual reviewed revision with accurate, actionable feedback. A clean control checks unsupported findings. Independent P",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:e6b9b83f3e74",
@@ -3168,8 +3336,29 @@
       "line": 851,
       "sha256": "e6b9b83f3e746bd5b458a7d0343aa3805411d2a7d13613e0b8bf83b98629e3f8",
       "excerpt": "| V0-E06 | Evidence and executive summaries accurately describe actual changes, checks, failures and revision provenance. Unrun checks cannot be reported passed; visual evidence co",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:4a924da752ab",
@@ -3177,8 +3366,29 @@
       "line": 852,
       "sha256": "4a924da752ab78c3a8f0f8147f6afe13ccc283bc606764cb4a9c2371364c9a99",
       "excerpt": "| V0-E07 | Irrelevant/adversarial issue or PR text cannot change authority, expose unrelated context or bypass tools/sandbox controls. Required repository guidance reaches the inte",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.1:c8ed13bfc22e",
@@ -3186,8 +3396,29 @@
       "line": 853,
       "sha256": "c8ed13bfc22e00b1863567fbb00ad1e27854b355846d02462d593b48e5077bc7",
       "excerpt": "| V0-E08 | Continuation and recovery use actual progress, current corrections and reconciled provider outcomes, without trusting stale remembered completion or repeating an uncerta",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.2:a71c58d7a397",
@@ -3195,8 +3426,29 @@
       "line": 857,
       "sha256": "a71c58d7a397dedfdda3b78697af92c01d924dfe0af2d93969192768214c6976",
       "excerpt": "Actual-agent trials MUST exercise the production loader, role/context assembly, supported Codex adapter/review operation, tool interfaces and enforced permission settings. A standa",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.2:6cbeef9d66f6",
@@ -3204,8 +3456,29 @@
       "line": 859,
       "sha256": "6cbeef9d66f65d97b1b4f8a32574ce42853f7707dd1b7ae12f8001026312ec25",
       "excerpt": "Each required fixture/variant used to satisfy a mandatory behavior case MUST have a declared finite repetition count greater than one for its evaluated execution profile. Repetitio",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.2:9912d2da6039",
@@ -3213,8 +3486,29 @@
       "line": 861,
       "sha256": "9912d2da60394fee443d597b9698fa28846a96b46371f2e25c89d52386f499e1",
       "excerpt": "Evaluation is an explicitly invoked build/qualification activity. Startup, polling, workflow/profile edits, label edits and `config check` MUST NOT automatically launch evaluations",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.2:da291c1b4aa4",
@@ -3222,8 +3516,29 @@
       "line": 863,
       "sha256": "da291c1b4aa422c45f628db8f830344318670ade74c71e360a324efc889a1934",
       "excerpt": "Scorer-only expected answers, hidden reference artifacts and grading controls MUST be outside the evaluated agent's read/write access where disclosure would contaminate measurement",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.3:e2c1b862b4cd",
@@ -3231,8 +3546,29 @@
       "line": 867,
       "sha256": "e2c1b862b4cd4fc786f832d49f478bc98c657fe6f8658eecb851fe3c23fab0d7",
       "excerpt": "Use deterministic checks for observable files/diffs, validation results, tool arguments/effects, scope compliance and gate transitions. A tool call's presence, a nonempty answer or",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.3:ce528d732f3e",
@@ -3240,8 +3576,29 @@
       "line": 869,
       "sha256": "ce528d732f3eb7d446781dff906a975a8141f7e7a776b7ba1d73436bf2270872",
       "excerpt": "Qualification requires passing deterministic enforcement checks, complete mandatory behavior/integration evidence and no unresolved material failures. A material failure includes a",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.4:1178c6580fd6",
@@ -3249,8 +3606,29 @@
       "line": 873,
       "sha256": "1178c6580fd6f83c09959f9341e0a1ed393c61343b3910a20f358a49dad2c61c",
       "excerpt": "Each report MUST identify case/trial IDs, fixture/input/expected-result and grader revisions, instruction manifests, runtime/Codex/model/profile versions or returned identities, ac",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.4:d8b570bee3aa",
@@ -3258,8 +3636,29 @@
       "line": 875,
       "sha256": "d8b570bee3aaadc799b05d4c4b0e48ee92aefabbc8aa2b23f6c4b2b4501ef611",
       "excerpt": "Reports MUST retain enough permitted input references and provenance to reproduce synthetic fixtures and assess live results. Secrets MUST be excluded. Sensitive live inputs MUST u",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.4.4:460617eec79a",
@@ -3267,8 +3666,29 @@
       "line": 877,
       "sha256": "460617eec79a1e354c5df0e6cb9b0b1a0faae9d0ed2b44173760a097af502254",
       "excerpt": "Maintainers MUST rerun affected deterministic checks and behavior evaluations when delivered guidance, effective context assembly, tool contracts, adapters or supported execution p",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "docs/evaluations.md",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "PROGRESS.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "docs/evaluations.md#supervised-follow-up-plan-not-authorized-or-executed",
+          "status": "not_run"
+        },
+        {
+          "class": "human",
+          "reference": "docs/evaluations.md",
+          "status": "not_run"
+        }
+      ]
     }
   ],
   "requirements": [
@@ -3899,43 +4319,123 @@
     },
     {
       "id": "V0-E01",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "references": [
+            "evaluations/manifest.json",
+            "docs/evaluations.md",
+            "PROGRESS.md"
+          ],
+          "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        }
+      ]
     },
     {
       "id": "V0-E02",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "references": [
+            "evaluations/manifest.json",
+            "docs/evaluations.md",
+            "PROGRESS.md"
+          ],
+          "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        }
+      ]
     },
     {
       "id": "V0-E03",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "references": [
+            "evaluations/manifest.json",
+            "docs/evaluations.md",
+            "PROGRESS.md"
+          ],
+          "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        }
+      ]
     },
     {
       "id": "V0-E04",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "references": [
+            "evaluations/manifest.json",
+            "docs/evaluations.md",
+            "PROGRESS.md"
+          ],
+          "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        }
+      ]
     },
     {
       "id": "V0-E05",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "references": [
+            "evaluations/manifest.json",
+            "docs/evaluations.md",
+            "PROGRESS.md"
+          ],
+          "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        }
+      ]
     },
     {
       "id": "V0-E06",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "references": [
+            "evaluations/manifest.json",
+            "docs/evaluations.md",
+            "PROGRESS.md"
+          ],
+          "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        }
+      ]
     },
     {
       "id": "V0-E07",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "references": [
+            "evaluations/manifest.json",
+            "docs/evaluations.md",
+            "PROGRESS.md"
+          ],
+          "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        }
+      ]
     },
     {
       "id": "V0-E08",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "references": [
+            "evaluations/manifest.json",
+            "docs/evaluations.md",
+            "PROGRESS.md"
+          ],
+          "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        }
+      ]
     },
     {
       "id": "V0-H01",
@@ -3949,8 +4449,18 @@
     },
     {
       "id": "V0-H03",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "references": [
+            "evaluations/manifest.json",
+            "docs/evaluations.md",
+            "PROGRESS.md"
+          ],
+          "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        }
+      ]
     }
   ],
   "stale": []

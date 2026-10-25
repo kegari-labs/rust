@@ -11,6 +11,8 @@ use crate::{
 };
 use serde_json::Value;
 use uuid::Uuid;
+#[path = "runtime_claims_transition.rs"]
+mod transition_records;
 
 /// An actual completed authorized proposal recovered from host-owned records.
 /// Its historical authority does not authorize any new provider write: consumers
@@ -18,6 +20,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug)]
 pub struct VerifiedAuthorizedOutcome {
     outcome: WorkerOutcome,
+    original_authority: FreshGate,
     authority: FreshGate,
     admission: Receipt,
     digest: String,
@@ -27,7 +30,18 @@ impl VerifiedAuthorizedOutcome {
         &self.outcome
     }
     pub fn original_authority(&self) -> &FreshGate {
+        &self.original_authority
+    }
+    /// Historical effective authority of this particular completed turn.
+    /// Further effects still require a current native gate.
+    pub fn effective_authority(&self) -> &FreshGate {
         &self.authority
+    }
+    pub fn correction_transition_digest(&self) -> Option<&str> {
+        self.outcome
+            .processed_correction
+            .as_ref()
+            .and_then(|processed| processed.transition_digest.as_deref())
     }
     pub fn run_receipt(&self) -> &Receipt {
         &self.admission
@@ -115,6 +129,8 @@ pub(crate) fn recover_authorized(
     let run = RunReference::from_receipt(&admission)?
         .ok_or_else(|| Error::new("worker_binding", "proposal has no actual worker admission"))?;
     let authority = FreshGate::recover_host_claim(key, &signed, &outcome.fresh_gate_digest)?;
+    let original =
+        transition_records::original_authority(key, claims, &admission, &outcome, &authority)?;
     let contract: Value = records.read("contract.json")?;
     let recovered = recover_session(records, &admission)?.ok_or_else(|| {
         Error::new(
@@ -122,7 +138,7 @@ pub(crate) fn recover_authorized(
             "proposal has no retained provider session",
         )
     })?;
-    if outcome.schema_version != 1
+    if !matches!(outcome.schema_version, 1 | 2)
         || outcome.runtime_id != runtime
         || admission.runtime_id != runtime
         || outcome.operation_id != admission.operation_id
@@ -133,7 +149,8 @@ pub(crate) fn recover_authorized(
         || outcome.work.as_ref() != Some(authority.work())
         || authority.workspace_id() != run.workspace
         || authority.work_key()? != run.phase.work
-        || canonical_digest(1, &authority.work().generation)? != run.phase.generation
+        || canonical_digest(1, &original.work().generation)? != run.phase.generation
+        || outcome.instructions.work_generation != original.work().digest()?
         || outcome.instructions.operation_id != admission.operation_id
         || outcome.instructions.workspace_id != run.workspace
         || outcome.instructions.phase != run.phase.phase
@@ -164,6 +181,9 @@ pub(crate) fn recover_authorized(
         || recovered.state.completed_turns != outcome.session.completed_turns
         || recovered.state.correction_required != outcome.session.correction_required
         || recovered.state.correction_consumed != outcome.session.correction_consumed
+        || outcome.schema_version == 2
+            && (outcome.session.last_completed_turn.as_deref() != Some(&outcome.completed_turn)
+                || recovered.state.last_completed_turn.as_deref() != Some(&outcome.completed_turn))
         || outcome
             .session
             .completed_turns
@@ -185,12 +205,15 @@ pub(crate) fn recover_authorized(
     let journal = PrivateDir::open(&records.path().join("journal"))?;
     let expected = canonical_digest(1, &outcome)?;
     let mut found = false;
+    let mut delivered_at = None;
+    let mut processed_at = None;
+    let mut outcome_at = None;
     // recover_session has already checked complete contiguous bounded history.
     // Recheck this particular pending proposal; a signed model-shaped value
     // alone cannot stand in for an actually recorded completed-turn output.
     let files = journal.records_bounded(65_537)?;
     let mut total = 0usize;
-    for leaf in files {
+    for (index, leaf) in files.into_iter().enumerate() {
         if leaf == "binding.json" {
             continue;
         }
@@ -206,6 +229,29 @@ pub(crate) fn recover_authorized(
                 "proposal journal exceeds its byte bound",
             ));
         }
+        if let Some(processed) = &outcome.processed_correction {
+            if event["kind"] == "correction_delivered"
+                && event["record"]["thread"].as_str() == outcome.session.thread_id.as_deref()
+                && event["record"]["turn"].as_str() == Some(&outcome.completed_turn)
+                && event["record"]["transition"].as_str() == processed.transition_digest.as_deref()
+                && event["record"]["input_digest"].as_str() == Some(&processed.input_digest)
+                && event["record"]["watermark"].as_u64() == Some(processed.watermark)
+            {
+                delivered_at = Some(index);
+            }
+            if event["kind"] == "correction_processed"
+                && event["record"]["thread"].as_str() == outcome.session.thread_id.as_deref()
+                && event["record"]["turn"].as_str() == Some(&outcome.completed_turn)
+                && canonical_digest(1, &event["record"]["processed"])?
+                    == canonical_digest(1, processed)?
+                && processed_at.replace(index).is_some()
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "correction processing journal is duplicated",
+                ));
+            }
+        }
         if event["kind"] == "outcome_pending"
             && event["record"]["proposal_id"].as_str() == Some(&proposal.to_string())
         {
@@ -216,7 +262,20 @@ pub(crate) fn recover_authorized(
                 ));
             }
             found = true;
+            outcome_at = Some(index);
         }
+    }
+    if let Some(processed) = &outcome.processed_correction
+        && processed.watermark > 0
+        && (processed_at.is_none()
+            || processed_at >= outcome_at
+            || processed.transition_digest.is_some()
+                && (delivered_at.is_none() || delivered_at >= processed_at))
+    {
+        return Err(Error::new(
+            "worker_binding",
+            "corrected outcome lacks ordered actual turn delivery and consumption",
+        ));
     }
     if !found {
         return Err(Error::new(
@@ -226,6 +285,7 @@ pub(crate) fn recover_authorized(
     }
     Ok(VerifiedAuthorizedOutcome {
         outcome,
+        original_authority: original,
         authority,
         admission,
         digest: signed.digest()?,
@@ -281,7 +341,10 @@ pub(crate) fn proposal_ids(records: &PrivateDir, admission: &Receipt) -> Result<
 }
 
 #[cfg(test)]
-pub(crate) use tests::{test_coordination_fixture, test_fixture, test_fixture_with_claim};
+pub(crate) use tests::{
+    test_coordination_fixture, test_coordination_fixture_with_proposal, test_fixture,
+    test_fixture_with_claim,
+};
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +555,7 @@ mod tests {
                 runtime_id: id(1),
                 operation_id: id(7),
                 proposal_id: id(8),
+                processed_correction: None,
                 completed_turn: "fixture-turn".into(),
                 work: Some(work),
                 independent_review: None,
@@ -554,6 +618,154 @@ mod tests {
             )
         }
     }
+    async fn corrected_fixture() -> (tempfile::TempDir, Fixture) {
+        let (native, transition) = crate::corrections::test_transition_fixture().await;
+        let original = transition.original_authority();
+        let mut fixture = Fixture::with(
+            AgentRole::Testing,
+            Some(original.work().clone()),
+            json!({"fixture":true}),
+            None,
+        );
+        fixture.authority = transition.current_authority().clone();
+        fixture.outcome.schema_version = 2;
+        fixture.outcome.work = Some(transition.effective_work().clone());
+        fixture.outcome.fresh_gate_digest = fixture.authority.digest().unwrap();
+        fixture.outcome.instructions.workspace_id = original.workspace_id();
+        fixture.outcome.instructions.profile = original.profile().clone();
+        fixture.outcome.instructions.workflow_digest = original.workflow_digest().into();
+        fixture.outcome.instruction_digest = canonical_digest(
+            crate::instructions::ASSEMBLY_SCHEMA,
+            &fixture.outcome.instructions,
+        )
+        .unwrap();
+        fixture.outcome.session.binding.instruction_digest =
+            fixture.outcome.instruction_digest.clone();
+        fixture.outcome.session.binding.profile = CodexProfile {
+            model: original.profile().model.clone(),
+            reasoning: original.profile().reasoning.clone(),
+            speed: "standard".into(),
+        };
+        fixture.outcome.session.correction_required = transition.watermark();
+        fixture.outcome.session.correction_consumed = transition.watermark();
+        fixture.outcome.session.last_completed_turn = Some(fixture.outcome.completed_turn.clone());
+        fixture.outcome.processed_correction = Some(crate::worker::ProcessedCorrection {
+            watermark: transition.watermark(),
+            input_digest: transition.input_digest(),
+            transition_digest: Some(transition.digest().into()),
+        });
+        let mut run = RunReference::from_receipt(&fixture.admission)
+            .unwrap()
+            .unwrap();
+        run.workspace = original.workspace_id();
+        run.profile_digest = canonical_digest(1, original.profile()).unwrap();
+        run.instruction_digest = fixture.outcome.instruction_digest.clone();
+        fixture
+            .admission
+            .expected
+            .insert("run".into(), serde_json::to_string(&run).unwrap());
+        let mut contract: Value = fixture.records.read("contract.json").unwrap();
+        contract["instructions"] = serde_json::to_value(&fixture.outcome.instructions).unwrap();
+        fixture.records.write("contract.json", &contract).unwrap();
+        let journal = fixture.records.child("journal").unwrap();
+        journal.write("binding.json", &json!({"schema_version":1,"scope_digest":fixture.admission.expected["scope"],"instruction_digest":fixture.outcome.instruction_digest,"tool_contract_digest":fixture.outcome.tool_contract_digest})).unwrap();
+        journal.write("event-00000000.json", &json!({"kind":"session","record":{"state":fixture.outcome.session,"pending_method":null}})).unwrap();
+        fixture.save();
+        journal.write("event-00000001.json", &json!({"kind":"correction_delivered","record":{"thread":fixture.outcome.session.thread_id,"turn":fixture.outcome.completed_turn,"transition":transition.digest(),"input_digest":transition.input_digest(),"watermark":transition.watermark()}})).unwrap();
+        journal.write("event-00000002.json", &json!({"kind":"correction_processed","record":{"thread":fixture.outcome.session.thread_id,"turn":fixture.outcome.completed_turn,"processed":fixture.outcome.processed_correction}})).unwrap();
+        journal
+            .write(
+                "event-00000003.json",
+                &json!({"kind":"outcome_pending","record":fixture.outcome}),
+            )
+            .unwrap();
+        let record = json!({"schema_version":1,"runtime":fixture.admission.runtime_id,"operation":fixture.admission.operation_id,"work":fixture.admission.canonical_targets[0],"scope":fixture.admission.expected["scope"],"instructions":fixture.outcome.instruction_digest,"tool_contract":fixture.outcome.tool_contract_digest,"transition":transition.record().unwrap()});
+        let signed = fixture
+            .key
+            .sign("worker_correction_transition", &record)
+            .unwrap();
+        fixture
+            .claims
+            .write_bytes(
+                &format!(
+                    "worker-transition-{}-{}.json",
+                    fixture.admission.operation_id,
+                    transition.watermark()
+                ),
+                &serde_json::to_vec(&signed).unwrap(),
+            )
+            .unwrap();
+        (native, fixture)
+    }
+    fn recover_corrected(fixture: &Fixture) -> Result<VerifiedAuthorizedOutcome> {
+        recover_authorized(
+            &fixture.key,
+            &fixture.claims,
+            &fixture.records,
+            id(1),
+            fixture.admission.clone(),
+            fixture.outcome.proposal_id,
+        )
+    }
+    #[tokio::test]
+    async fn corrected_claim_recovers_original_assembly_and_effective_native_history() {
+        let (_native, fixture) = corrected_fixture().await;
+        let verified = recover_corrected(&fixture).unwrap();
+        assert_ne!(
+            verified.original_authority().work(),
+            verified.effective_authority().work()
+        );
+        assert_eq!(
+            verified.original_authority().work().digest().unwrap(),
+            verified.outcome().instructions.work_generation
+        );
+        assert_eq!(
+            Some(verified.effective_authority().work()),
+            verified.outcome().work.as_ref()
+        );
+        assert_eq!(
+            verified.correction_transition_digest(),
+            fixture
+                .outcome
+                .processed_correction
+                .as_ref()
+                .unwrap()
+                .transition_digest
+                .as_deref()
+        );
+        let leaf = format!(
+            "worker-transition-{}-{}.json",
+            fixture.admission.operation_id,
+            fixture.authority.correction_watermark()
+        );
+        std::fs::remove_file(fixture.claims.path().join(&leaf)).unwrap();
+        assert_eq!(
+            recover_corrected(&fixture).unwrap_err().code,
+            "worker_binding"
+        );
+    }
+    #[tokio::test]
+    async fn corrected_claim_rejects_unprocessed_or_reordered_turn_evidence() {
+        let (_native, fixture) = corrected_fixture().await;
+        let journal = fixture.records.child("journal").unwrap();
+        let processed: Value = journal.read("event-00000002.json").unwrap();
+        let outcome: Value = journal.read("event-00000003.json").unwrap();
+        journal.write("event-00000002.json", &outcome).unwrap();
+        journal.write("event-00000003.json", &processed).unwrap();
+        assert_eq!(
+            recover_corrected(&fixture).unwrap_err().code,
+            "worker_binding"
+        );
+        journal.write("event-00000002.json", &processed).unwrap();
+        journal.write("event-00000003.json", &outcome).unwrap();
+        let mut delivered: Value = journal.read("event-00000001.json").unwrap();
+        delivered["record"]["turn"] = json!("other-turn");
+        journal.write("event-00000001.json", &delivered).unwrap();
+        assert_eq!(
+            recover_corrected(&fixture).unwrap_err().code,
+            "worker_binding"
+        );
+    }
     /// Protected deterministic host fixture, not actual provider/process evidence.
     /// It goes through the production signature/contract/journal recovery path.
     pub(crate) fn test_fixture(
@@ -607,6 +819,7 @@ mod tests {
             elapsed_ms: 1,
             hook_error: None,
             checks: vec![],
+            failed_checks: vec![],
             local_exit_confirmed: true,
         });
         (fixture._temp, verified, completion)
@@ -616,7 +829,16 @@ mod tests {
         claim: Value,
         account: &str,
     ) -> (tempfile::TempDir, VerifiedCoordinationOutcome) {
+        test_coordination_fixture_with_proposal(authority, claim, account, id(8))
+    }
+    pub(crate) fn test_coordination_fixture_with_proposal(
+        authority: FreshGate,
+        claim: Value,
+        account: &str,
+        proposal: Uuid,
+    ) -> (tempfile::TempDir, VerifiedCoordinationOutcome) {
         let mut fixture = Fixture::new();
+        fixture.outcome.proposal_id = proposal;
         fixture.outcome.work = Some(authority.work().clone());
         fixture.outcome.fresh_gate_digest = authority.digest().unwrap();
         fixture.outcome.claim = claim;

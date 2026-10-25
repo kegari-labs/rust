@@ -1,10 +1,17 @@
 # Behavior evaluation suite
 
-The executable runner and 28 versioned variants are implemented. Deterministic
+The bounded trial loop, report CLI and 28 versioned variants are implemented. Deterministic
 replay tests validate the graders and boundaries; they are **not actual-agent
 qualification**. No live trial has been launched. The profile slot is unresolved,
-the real runtime `TrialHost`/authority wiring is still required, OS sandbox and
+the concrete fixture/native context and live authority composition is still
+required, OS sandbox and
 provider compatibility remain unqualified, and human review remains pending.
+
+Suite version 2 uses grader `kegari-observable-v2`. It binds the complete trial
+declaration and prepared context, rejects undeclared host-metadata hints and
+counts nested `.git` paths in source/scope grading. Only the repository root's
+Git administration is checked separately. Earlier grader results remain
+historical evidence and need regrading before comparison under these rules.
 
 `evaluations/manifest.json` declares all V0-E01–08 variants, their REQ/SC/V0
 mappings, roles, context, initial state, outcomes, artifacts, prohibited effects,
@@ -41,7 +48,17 @@ regrading comparisons; changed rubrics do not preserve comparability by default.
 
 `prepare_fixture` refuses an existing destination, copies bounded regular files and preserves their modes,
 rejects hardlinks/symlinks and verifies fixture/seed digests. It never clears a
-previous attempt. `verify_grader_boundary` checks actual validated filesystem
+previous attempt. Its private preparation digest binds the input, declared prior
+state, initial file snapshot and all prepared paths; replacing any of these
+invalidates assembly, live preflight and grading. The schema-1 context is exactly
+the fixture input with `timeline` removed and four canonical host fields added:
+`workspace: {id, name: "synthetic"}`, `operation: {id}`, the actual bound `profile`
+and `phase`. IDs must be the real admitted identities. Extra nested metadata and
+undeclared guidance are rejected, including hints placed inside `workspace` or
+`operation`. A native fixture mapping needs an explicit versioned declaration;
+these comparisons must not be relaxed to make a native context pass.
+
+`verify_grader_boundary` checks actual validated filesystem
 grants, repository, scratch, private scorer and report roots. The scorer and
 report store must be explicit deny roots. The checked-in tests attempt grant
 expansion, file aliasing and grader access. These checks verify configured
@@ -69,7 +86,11 @@ checks and profile edits must not call it. The API is in `src/evaluation.rs`:
    including schemas and descriptions. Its immutable definitions and digest are
    tied to the exact assembly; the live runner uses and records only that bound
    contract. Same-named schema/description changes require a new binding and
-   new trial provenance. Supply `TrialOperation` and the production `TrialHost` implementation. This
+   new trial provenance. The shared production path is
+   `runtime_workers::prepare_admitted`, followed by consuming the returned worker
+   with `into_trial`. The resulting opaque `AdmittedTrial::operation` provides
+   the actual scoped worker, provider launch capability and hook lifecycle;
+   callers cannot supply an unjournaled subprocess. The production `TrialHost`
    trait extends the same `codex::ToolBroker` used by product execution. Its
    `observe` projection must come from verified host receipts, actual gates,
    checks and artifacts. Worker claims belong only in `AgentSummary`. Its
@@ -84,7 +105,9 @@ checks and profile edits must not call it. The API is in `src/evaluation.rs`:
    and rechecks authority at boundaries and tool calls. Its teardown must stop
    owned workers on cancellation; it cannot clear unresolved remote effects.
    No paid fallback or remote mutation authority is implied.
-6. `run_live_trial` verifies the pinned executable, account, catalog/profile,
+6. `run_live_trial` first checks the complete variant against the suite declaration
+   and the actual worker's entire bound context against the sealed fixture. It
+   verifies the pinned executable, account, catalog/profile,
    rate-limit observation and concrete permission configuration, then uses
    real `RpcClient::start_thread`, native `review/start` for review roles, and
    bounded turn/event pumping. Declared edited/follow-up corrections use
@@ -93,6 +116,9 @@ checks and profile edits must not call it. The API is in `src/evaluation.rs`:
    correction watermark does. The timeout terminates the owned adapter and
    marks outstanding effects uncertain. The suite deadline also bounds a
    hung host executor and records all remaining variants as skipped.
+   A successful actual lifecycle can then yield `AdmittedTrial::finish` and
+   `RuntimeCoordinator::finish_trial`; these consume the checked completion and
+   do not reconstruct a permit or use a replay trace as production evidence.
 7. Grade actual source snapshots and runtime observations, append the report,
    and preserve every failed/blocked/interrupted attempt. Grading compares
    exact changed paths and modes, required file contents, check status/receipt and

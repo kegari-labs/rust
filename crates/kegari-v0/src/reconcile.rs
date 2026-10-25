@@ -1625,6 +1625,32 @@ impl FreshGate {
                 "pending host claim envelope is not the exact versioned schema",
             ));
         }
+        Self::recover_record(
+            payload.get("authority").cloned().ok_or_else(|| {
+                Error::new(
+                    "invalid_attestation",
+                    "pending host claim lacks authority provenance",
+                )
+            })?,
+            expected_digest,
+        )
+    }
+    pub(crate) fn recover_correction_record(
+        key: &AttestationKey,
+        signed: &Signed<serde_json::Value>,
+        field: &str,
+        expected_digest: &str,
+    ) -> Result<Self> {
+        key.verify("worker_correction_transition", signed)?;
+        if !matches!(field, "original" | "current") {
+            return Err(Error::new(
+                "invalid_attestation",
+                "unknown correction authority field",
+            ));
+        }
+        Self::recover_record(signed.payload["transition"][field].clone(), expected_digest)
+    }
+    fn recover_record(value: serde_json::Value, expected_digest: &str) -> Result<Self> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct StoredGate {
@@ -1645,19 +1671,12 @@ impl FreshGate {
             purpose: String,
             observed_at: DateTime<Utc>,
         }
-        let stored: StoredGate =
-            serde_json::from_value(payload.get("authority").cloned().ok_or_else(|| {
-                Error::new(
-                    "invalid_attestation",
-                    "legacy pending host claim lacks authority provenance",
-                )
-            })?)
-            .map_err(|_| {
-                Error::new(
-                    "invalid_attestation",
-                    "stored host authority schema is invalid",
-                )
-            })?;
+        let stored: StoredGate = serde_json::from_value(value).map_err(|_| {
+            Error::new(
+                "invalid_attestation",
+                "stored host authority schema is invalid",
+            )
+        })?;
         let purpose = match stored.purpose.as_str() {
             "new_operation" => GatePurpose::NewOperation,
             "drain_existing" => GatePurpose::DrainExisting,
@@ -2075,6 +2094,7 @@ pub struct ParentDelivery {
     parent: Option<VerifiedParent>,
     acceptance: Option<VerifiedAcceptance>,
     release: Option<crate::release::VerifiedReleaseEligibility>,
+    no_release: Option<crate::evidence::VerifiedNoReleaseRequired>,
 }
 impl ParentDelivery {
     pub fn verified_parent(&self) -> Option<&VerifiedParent> {
@@ -2088,6 +2108,29 @@ impl ParentDelivery {
     }
     pub fn release_eligibility(&self) -> Option<&crate::release::VerifiedReleaseEligibility> {
         self.release.as_ref()
+    }
+    pub fn no_release_required(&self) -> Option<&crate::evidence::VerifiedNoReleaseRequired> {
+        self.no_release.as_ref()
+    }
+    pub(crate) fn record_no_release_required(
+        &mut self,
+        proof: crate::evidence::VerifiedNoReleaseRequired,
+    ) -> Result<()> {
+        let record = proof.record();
+        if self.parent.as_ref().is_none_or(|parent| {
+            parent.token() != record.evidence_token || parent.manifest().work != record.work
+        }) || self.acceptance.as_ref().is_none_or(|acceptance| {
+            acceptance.digest() != record.acceptance_digest
+                || acceptance.acceptance().work != record.work
+        }) {
+            return Err(Error::new(
+                "stale_result",
+                "already-production outcome differs from current accepted evidence",
+            ));
+        }
+        self.no_release = Some(proof);
+        self.release = None;
+        Ok(())
     }
     pub fn child(&mut self, child: VerifiedChild) -> Result<()> {
         let id = child
@@ -2105,6 +2148,7 @@ impl ParentDelivery {
         self.parent = Some(parent);
         self.acceptance = None;
         self.release = None;
+        self.no_release = None;
     }
     pub fn acceptance(&mut self, acceptance: VerifiedAcceptance) -> Result<()> {
         let parent = self.parent.as_ref().ok_or_else(|| {
@@ -2123,6 +2167,7 @@ impl ParentDelivery {
         }
         self.acceptance = Some(acceptance);
         self.release = None;
+        self.no_release = None;
         Ok(())
     }
     pub(crate) fn require_release_selection(
@@ -2460,7 +2505,17 @@ impl RuntimeProjection {
                         "Complete a fresh authoritative reconciliation",
                     ));
                 }
-                if !running_intent && (verified.is_none() || accepted.is_some()) {
+                let released = input.history.iter().any(|h| {
+                    h.parent == parent.key
+                        && parent.work.as_ref().is_some_and(|w| {
+                            w.generation == h.generation
+                                && input
+                                    .outcomes
+                                    .parent_outcome(&parent.key, &w.generation)
+                                    .is_some()
+                        })
+                });
+                if !running_intent && !released && (verified.is_none() || accepted.is_some()) {
                     reasons.push(blocker(
                         &parent.key,
                         "runtime_not_running",
@@ -2474,13 +2529,6 @@ impl RuntimeProjection {
                     .filter(|a| a.parent == parent.key)
                     .cloned()
                     .collect();
-                let released = input.history.iter().any(|h| {
-                    h.parent == parent.key
-                        && parent
-                            .work
-                            .as_ref()
-                            .is_some_and(|w| w.generation == h.generation)
-                });
                 if released && activities.is_empty() && reasons.is_empty() {
                     continue;
                 }
@@ -2651,6 +2699,59 @@ fn next_action(overview: &Overview) -> NextAction {
 }
 
 impl ParentProjection {
+    /// A correction may replace work only through verified native routing. This
+    /// is not a new admission gate and never changes retained execution choices.
+    pub(crate) fn retain_corrected_gate(
+        &self,
+        admitted: &FreshGate,
+        routes: &crate::corrections::VerifiedCorrectionRoutes,
+        outcomes: &DependencyOutcomes,
+        now: DateTime<Utc>,
+        age: Duration,
+    ) -> Result<FreshGate> {
+        if admitted.work.child.is_none() || admitted.purpose == GatePurpose::Coordination {
+            return Err(Error::new(
+                "scope_violation",
+                "incremental corrections require an admitted child",
+            ));
+        }
+        let mut parent = self.clone();
+        parent.blockers.retain(|blocker| blocker.code != "excluded");
+        let child = parent
+            .children
+            .get_mut(&admitted.work.child.unwrap())
+            .ok_or_else(|| Error::new("scope_violation", "corrected child disappeared"))?;
+        child.profile = Some(admitted.profile.clone());
+        child.blockers.retain(|blocker| {
+            blocker.next_action
+                != "Assign exactly one configured tool, model, reasoning and speed label"
+        });
+        let mut current = parent.fresh_gate(
+            admitted.work.child,
+            GatePurpose::DrainExisting,
+            outcomes,
+            now,
+            age,
+        )?;
+        if current.workspace_id != admitted.workspace_id
+            || current.child_scope_digest != admitted.child_scope_digest
+            || current.required_children != admitted.required_children
+            || current.dependency_digest != admitted.dependency_digest
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "correction changed the admitted scope, child inventory or dependencies",
+            ));
+        }
+        current.config_revision = admitted.config_revision.clone();
+        current.drain_config_revision = admitted.drain_config_revision.clone();
+        current.workflow_digest = admitted.workflow_digest.clone();
+        current.profile = admitted.profile.clone();
+        current.profile_digest = admitted.profile_digest.clone();
+        current.purpose = admitted.purpose;
+        routes.validate_successor(admitted, &current, &self.source_digest, now, age)?;
+        Ok(current)
+    }
     /// Used only by the active snapshot registry after current connection/path/
     /// repository/allowlist checks. It cannot create a new admission snapshot.
     pub(crate) fn retain_active_gate(
@@ -2712,13 +2813,8 @@ impl IndependentReviewGate {
         if current.workspace_id != self.workspace_id
             || current.repository_id != self.repository_id
             || current.review_identity != self.review_identity
-            || current.pull_request.id != self.pull_request.id
-            || current.pull_request.number != self.pull_request.number
-            || current.pull_request.author_id != self.pull_request.author_id
-            || current.pull_request.head_sha != self.pull_request.head_sha
-            || current.pull_request.base_sha != self.pull_request.base_sha
-            || current.pull_request.state != self.pull_request.state
-            || current.pull_request.draft != self.pull_request.draft
+            || canonical_digest(1, &current.pull_request)?
+                != canonical_digest(1, &self.pull_request)?
         {
             return Err(Error::new(
                 "stale_result",

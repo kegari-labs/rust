@@ -20,12 +20,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeSet, sync::Mutex};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[path = "runtime_delivery_no_release.rs"]
+mod no_release;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PublicationRef {
     id: Uuid,
     body_digest: String,
     writer: Uuid,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ManualRole {
+    Release,
+    Recover,
+}
+impl ManualRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Release => "release",
+            Self::Recover => "recover",
+        }
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,10 +57,14 @@ struct AttemptRecord {
     acceptance_publication: PublicationRef,
     manual_intent: Option<Uuid>,
     manual_actor: Option<crate::control::Actor>,
+    manual_role: Option<ManualRole>,
     acceptance_actor: Uuid,
+    #[serde(with = "repository_operations")]
     preparations: BTreeMap<RepositoryId, Uuid>,
     attempt: ReleaseAttempt,
     admission_confirmed: bool,
+    admission_operation: Uuid,
+    recovery_receipts: BTreeMap<Uuid, String>,
     local_retired: bool,
     pending_receipts: BTreeMap<Uuid, String>,
 }
@@ -55,6 +76,7 @@ struct PreparationRef {
     work: WorkIdentity,
     evidence_token: String,
     operation: Uuid,
+    #[serde(with = "repository_operations")]
     repositories: BTreeMap<RepositoryId, Uuid>,
 }
 struct RepoPreparation {
@@ -84,7 +106,52 @@ struct LiveRelease {
 struct ReleaseState {
     restored: bool,
     attempts: BTreeMap<Uuid, AttemptRecord>,
+    no_release: BTreeMap<Uuid, evidence::VerifiedNoReleaseRequired>,
     queue: ReleaseQueue,
+}
+// JSON object keys cannot encode RepositoryId structs. Preserve canonical
+// repository ordering as strict tuple arrays in authenticated records.
+mod repository_operations {
+    use super::*;
+    use serde::{Deserializer, Serializer, de::Error as _, ser::Error as _};
+    pub fn serialize<S: Serializer>(
+        map: &BTreeMap<RepositoryId, Uuid>,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        if map.len() > 1024 {
+            return Err(S::Error::custom("too many repository operations"));
+        }
+        for (repository, operation) in map {
+            repository.validate().map_err(S::Error::custom)?;
+            if operation.is_nil() {
+                return Err(S::Error::custom("nil repository operation"));
+            }
+        }
+        map.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<BTreeMap<RepositoryId, Uuid>, D::Error> {
+        let entries = Vec::<(RepositoryId, Uuid)>::deserialize(deserializer)?;
+        if entries.len() > 1024 {
+            return Err(D::Error::custom("too many repository operations"));
+        }
+        let mut result = BTreeMap::new();
+        for (repository, operation) in entries {
+            repository.validate().map_err(D::Error::custom)?;
+            if operation.is_nil()
+                || result
+                    .last_key_value()
+                    .is_some_and(|(prior, _)| prior >= &repository)
+            {
+                return Err(D::Error::custom(
+                    "repository operations must be unique, sorted and nonnil",
+                ));
+            }
+            result.insert(repository, operation);
+        }
+        Ok(result)
+    }
 }
 type PreparationKey = (Uuid, Uuid, String);
 fn preparation_key(workspace: Uuid, work: &WorkIdentity, token: &str) -> PreparationKey {
@@ -111,6 +178,27 @@ fn preparation_leaf(workspace: Uuid, token: &str) -> Result<String> {
         token.rsplit(':').next().unwrap()
     ))
 }
+fn admission_scope(receipt: &crate::control::Receipt, plan: &ReleasePlan) -> Result<String> {
+    if receipt.operation_id == plan.operation_id {
+        return plan.digest();
+    }
+    let reference =
+        crate::control::ReleaseResumeReference::from_receipt(receipt)?.ok_or_else(|| {
+            Error::new(
+                "ownership_conflict",
+                "release admission has no exact resume lineage",
+            )
+        })?;
+    if reference.plan_operation_id() != plan.operation_id
+        || reference.plan_digest() != plan.digest()?
+    {
+        return Err(Error::new(
+            "ownership_conflict",
+            "resumed admission belongs to another plan",
+        ));
+    }
+    reference.scope_digest()
+}
 fn issue(record: &AttemptRecord) -> Result<IssueKey> {
     IssueKey::new(
         &record.work.linear_endpoint,
@@ -118,8 +206,27 @@ fn issue(record: &AttemptRecord) -> Result<IssueKey> {
         record.work.parent,
     )
 }
-fn rebuild_queue(attempts: &BTreeMap<Uuid, AttemptRecord>) -> Result<ReleaseQueue> {
+// A held plan cannot dispatch another step. Once every owned effect is known,
+// its finite local claim can retire while the resource hold remains intact.
+fn ready_for_local_retirement(record: &AttemptRecord) -> bool {
+    record.pending_receipts.is_empty()
+        && !record.attempt.has_unknown()
+        && (record.attempt.completed()
+            || record.attempt.resolved
+            || record.attempt.abandoned
+            || record.attempt.hold_reason.is_some())
+}
+fn rebuild_queue(
+    attempts: &BTreeMap<Uuid, AttemptRecord>,
+    no_release: &BTreeMap<Uuid, evidence::VerifiedNoReleaseRequired>,
+) -> Result<ReleaseQueue> {
     let mut queue = ReleaseQueue::default();
+    // These proofs were admitted against the then-current queue and reobserved
+    // from native publications. Reconstruct history before later owners/holds;
+    // recording history never releases a resource or consumes spacing.
+    for proof in no_release.values() {
+        queue.record_no_release_required(proof)?;
+    }
     // Resource locks and unresolved holds are reconstructed before eligibility
     // is considered. A completed old release remains spacing/dependency history.
     for record in attempts.values() {
@@ -195,10 +302,11 @@ impl RuntimeDelivery {
             }
             record.attempt.validate_recovered()?;
             if record.admission_confirmed {
-                let receipt = self.runtime.control.operation(plan.operation_id)?;
+                let receipt = self.runtime.control.operation(record.admission_operation)?;
+                let expected_scope = admission_scope(&receipt, plan)?;
                 if receipt.kind != "admission"
                     || receipt.runtime_id != record.runtime
-                    || receipt.expected.get("scope") != Some(&plan.digest()?)
+                    || receipt.expected.get("scope") != Some(&expected_scope)
                     || receipt.owner_generation != record.attempt.owner_generation
                     || receipt.canonical_targets != vec![issue(&record)?.identity()?]
                 {
@@ -217,7 +325,7 @@ impl RuntimeDelivery {
             }
             records.insert(record.attempt.plan.operation_id, record);
         }
-        state.queue = rebuild_queue(&records)?;
+        state.queue = rebuild_queue(&records, &state.no_release)?;
         state.attempts = records;
         state.restored = true;
         Ok(())
@@ -237,7 +345,7 @@ impl RuntimeDelivery {
             record.attempt.validate_recovered()?;
             let mut proposed = state.attempts.clone();
             proposed.insert(operation, record.clone());
-            let queue = rebuild_queue(&proposed)?;
+            let queue = rebuild_queue(&proposed, &state.no_release)?;
             self.save_release(&record)?;
             state.attempts = proposed;
             state.queue = queue;
@@ -385,12 +493,19 @@ impl RuntimeDelivery {
                 "release acceptance actor was removed",
             ));
         }
+        if record.manual_actor.is_some() != record.manual_role.is_some() {
+            return Err(Error::new(
+                "record_corrupt",
+                "release command role is missing",
+            ));
+        }
         if let Some(actor) = &record.manual_actor {
-            crate::app::verify_current_actor(&config, actor, "release")?;
+            let role = record.manual_role.unwrap().as_str();
+            crate::app::verify_current_actor(&config, actor, role)?;
             runtime
                 .configuration
                 .authority_fences()?
-                .check_actor(actor, "release")?;
+                .check_actor(actor, role)?;
         }
         let parent = if let Some(expected) = active {
             runtime
@@ -1119,6 +1234,7 @@ impl RuntimeDelivery {
                 && r.record.payload.config_revision
                     == workspace.configuration.revision().unwrap_or_default()
         });
+        let successor = self.successor_intent(&plan, gate.work(), &acceptance)?;
         if let Some(manual) = &manual {
             crate::app::verify_current_actor(
                 &workspace.configuration,
@@ -1152,8 +1268,11 @@ impl RuntimeDelivery {
             repository_policy_usable: true,
             credentials_usable: true,
             manual_mode: selected.release.mode == ReleaseMode::Manual,
-            explicit_manual_request: manual.as_ref().map(|r| r.request_id()),
-            actor_may_release: manual.is_some(),
+            explicit_manual_request: successor
+                .as_ref()
+                .map(|s| s.command())
+                .or_else(|| manual.as_ref().map(|r| r.request_id())),
+            actor_may_release: successor.is_some() || manual.is_some(),
             owner_generation: lease.owner_generation,
             control_generation: snapshot.intent.generation,
             required_step_ids: plan.steps.iter().map(|s| s.id.clone()).collect(),
@@ -1170,7 +1289,7 @@ impl RuntimeDelivery {
         };
         self.runtime
             .retain_release_eligibility(&parent.key, eligibility.clone())?;
-        if selected.release.mode == ReleaseMode::Manual && manual.is_none() {
+        if selected.release.mode == ReleaseMode::Manual && manual.is_none() && successor.is_none() {
             return Ok(());
         }
         let (parent_publication, acceptance_publication) = self.publication_refs(
@@ -1220,6 +1339,16 @@ impl RuntimeDelivery {
                         selected_digest,
                         selected_at,
                     )?;
+                if successor.is_some()
+                    && self
+                        .successor_intent(&plan, gate.work(), &acceptance)?
+                        .is_none()
+                {
+                    return Err(Error::new(
+                        "stale_result",
+                        "successor authorization disappeared",
+                    ));
+                }
                 let mut state = self.releases.state.lock().map_err(|_| unavailable())?;
                 state.queue.eligible(&plan, Utc::now())?;
                 let attempt = ReleaseAttempt::admit(
@@ -1237,21 +1366,33 @@ impl RuntimeDelivery {
                     workflow_digest: gate.workflow_digest().into(),
                     parent_publication: parent_publication.clone(),
                     acceptance_publication: acceptance_publication.clone(),
-                    manual_intent: manual.as_ref().map(|r| r.request_id()),
-                    manual_actor: manual.as_ref().map(|r| r.record.payload.actor.clone()),
+                    manual_intent: successor
+                        .as_ref()
+                        .map(|s| s.command())
+                        .or_else(|| manual.as_ref().map(|r| r.request_id())),
+                    manual_actor: successor
+                        .as_ref()
+                        .map(|s| s.actor().clone())
+                        .or_else(|| manual.as_ref().map(|r| r.record.payload.actor.clone())),
+                    manual_role: successor
+                        .as_ref()
+                        .map(|_| ManualRole::Recover)
+                        .or_else(|| manual.as_ref().map(|_| ManualRole::Release)),
                     acceptance_actor: acceptance.acceptance().linear_actor.parse().map_err(
                         |_| Error::new("identity_mismatch", "acceptance actor is not canonical"),
                     )?,
                     preparations: preparation.reference.repositories.clone(),
                     attempt,
                     admission_confirmed: false,
+                    admission_operation: operation,
+                    recovery_receipts: BTreeMap::new(),
                     local_retired: false,
                     pending_receipts: BTreeMap::new(),
                 };
                 Self::check_release_publications(&self.runtime, &record, None)?;
                 let mut proposed = state.attempts.clone();
                 proposed.insert(operation, record.clone());
-                let queue = rebuild_queue(&proposed)?;
+                let queue = rebuild_queue(&proposed, &state.no_release)?;
                 self.save_release(&record)?;
                 state.queue = queue;
                 state.attempts = proposed;
@@ -1319,17 +1460,18 @@ impl RuntimeDelivery {
                 "release still has unresolved original effects",
             ));
         }
-        let prior = self.runtime.control.operation(operation)?;
+        let prior = self.runtime.control.operation(record.admission_operation)?;
+        let scope = admission_scope(&prior, &record.attempt.plan)?;
         let receipt = if prior.phase == ReceiptPhase::Reconciled {
             prior
         } else {
             self.runtime.control.retire_local(
-                operation,
+                record.admission_operation,
                 json!({"release":"terminal","plan_digest":record.attempt.plan.digest()?}),
             )?
         };
         if receipt.kind != "admission"
-            || receipt.expected.get("scope") != Some(&record.attempt.plan.digest()?)
+            || receipt.expected.get("scope") != Some(&scope)
             || receipt.observed_result.as_ref().is_none_or(|v| {
                 v["local_execution"] != "exited"
                     || v["unresolved_effects"]
@@ -1426,6 +1568,12 @@ impl RuntimeDelivery {
                 ));
             }
             let step = observed.step_id();
+            if record.attempt.step_attempt(step)? != observed.attempt() {
+                return Err(Error::new(
+                    "ownership_conflict",
+                    "release observation belongs to another step attempt",
+                ));
+            }
             if !matches!(observed.outcome(), ReleaseStepOutcome::Pending)
                 && let Some(receipt) = observed.receipt()
             {
@@ -1517,7 +1665,14 @@ impl RuntimeDelivery {
             })?;
             let observed = workspace
                 .coordinator
-                .observe_release_step(admission, plan, step, &workspace.observer, &verifier)
+                .observe_release_step(
+                    admission,
+                    plan,
+                    step,
+                    record.attempt.step_attempt(step)?,
+                    &workspace.observer,
+                    &verifier,
+                )
                 .await?;
             self.record_release_observation(operation, &observed)?;
         }
@@ -1528,11 +1683,10 @@ impl RuntimeDelivery {
             .map_err(|_| unavailable())?
             .attempts[&operation]
             .clone();
-        if (record.attempt.completed() || record.attempt.resolved)
-            && record.pending_receipts.is_empty()
-            && record.attempt.hold_reason.is_none()
-        {
-            self.retire_release(operation, &record)?;
+        if ready_for_local_retirement(&record) {
+            if !record.local_retired {
+                self.retire_release(operation, &record)?;
+            }
             return Ok(());
         }
         if record.attempt.hold_reason.is_some() || !record.pending_receipts.is_empty() {
@@ -1582,7 +1736,9 @@ impl RuntimeDelivery {
                 resource_lock_owned: true,
                 credentials_usable: true,
                 repository_policy_current: true,
-                force_stopped: snapshot.fenced_operations.contains(&operation),
+                force_stopped: snapshot
+                    .fenced_operations
+                    .contains(&live.permit.operation_id),
                 current_revisions: &revisions,
             };
             let prepared_record = current.clone();
@@ -1688,6 +1844,17 @@ impl RuntimeDelivery {
         order_candidates(&mut candidates);
         for candidate in candidates {
             let result = async {
+                if self
+                    .advance_no_release(
+                        lease,
+                        projection,
+                        candidate.workspace,
+                        candidate.parent.issue,
+                    )
+                    .await?
+                {
+                    return Ok(());
+                }
                 let Some(prepared) = self
                     .prepare_release(
                         lease,
@@ -1755,12 +1922,7 @@ impl RuntimeDelivery {
                     .map_err(|_| unavailable())?
                     .attempts
                     .get(&id)
-                    .is_some_and(|r| {
-                        (r.attempt.completed() || r.attempt.resolved)
-                            && r.pending_receipts.is_empty()
-                            && r.attempt.hold_reason.is_none()
-                            && r.local_retired
-                    })
+                    .is_some_and(|r| ready_for_local_retirement(r) && r.local_retired)
             {
                 self.releases
                     .live
@@ -1824,14 +1986,6 @@ impl RuntimeDelivery {
             }
             let result = async {
                 let workspace = self.workspace(projection, record.workspace)?;
-                let current = projection.parent(record.workspace, record.work.parent)?;
-                let gate = current.fresh_gate(
-                    None,
-                    GatePurpose::DrainExisting,
-                    &self.runtime.dependency_outcomes()?,
-                    Utc::now(),
-                    Duration::seconds(30),
-                )?;
                 for (id, state) in &record.attempt.steps {
                     if !state.is_unknown()
                         && !record
@@ -1841,7 +1995,7 @@ impl RuntimeDelivery {
                     {
                         continue;
                     }
-                    let step = record
+                    let _step = record
                         .attempt
                         .plan
                         .steps
@@ -1850,15 +2004,12 @@ impl RuntimeDelivery {
                         .ok_or_else(|| {
                             Error::new("record_corrupt", "retained release step is undeclared")
                         })?;
-                    let repository = step.kind.repository();
-                    let revision = release_revision(&record.attempt.plan, repository)?;
-                    let context = workspace.coordinator.observation(gate.clone(), revision)?;
                     let observed = workspace
                         .coordinator
-                        .recover_release_step(
-                            &context,
+                        .recover_owned_release_step(
                             &record.attempt.plan,
                             id,
+                            record.attempt.step_attempt(id)?,
                             &workspace.observer,
                         )
                         .await?;
@@ -1871,11 +2022,7 @@ impl RuntimeDelivery {
                     .map_err(|_| unavailable())?
                     .attempts[&record.attempt.plan.operation_id]
                     .clone();
-                if (current.attempt.completed() || current.attempt.resolved)
-                    && current.pending_receipts.is_empty()
-                    && current.attempt.hold_reason.is_none()
-                    && !current.local_retired
-                {
+                if ready_for_local_retirement(&current) && !current.local_retired {
                     self.retire_release(current.attempt.plan.operation_id, &current)?;
                 }
                 Ok(())
@@ -2085,7 +2232,7 @@ mod tests {
     use super::*;
     use crate::digest::canonical_digest;
 
-    fn record(plan: ReleasePlan, work: WorkIdentity) -> AttemptRecord {
+    pub(super) fn record(plan: ReleasePlan, work: WorkIdentity) -> AttemptRecord {
         let reference = PublicationRef {
             id: Uuid::new_v4(),
             body_digest: canonical_digest(1, &json!("fixture native publication")).unwrap(),
@@ -2134,13 +2281,72 @@ mod tests {
             acceptance_publication: reference,
             manual_intent: None,
             manual_actor: None,
+            manual_role: None,
             acceptance_actor: Uuid::from_u128(5),
             preparations: BTreeMap::new(),
+            admission_operation: attempt.plan.operation_id,
+            recovery_receipts: BTreeMap::new(),
             attempt,
             admission_confirmed: true,
             local_retired: false,
             pending_receipts: BTreeMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn nonempty_repository_operation_maps_roundtrip_through_signed_private_json() {
+        let (plan, work, _) = crate::delivery::observed_merge_for_runtime().await;
+        let mut attempt = record(plan, work);
+        attempt.preparations = BTreeMap::from([
+            (
+                RepositoryId {
+                    hostname: "github.invalid".into(),
+                    id: "42".into(),
+                },
+                Uuid::new_v4(),
+            ),
+            (
+                RepositoryId {
+                    hostname: "github.invalid".into(),
+                    id: "7".into(),
+                },
+                Uuid::new_v4(),
+            ),
+        ]);
+        let reference = PreparationRef {
+            schema_version: 1,
+            workspace: attempt.workspace,
+            work: attempt.work.clone(),
+            evidence_token: attempt.attempt.plan.evidence_token.clone(),
+            operation: attempt.attempt.plan.operation_id,
+            repositories: attempt.preparations.clone(),
+        };
+        let root = tempfile::TempDir::new().unwrap();
+        let directory = crate::storage::PrivateDir::create(
+            &root.path().canonicalize().unwrap().join("records"),
+        )
+        .unwrap();
+        let key = evidence::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap();
+        let signed = key.sign("runtime_release_attempt", &attempt).unwrap();
+        directory.write("attempt.json", &signed).unwrap();
+        let restored: Signed<AttemptRecord> = directory.read("attempt.json").unwrap();
+        key.verify("runtime_release_attempt", &restored).unwrap();
+        assert_eq!(restored.payload.preparations, attempt.preparations);
+        assert_eq!(restored.digest().unwrap(), signed.digest().unwrap());
+        let prepared = key.sign("runtime_release_preparation", &reference).unwrap();
+        directory.write("preparation.json", &prepared).unwrap();
+        let restored: Signed<PreparationRef> = directory.read("preparation.json").unwrap();
+        key.verify("runtime_release_preparation", &restored)
+            .unwrap();
+        assert_eq!(restored.payload.repositories, reference.repositories);
+        assert_eq!(restored.digest().unwrap(), prepared.digest().unwrap());
+        let mut duplicated = serde_json::to_value(&reference).unwrap();
+        let entries = duplicated["repositories"].as_array_mut().unwrap();
+        entries.push(entries[0].clone());
+        assert!(serde_json::from_value::<PreparationRef>(duplicated).is_err());
+        let mut unsorted = serde_json::to_value(&attempt).unwrap();
+        unsorted["preparations"].as_array_mut().unwrap().reverse();
+        assert!(serde_json::from_value::<AttemptRecord>(unsorted).is_err());
     }
 
     #[tokio::test]
@@ -2253,6 +2459,81 @@ mod tests {
                 .queue
                 .eligible(&competitor, Utc::now())
                 .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn known_failed_release_retires_local_claim_but_keeps_resource_hold() {
+        let (_root, built, delivery) = super::super::tests::fixture().await;
+        let (plan, work, _) = crate::delivery::observed_merge_for_runtime().await;
+        let operation = plan.operation_id;
+        let lease = super::super::tests::start_control(&built.runtime);
+        built
+            .runtime
+            .control
+            .admit(
+                &lease,
+                operation,
+                IssueKey::new(&work.linear_endpoint, work.linear_workspace, work.parent)
+                    .unwrap()
+                    .identity()
+                    .unwrap(),
+                plan.digest().unwrap(),
+                || Ok(()),
+            )
+            .unwrap();
+        let mut initial = record(plan.clone(), work);
+        let step = plan.steps[0].id.clone();
+        initial.attempt.steps.insert(
+            step.clone(),
+            StepState::Failed {
+                reason: "actual provider validation failed".into(),
+                remote_id: Some("owned:1".into()),
+                observed_at: Utc::now(),
+            },
+        );
+        initial.attempt.hold_reason = Some("terminal release failure".into());
+        assert!(ready_for_local_retirement(&initial));
+        initial.pending_receipts.insert(Uuid::new_v4(), step);
+        assert!(!ready_for_local_retirement(&initial));
+        initial.pending_receipts.clear();
+        delivery.save_release(&initial).unwrap();
+        delivery.restore_releases().unwrap();
+        delivery.retire_release(operation, &initial).unwrap();
+        let receipt = built.runtime.control.operation(operation).unwrap();
+        assert_eq!(receipt.phase, ReceiptPhase::Reconciled);
+        assert_eq!(
+            receipt.observed_result.as_ref().unwrap()["local_execution"],
+            "exited"
+        );
+        assert_eq!(
+            receipt.observed_result.as_ref().unwrap()["unresolved_effects"],
+            json!([])
+        );
+        assert!(
+            built
+                .runtime
+                .control
+                .snapshot()
+                .unwrap()
+                .active_operations
+                .is_empty()
+        );
+        let current = delivery.releases.state.lock().unwrap().attempts[&operation].clone();
+        assert!(current.local_retired);
+        assert!(current.attempt.hold_reason.is_some());
+        let mut competitor = plan;
+        competitor.operation_id = Uuid::new_v4();
+        competitor.parent_id = Uuid::new_v4();
+        assert!(
+            delivery
+                .releases
+                .state
+                .lock()
+                .unwrap()
+                .queue
+                .eligible(&competitor, Utc::now())
+                .is_err()
         );
     }
 
@@ -2418,3 +2699,6 @@ mod tests {
         );
     }
 }
+
+#[path = "runtime_delivery_recovery.rs"]
+mod recovery;

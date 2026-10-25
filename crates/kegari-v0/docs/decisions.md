@@ -57,6 +57,18 @@ unknown provider outcomes. `AuthorizedOperationRecovery` similarly binds exact
 runtime receipt and command ownership; the adapter must reconcile actual provider
 or process facts. There are no default-success adapters.
 
+Recovery intent and completion use closed local metadata operations. They can
+record an authenticated recovery request while pending corrections or unknown
+effects hold normal execution, including while STOPPED. Completion requires the
+actual durable action receipt: a release transition or checked new resume
+admission, or the exact Reconciled target of `operation reconcile`. An
+authorization-only receipt, substituted result or still-unknown target cannot
+stand in for completion. Unrelated holds remain unchanged, even when they cover
+the entire runtime. These paths cannot transmit a provider action or grant work.
+Only resume's separate ordinary RUNNING admission can create a new permit; it
+binds the original plan and a consumed, reconciled predecessor with a new
+monotone resume ordinal.
+
 Cleanup inspection and application call the production `Housekeeping` implementation,
 including its exact immutable plan and original parent-command ownership. Source
 files cannot be removed by a worker or inferred tracker transition.
@@ -94,3 +106,13 @@ Complete refresh preserves the fence until that exact signed native comment is
 observed, or a durable receipt proves no transmission occurred. A missing, edited
 or ambiguously duplicated publication cannot install retry/acceptance/correction
 authority. Cache insertion callbacks must not reenter `ControlHost`.
+
+No-release completion records use the same operation recovery command. Recovery
+requires the original signed local intent, exact actual admission/effect lineage,
+and one unchanged native publication by the originally selected writer. Current
+operator authority and the configured provider endpoint/account/workspace are
+rechecked before recording the observation. Missing or ambiguous publications
+remain unknown; they do not authorize resending. If a restarted original admission
+also needs recovery, its sole publication effect must be reconciled first, and no
+active local or external owner may remain. Historical receipt recovery never
+creates a current dependency capability by itself.

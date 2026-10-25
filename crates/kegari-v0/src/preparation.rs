@@ -520,11 +520,11 @@ impl AuthorizationPublisher {
         Ok(verified)
     }
 }
-struct PublicationAttempt {
-    operation: Uuid,
-    admission: Uuid,
-    reference: MetadataReference,
-    previous: Option<Uuid>,
+pub(crate) struct PublicationAttempt {
+    pub(crate) operation: Uuid,
+    pub(crate) admission: Uuid,
+    pub(crate) reference: MetadataReference,
+    pub(crate) previous: Option<Uuid>,
 }
 fn publication_attempt(
     runtime: Uuid,
@@ -534,17 +534,47 @@ fn publication_attempt(
     config: &crate::config::RuntimeConfig,
     now: chrono::DateTime<Utc>,
 ) -> Result<PublicationAttempt> {
+    metadata_publication_attempt(
+        "parent_authorization",
+        runtime,
+        snapshot,
+        work,
+        receipts,
+        config,
+        now,
+    )
+}
+pub(crate) fn metadata_publication_attempt(
+    purpose: &str,
+    runtime: Uuid,
+    snapshot: &str,
+    work: &str,
+    receipts: &[Receipt],
+    config: &crate::config::RuntimeConfig,
+    now: chrono::DateTime<Utc>,
+) -> Result<PublicationAttempt> {
+    if !matches!(purpose, "parent_authorization" | "no_release_required") {
+        return Err(Error::invalid(
+            "unknown finite metadata publication purpose",
+        ));
+    }
     let mut history = BTreeMap::new();
     let mut cap = config.max_attempts_per_phase;
     for receipt in receipts {
         if let Some(reference) = MetadataReference::from_receipt(receipt)?
-            && reference.purpose == "parent_authorization"
+            && reference.purpose == purpose
             && reference.generation == snapshot
         {
             if receipt.runtime_id != runtime
                 || receipt.canonical_targets != vec![work.to_string()]
                 || receipt.operation_id
-                    != attempt_id(runtime, snapshot, "admission", reference.attempt)?
+                    != metadata_attempt_id(
+                        purpose,
+                        runtime,
+                        snapshot,
+                        "admission",
+                        reference.attempt,
+                    )?
                 || history.insert(reference.attempt, receipt).is_some()
             {
                 return Err(Error::new(
@@ -563,10 +593,10 @@ fn publication_attempt(
     }
     let make = |attempt, previous| -> Result<PublicationAttempt> {
         Ok(PublicationAttempt {
-            operation: attempt_id(runtime, snapshot, "publication", attempt)?,
-            admission: attempt_id(runtime, snapshot, "admission", attempt)?,
+            operation: metadata_attempt_id(purpose, runtime, snapshot, "publication", attempt)?,
+            admission: metadata_attempt_id(purpose, runtime, snapshot, "admission", attempt)?,
             reference: MetadataReference {
-                purpose: "parent_authorization".into(),
+                purpose: purpose.into(),
                 generation: snapshot.into(),
                 attempt,
                 max_attempts: cap,
@@ -681,11 +711,25 @@ fn retryable_preparation(error: &Error) -> bool {
         || (error.retryable && matches!(error.code.as_str(), "provider_status" | "rate_limited"))
 }
 fn attempt_id(runtime: Uuid, snapshot: &str, phase: &str, attempt: u32) -> Result<Uuid> {
+    metadata_attempt_id("parent_authorization", runtime, snapshot, phase, attempt)
+}
+fn metadata_attempt_id(
+    purpose: &str,
+    runtime: Uuid,
+    snapshot: &str,
+    phase: &str,
+    attempt: u32,
+) -> Result<Uuid> {
+    let phase = if purpose == "parent_authorization" {
+        phase.to_owned()
+    } else {
+        format!("{purpose}:{phase}")
+    };
     publication_id(
         runtime,
         snapshot,
         &if attempt == 1 {
-            phase.into()
+            phase
         } else {
             format!("{phase}:{attempt}")
         },
@@ -868,5 +912,61 @@ mod tests {
             .expected
             .insert("admission_operation".into(), Uuid::new_v4().to_string());
         assert_eq!(planned(&gap, &config).err().unwrap().code, "record_corrupt");
+    }
+    #[test]
+    fn no_release_metadata_retries_are_separate_bounded_and_never_replay_unknowns() {
+        let mut config = config();
+        let snapshot = canonical_digest(1, &"snapshot").unwrap();
+        let make = |receipts: &[Receipt], config: &crate::config::RuntimeConfig| {
+            metadata_publication_attempt(
+                "no_release_required",
+                config.id,
+                &snapshot,
+                "work",
+                receipts,
+                config,
+                Utc::now(),
+            )
+        };
+        let initial = make(&[], &config).unwrap();
+        assert_ne!(initial.operation, planned(&[], &config).unwrap().operation);
+        assert_ne!(initial.admission, planned(&[], &config).unwrap().admission);
+        let mut retained = history(1, 2, false);
+        let mut reference = initial.reference.clone();
+        reference.max_attempts = 2;
+        retained[0].operation_id = initial.admission;
+        retained[0].request_id = initial.admission;
+        retained[0].expected.insert(
+            "metadata".into(),
+            serde_json::to_string(&reference).unwrap(),
+        );
+        retained[1].operation_id = initial.operation;
+        retained[1].request_id = initial.operation;
+        retained[1]
+            .expected
+            .insert("admission_operation".into(), initial.admission.to_string());
+        let retry = make(&retained, &config).unwrap();
+        assert_eq!(retry.reference.attempt, 2);
+        assert_eq!(retry.reference.max_attempts, 2);
+        assert_eq!(retry.previous, Some(initial.operation));
+        config.max_attempts_per_phase = 99;
+        assert_eq!(make(&retained, &config).unwrap().reference.max_attempts, 2);
+        retained[1].phase = ReceiptPhase::Sent;
+        retained[1].observed_result = None;
+        assert_eq!(
+            make(&retained, &config).unwrap().operation,
+            initial.operation
+        );
+        retained[1].phase = ReceiptPhase::Acknowledged;
+        retained[1].observed_result = Some(json!({"comment_id":Uuid::new_v4()}));
+        assert_eq!(
+            make(&retained, &config).unwrap().operation,
+            initial.operation
+        );
+        retained[1].phase = ReceiptPhase::Reconciled;
+        retained[1].observed_result =
+            Some(json!({"effect":"not_sent","error":Error::new("timeout", "fixture")}));
+        retained[1].updated_at = Utc::now();
+        assert_eq!(make(&retained, &config).err().unwrap().code, "retry_wait");
     }
 }

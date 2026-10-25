@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "asset_version": "2",
+  "asset_version": "3",
   "runtime_version": "0.1.0",
   "assets": {
     "authority": "sha256:093132ce901d79612deb74bc4fd58b3ee143127b9242f38c72e3ac879bdfc6cd",
     "child": "sha256:2b737180ae7865ef3333a8ac8f28f8b79d6010e71a4c4f4b3407c0a1382f5d62",
-    "continuation": "sha256:588489f623aa7d741a757318d8e716e75d27855f2a2fe8625182747ffe10d506",
+    "continuation": "sha256:051405a5808c16c0234a3896657b791ff06eea6499e67a75d617f3270a50e5d8",
     "coordination": "sha256:07554377881779d4008480760389801c4ad6baa8726a51961577d5a504af57ae",
     "review": "sha256:ecd1ae2c1d9fe5c17f0002eba010323687217b66f221b447bd02d94e268f826c",
     "validation": "sha256:329827b6c7f47f6522ea802bc5919e2234c185d1b64ea7a2f2c4ef8baf0efc18"

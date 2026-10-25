@@ -887,3 +887,36 @@ async fn late_failure_status_on_older_deployment_blocks_current_target() {
     f.state.lock().unwrap().older_failure = Some("2026-01-04T00:00:00Z");
     assert!(f.observer.recover_target(&c, "deploy").await.is_err());
 }
+
+#[tokio::test]
+async fn recovery_inventory_retains_verified_main_target_divergence_without_assembly_authority() {
+    let f = Fixture::new();
+    let c = contract(true);
+    assert!(f.observer.observe_recovery(&c).await.is_err());
+    let (a, p, ch, r) = f.prepare(&c).await;
+    f.artifact(&c, &ch, |_| {});
+    f.observer
+        .observe_target(&c, &a, &p, &ch, &r, &verifier())
+        .await
+        .unwrap();
+    let coherent = f.observer.observe_recovery(&c).await.unwrap();
+    assert!(coherent.coherent());
+    assert_eq!(coherent.observations().len(), 2);
+    f.state.lock().unwrap().main = "c".repeat(40);
+    assert!(f.observer.observe(&c).await.is_err());
+    let recovery = f.observer.observe_recovery(&c).await.unwrap();
+    assert!(!recovery.coherent());
+    assert_eq!(recovery.production().commit, "c".repeat(40));
+    assert_eq!(recovery.targets()[0].source, source());
+    assert_eq!(recovery.contract_digest(), c.digest().unwrap());
+    let observations = recovery.observations();
+    assert!(
+        observations
+            .iter()
+            .any(|observation| observation.deployed_commit.as_deref()
+                == Some(source().commit.as_str())
+                && observation.production_commit == "c".repeat(40))
+    );
+    f.state.lock().unwrap().status = "failure".into();
+    assert!(f.observer.observe_recovery(&c).await.is_err());
+}

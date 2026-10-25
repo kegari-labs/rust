@@ -10,10 +10,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 struct ObservingBroker {
     turn: Option<String>,
     called: bool,
+    intervention: bool,
 }
 impl ToolBroker for ObservingBroker {
     fn observe_session(&mut self, state: &SessionState) -> kegari_v0::error::Result<()> {
         self.turn = state.turn_id.clone();
+        self.intervention = state.intervention.is_some();
         Ok(())
     }
     fn call<'a>(
@@ -731,6 +733,19 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
         write_json(&mut sw,json!({"id":req["id"],"result":{"reviewThreadId":"owned-thread","turn":{"id":"turn-review","status":"inProgress"}}})).await;
         write_json(&mut sw,json!({"method":"turn/completed","params":{"threadId":"owned-thread","turn":{"id":"turn-review","status":"completed"}}})).await;
         let req = read_json(&mut sr).await;
+        assert_eq!(req["method"], "thread/read");
+        assert_wire_schema(&req["params"], "v2_ThreadReadParams.json");
+        let mut read_thread = response["thread"].clone();
+        read_thread["cwd"] = response["cwd"].clone();
+        read_thread["modelProvider"] = response["modelProvider"].clone();
+        read_thread["status"] = json!({"type":"idle"});
+        read_thread["turns"] = json!([{"id":"turn-fast","status":"completed","items":[]},{"id":"turn-review","status":"completed","items":[]}]);
+        write_json(
+            &mut sw,
+            json!({"id":req["id"],"result":{"thread":read_thread}}),
+        )
+        .await;
+        let req = read_json(&mut sr).await;
         assert_eq!(req["method"], "thread/resume");
         assert_wire_schema(&req["params"], "v2_ThreadResumeParams.json");
         assert!(req["params"].get("path").is_none());
@@ -804,6 +819,7 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
         &isolation,
         &permissions,
         "provider confirms PR remains open at abc",
+        &mut DenyTools,
     )
     .await
     .unwrap();
@@ -1135,4 +1151,90 @@ fn test_resource_writes_are_separate_exact_grants_and_never_reopen_source_or_con
     plan.resource_writes = original;
     std::os::unix::fs::symlink(&plan.repository, resource.join("escape")).unwrap();
     assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
+}
+
+#[tokio::test]
+async fn owned_thread_history_rejects_divergence_and_retains_policy_before_resume() {
+    for scenario in [
+        "current",
+        "cwd",
+        "unrecorded",
+        "active",
+        "duplicate",
+        "failed",
+        "policy",
+    ] {
+        let (client, server) = tokio::io::duplex(16_384);
+        let (cr, cw) = tokio::io::split(client);
+        let (sr, mut sw) = tokio::io::split(server);
+        let mut sr = BufReader::new(sr);
+        let task = tokio::spawn(async move {
+            handshake(&mut sr, &mut sw).await;
+            let request = read_json(&mut sr).await;
+            assert_eq!(request["method"], "account/read");
+            write_json(&mut sw, json!({"id":request["id"],"result":{"account":{"type":"chatgpt"},"workspaceRouting":{"chatgptAccountId":"account-one"}}})).await;
+            let request = read_json(&mut sr).await;
+            assert_eq!(request["method"], "thread/read");
+            assert_wire_schema(&request["params"], "v2_ThreadReadParams.json");
+            let turn = json!({"id":"turn-one","status":"completed","items":[]});
+            let mut thread = json!({"id":"thread-one","cwd":"/private/tmp/fixture/repository","modelProvider":"openai","status":{"type":"idle"},"turns":[turn.clone()]});
+            match scenario {
+                "current" => (),
+                "cwd" => thread["cwd"] = json!("/private/tmp/unrelated"),
+                "unrecorded" => thread["turns"][0]["id"] = json!("another-turn"),
+                "active" => thread["status"] = json!({"type":"active","activeFlags":[]}),
+                "duplicate" => thread["turns"] = json!([turn.clone(), turn]),
+                "failed" => {
+                    thread["turns"][0]["status"] = json!("failed");
+                    thread["turns"][0]["error"] = json!({"message":"transport failed","codexErrorInfo":"internalServerError"});
+                }
+                "policy" => {
+                    // An unknown provider turn cannot hide an actual policy signal
+                    // behind the subsequent exact-history mismatch.
+                    thread["turns"][0]["id"] = json!("provider-new-turn");
+                    thread["turns"][0]["status"] = json!("failed");
+                    thread["turns"][0]["error"] =
+                        json!({"message":"restricted","codexErrorInfo":"cyberPolicy"});
+                }
+                _ => unreachable!(),
+            }
+            write_json(
+                &mut sw,
+                json!({"id":request["id"],"result":{"thread":thread}}),
+            )
+            .await;
+        });
+        let mut rpc = RpcClient::from_transport(cr, cw, Duration::from_secs(2)).unwrap();
+        rpc.initialize().await.unwrap();
+        rpc.verify_account("account-one").await.unwrap();
+        let mut state = active();
+        state
+            .notification(
+                "turn/completed",
+                &json!({"threadId":"thread-one","turn":{"id":"turn-one","status":"completed"}}),
+            )
+            .unwrap();
+        let mut broker = ObservingBroker::default();
+        let result = rpc.observe_owned_thread(&mut state, &mut broker).await;
+        match scenario {
+            "current" => assert!(result.unwrap().starts_with("sha256:v1:")),
+            "cwd" => assert_eq!(result.unwrap_err().code, "identity_mismatch"),
+            "policy" => {
+                assert_eq!(result.unwrap_err().code, "provider_intervention");
+                assert!(
+                    broker.intervention,
+                    "actual blocker must be checkpointed immediately"
+                );
+                assert!(state.intervention.is_some());
+                assert_eq!(
+                    state.next_turn_allowed().unwrap_err().code,
+                    "provider_intervention"
+                );
+            }
+            _ => assert_eq!(result.unwrap_err().code, "reconciliation_required"),
+        }
+        assert!(state.turn_id.is_none());
+        assert_eq!(state.turns_started, 1);
+        task.await.unwrap();
+    }
 }

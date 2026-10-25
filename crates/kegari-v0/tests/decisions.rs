@@ -373,6 +373,7 @@ struct Evidence {
     corrections: Mutex<Vec<VerifiedExplicitCorrection>>,
     retries: Mutex<Vec<VerifiedRetryGrant>>,
     retry: Mutex<Option<RetryTarget>>,
+    recovery_authorizations: Mutex<Vec<Receipt>>,
 }
 impl DecisionEvidence for Evidence {
     fn current(&self, _: &kegari_v0::authority::IssueKey) -> Result<ParentDelivery> {
@@ -406,8 +407,14 @@ impl DecisionEvidence for Evidence {
     fn release(&self, _: AuthorizedDecision) -> HostFuture<'_, Receipt> {
         Box::pin(async { Err(Error::new("fixture", "no synthetic release success")) })
     }
-    fn recover_release(&self, _: AuthorizedDecision) -> HostFuture<'_, Receipt> {
-        Box::pin(async { Err(Error::new("fixture", "no synthetic recovery success")) })
+    fn recover_release(&self, decision: AuthorizedDecision) -> HostFuture<'_, Receipt> {
+        Box::pin(async move {
+            self.recovery_authorizations
+                .lock()
+                .unwrap()
+                .push(decision.authorization_receipt()?.clone());
+            Err(Error::new("fixture", "no synthetic recovery success"))
+        })
     }
     fn reconcile(&self, _: AuthorizedOperationRecovery) -> HostFuture<'_, Receipt> {
         Box::pin(async { Err(Error::new("fixture", "no synthetic reconciliation success")) })
@@ -1128,4 +1135,120 @@ async fn edited_or_deleted_retry_and_correction_publications_never_install_new_a
             }
         }
     }
+}
+
+#[tokio::test]
+async fn stopped_recovery_reaches_backend_with_pending_correction_and_retains_unknown_effect() {
+    use kegari_v0::control::{Lease, Lifecycle};
+    let f = DecisionFixture::new().await;
+    let work = f
+        .cache
+        .admission_snapshot()
+        .unwrap()
+        .parent(id(2), id(100))
+        .unwrap()
+        .key
+        .identity()
+        .unwrap();
+    let mut lifecycle_actor = f.actor();
+    lifecycle_actor.roles.insert("lifecycle".into());
+    let lifecycle = |generation| MutationRequest {
+        request_id: Uuid::new_v4(),
+        runtime_id: id(1),
+        actor: lifecycle_actor.clone(),
+        kind: "lifecycle".into(),
+        canonical_targets: vec![id(1).to_string()],
+        expected: BTreeMap::new(),
+        payload: json!({"generation":generation}),
+    };
+    f.control
+        .lifecycle(lifecycle(0), Lifecycle::Start, 0)
+        .unwrap();
+    let lease = Lease {
+        runtime_id: id(1),
+        owner_generation: 1,
+        owner_id: Uuid::new_v4(),
+    };
+    f.control.attach_reconciled(lease.clone()).unwrap();
+    let permit = f
+        .control
+        .admit(
+            &lease,
+            Uuid::new_v4(),
+            work.clone(),
+            canonical_digest(1, &"fixture immutable plan").unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    let external = MutationRequest {
+        request_id: Uuid::new_v4(),
+        runtime_id: id(1),
+        actor: f.actor(),
+        kind: "fixture_external_effect".into(),
+        canonical_targets: vec![work],
+        expected: BTreeMap::new(),
+        payload: Value::Null,
+    };
+    let external_id = external.request_id;
+    let (_pending, ()) = f
+        .control
+        .begin_effect(external, &permit, || Ok(()), |_| Ok(()))
+        .unwrap();
+    f.control
+        .retire_local(
+            permit.operation_id,
+            json!({"fixture":"local work ended; external outcome unknown"}),
+        )
+        .unwrap();
+    f.control
+        .lifecycle(lifecycle(1), Lifecycle::Stop, 1)
+        .unwrap();
+    f.wire.lock().unwrap().comments.get_mut(&id(100)).unwrap().push(json!({"id":id(999),"body":"Please correct the existing child to preserve the previous inclusive behavior.","createdAt":"2026-01-05T00:00:00Z","updatedAt":"2026-01-05T00:00:00Z","editedAt":null,"url":"https://linear.invalid/comment/999","user":{"id":id(5)},"onBehalfOf":null,"botActor":null,"issue":{"id":id(100)}}));
+    let projection = f.cache.refresh().await.unwrap();
+    assert!(
+        !projection
+            .parent(id(2), id(100))
+            .unwrap()
+            .corrections
+            .pending_ids()
+            .is_empty()
+    );
+    let (request,parent)=f.command(CommandName::ReleaseRecover,json!({"parent":"TEST-100","operation":permit.operation_id,"action":"abandon","reason":"Retain uncertain work and retire only known unstarted steps"}));
+    let error = f
+        .manager
+        .execute(f.actor(), request, parent.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.code, "fixture",
+        "actual decision authorization should reach the explicitly non-executing test backend"
+    );
+    let authorizations = f.evidence.recovery_authorizations.lock().unwrap();
+    assert_eq!(authorizations.len(), 1);
+    let authorization = &authorizations[0];
+    assert_eq!(authorization.phase, ReceiptPhase::Acknowledged);
+    assert_eq!(
+        authorization.expected["parent_command_id"],
+        parent.operation_id.to_string()
+    );
+    assert_eq!(
+        f.control
+            .operation(authorization.operation_id)
+            .unwrap()
+            .payload_digest,
+        authorization.payload_digest
+    );
+    assert!(
+        f.control
+            .snapshot()
+            .unwrap()
+            .unresolved_operations
+            .contains_key(&external_id)
+    );
+    assert_eq!(
+        f.control.operation(external_id).unwrap().phase,
+        ReceiptPhase::Sent
+    );
+    assert!(f.control.snapshot().unwrap().active_operations.is_empty());
+    assert_eq!(f.writes(), 0);
 }
