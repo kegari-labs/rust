@@ -34,8 +34,9 @@ The explicit stable override is valid only after checking that it is the pinned 
 | Git/delivery review found incomplete plan coverage, unaccounted candidate deltas, weak carry verification and discarded recovery history | Exact repository/target/step and child contribution sets, non-deserializable verified carry/full production checks, retained failed-step history | Four regressions passed |
 | A valid literal workflow could omit required task/context fields | Append mandatory normalized context as a distinct layer regardless of template interpolation; preserve its digest | Production-path regression passed |
 | Assembly accepted scratch inside repository source | Reject overlap in both directions, in addition to the execution-boundary checks | Regression passed |
+| Conflicting recovered release acquisition partly removed existing resource locks | Validate every conflict before changing lock ownership | Regression passed |
 
-The initial combined strict Clippy run failed on collapsible conditions, large enum size and excessive argument lists. These were refactored and strict Clippy subsequently passed for the foundation targets; no lint suppressions or weakened checks hid the findings. This failed run remains part of the milestone record. The first combined run passed 87 tests; two subsequent context-assembly regressions bring the foundation suite to 89. Later provider/evaluation work is outside these results.
+The initial combined strict Clippy run failed on collapsible conditions, large enum size and excessive argument lists. These were refactored and strict Clippy subsequently passed for the foundation targets; no lint suppressions or weakened checks hid the findings. This failed run remains part of the milestone record. The first combined run passed 87 tests; two context-assembly regressions and one atomic lock-reconciliation regression bring the foundation suite to 90. Later provider/evaluation work is outside these results.
 
 ## Qualification blockers
 
