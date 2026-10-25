@@ -614,6 +614,7 @@ impl RuntimeCoordinator {
                         source_advanced: None,
                         retried_unfinished: None,
                         review_retry: None,
+                        review_round: None,
                         max_seconds: worker_seconds,
                         max_turns: plan.model.max_turns,
                     },

@@ -54,6 +54,8 @@ impl RunResumeReference {
             || receipt.operation_id == value.predecessor
             || value.review_rounds_consumed > run.max_review_rounds
             || [
+                "review_round",
+                "review_round_preparation",
                 "metadata",
                 "worker_preparation",
                 "session_recovery_preparation",
@@ -109,6 +111,15 @@ impl ControlHost {
         resume: &RunResumeReference,
         history: &BTreeMap<u32, Receipt>,
     ) -> Result<()> {
+        if history
+            .values()
+            .any(|receipt| receipt.expected.contains_key("review_round"))
+        {
+            return Err(Error::new(
+                "review_round_required",
+                "provider resume cannot discard round provenance",
+            ));
+        }
         let (_, predecessor) = history.last_key_value().ok_or_else(|| {
             Error::new(
                 "no_work_trigger",

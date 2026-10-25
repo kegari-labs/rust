@@ -280,6 +280,7 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
         source_advanced: None,
         retried_unfinished: None,
         review_retry: Some(proof.clone()),
+        review_round: None,
         max_seconds: 60,
         max_turns: grant.new_budget().max_turns,
     };
@@ -419,9 +420,11 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
     )
     .unwrap()
     .unwrap();
-    // A protected completed receipt alone cannot advance the runtime pipeline
-    // after losing its actual live/joined worker. The bookkeeping retains the
-    // old review identity and the new pending launch identity for recovery.
+    // This legacy completed-grant fixture has no admitted opaque review round.
+    // It cannot advance the current pipeline or manufacture that missing cause
+    // from its protected completion receipt. Preserve both operation identities.
+    // The actual-round fixture separately reaches the native joined-run barrier
+    // through admit_review_round_worker using its genuine round and closed prep.
     let mut child = super::super::ChildPipeline {
         reference: super::super::ChildReference {
             schema_version: 1,
@@ -440,6 +443,8 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
             review_retry_operation: Some(completion.operation_id),
             review_retry_digest: Some(proof.digest().into()),
             review_history: vec![],
+            review_round_digest: None,
+            paired_round_digest: None,
             observed_at: Utc::now(),
             error: None,
         },
@@ -462,15 +467,33 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
         source_advanced: None,
         review_worker_assignment: Some(f.assignment.clone()),
         review_retry: Some(proof.clone()),
+        review_round: None,
+        paired_round: None,
     };
     f.service.persist_child(&child).unwrap();
+    let operations_before =
+        canonical_digest(1, &f.built.runtime.control.operations().unwrap()).unwrap();
+    let requests_before = f.wire.lock().unwrap().requests.len();
+    let pipeline_leaf = format!("child-pipeline-{}.json", child.reference.operation);
+    let pipeline_before = fs::read(f.service.records.path().join(&pipeline_leaf)).unwrap();
+    let unavailable = f
+        .service
+        .launch_review_retry(f.lease, &mut child)
+        .await
+        .unwrap_err();
+    assert_eq!(unavailable.code, "review_round_unavailable");
     assert_eq!(
-        f.service
-            .launch_review_retry(f.lease, &mut child)
-            .await
-            .unwrap_err()
-            .code,
-        "reconciliation_required"
+        unavailable.message,
+        "retry requires its retained opaque review round"
+    );
+    assert_eq!(
+        canonical_digest(1, &f.built.runtime.control.operations().unwrap()).unwrap(),
+        operations_before
+    );
+    assert_eq!(f.wire.lock().unwrap().requests.len(), requests_before);
+    assert_eq!(
+        fs::read(f.service.records.path().join(&pipeline_leaf)).unwrap(),
+        pipeline_before
     );
     assert_eq!(
         child.reference.stage,

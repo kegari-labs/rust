@@ -52,7 +52,7 @@ impl PreparationReference {
         Ok(Some(value))
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if self.worker_operation.is_nil()
             || self.workspace.is_nil()
             || self.account.trim().is_empty()

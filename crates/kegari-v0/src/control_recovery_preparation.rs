@@ -89,6 +89,8 @@ impl SessionRecoveryPreparationReference {
             || receipt.request_id != receipt.operation_id
             || receipt.canonical_targets != [value.phase.work.clone()]
             || [
+                "review_round",
+                "review_round_preparation",
                 "run",
                 "metadata",
                 "worker_preparation",
@@ -187,6 +189,15 @@ impl ControlHost {
             return Err(Error::new(
                 "stale_result",
                 "session recovery predecessor is not the exact latest phase receipt",
+            ));
+        }
+        if runs
+            .values()
+            .any(|(receipt, _)| receipt.expected.contains_key("review_round"))
+        {
+            return Err(Error::new(
+                "review_round_required",
+                "metadata session recovery cannot omit retained round provenance",
             ));
         }
         if run.attempt >= model_cap

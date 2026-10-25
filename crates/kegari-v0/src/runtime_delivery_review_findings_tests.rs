@@ -398,6 +398,7 @@ pub(super) async fn run(
         unfinished: None,
         retried_unfinished: None,
         review_retry: None,
+        review_round: None,
         source_advanced: Some(advanced.clone()),
         max_seconds: 60,
         max_turns: advanced.reference().max_turns,

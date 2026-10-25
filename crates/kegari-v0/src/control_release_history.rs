@@ -31,6 +31,10 @@ fn terminal_admission(receipt: &Receipt) -> Result<()> {
             "continuation",
             "source_advanced",
             "worker_preparation",
+            "review_round",
+            "review_round_preparation",
+            "review_round_resume",
+            "review_round_recovery",
             "session_resume",
             "session_recovery_preparation",
         ]

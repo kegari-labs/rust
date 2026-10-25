@@ -227,6 +227,8 @@ pub struct LaunchRequest {
     /// A current native operator grant for the retained exact unfinished task.
     pub retried_unfinished: Option<Arc<crate::delivery::RetriedUnfinishedWork>>,
     pub review_retry: Option<Arc<crate::delivery::ReviewRetryWork>>,
+    /// Exact review/fix round, orthogonal to its existing readmission cause.
+    pub review_round: Option<Arc<crate::delivery::VerifiedReviewRoundPlan>>,
     pub max_seconds: u64,
     pub max_turns: u32,
 }
@@ -262,6 +264,61 @@ impl LaunchRequest {
         }
         if let Some(source) = &self.source {
             source.revision.validate()?;
+        }
+        if self.review_round.is_none()
+            && (self
+                .unfinished
+                .as_ref()
+                .is_some_and(|proof| proof.requires_review_round())
+                || self
+                    .source_advanced
+                    .as_ref()
+                    .is_some_and(|proof| proof.requires_review_round()))
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "common review lineage cannot omit its opaque round plan",
+            ));
+        }
+        if let Some(round) = &self.review_round {
+            let assignment = self.delivery.as_ref().ok_or_else(|| {
+                Error::new(
+                    "worker_binding",
+                    "review round requires its actual delivery assignment",
+                )
+            })?;
+            if round.subject_phase() != &self.phase || self.retried_unfinished.is_some() {
+                return Err(Error::new(
+                    "worker_binding",
+                    "review round changes its exact subject phase",
+                ));
+            }
+            round.verify_assignment(assignment)?;
+            WorkerAuthority::Authorized(round.authority().clone()).compare(&self.authority)?;
+            use crate::control::ReviewRoundCause;
+            let compatible = match &round.reference().cause {
+                ReviewRoundCause::Initial {} | ReviewRoundCause::TransientRetry { .. } => {
+                    self.unfinished.is_none() && self.source_advanced.is_none()
+                }
+                ReviewRoundCause::PairedRepair { .. } => self.unfinished.is_some(),
+                ReviewRoundCause::RepairContinuation {
+                    current_source,
+                    validation,
+                    ..
+                } => self.unfinished.as_ref().is_some_and(|unfinished| {
+                    unfinished.predecessor() == current_source.implementation.operation
+                        && unfinished.predecessor_receipt_digest()
+                            == current_source.implementation.receipt_digest
+                        && unfinished.failure_operation() == validation.validation.operation
+                }),
+                ReviewRoundCause::AfterRepair { .. } => self.source_advanced.is_some(),
+            };
+            if !compatible {
+                return Err(Error::new(
+                    "worker_binding",
+                    "review round differs from retained source cause",
+                ));
+            }
         }
         if let Some(proof) = &self.unfinished {
             let assignment = self.delivery.as_ref().ok_or_else(|| {
@@ -422,33 +479,45 @@ pub async fn prepare_admitted(
         &plan.workflow.digest,
     )?;
     let prep_id = preparation_operation(plan.request.operation_id)?;
-    let prep_scope = canonical_digest(
-        1,
-        &json!({"kind":"worker_preparation","operation":plan.request.operation_id,"authority":plan.request.authority.digest()?,"phase":plan.request.phase,"source":plan.source,"role":plan.role,"assignment":plan.request.delivery.as_ref().map(|assignment|assignment.digest()).transpose()?}),
-    )?;
-    let prep_permit = runtime.control.admit_preparation_observed(
-        &plan.request.lease,
-        PreparationAdmission {
-            request_id: prep_id,
-            work_key: plan.request.authority.work_key()?,
-            scope_digest: prep_scope,
-            reference: PreparationReference {
-                worker_operation: plan.request.operation_id,
-                workspace: plan.workspace.id,
-                account: plan.account.clone(),
-                phase: plan.request.phase.clone(),
-            },
+    let mut prep_binding = json!({"kind":"worker_preparation","operation":plan.request.operation_id,"authority":plan.request.authority.digest()?,"phase":plan.request.phase,"source":plan.source,"role":plan.role,"assignment":plan.request.delivery.as_ref().map(|assignment|assignment.digest()).transpose()?});
+    if let Some(round) = &plan.request.review_round {
+        prep_binding["review_round"] = json!(round.digest());
+    }
+    let prep_scope = canonical_digest(1, &prep_binding)?;
+    let prep_admission = PreparationAdmission {
+        request_id: prep_id,
+        work_key: plan.request.authority.work_key()?,
+        scope_digest: prep_scope,
+        reference: PreparationReference {
+            worker_operation: plan.request.operation_id,
+            workspace: plan.workspace.id,
+            account: plan.account.clone(),
+            phase: plan.request.phase.clone(),
         },
-        |snapshot| {
-            let current = runtime.plan_worker_preparation(
-                &plan.request,
-                plan.workspace.id,
-                &plan.account,
-                snapshot,
-            )?;
-            require_preparation_schedule(&initial_schedule, &current, plan.request.max_turns)
-        },
-    )?;
+    };
+    let prep_gate = |snapshot: &crate::control::ControlSnapshot| {
+        let current = runtime.plan_worker_preparation(
+            &plan.request,
+            plan.workspace.id,
+            &plan.account,
+            snapshot,
+        )?;
+        require_preparation_schedule(&initial_schedule, &current, plan.request.max_turns)
+    };
+    let prep_permit = if let Some(round) = &plan.request.review_round {
+        runtime.control.admit_round_preparation_observed(
+            &plan.request.lease,
+            prep_admission,
+            round.reference().clone(),
+            prep_gate,
+        )?
+    } else {
+        runtime.control.admit_preparation_observed(
+            &plan.request.lease,
+            prep_admission,
+            prep_gate,
+        )?
+    };
     let prepared = prepare_owned(&runtime, &plan, &prep_permit).await;
     let observed_exit = runtime
         .executions
@@ -504,38 +573,48 @@ pub async fn prepare_admitted(
             attempt: schedule.attempt,
         },
     };
-    let permit = match (
-        &plan.request.unfinished,
-        &plan.request.source_advanced,
-        &plan.request.retried_unfinished,
-        &plan.request.review_retry,
-    ) {
-        (Some(proof), None, None, None) => {
-            runtime.admit_unfinished_worker(&plan.request.lease, admission, &contract, proof)?
-        }
-        (None, Some(proof), None, None) => runtime.admit_source_advanced_worker(
-            &plan.request.lease,
-            admission,
-            &contract,
-            proof,
-        )?,
-        (None, None, Some(proof), None) => runtime.admit_retried_unfinished_worker(
-            &plan.request.lease,
-            admission,
-            &contract,
-            proof,
-        )?,
-        (None, None, None, Some(proof)) => {
-            runtime.admit_review_retry_worker(&plan.request.lease, admission, &contract, proof)?
-        }
-        (None, None, None, None) => {
-            runtime.admit_worker(&plan.request.lease, admission, &contract)?
-        }
-        _ => {
-            return Err(Error::new(
-                "worker_binding",
-                "conflicting readmission causes",
-            ));
+    let permit = if plan.request.review_round.is_some() {
+        // Read the actual closed canonical preparation; Control checks its whole
+        // digest again atomically with the model admission and current proof.
+        let preparation = runtime.control.operation(prep_id)?;
+        runtime.admit_review_round_worker(admission, &contract, &plan.request, &preparation)?
+    } else {
+        match (
+            &plan.request.unfinished,
+            &plan.request.source_advanced,
+            &plan.request.retried_unfinished,
+            &plan.request.review_retry,
+        ) {
+            (Some(proof), None, None, None) => {
+                runtime.admit_unfinished_worker(&plan.request.lease, admission, &contract, proof)?
+            }
+            (None, Some(proof), None, None) => runtime.admit_source_advanced_worker(
+                &plan.request.lease,
+                admission,
+                &contract,
+                proof,
+            )?,
+            (None, None, Some(proof), None) => runtime.admit_retried_unfinished_worker(
+                &plan.request.lease,
+                admission,
+                &contract,
+                proof,
+            )?,
+            (None, None, None, Some(proof)) => runtime.admit_review_retry_worker(
+                &plan.request.lease,
+                admission,
+                &contract,
+                proof,
+            )?,
+            (None, None, None, None) => {
+                runtime.admit_worker(&plan.request.lease, admission, &contract)?
+            }
+            _ => {
+                return Err(Error::new(
+                    "worker_binding",
+                    "conflicting readmission causes",
+                ));
+            }
         }
     };
     let start: Result<AdmittedWorker> = (|| {
@@ -750,6 +829,9 @@ impl Plan {
         &self,
         runtime: &RuntimeCoordinator,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
+        if self.request.review_round.is_some() {
+            return runtime.next_attempt_for_review_round(&self.request);
+        }
         match (
             &self.request.unfinished,
             &self.request.source_advanced,

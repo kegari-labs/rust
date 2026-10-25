@@ -396,6 +396,7 @@ impl RuntimeDriver {
                             source_advanced: None,
                             retried_unfinished: None,
                             review_retry: None,
+                            review_round: None,
                             max_seconds: bound,
                             max_turns: action.schedule.max_turns,
                         },

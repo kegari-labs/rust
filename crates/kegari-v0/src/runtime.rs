@@ -466,7 +466,16 @@ impl RuntimeCoordinator {
                 ));
             }
         };
-        self.plan_attempt(&request.phase, workspace, account, cause, Some(snapshot))
+        self.plan_attempt_context(
+            &request.phase,
+            workspace,
+            account,
+            WorkerPlanning {
+                readmission: cause,
+                round: request.review_round.as_deref(),
+            },
+            Some(snapshot),
+        )
     }
     pub fn next_attempt_for_unfinished(
         &self,
@@ -505,6 +514,79 @@ impl RuntimeCoordinator {
         let account = &config.connections[&workspace.codex_connection].account_id;
         self.plan_attempt(proof.phase(), workspace.id, account, Some(proof), None)
     }
+    pub(crate) fn next_attempt_for_review_round(
+        &self,
+        request: &crate::runtime_workers::LaunchRequest,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        request.validate_binding()?;
+        let round = request.review_round.as_deref().ok_or_else(|| {
+            Error::new(
+                "worker_binding",
+                "round planning requires the actual opaque round plan",
+            )
+        })?;
+        let workspace = round.authority().workspace_id();
+        let config = self.configuration.snapshot()?;
+        let ws = config
+            .workspaces
+            .values()
+            .find(|ws| ws.id == workspace)
+            .ok_or_else(|| Error::new("scope_violation", "round workspace disappeared"))?;
+        self.plan_attempt_context(
+            &request.phase,
+            workspace,
+            &config.connections[&ws.codex_connection].account_id,
+            WorkerPlanning {
+                readmission: request_readmission(request)?,
+                round: Some(round),
+            },
+            None,
+        )
+    }
+    fn schedule_review_round(
+        &self,
+        limits: &crate::config::RuntimeConfig,
+        receipts: &[crate::control::Receipt],
+        round: &crate::delivery::VerifiedReviewRoundPlan,
+        readmission: Option<WorkerReadmission<'_>>,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        let config = self.configuration.snapshot()?;
+        // A paired repair ignores an unrelated implementation-captured review
+        // cap, but must still fit the current configured review namespace.
+        if round.reference().ordinal > config.runtime.max_review_rounds {
+            return Err(Error::new(
+                "review_rounds_exhausted",
+                "round exceeds the current configured review bound",
+            ));
+        }
+
+        let current = self
+            .current_admission_authority(&WorkerAuthority::Authorized(round.authority().clone()))?;
+        WorkerAuthority::Authorized(round.authority().clone()).compare(&current)?;
+        let grants = crate::runtime_workflow::current_retry_grants(
+            &config,
+            &self.observations.admission_snapshot()?,
+            round.authority().work(),
+            receipts,
+            &self.services.key,
+        )?;
+        round.verify_joined(&|operation| self.retained_completion(operation))?;
+        let cause = round_run_cause(readmission)?;
+        crate::runtime_schedule::plan_review_round(crate::runtime_schedule::RoundScheduleInput {
+            runtime: limits,
+            phase: round.subject_phase(),
+            workspace: round.authority().workspace_id(),
+            receipts,
+            grants: &grants,
+            proof: round,
+            cause: &cause,
+            review_retry: match readmission {
+                Some(WorkerReadmission::ReviewRetry(proof)) => Some(proof),
+                _ => None,
+            },
+            now: Utc::now(),
+        })
+    }
     fn plan_attempt(
         &self,
         phase: &crate::scheduler::PhaseKey,
@@ -513,6 +595,38 @@ impl RuntimeCoordinator {
         readmission: Option<WorkerReadmission<'_>>,
         locked_snapshot: Option<&crate::control::ControlSnapshot>,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
+        self.plan_attempt_context(
+            phase,
+            workspace,
+            account,
+            WorkerPlanning {
+                readmission,
+                round: None,
+            },
+            locked_snapshot,
+        )
+    }
+    fn plan_attempt_context(
+        &self,
+        phase: &crate::scheduler::PhaseKey,
+        workspace: Uuid,
+        account: &str,
+        planning: WorkerPlanning<'_>,
+        locked_snapshot: Option<&crate::control::ControlSnapshot>,
+    ) -> Result<crate::runtime_schedule::RunSchedule> {
+        let WorkerPlanning { readmission, round } = planning;
+        if round.is_none()
+            && match readmission {
+                Some(WorkerReadmission::Unfinished(proof)) => proof.requires_review_round(),
+                Some(WorkerReadmission::SourceAdvanced(proof)) => proof.requires_review_round(),
+                _ => false,
+            }
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "actual common review lineage requires its opaque round plan",
+            ));
+        }
         let config = self.configuration.snapshot()?;
         let ws = config
             .workspaces
@@ -595,6 +709,7 @@ impl RuntimeCoordinator {
             )?;
             crate::runtime_workflow::require_current_grant(&grant, &observed)?;
             if phase.phase == "child_codex_review"
+                && round.is_none()
                 && !matches!(readmission, Some(WorkerReadmission::ReviewRetry(_)))
                 && !matches!(readmission, Some(WorkerReadmission::SourceAdvanced(proof)) if proof.has_granted_review())
             {
@@ -737,6 +852,9 @@ impl RuntimeCoordinator {
                 WorkerReadmission::ReviewRetry(proof) => proof.verify_completion(&completed)?,
                 _ => require_joined_readmission(&completed)?,
             }
+            if let Some(round) = round {
+                return self.schedule_review_round(&limits, &receipts, round, Some(proof));
+            }
             match proof {
                 WorkerReadmission::Unfinished(proof) => crate::runtime_schedule::plan_unfinished(
                     &limits,
@@ -775,6 +893,8 @@ impl RuntimeCoordinator {
                     Ok(schedule)
                 }
             }
+        } else if let Some(round) = round {
+            self.schedule_review_round(&limits, &receipts, round, None)
         } else {
             crate::runtime_schedule::plan(&limits, phase, workspace, &receipts, Utc::now())
         }
@@ -1480,6 +1600,77 @@ impl RuntimeCoordinator {
             &crate::housekeeping::VerifiedDirectoryReuse,
         )>,
     ) -> Result<Permit> {
+        self.admit_worker_context(
+            lease,
+            input,
+            contract,
+            WorkerAdmissionContext {
+                planning: WorkerPlanning {
+                    readmission,
+                    round: None,
+                },
+                session_resume,
+                preparation: None,
+            },
+        )
+    }
+    pub(crate) fn admit_review_round_worker(
+        &self,
+        input: crate::control::RunAdmission,
+        contract: &WorkerContract,
+        request: &crate::runtime_workers::LaunchRequest,
+        preparation: &crate::control::Receipt,
+    ) -> Result<Permit> {
+        request.validate_binding()?;
+        let round = request.review_round.as_deref().ok_or_else(|| {
+            Error::new(
+                "worker_binding",
+                "round admission requires its actual opaque plan",
+            )
+        })?;
+        if input.request_id != request.operation_id || input.reference.phase != request.phase {
+            return Err(Error::new(
+                "worker_binding",
+                "round request differs from actual run admission",
+            ));
+        }
+        request.authority.compare(contract.authority())?;
+        self.admit_worker_context(
+            &request.lease,
+            input,
+            contract,
+            WorkerAdmissionContext {
+                planning: WorkerPlanning {
+                    readmission: request_readmission(request)?,
+                    round: Some(round),
+                },
+                session_resume: None,
+                preparation: Some(crate::control::ReviewReceiptReference {
+                    operation: preparation.operation_id,
+                    receipt_digest: canonical_digest(1, preparation)?,
+                }),
+            },
+        )
+    }
+    fn admit_worker_context(
+        &self,
+        lease: &Lease,
+        input: crate::control::RunAdmission,
+        contract: &WorkerContract,
+        context: WorkerAdmissionContext<'_>,
+    ) -> Result<Permit> {
+        let WorkerAdmissionContext {
+            planning,
+            session_resume,
+            preparation,
+        } = context;
+        let WorkerPlanning { readmission, round } = planning;
+        if round.is_some() && (session_resume.is_some() || preparation.is_none()) {
+            return Err(Error::new(
+                "worker_binding",
+                "round admission lost its exact preparation",
+            ));
+        }
         if readmission.is_some() && session_resume.is_some() {
             return Err(Error::new(
                 "worker_binding",
@@ -1510,6 +1701,17 @@ impl RuntimeCoordinator {
             .capture_active(workspace, revision, workflow)?;
         let final_gate = |snapshot: &crate::control::ControlSnapshot| {
             self.registration.verify_active_owner(lease)?;
+            if let Some(round) = round {
+                round.verify_contract(contract)?;
+                if round.subject_phase() != &reference.phase {
+                    return Err(Error::new(
+                        "worker_binding",
+                        "round admission changes phase",
+                    ));
+                }
+                WorkerAuthority::Authorized(round.authority().clone())
+                    .compare(contract.authority())?;
+            }
             if let Some(proof) = readmission {
                 proof.verify_contract(contract)?;
                 if proof.phase() != &reference.phase {
@@ -1520,11 +1722,14 @@ impl RuntimeCoordinator {
                 }
                 WorkerAuthority::Authorized(proof.authority().clone())
                     .compare(contract.authority())?;
-                let schedule = self.plan_attempt(
+                let schedule = self.plan_attempt_context(
                     &reference.phase,
                     reference.workspace,
                     &reference.account,
-                    Some(proof),
+                    WorkerPlanning {
+                        readmission: Some(proof),
+                        round,
+                    },
                     Some(snapshot),
                 )?;
                 if reference.attempt != schedule.attempt
@@ -1553,11 +1758,14 @@ impl RuntimeCoordinator {
                 }
             }
             if readmission.is_none() && session_resume.is_none() {
-                let schedule = self.plan_attempt(
+                let schedule = self.plan_attempt_context(
                     &reference.phase,
                     reference.workspace,
                     &reference.account,
-                    None,
+                    WorkerPlanning {
+                        readmission: None,
+                        round,
+                    },
                     Some(snapshot),
                 )?;
                 if reference.attempt != schedule.attempt
@@ -1682,7 +1890,19 @@ impl RuntimeCoordinator {
                 .cloned();
             crate::runtime_schedule::ensure_capacity(&config, &active, &reference, quota.as_ref())
         };
-        let permit = if let Some(resume) = resume_reference {
+        let permit = if let Some(round) = round {
+            self.control.admit_round_run_observed(
+                lease,
+                input,
+                crate::control::ReviewRoundRunProvenance {
+                    round: round.reference().clone(),
+                    preparation: preparation
+                        .ok_or_else(|| Error::new("worker_binding", "round preparation missing"))?,
+                    cause: round_run_cause(readmission)?,
+                },
+                final_gate,
+            )?
+        } else if let Some(resume) = resume_reference {
             self.control
                 .admit_run_resumed_observed(lease, input, resume, final_gate)?
         } else {
@@ -2796,6 +3016,58 @@ fn readmission_spacing(
         .detail(json!({"not_before":not_before})));
     }
     Ok(not_before)
+}
+
+#[derive(Clone, Copy)]
+struct WorkerPlanning<'a> {
+    readmission: Option<WorkerReadmission<'a>>,
+    round: Option<&'a crate::delivery::VerifiedReviewRoundPlan>,
+}
+struct WorkerAdmissionContext<'a> {
+    planning: WorkerPlanning<'a>,
+    session_resume: Option<(
+        &'a crate::worker_run::VerifiedSessionResume,
+        &'a crate::housekeeping::VerifiedDirectoryReuse,
+    )>,
+    preparation: Option<crate::control::ReviewReceiptReference>,
+}
+fn request_readmission(
+    request: &crate::runtime_workers::LaunchRequest,
+) -> Result<Option<WorkerReadmission<'_>>> {
+    match (
+        &request.unfinished,
+        &request.source_advanced,
+        &request.retried_unfinished,
+        &request.review_retry,
+    ) {
+        (Some(p), None, None, None) => Ok(Some(WorkerReadmission::Unfinished(p))),
+        (None, Some(p), None, None) => Ok(Some(WorkerReadmission::SourceAdvanced(p))),
+        (None, None, Some(p), None) => Ok(Some(WorkerReadmission::Retried(p))),
+        (None, None, None, Some(p)) => Ok(Some(WorkerReadmission::ReviewRetry(p))),
+        (None, None, None, None) => Ok(None),
+        _ => Err(Error::new(
+            "worker_binding",
+            "conflicting round readmission causes",
+        )),
+    }
+}
+fn round_run_cause(
+    readmission: Option<WorkerReadmission<'_>>,
+) -> Result<crate::control::ReviewRoundRunCause> {
+    use crate::control::ReviewRoundRunCause;
+    match readmission {
+        None | Some(WorkerReadmission::ReviewRetry(_)) => Ok(ReviewRoundRunCause::Review),
+        Some(WorkerReadmission::Unfinished(p)) => {
+            Ok(ReviewRoundRunCause::PairedRepair(continuation_reference(p)))
+        }
+        Some(WorkerReadmission::SourceAdvanced(p)) => Ok(ReviewRoundRunCause::AfterRepair(
+            source_advanced_reference(p),
+        )),
+        Some(WorkerReadmission::Retried(_)) => Err(Error::new(
+            "worker_binding",
+            "new implementation grant needs its own round lineage",
+        )),
+    }
 }
 
 #[derive(Clone, Copy)]

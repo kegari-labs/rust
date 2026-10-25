@@ -266,6 +266,7 @@ pub struct ReviewRetryRequest<'a> {
 
 /// A completed exact-head review inside an authenticated granted budget. This
 /// carries its actual completion; serialized receipts alone cannot recreate it.
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct CompletedGrantedReview {
     basis: Arc<ReviewRetryWork>,
@@ -276,6 +277,7 @@ pub(crate) struct CompletedGrantedReview {
     inventory_digest: String,
     digest: String,
 }
+#[cfg(test)]
 impl CompletedGrantedReview {
     pub(crate) fn digest(&self) -> &str {
         &self.digest
@@ -329,6 +331,7 @@ impl CompletedGrantedReview {
     }
 }
 impl DeliveryCoordinator {
+    #[cfg(test)]
     pub(crate) async fn completed_granted_review(
         &self,
         admission: &DeliveryAdmission,

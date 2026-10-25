@@ -37,7 +37,8 @@ impl RunContinuationReference {
             || receipt
                 .expected
                 .contains_key("session_recovery_preparation")
-            || value.review_rounds_consumed > run.max_review_rounds
+            || (ReviewRoundReference::from_receipt(receipt)?.is_none()
+                && value.review_rounds_consumed > run.max_review_rounds)
         {
             return Err(Error::new(
                 "record_corrupt",
@@ -46,7 +47,7 @@ impl RunContinuationReference {
         }
         Ok(Some(value))
     }
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if self.predecessor.is_nil() || self.failure_operation.is_nil() {
             return Err(Error::new(
                 "record_corrupt",
@@ -90,7 +91,7 @@ impl SourceAdvancedReference {
             review_rounds_consumed: self.review_rounds_consumed,
         }
     }
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         self.mechanics().validate()?;
         crate::evidence::validate_digest(&self.source_receipt_digest)?;
         if self.predecessor == self.source_operation {
@@ -118,7 +119,9 @@ impl SourceAdvancedReference {
             || !["child_local_validation", "child_codex_review"].contains(&run.phase.phase.as_str())
             || receipt.operation_id == value.predecessor
             || receipt.operation_id == value.source_operation
-            || value.review_rounds_consumed > run.max_review_rounds
+            || (run.phase.phase != "child_local_validation"
+                && ReviewRoundReference::from_receipt(receipt)?.is_none()
+                && value.review_rounds_consumed > run.max_review_rounds)
             || [
                 "metadata",
                 "release_resume",
@@ -173,6 +176,16 @@ impl ControlHost {
         source: &SourceAdvancedReference,
         history: &BTreeMap<u32, Receipt>,
     ) -> Result<()> {
+        self.verify_source_advanced_accounting(snapshot, run, source, history, None)
+    }
+    pub(super) fn verify_source_advanced_accounting(
+        &self,
+        snapshot: &ControlSnapshot,
+        run: &RunReference,
+        source: &SourceAdvancedReference,
+        history: &BTreeMap<u32, Receipt>,
+        round: Option<&ReviewRoundReference>,
+    ) -> Result<()> {
         if !["child_local_validation", "child_codex_review"].contains(&run.phase.phase.as_str()) {
             return Err(Error::new(
                 "scope_violation",
@@ -186,6 +199,14 @@ impl ControlHost {
                 "source has no actual implementation admission",
             )
         })?;
+        if let Some(marker) = ReviewRoundReference::from_receipt(&receipt)?
+            && !marker.is_repair()
+        {
+            return Err(Error::new(
+                "review_round_lineage",
+                "advanced implementation has another round role",
+            ));
+        }
         if original.phase.phase != "implementation"
             || canonical_digest(1, &receipt)? != source.source_receipt_digest
         {
@@ -194,7 +215,12 @@ impl ControlHost {
                 "source no longer binds the exact completed implementation",
             ));
         }
-        for receipt in self.receipts.all()? {
+        let observed = if round.is_some() {
+            self.review_round_receipts()?
+        } else {
+            self.receipts.all()?
+        };
+        for receipt in observed {
             if let Some(later) = RunReference::from_receipt(&receipt)?
                 && later.phase == original.phase
             {
@@ -216,7 +242,14 @@ impl ControlHost {
                 }
             }
         }
-        self.verify_run_continuation(snapshot, run, &source.mechanics(), history)
+        self.verify_run_continuation_accounting(
+            snapshot,
+            run,
+            &source.mechanics(),
+            history,
+            round,
+            run.phase.phase == "child_local_validation",
+        )
     }
     /// The callback must verify the opaque delivery trigger, source and current
     /// authority against this serialized snapshot. It must not reenter control.
@@ -256,6 +289,17 @@ impl ControlHost {
         run: &RunReference,
         continuation: &RunContinuationReference,
         history: &BTreeMap<u32, Receipt>,
+    ) -> Result<()> {
+        self.verify_run_continuation_accounting(snapshot, run, continuation, history, None, false)
+    }
+    pub(super) fn verify_run_continuation_accounting(
+        &self,
+        snapshot: &ControlSnapshot,
+        run: &RunReference,
+        continuation: &RunContinuationReference,
+        history: &BTreeMap<u32, Receipt>,
+        round: Option<&ReviewRoundReference>,
+        validation_source: bool,
     ) -> Result<()> {
         let (_, predecessor) = history.last_key_value().ok_or_else(|| {
             Error::new("no_work_trigger", "continuation has no actual predecessor")
@@ -316,7 +360,9 @@ impl ControlHost {
             || run.max_turns > max_turns
             || run.max_review_rounds > max_review_rounds
             || continuation.review_rounds_consumed < prior_review_rounds
-            || continuation.review_rounds_consumed > max_review_rounds
+            || (round.is_none()
+                && !validation_source
+                && continuation.review_rounds_consumed > max_review_rounds)
         {
             return Err(Error::new(
                 "attempts_exhausted",

@@ -96,6 +96,10 @@ struct ChildReference {
     review_retry_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     review_history: Vec<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_round_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paired_round_digest: Option<String>,
     observed_at: chrono::DateTime<Utc>,
     error: Option<Error>,
 }
@@ -120,6 +124,8 @@ struct ChildPipeline {
     source_advanced: Option<Arc<VerifiedSourceAdvanced>>,
     review_worker_assignment: Option<DeliveryWorkerAssignment>,
     review_retry: Option<Arc<ReviewRetryWork>>,
+    review_round: Option<Arc<VerifiedReviewRoundPlan>>,
+    paired_round: Option<Arc<VerifiedReviewRoundPlan>>,
 }
 pub(super) struct CandidateChild {
     pub(super) child: Uuid,
@@ -296,6 +302,8 @@ impl RuntimeDelivery {
                         review_retry_operation: None,
                         review_retry_digest: None,
                         review_history: vec![],
+                        review_round_digest: None,
+                        paired_round_digest: None,
                         observed_at: Utc::now(),
                         error: None,
                     },
@@ -318,6 +326,8 @@ impl RuntimeDelivery {
                     source_advanced: None,
                     review_worker_assignment: None,
                     review_retry: None,
+                    review_round: None,
+                    paired_round: None,
                 };
                 self.persist_child(&pipeline)?;
                 self.children
@@ -620,11 +630,16 @@ impl RuntimeDelivery {
         )
     }
     async fn launch_review_retry(&self, lease: &Lease, child: &mut ChildPipeline) -> Result<()> {
-        let proof = child
-            .review_retry
-            .as_ref()
-            .ok_or_else(|| Error::new("reconciliation_required", "review retry proof unavailable"))?
-            .clone();
+        let round = child.review_round.clone().ok_or_else(|| {
+            Error::new(
+                "review_round_unavailable",
+                "retry requires its retained opaque review round",
+            )
+        })?;
+        if child.reference.review_round_digest.as_deref() != Some(round.digest()) {
+            return Err(Error::new("record_corrupt", "retry round proposal changed"));
+        }
+        let phase = round.subject_phase().clone();
         let operation = child
             .reference
             .review_retry_operation
@@ -637,10 +652,13 @@ impl RuntimeDelivery {
                         "review retry operation is not a model admission",
                     )
                 })?;
-                if run.phase != *proof.phase() || run.instruction_digest.is_empty() {
+                if run.phase != phase
+                    || crate::control::ReviewRoundReference::from_receipt(&receipt)?.as_ref()
+                        != Some(round.reference())
+                {
                     return Err(Error::new(
                         "worker_binding",
-                        "review retry receipt changed phase",
+                        "review retry receipt changed phase/round",
                     ));
                 }
                 self.worker_launch_admitted(operation)?
@@ -652,52 +670,51 @@ impl RuntimeDelivery {
             if self.worker_launch_admitted(operation)? {
                 return Err(Error::new(
                     "reconciliation_required",
-                    "review preparation exists without a known model admission; preserve its original identity",
+                    "review preparation exists without a known model admission; preserve original identity",
                 ));
             }
             if self
                 .current_review_grants(&child.reference.work)?
                 .iter()
-                .any(|grant| grant.phase() == proof.phase())
+                .any(|g| g.phase() == &phase)
             {
-                // No preparation/model effect exists for this pending launch.
-                // A newer explicit grant is selected from the actual latest
-                // failed review on the next tick, without reusing this proof.
                 child.reference.stage = Stage::RetryReview;
                 return self.persist_child(child);
             }
-            let schedule = self.runtime.next_attempt_for_review_retry(&proof)?;
+            let mut request = crate::runtime_workers::LaunchRequest {
+                lease: lease.clone(),
+                operation_id: operation,
+                authority: self.current_delivery_worker_authority(round.authority())?,
+                phase,
+                source: None,
+                delivery: Some(round.assignment().clone()),
+                unfinished: None,
+                source_advanced: None,
+                retried_unfinished: None,
+                review_retry: child.review_retry.clone(),
+                review_round: Some(round),
+                max_seconds: 3600,
+                max_turns: self.runtime.configuration.snapshot()?.runtime.max_turns,
+            };
+            let schedule = self.runtime.next_attempt_for_review_round(&request)?;
             if schedule.not_before > Utc::now() {
                 return Err(Error::new(
                     "operation_pending",
                     "review retry spacing has not elapsed",
                 ));
             }
+            request.max_turns = schedule.max_turns;
             child.reference.review_retry_operation = Some(operation);
             self.persist_child(child)?;
-            crate::runtime_workers::launch(
-                self.runtime.clone(),
-                crate::runtime_workers::LaunchRequest {
-                    lease: lease.clone(),
-                    operation_id: operation,
-                    authority: self.current_delivery_worker_authority(proof.authority())?,
-                    phase: proof.phase().clone(),
-                    source: None,
-                    delivery: Some(proof.assignment().clone()),
-                    unfinished: None,
-                    source_advanced: None,
-                    retried_unfinished: None,
-                    review_retry: Some(proof.clone()),
-                    max_seconds: 3600,
-                    max_turns: schedule.max_turns,
-                },
-            )
-            .await?;
+            crate::runtime_workers::launch(self.runtime.clone(), request).await?;
         }
-        // The old run, receipt and assignment remain immutable history. A new
-        // operation is selected only after actual preparation/model admission.
         if child.reference.review != Some(operation) {
-            child.reference.review_history.push(proof.predecessor());
+            child
+                .reference
+                .review_history
+                .push(child.reference.review.ok_or_else(|| {
+                    Error::new("record_corrupt", "review retry has no original operation")
+                })?);
             child.reference.review = Some(operation);
         }
         child.reference.review_retry_operation = None;
@@ -710,7 +727,7 @@ impl RuntimeDelivery {
         operation_id: Uuid,
         assignment: DeliveryWorkerAssignment,
     ) -> Result<Uuid> {
-        self.launch_assignment_with_source(lease, operation_id, assignment, None)
+        self.launch_assignment_with_source(lease, operation_id, assignment, None, None)
             .await
     }
     fn current_delivery_worker_authority(&self, expected: &FreshGate) -> Result<WorkerAuthority> {
@@ -725,8 +742,12 @@ impl RuntimeDelivery {
         operation_id: Uuid,
         assignment: DeliveryWorkerAssignment,
         source_advanced: Option<Arc<VerifiedSourceAdvanced>>,
+        review_round: Option<Arc<VerifiedReviewRoundPlan>>,
     ) -> Result<Uuid> {
-        let phase = if let Some(proof) = &source_advanced {
+        let phase = if let Some(round) = &review_round {
+            round.verify_assignment(&assignment)?;
+            round.subject_phase().clone()
+        } else if let Some(proof) = &source_advanced {
             proof.phase().clone()
         } else {
             PhaseKey {
@@ -742,41 +763,41 @@ impl RuntimeDelivery {
             .values()
             .find(|w| w.id == assignment.authority().workspace_id())
             .ok_or_else(|| Error::new("scope_violation", "assignment workspace disappeared"))?;
-        let schedule = match &source_advanced {
-            Some(proof) => {
-                proof.verify_assignment(&assignment)?;
-                self.runtime.next_attempt_for_source_advanced(proof)?
-            }
-            None => self.runtime.next_attempt(
-                &phase,
+        let mut request = crate::runtime_workers::LaunchRequest {
+            lease: lease.clone(),
+            operation_id,
+            authority: self.current_delivery_worker_authority(assignment.authority())?,
+            phase,
+            source: None,
+            delivery: Some(assignment),
+            unfinished: None,
+            retried_unfinished: None,
+            review_retry: None,
+            source_advanced,
+            review_round,
+            max_seconds: 3600,
+            max_turns: config.runtime.max_turns,
+        };
+        let schedule = if request.review_round.is_some() {
+            self.runtime.next_attempt_for_review_round(&request)?
+        } else if let Some(proof) = &request.source_advanced {
+            proof.verify_assignment(request.delivery.as_ref().unwrap())?;
+            self.runtime.next_attempt_for_source_advanced(proof)?
+        } else {
+            self.runtime.next_attempt(
+                &request.phase,
                 workspace.id,
                 &config.connections[&workspace.codex_connection].account_id,
-            )?,
+            )?
         };
         if schedule.not_before > Utc::now() {
             return Err(Error::new(
                 "operation_pending",
-                "delivery worker phase retry spacing has not elapsed",
+                "delivery worker spacing has not elapsed",
             ));
         }
-        crate::runtime_workers::launch(
-            self.runtime.clone(),
-            crate::runtime_workers::LaunchRequest {
-                lease: lease.clone(),
-                operation_id,
-                authority: self.current_delivery_worker_authority(assignment.authority())?,
-                phase,
-                source: None,
-                delivery: Some(assignment),
-                unfinished: None,
-                retried_unfinished: None,
-                review_retry: None,
-                source_advanced,
-                max_seconds: 3600,
-                max_turns: schedule.max_turns,
-            },
-        )
-        .await
+        request.max_turns = schedule.max_turns;
+        crate::runtime_workers::launch(self.runtime.clone(), request).await
     }
     async fn advanced_assignment(
         &self,
@@ -855,19 +876,38 @@ impl RuntimeDelivery {
                 "prior required check has no actual completed outcome",
             )
         })?;
-        let proof = coordinator
-            .source_advanced(SourceAdvancedRequest {
-                source: RepairSource {
-                    admission,
-                    original: child.claim.clone(),
-                    source: required(&child.source, "sealed source")?,
-                    completion: child.completion.clone(),
-                },
-                assignment: &assignment,
-                predecessor: &predecessor,
-                completion,
-            })
-            .await?;
+        let request = SourceAdvancedRequest {
+            source: RepairSource {
+                admission,
+                original: child.claim.clone(),
+                source: required(&child.source, "sealed source")?,
+                completion: child.completion.clone(),
+            },
+            assignment: &assignment,
+            predecessor: &predecessor,
+            completion,
+        };
+        let proof = if assignment.phase() == "child_local_validation" {
+            match self.granted_review_repair(child).await? {
+                Some(repair)
+                    if matches!(
+                        repair.granted_review(),
+                        Some(CompletedReviewLineage::Round(_))
+                    ) =>
+                {
+                    coordinator
+                        .source_advanced_paired_validation(
+                            request,
+                            &repair,
+                            &self.current_review_grants(&child.reference.work)?,
+                        )
+                        .await?
+                }
+                _ => coordinator.source_advanced(request).await?,
+            }
+        } else {
+            coordinator.source_advanced(request).await?
+        };
         Ok((assignment, Some(Arc::new(proof))))
     }
     async fn granted_review_repair(
@@ -907,6 +947,38 @@ impl RuntimeDelivery {
         }
         Ok(found)
     }
+    async fn paired_review_plan(
+        &self,
+        child: &ChildPipeline,
+    ) -> Result<Option<Arc<VerifiedReviewRoundPlan>>> {
+        let candidates: Vec<_> = self
+            .children
+            .pipelines
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+            .iter()
+            .filter(|(id, _)| **id != child.reference.operation)
+            .map(|(_, value)| value.clone())
+            .collect();
+        let mut result = None;
+        for candidate in candidates {
+            let candidate = candidate.lock().await;
+            if candidate.reference.repair_operation != Some(child.reference.operation) {
+                continue;
+            }
+            if let Some(plan) = &candidate.paired_round
+                && (candidate.reference.work != child.reference.work
+                    || candidate.reference.paired_round_digest.as_deref() != Some(plan.digest())
+                    || result.replace(plan.clone()).is_some())
+            {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "paired review ancestry is ambiguous or changed",
+                ));
+            }
+        }
+        Ok(result)
+    }
     fn retain_unfinished(
         &self,
         child: &mut ChildPipeline,
@@ -935,6 +1007,17 @@ impl RuntimeDelivery {
                 "repair intent differs from retained evidence",
             ));
         }
+        if child.paired_round.is_none()
+            && crate::control::ReviewRoundReference::from_receipt(
+                &self.runtime.control.operation(proof.predecessor())?,
+            )?
+            .is_some()
+        {
+            return Err(Error::new(
+                "review_round_continuation_unavailable",
+                "further implementation within one pair requires exact retained pair/source continuation; original budgets and evidence remain held",
+            ));
+        }
         let operation = child
             .reference
             .repair_operation
@@ -955,19 +1038,17 @@ impl RuntimeDelivery {
             .iter()
             .filter(|grant| grant.phase() == proof.phase())
             .collect();
-        let (phase, assignment, unfinished, retried_unfinished, schedule) = match matches.as_slice()
-        {
+        if child.paired_round.is_some() && !matches.is_empty() {
+            return Err(Error::new(
+                "review_round_unavailable",
+                "paired repair cannot silently move to another implementation budget",
+            ));
+        }
+        let (phase, assignment, unfinished, retried_unfinished) = match matches.as_slice() {
             [] => {
-                let schedule = self.runtime.next_attempt_for_unfinished(&proof)?;
                 let assignment = crate::delivery::repair_worker_assignment(&proof)?;
                 proof.verify_assignment(&assignment)?;
-                (
-                    proof.phase().clone(),
-                    assignment,
-                    Some(proof),
-                    None,
-                    schedule,
-                )
+                (proof.phase().clone(), assignment, Some(proof), None)
             }
             [grant] => {
                 let workspace = self.workspace(
@@ -979,44 +1060,50 @@ impl RuntimeDelivery {
                     (*grant).clone(),
                     &grants,
                 )?);
-                let schedule = self.runtime.next_attempt_for_retried_unfinished(&retried)?;
                 let assignment = crate::delivery::retried_repair_worker_assignment(&retried)?;
                 retried.verify_assignment(&assignment)?;
-                (
-                    retried.phase().clone(),
-                    assignment,
-                    None,
-                    Some(retried),
-                    schedule,
-                )
+                (retried.phase().clone(), assignment, None, Some(retried))
             }
             _ => {
                 return Err(Error::new(
                     "ownership_conflict",
-                    "multiple operator retries replace this unfinished budget",
+                    "multiple retries replace unfinished budget",
                 ));
             }
         };
+        let mut request = crate::runtime_workers::LaunchRequest {
+            lease: lease.clone(),
+            operation_id: operation,
+            authority: self.current_delivery_worker_authority(assignment.authority())?,
+            phase,
+            source: None,
+            delivery: Some(assignment),
+            unfinished,
+            retried_unfinished,
+            review_retry: None,
+            source_advanced: None,
+            review_round: child.paired_round.clone(),
+            max_seconds: 3600,
+            max_turns: self.runtime.configuration.snapshot()?.runtime.max_turns,
+        };
+        let schedule = if request.review_round.is_some() {
+            self.runtime.next_attempt_for_review_round(&request)?
+        } else if let Some(retried) = &request.retried_unfinished {
+            self.runtime.next_attempt_for_retried_unfinished(retried)?
+        } else {
+            self.runtime
+                .next_attempt_for_unfinished(request.unfinished.as_ref().unwrap())?
+        };
+        if schedule.not_before > Utc::now() {
+            return Err(Error::new(
+                "operation_pending",
+                "repair spacing has not elapsed",
+            ));
+        }
+        request.max_turns = schedule.max_turns;
         child.reference.repair_operation = Some(operation);
         self.persist_child(child)?;
-        crate::runtime_workers::launch(
-            self.runtime.clone(),
-            crate::runtime_workers::LaunchRequest {
-                lease: lease.clone(),
-                operation_id: operation,
-                authority: self.current_delivery_worker_authority(assignment.authority())?,
-                phase,
-                source: None,
-                delivery: Some(assignment),
-                unfinished,
-                retried_unfinished,
-                review_retry: None,
-                source_advanced: None,
-                max_seconds: 3600,
-                max_turns: schedule.max_turns,
-            },
-        )
-        .await?;
+        crate::runtime_workers::launch(self.runtime.clone(), request).await?;
         child.reference.stage = Stage::RepairWaiting;
         self.persist_child(child)
     }
@@ -1103,7 +1190,7 @@ impl RuntimeDelivery {
         Ok(result)
     }
     fn block_terminal_child(&self, child: &mut ChildPipeline, error: &Error) -> Result<()> {
-        if !terminal_gate_failure(error) {
+        if !terminal_gate_failure(error) && error.code != "review_rounds_exhausted" {
             return Ok(());
         }
         let Some(phase) = &child.phase else {
@@ -1415,9 +1502,9 @@ impl RuntimeDelivery {
                 .collect();
             match matching.as_slice() {
                 [] if child
-                    .review_retry
+                    .review_round
                     .as_ref()
-                    .is_some_and(|proof| proof.phase() == &run.phase) =>
+                    .is_some_and(|plan| plan.subject_phase() == &run.phase) =>
                 {
                     Some((None, grants))
                 }
@@ -1532,6 +1619,7 @@ impl RuntimeDelivery {
                     operation,
                     assignment,
                     child.source_advanced.clone(),
+                    None,
                 )
                 .await?;
                 child.reference.stage = Stage::Validate;
@@ -1557,19 +1645,47 @@ impl RuntimeDelivery {
                 let result = match result {
                     Ok(result) => result,
                     Err(error) if terminal_gate_failure(&error) => {
-                        let proof = coordinator
-                            .unfinished_validation(ValidationRepairRequest {
-                                source: RepairSource {
-                                    admission: &admission,
-                                    original: child.claim.clone(),
-                                    source: required(&child.source, "sealed source")?,
-                                    completion: child.completion.clone(),
-                                },
-                                workflow: &workspace.workflow,
-                                outcome: &outcome,
-                                completion: completion.clone(),
-                            })
-                            .await;
+                        let request = ValidationRepairRequest {
+                            source: RepairSource {
+                                admission: &admission,
+                                original: child.claim.clone(),
+                                source: required(&child.source, "sealed source")?,
+                                completion: child.completion.clone(),
+                            },
+                            workflow: &workspace.workflow,
+                            outcome: &outcome,
+                            completion: completion.clone(),
+                        };
+                        if let Some(previous) = self.paired_review_plan(child).await? {
+                            let validation_source = child.source_advanced.clone().ok_or_else(|| Error::new(
+                                "review_round_lineage", "continued pair lacks its actual validation source capability"))?;
+                            let grants = self.current_review_grants(&child.reference.work)?;
+                            let config = self.runtime.configuration.snapshot()?;
+                            let (proof, next_pair) = match coordinator
+                                .continue_paired_repair(
+                                    request,
+                                    previous,
+                                    validation_source,
+                                    &config,
+                                    &grants,
+                                )
+                                .await
+                            {
+                                Ok(value) => value,
+                                // A missing required check is a known terminal
+                                // validation failure, not unfinished work proof.
+                                // Preserve that original error so the existing
+                                // outer retirement path can drain this phase.
+                                Err(unavailable) if unavailable.code == "no_work_trigger" => {
+                                    return Err(error);
+                                }
+                                Err(unavailable) => return Err(unavailable),
+                            };
+                            child.reference.paired_round_digest = Some(next_pair.digest().into());
+                            child.paired_round = Some(Arc::new(next_pair));
+                            return self.retain_unfinished(child, (*proof).clone(), error);
+                        }
+                        let proof = coordinator.unfinished_validation(request).await;
                         return match proof {
                             Ok(proof) => self.retain_unfinished(child, proof, error),
                             Err(unavailable) if unavailable.code == "no_work_trigger" => Err(error),
@@ -1723,6 +1839,38 @@ impl RuntimeDelivery {
                 child.reference.source_advanced_digest =
                     advanced.as_ref().map(|p| p.digest().to_owned());
                 child.source_advanced = advanced;
+                let grants = self.current_review_grants(&child.reference.work)?;
+                let input = ReviewRoundSource {
+                    admission: &admission,
+                    claim: child.claim.clone(),
+                    source: required(&child.source, "sealed source")?,
+                    completion: child.completion.clone(),
+                    assignment: required(&child.assignment, "review assignment")?,
+                };
+                let plan = if let Some(advanced) = &child.source_advanced {
+                    let paired = self.paired_review_plan(child).await?.ok_or_else(|| {
+                        Error::new(
+                            "review_round_unavailable",
+                            "changed review source lacks genuine paired-round ancestry",
+                        )
+                    })?;
+                    coordinator
+                        .after_repair_review_round(
+                            input,
+                            paired,
+                            advanced.clone(),
+                            &workspace.configuration,
+                            &grants,
+                        )
+                        .await?
+                } else {
+                    coordinator
+                        .initial_review_round(input, &workspace.configuration, &grants)
+                        .await?
+                };
+                plan.verify_assignment(&assignment)?;
+                child.reference.review_round_digest = Some(plan.digest().into());
+                child.review_round = Some(Arc::new(plan));
                 child.review_worker_assignment = Some(assignment.clone());
                 self.finish_child_phase(child, Stage::LaunchReview)?;
                 let operation = child.reference.review.unwrap_or_else(Uuid::new_v4);
@@ -1733,6 +1881,7 @@ impl RuntimeDelivery {
                     operation,
                     assignment,
                     child.source_advanced.clone(),
+                    child.review_round.clone(),
                 )
                 .await?;
                 child.reference.stage = Stage::Review;
@@ -1750,34 +1899,55 @@ impl RuntimeDelivery {
                             "actual failed review completion missing",
                         )
                     })?;
-                let proof = match grant {
+                let (round, retry) = match grant {
                     Some(grant) => {
-                        coordinator
-                            .retry_failed_review(ReviewRetryRequest {
-                                admission: &admission,
-                                assignment: required(
-                                    &child.review_worker_assignment,
-                                    "original review worker assignment",
-                                )?,
-                                failed: completion,
-                                grant,
-                                current_grants: &grants,
-                            })
-                            .await?
-                    }
-                    None => {
-                        coordinator
-                            .continue_failed_review(
-                                &admission,
-                                required(&child.review_retry, "previous review retry proof")?,
-                                completion,
+                        let proof = Arc::new(
+                            coordinator
+                                .retry_failed_review(ReviewRetryRequest {
+                                    admission: &admission,
+                                    assignment: required(
+                                        &child.review_worker_assignment,
+                                        "original review assignment",
+                                    )?,
+                                    failed: completion,
+                                    grant,
+                                    current_grants: &grants,
+                                })
+                                .await?,
+                        );
+                        let plan = coordinator
+                            .granted_review_round(
+                                ReviewRoundSource {
+                                    admission: &admission,
+                                    claim: child.claim.clone(),
+                                    source: required(&child.source, "sealed source")?,
+                                    completion: child.completion.clone(),
+                                    assignment: required(&child.assignment, "review assignment")?,
+                                },
+                                &workspace.configuration,
+                                proof.clone(),
                                 &grants,
                             )
-                            .await?
+                            .await?;
+                        (plan, Some(proof))
                     }
+                    None => (
+                        coordinator.transient_review_round(
+                            required(&child.review_round, "previous genuine round plan")?.clone(),
+                            completion,
+                            &workspace.configuration,
+                            &grants,
+                        )?,
+                        None,
+                    ),
                 };
-                child.reference.review_retry_digest = Some(proof.digest().into());
-                child.review_retry = Some(Arc::new(proof));
+                child.reference.review_round_digest = Some(round.digest().into());
+                child.review_worker_assignment = Some(round.assignment().clone());
+                child.review_round = Some(Arc::new(round));
+                child.reference.review_retry_digest = retry.as_ref().map(|p| p.digest().into());
+                child.review_retry = retry;
+                child.source_advanced = None;
+                child.reference.source_advanced_digest = None;
                 self.finish_child_phase(child, Stage::LaunchReviewRetry)?;
                 self.persist_child(child)?;
             }
@@ -1785,66 +1955,41 @@ impl RuntimeDelivery {
                 let (outcome, completion) = self
                     .completed_claim(child.reference.review.unwrap())?
                     .ok_or_else(|| Error::new("operation_pending", "Codex review remains owned"))?;
-                let published = if let Some(proof) = &child.review_retry {
-                    let checked = proof.clone();
-                    let runtime = self.runtime.clone();
-                    let operation = completion.operation_id;
-                    let current: GateCheck = Arc::new(move |_| {
-                        let receipts = runtime.control.operations()?;
-                        let grants = crate::runtime_workflow::current_retry_grants(
-                            &runtime.configuration.snapshot()?,
-                            &runtime.observations.admission_snapshot()?,
-                            checked.authority().work(),
-                            &receipts,
-                            &runtime.services.key,
-                        )?;
-                        checked.verify_completed_inventory(&receipts, &grants, operation)
-                    });
+                let grants = self.current_review_grants(&child.reference.work)?;
+                let completed = Arc::new(
                     coordinator
-                        .publish_retried_review(
+                        .completed_review_round(
                             &admission,
                             required(&child.assignment, "review assignment")?,
-                            &outcome,
-                            &completion,
-                            proof,
-                            current,
+                            required(&child.review_round, "actual admitted review round")?.clone(),
+                            outcome.clone(),
+                            completion.clone(),
+                            &grants,
                         )
-                        .await
-                } else if let Some(proof) = &child.source_advanced {
-                    let checked = proof.clone();
-                    let runtime = self.runtime.clone();
-                    let operation = completion.operation_id;
-                    let current: GateCheck = Arc::new(move |_| {
-                        let receipts = runtime.control.operations()?;
-                        let grants = crate::runtime_workflow::current_retry_grants(
-                            &runtime.configuration.snapshot()?,
-                            &runtime.observations.admission_snapshot()?,
-                            checked.authority().work(),
-                            &receipts,
-                            &runtime.services.key,
-                        )?;
-                        checked.verify_completed_inventory(&receipts, &grants, operation)
-                    });
-                    coordinator
-                        .publish_source_advanced_review(
-                            &admission,
-                            required(&child.assignment, "review assignment")?,
-                            &outcome,
-                            &completion,
-                            proof,
-                            current,
-                        )
-                        .await
-                } else {
-                    coordinator
-                        .publish_completed_review(
-                            &admission,
-                            required(&child.assignment, "review assignment")?,
-                            &outcome,
-                            &completion,
-                        )
-                        .await
-                };
+                        .await?,
+                );
+                let checked = completed.clone();
+                let runtime = self.runtime.clone();
+                let current: GateCheck = Arc::new(move |_| {
+                    let receipts = runtime.control.operations()?;
+                    let grants = crate::runtime_workflow::current_retry_grants(
+                        &runtime.configuration.snapshot()?,
+                        &runtime.observations.admission_snapshot()?,
+                        checked.plan().authority().work(),
+                        &receipts,
+                        &runtime.services.key,
+                    )?;
+                    checked.verify_current(&receipts, &grants)?;
+                    checked.verify_joined(&|id| runtime.retained_completion(id))
+                });
+                let published = coordinator
+                    .publish_completed_round(
+                        &admission,
+                        required(&child.assignment, "review assignment")?,
+                        &completed,
+                        current,
+                    )
+                    .await;
                 child.review = Some(match published {
                     Ok(review) => review,
                     Err(error) if terminal_gate_failure(&error) => {
@@ -1859,23 +2004,22 @@ impl RuntimeDelivery {
                             outcome: &outcome,
                             completion: completion.clone(),
                         };
-                        let proof = if let Some(retry) = &child.review_retry {
-                            let receipts = self.runtime.control.operations()?;
-                            let grants = crate::runtime_workflow::current_retry_grants(
-                                &self.runtime.configuration.snapshot()?,
-                                &self.runtime.observations.admission_snapshot()?,
-                                retry.authority().work(),
-                                &receipts,
-                                &self.runtime.services.key,
-                            )?;
-                            coordinator
-                                .unfinished_retried_review(request, retry, &grants)
-                                .await
-                        } else {
-                            coordinator.unfinished_review(request).await
-                        };
+                        let proof = coordinator
+                            .unfinished_completed_round(request, completed.clone(), &grants)
+                            .await;
                         return match proof {
-                            Ok(proof) => self.retain_unfinished(child, proof, error),
+                            Ok(proof) => {
+                                let proof = Arc::new(proof);
+                                let pair = coordinator.paired_review_repair(
+                                    completed,
+                                    proof.clone(),
+                                    &workspace.configuration,
+                                    &grants,
+                                )?;
+                                child.reference.paired_round_digest = Some(pair.digest().into());
+                                child.paired_round = Some(Arc::new(pair));
+                                self.retain_unfinished(child, (*proof).clone(), error)
+                            }
                             Err(unavailable) if unavailable.code == "no_work_trigger" => Err(error),
                             Err(unavailable) => Err(unavailable),
                         };
@@ -2248,6 +2392,8 @@ mod retention_tests {
                 review_retry_operation: None,
                 review_retry_digest: None,
                 review_history: vec![],
+                review_round_digest: None,
+                paired_round_digest: None,
                 observed_at: Utc::now(),
                 error: None,
             },
@@ -2270,6 +2416,8 @@ mod retention_tests {
             source_advanced: None,
             review_worker_assignment: None,
             review_retry: None,
+            review_round: None,
+            paired_round: None,
         }));
         service
             .children

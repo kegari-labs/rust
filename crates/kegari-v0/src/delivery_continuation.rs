@@ -33,7 +33,8 @@ struct UnfinishedProof {
     contract_digest: String,
     review_round: bool,
     review_rounds_consumed: u32,
-    granted_review: Option<CompletedGrantedReview>,
+    granted_review: Option<CompletedReviewLineage>,
+    paired_repair: Option<Arc<VerifiedReviewRoundPlan>>,
 }
 impl UnfinishedChildWork {
     pub fn predecessor(&self) -> Uuid {
@@ -95,10 +96,19 @@ impl UnfinishedChildWork {
         if let Some(review) = &self.inner.granted_review {
             review.verify_current(receipts, grants)?;
         }
+        if let Some(pair) = &self.inner.paired_repair {
+            pair.verify_completed_repair(receipts, grants, &self.inner.predecessor_receipt)?;
+        }
         Ok(())
     }
-    pub(crate) fn granted_review(&self) -> Option<&CompletedGrantedReview> {
+    pub(crate) fn granted_review(&self) -> Option<&CompletedReviewLineage> {
         self.inner.granted_review.as_ref()
+    }
+    pub(crate) fn requires_review_round(&self) -> bool {
+        matches!(
+            &self.inner.granted_review,
+            Some(CompletedReviewLineage::Round(_))
+        )
     }
     pub fn reference(&self) -> &RunReference {
         &self.inner.reference
@@ -186,7 +196,8 @@ impl UnfinishedChildWork {
 
 enum RepairReview {
     None,
-    Findings(Option<Box<CompletedGrantedReview>>),
+    Findings(Option<Box<CompletedReviewLineage>>),
+    ContinuedPair(Arc<VerifiedReviewRoundPlan>),
 }
 
 pub struct RepairSource<'a> {
@@ -212,6 +223,27 @@ impl DeliveryCoordinator {
     pub async fn unfinished_validation(
         &self,
         request: ValidationRepairRequest<'_>,
+    ) -> Result<UnfinishedChildWork> {
+        self.unfinished_validation_inner(request, RepairReview::None)
+            .await
+    }
+    pub(super) async fn unfinished_validation_in_round(
+        &self,
+        request: ValidationRepairRequest<'_>,
+        previous: Arc<VerifiedReviewRoundPlan>,
+        grants: &[crate::decisions::VerifiedRetryGrant],
+    ) -> Result<UnfinishedChildWork> {
+        let actual = self
+            .host
+            .operation(request.source.original.operation_id())?;
+        previous.verify_completed_repair(&self.host.operations()?, grants, &actual)?;
+        self.unfinished_validation_inner(request, RepairReview::ContinuedPair(previous))
+            .await
+    }
+    async fn unfinished_validation_inner(
+        &self,
+        request: ValidationRepairRequest<'_>,
+        review: RepairReview,
     ) -> Result<UnfinishedChildWork> {
         let admission = request.source.admission;
         self.current(admission, &[DeliveryPhase::LocalValidation])?;
@@ -280,7 +312,7 @@ impl DeliveryCoordinator {
             request.completion,
             cause,
             json!({"kind":"required_local_checks","checks":names}),
-            RepairReview::None,
+            review,
         )
         .await
     }
@@ -290,6 +322,7 @@ impl DeliveryCoordinator {
     ) -> Result<UnfinishedChildWork> {
         self.unfinished_review_inner(request, None).await
     }
+    #[cfg(test)]
     pub(crate) async fn unfinished_retried_review(
         &self,
         request: ReviewRepairRequest<'_>,
@@ -306,12 +339,36 @@ impl DeliveryCoordinator {
                 grants,
             )
             .await?;
-        self.unfinished_review_inner(request, Some(lineage)).await
+        self.unfinished_review_inner(
+            request,
+            Some(CompletedReviewLineage::Legacy(Box::new(lineage))),
+        )
+        .await
+    }
+    /// Common consumer: the actual initial/retried/source-advanced review
+    /// remains opaque. No raw claim, scalar or marker can create this lineage.
+    pub(crate) async fn unfinished_completed_round(
+        &self,
+        request: ReviewRepairRequest<'_>,
+        completed: Arc<CompletedReviewRound>,
+        grants: &[crate::decisions::VerifiedRetryGrant],
+    ) -> Result<UnfinishedChildWork> {
+        completed.verify_current(&self.host.operations()?, grants)?;
+        if completed.outcome().digest() != request.outcome.digest()
+            || !Arc::ptr_eq(completed.completion(), &request.completion)
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "Findings differ from actual completed round",
+            ));
+        }
+        self.unfinished_review_inner(request, Some(CompletedReviewLineage::Round(completed)))
+            .await
     }
     async fn unfinished_review_inner(
         &self,
         request: ReviewRepairRequest<'_>,
-        granted_review: Option<CompletedGrantedReview>,
+        granted_review: Option<CompletedReviewLineage>,
     ) -> Result<UnfinishedChildWork> {
         let admission = request.source.admission;
         self.current(
@@ -404,9 +461,17 @@ impl DeliveryCoordinator {
         obligation: Value,
         review: RepairReview,
     ) -> Result<UnfinishedChildWork> {
-        let (review_round, granted_review) = match review {
-            RepairReview::None => (false, None),
-            RepairReview::Findings(lineage) => (true, lineage.map(|value| *value)),
+        let (review_round, granted_review, paired_repair) = match review {
+            RepairReview::None => (false, None, None),
+            RepairReview::Findings(lineage) => (true, lineage.map(|value| *value), None),
+            RepairReview::ContinuedPair(previous) => {
+                let findings = previous.completed_findings()?;
+                (
+                    false,
+                    Some(CompletedReviewLineage::Round(findings)),
+                    Some(previous),
+                )
+            }
         };
         self.current_child_claim(input.admission, &input.original)?;
         let original = input.original.outcome();
@@ -489,14 +554,21 @@ impl DeliveryCoordinator {
                 && review.phase.phase == "child_codex_review"
             {
                 closed_run(&self.host, receipt.operation_id)?;
-                review_rounds_consumed =
-                    review_rounds_consumed.checked_add(1).ok_or_else(|| {
-                        Error::new(
-                            "attempts_exhausted",
-                            "review round count exceeds finite range",
-                        )
-                    })?;
+                if !matches!(&granted_review, Some(CompletedReviewLineage::Round(_))) {
+                    review_rounds_consumed =
+                        review_rounds_consumed.checked_add(1).ok_or_else(|| {
+                            Error::new(
+                                "attempts_exhausted",
+                                "review round count exceeds finite range",
+                            )
+                        })?;
+                }
             }
+        }
+        if let Some(CompletedReviewLineage::Round(completed)) = &granted_review {
+            review_rounds_consumed =
+                retained_round_scalar_floor(&self.host.operations()?, &reference)?
+                    .max(completed.plan().reference().ordinal);
         }
         if review_round && review_rounds_consumed == 0 {
             return Err(Error::new(
@@ -523,7 +595,20 @@ impl DeliveryCoordinator {
             ));
         }
         let inventory = self.host.operations()?;
-        if let Some(review) = &granted_review {
+        if let Some(previous) = &paired_repair {
+            if previous.subject_phase() != &reference.phase
+                || previous.reference().repair_findings().is_none()
+                || granted_review
+                    .as_ref()
+                    .is_none_or(|r| r.phase() != &previous.reference().review_phase)
+            {
+                return Err(Error::new(
+                    "review_round_lineage",
+                    "continued validation loses its actual original Findings pair",
+                ));
+            }
+            require_latest_phase(&inventory, predecessor_receipt.runtime_id, &failure_phase)?;
+        } else if let Some(review) = &granted_review {
             if !review_round
                 || review.outcome().digest() != outcome.digest()
                 || !Arc::ptr_eq(review.completion(), &failure)
@@ -555,7 +640,8 @@ impl DeliveryCoordinator {
             1,
             &json!({"purpose":"unfinished_child_work","predecessor":predecessor_receipt_digest,
             "failure":failure_receipt_digest,"failure_inventory":failure_phase_inventory_digest,"source":owned.digest()?,"authority":input.admission.gate.digest()?,
-            "remaining_task":remaining_task,"progress":progress_digest,"review_round":review_round,"granted_review":granted_review.as_ref().map(CompletedGrantedReview::digest)}),
+            "remaining_task":remaining_task,"progress":progress_digest,"review_round":review_round,"granted_review":granted_review.as_ref().map(CompletedReviewLineage::digest),
+            "paired_repair":paired_repair.as_ref().map(|p|p.digest())}),
         )?;
         let role = original.outcome().instructions.role;
         Ok(UnfinishedChildWork {
@@ -579,6 +665,7 @@ impl DeliveryCoordinator {
                 review_round,
                 review_rounds_consumed,
                 granted_review,
+                paired_repair,
             }),
         })
     }
@@ -694,9 +781,12 @@ pub struct VerifiedSourceAdvanced {
     review_rounds_consumed: u32,
     _original: Arc<CompletedChildClaim>,
     _previous_completion: Arc<RunCompletion>,
-    granted_review: Option<CompletedGrantedReview>,
+    granted_review: Option<CompletedReviewLineage>,
 }
 impl VerifiedSourceAdvanced {
+    pub(super) fn previous_completion(&self) -> &Arc<RunCompletion> {
+        &self._previous_completion
+    }
     pub fn assignment(&self) -> &DeliveryWorkerAssignment {
         &self.assignment
     }
@@ -720,8 +810,14 @@ impl VerifiedSourceAdvanced {
         }
         Ok(())
     }
+    pub(crate) fn requires_review_round(&self) -> bool {
+        self.phase().phase == "child_codex_review"
+            && matches!(&self.granted_review, Some(CompletedReviewLineage::Round(_)))
+    }
     pub(crate) fn has_granted_review(&self) -> bool {
-        self.granted_review.is_some()
+        self.granted_review
+            .as_ref()
+            .is_some_and(|review| review.phase().retry_grant.is_some())
     }
     pub fn verify_current(
         &self,
@@ -929,6 +1025,64 @@ impl DeliveryCoordinator {
         self.source_advanced_inner(request, Some(lineage.clone()))
             .await
     }
+    /// Validation of a paired source retains the same actual ancestry but does
+    /// not allocate a review round. Its own attempt/turn budget stays unchanged.
+    pub(crate) async fn source_advanced_paired_validation(
+        &self,
+        request: SourceAdvancedRequest<'_>,
+        repair: &UnfinishedChildWork,
+        grants: &[crate::decisions::VerifiedRetryGrant],
+    ) -> Result<VerifiedSourceAdvanced> {
+        let lineage = repair.granted_review().ok_or_else(|| {
+            Error::new(
+                "review_round_lineage",
+                "paired validation lacks completed review ancestry",
+            )
+        })?;
+        #[cfg(not(test))]
+        let CompletedReviewLineage::Round(completed) = lineage;
+        #[cfg(test)]
+        let CompletedReviewLineage::Round(completed) = lineage else {
+            return Err(Error::new(
+                "review_round_unavailable",
+                "legacy pair has no exact round ancestry",
+            ));
+        };
+        lineage.verify_current(&self.host.operations()?, grants)?;
+        let actual = self
+            .host
+            .operation(request.source.original.operation_id())?;
+        let link =
+            crate::control::RunContinuationReference::from_receipt(&actual)?.ok_or_else(|| {
+                Error::new(
+                    "worker_binding",
+                    "validation source is not the exact paired repair",
+                )
+            })?;
+        let marker = crate::control::ReviewRoundReference::from_receipt(&actual)?
+            .ok_or_else(|| Error::new("review_round_lineage", "paired source marker is missing"))?;
+        let findings = completed.findings()?;
+        if request.assignment.phase() != "child_local_validation"
+            || marker.repair_findings() != Some(&findings)
+            || marker.source != completed.plan().reference().source
+            || marker.review_phase != *completed.phase()
+            || marker.round_limit > completed.plan().reference().round_limit
+            || link.predecessor != repair.predecessor()
+            || link.predecessor_receipt_digest != repair.predecessor_receipt_digest()
+            || link.failure_operation != repair.failure_operation()
+            || link.trigger_digest != repair.digest()
+            || link.progress_digest != repair.progress_digest()
+            || link.review_rounds_consumed != repair.review_rounds_consumed()
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "validation source changes its exact pair",
+            ));
+        }
+        self.source_advanced_inner(request, Some(lineage.clone()))
+            .await
+    }
+    #[cfg(test)]
     pub(crate) async fn publish_source_advanced_review(
         &self,
         admission: &DeliveryAdmission,
@@ -996,7 +1150,7 @@ impl DeliveryCoordinator {
     async fn source_advanced_inner(
         &self,
         request: SourceAdvancedRequest<'_>,
-        granted_review: Option<CompletedGrantedReview>,
+        granted_review: Option<CompletedReviewLineage>,
     ) -> Result<VerifiedSourceAdvanced> {
         let admission = request.source.admission;
         self.current_child_claim(admission, &request.source.original)?;
@@ -1123,15 +1277,21 @@ impl DeliveryCoordinator {
                     && run.phase.phase == "child_codex_review"
                 {
                     closed_run(&self.host, receipt.operation_id)?;
-                    review_rounds_consumed =
-                        review_rounds_consumed.checked_add(1).ok_or_else(|| {
-                            Error::new("attempts_exhausted", "review round count overflow")
-                        })?;
+                    if !matches!(&granted_review, Some(CompletedReviewLineage::Round(_))) {
+                        review_rounds_consumed =
+                            review_rounds_consumed.checked_add(1).ok_or_else(|| {
+                                Error::new("attempts_exhausted", "review round count overflow")
+                            })?;
+                    }
                 }
             }
         }
         let inventory = self.host.operations()?;
-        if granted_review.is_none() {
+        if let Some(CompletedReviewLineage::Round(completed)) = &granted_review {
+            review_rounds_consumed = retained_round_scalar_floor(&inventory, &reference)?
+                .max(completed.plan().reference().ordinal);
+        }
+        if granted_review.is_none() || reference.phase.phase != "child_codex_review" {
             require_latest_phase(&inventory, predecessor.runtime_id, &reference)?;
         }
         let phase_inventory_digest =
@@ -1147,7 +1307,7 @@ impl DeliveryCoordinator {
         let digest = canonical_digest(
             1,
             &json!({"purpose":"source_advanced","previous":predecessor_digest,"previous_inventory":phase_inventory_digest,"source":source_receipt_digest,
-            "source_seal":request.source.source.receipt().payload_digest,"assignment":request.assignment.digest()?,"progress":progress_digest,"review_rounds_consumed":review_rounds_consumed,"granted_review":granted_review.as_ref().map(CompletedGrantedReview::digest)}),
+            "source_seal":request.source.source.receipt().payload_digest,"assignment":request.assignment.digest()?,"progress":progress_digest,"review_rounds_consumed":review_rounds_consumed,"granted_review":granted_review.as_ref().map(CompletedReviewLineage::digest)}),
         )?;
         Ok(VerifiedSourceAdvanced {
             assignment: request.assignment.clone(),
@@ -1217,6 +1377,29 @@ fn require_latest_phase(
 #[path = "delivery_continuation_retry.rs"]
 mod retry;
 pub use retry::RetriedUnfinishedWork;
+
+// Legacy scalar bytes remain a monotone audit floor. Versioned round allocation
+// is independently namespaced and never counts transient attempts as new rounds.
+fn retained_round_scalar_floor(receipts: &[Receipt], subject: &RunReference) -> Result<u32> {
+    let mut floor = 0;
+    for receipt in receipts {
+        if let Some(run) = RunReference::from_receipt(receipt)?
+            && run.phase == subject.phase
+            && run.workspace == subject.workspace
+        {
+            if let Some(value) = crate::control::RunContinuationReference::from_receipt(receipt)? {
+                floor = floor.max(value.review_rounds_consumed);
+            }
+            if let Some(value) = crate::control::SourceAdvancedReference::from_receipt(receipt)? {
+                floor = floor.max(value.review_rounds_consumed);
+            }
+            if let Some(value) = crate::control::RunResumeReference::from_receipt(receipt)? {
+                floor = floor.max(value.review_rounds_consumed);
+            }
+        }
+    }
+    Ok(floor)
+}
 
 #[cfg(test)]
 mod tests {

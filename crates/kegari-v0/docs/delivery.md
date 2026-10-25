@@ -334,20 +334,41 @@ source sealing, then asserts the genuine missing-qualified-local-check blocker.
 Its downstream changed-PR assignment is an explicitly test-only upstream fact;
 that separate component exercises granted new-head admission, clean result and
 provider publication. It does not establish the production local-validation/PR
-path or populate a native joined-run cache. Further Findings after that changed-
-head review, validation retry lineage, cross-correction and cold reconstruction
-remain unsupported.
+path or populate a native joined-run cache. Validation retry lineage,
+cross-correction and cold reconstruction remain separate prerequisites.
 
-Review-round accounting remains conservative: every admitted review, including a
-transient failed review, is counted. For example, the original failed review plus
-a granted Findings result consumes two recorded rounds before repair. This
-retains all historical limits but can block earlier than the specification's
-review-followed-by-fix semantics. Exact authenticated review/fix ancestry is a
-separate remaining correction; this slice does not decrement old counters.
-The deterministic review fixture uses a real in-process RPC failure notification,
-real Control receipts, owned Git objects and actual synthetic provider publication.
-It deliberately cannot populate the native runtime joined-run cache or establish
-native confinement/live-model qualification.
+Child review rounds now have explicit authenticated ancestry in the complete
+review phase, including its optional operator grant. The first review allocates
+round one; a supported transient retry keeps that round while consuming another
+session attempt. Actual Findings permits its scoped repair in the same round,
+including the last allowed round, while preserving the original implementation
+attempt and turn limits. A completed changed repair can allocate the next
+confirming review only when the review budget has room. Further Findings retains
+that exact new round and its own source instead of resetting the counter.
+
+A repeated repair within one Findings/fix pair requires an actual failed required
+check on the latest completed repaired source. Its continuation retains the
+original Findings, round identity and implementation budget, and binds the new
+validation receipt, complete failure inventory and current source. Merely missing
+a check does not create this capability. Validation itself allocates no review
+round. New review grants have distinct namespaces and cannot renew implementation
+limits or overwrite previous admission records.
+
+Preparation records a proposal; only the actual model admission allocates the
+round or consumes a session. Both gates verify current source, exact native grant,
+actual joined completion handles and the complete relevant receipt inventory.
+The model admission also binds the actual closed preparation's whole digest.
+A raced or stale proposal cannot allocate twice. Legacy unmarked history stays
+conservative: stored counters or serialized round references cannot reconstruct
+opaque execution authority or silently restart at round one.
+
+The [round-core validation report](../validation/LOCAL-REVIEW-ROUND-CORE.md)
+distinguishes implementation from executed checks. Component fixtures use real
+in-process RPC notifications, Control receipts and owned Git objects, with
+explicitly synthetic upstream provider/check observations where stated. They do
+not populate a native joined-run cache or establish native confinement/live-model
+qualification. Paired transient-session recovery and clean retried-validation
+handoff require their separate typed producers and consumers.
 
 ### Chained retained integrations
 

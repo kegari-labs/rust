@@ -295,8 +295,10 @@ pub struct MetadataAdmission {
 }
 enum AdmissionReference {
     Preparation(PreparationReference),
+    RoundPreparation(PreparationReference, Box<ReviewRoundReference>),
     SessionRecovery(SessionRecoveryPreparationReference),
     Run(RunReference),
+    RoundRun(RunReference, Box<ReviewRoundRunProvenance>),
     ContinuedRun(RunReference, RunContinuationReference),
     SourceAdvancedRun(RunReference, SourceAdvancedReference),
     ResumedRun(RunReference, RunResumeReference),
@@ -1049,8 +1051,17 @@ impl ControlHost {
                 "work identity already has an active operation",
             ));
         }
+        let round_receipts = if matches!(
+            &reference,
+            Some(AdmissionReference::RoundPreparation(..) | AdmissionReference::RoundRun(..))
+        ) {
+            Some(self.review_round_receipts()?)
+        } else {
+            None
+        };
         if let Some(
             AdmissionReference::Run(run)
+            | AdmissionReference::RoundRun(run, _)
             | AdmissionReference::ContinuedRun(run, _)
             | AdmissionReference::SourceAdvancedRun(run, _)
             | AdmissionReference::ResumedRun(run, _),
@@ -1058,7 +1069,11 @@ impl ControlHost {
         {
             let mut prior = BTreeMap::new();
             let mut cap = run.max_attempts;
-            for receipt in self.receipts.all()? {
+            let observed = match &round_receipts {
+                Some(receipts) => receipts.clone(),
+                None => self.receipts.all()?,
+            };
+            for receipt in observed {
                 if let Some(old) = RunReference::from_receipt(&receipt)?
                     && old.phase == run.phase
                 {
@@ -1085,6 +1100,29 @@ impl ControlHost {
                     "admission would reset, duplicate or exceed the durable phase budget",
                 ));
             }
+            if !matches!(&reference, Some(AdmissionReference::RoundRun(..)))
+                && prior
+                    .values()
+                    .any(|receipt| receipt.expected.contains_key("review_round"))
+            {
+                return Err(Error::new(
+                    "review_round_required",
+                    "admission cannot drop retained round provenance",
+                ));
+            }
+            if let Some(AdmissionReference::RoundRun(_, provenance)) = &reference {
+                self.verify_round_run(RoundRunCheck {
+                    snapshot: &s.snapshot(),
+                    lease,
+                    operation: request_id,
+                    run,
+                    provenance,
+                    history: &prior,
+                    receipts: round_receipts.as_deref().ok_or_else(|| {
+                        Error::new("control_failed", "round inventory was not loaded")
+                    })?,
+                })?;
+            }
             if let Some(AdmissionReference::ContinuedRun(_, continuation)) = &reference {
                 self.verify_run_continuation(&s.snapshot(), run, continuation, &prior)?;
             }
@@ -1094,6 +1132,30 @@ impl ControlHost {
             if let Some(AdmissionReference::ResumedRun(_, resume)) = &reference {
                 self.verify_run_resume(&s.snapshot(), run, resume, &prior)?;
             }
+        }
+        if let Some(AdmissionReference::Preparation(prep)) = &reference {
+            for receipt in self.review_round_receipts()? {
+                if let Some(run) = RunReference::from_receipt(&receipt)?
+                    && run.phase == prep.phase
+                    && receipt.expected.contains_key("review_round")
+                {
+                    return Err(Error::new(
+                        "review_round_required",
+                        "preparation cannot drop retained round provenance",
+                    ));
+                }
+            }
+        }
+        if let Some(AdmissionReference::RoundPreparation(prep, round)) = &reference {
+            self.verify_round_preparation(RoundPreparationCheck {
+                snapshot: &s.snapshot(),
+                operation: request_id,
+                prep,
+                round,
+                receipts: round_receipts.as_deref().ok_or_else(|| {
+                    Error::new("control_failed", "round inventory was not loaded")
+                })?,
+            })?;
         }
         if let Some(AdmissionReference::SessionRecovery(reference)) = &reference {
             self.verify_session_recovery_preparation(&s.snapshot(), reference)?;
@@ -1148,6 +1210,7 @@ impl ControlHost {
         ]);
         if let Some(
             AdmissionReference::Run(reference)
+            | AdmissionReference::RoundRun(reference, _)
             | AdmissionReference::ContinuedRun(reference, _)
             | AdmissionReference::SourceAdvancedRun(reference, _)
             | AdmissionReference::ResumedRun(reference, _),
@@ -1180,7 +1243,11 @@ impl ControlHost {
                     .map_err(|_| Error::invalid("session resume reference encoding"))?,
             );
         }
-        if let Some(AdmissionReference::Preparation(reference)) = &reference {
+        if let Some(
+            AdmissionReference::Preparation(reference)
+            | AdmissionReference::RoundPreparation(reference, _),
+        ) = &reference
+        {
             expected.insert(
                 "worker_preparation".into(),
                 serde_json::to_string(reference)
@@ -1193,6 +1260,19 @@ impl ControlHost {
                 serde_json::to_string(reference)
                     .map_err(|_| Error::invalid("recovery preparation encoding"))?,
             );
+        }
+        match &reference {
+            Some(AdmissionReference::RoundPreparation(_, round)) => {
+                expected.insert(
+                    "review_round".into(),
+                    serde_json::to_string(round.as_ref())
+                        .map_err(|_| Error::invalid("round preparation encoding"))?,
+                );
+            }
+            Some(AdmissionReference::RoundRun(_, provenance)) => {
+                provenance.persist(&mut expected)?
+            }
+            _ => (),
         }
         if let Some(AdmissionReference::Metadata(reference)) = reference {
             expected.insert(
@@ -2465,3 +2545,17 @@ impl ControlHost {
         Ok(receipt)
     }
 }
+
+// Typed round provenance shared by Control and native scheduling.
+#[path = "control_review_round.rs"]
+mod review_round;
+pub(crate) use review_round::{
+    FindingsReference, RepairValidationReference, ReviewReceiptReference, ReviewRoundCause,
+    ReviewRoundReference, ReviewedSourceReference, TransientFailureCode,
+};
+
+// Atomic round admission uses the same Control lock and durable receipt writer.
+#[path = "control_review_round_admission.rs"]
+mod round_admission;
+pub(crate) use round_admission::{ReviewRoundRunCause, ReviewRoundRunProvenance};
+use round_admission::{RoundPreparationCheck, RoundRunCheck};

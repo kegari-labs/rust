@@ -575,6 +575,22 @@ fn complete_inner(
             }
         },
     }
+    complete_admitted(host, fixture, claim)
+}
+
+/// Synthetic completed protocol only, after an actual caller-owned admission.
+/// Never install this result into RuntimeCoordinator's joined-completion cache.
+pub(crate) fn complete_admitted(
+    host: &crate::control::ControlHost,
+    fixture: &WorkerFixture,
+    claim: Value,
+) -> (
+    tempfile::TempDir,
+    VerifiedAuthorizedOutcome,
+    Arc<RunCompletion>,
+) {
+    let contract = &fixture.contract;
+    let manifest = &contract.instructions().manifest;
     let (files, outcome, state) = crate::runtime_claims::test_completed_contract_fixture(
         contract,
         host.operation(manifest.operation_id).unwrap(),
@@ -639,23 +655,6 @@ async fn failed_review_inner(
     retry_after_ms: Option<u64>,
     failure_code: Option<&str>,
 ) -> Arc<RunCompletion> {
-    use crate::codex::{CodexProfile, RpcClient, SessionBinding, SessionState};
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    struct Deny;
-    impl crate::codex::ToolBroker for Deny {
-        fn call<'a>(
-            &'a mut self,
-            _: &'a crate::codex::ToolCall,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + 'a>>
-        {
-            Box::pin(async {
-                Err(Error::new(
-                    "fixture_no_execution",
-                    "no tools in failed review fixture",
-                ))
-            })
-        }
-    }
     let contract = &fixture.contract;
     let manifest = &contract.instructions().manifest;
     let WorkerAuthority::Authorized(gate) = contract.authority() else {
@@ -704,6 +703,61 @@ async fn failed_review_inner(
         },
     )
     .unwrap();
+    failed_admitted_review(host, fixture, max_turns, retry_after_ms, failure_code).await
+}
+
+/// Actual deterministic protocol transport under an already observed Control
+/// admission, still no native execution or runtime joined-cache qualification.
+pub(crate) async fn failed_admitted_review(
+    host: &crate::control::ControlHost,
+    fixture: &WorkerFixture,
+    max_turns: u32,
+    retry_after_ms: Option<u64>,
+    failure_code: Option<&str>,
+) -> Arc<RunCompletion> {
+    failed_admitted_review_with_gate(host, fixture, max_turns, retry_after_ms, failure_code, None)
+        .await
+}
+
+/// Same deterministic protocol fixture, optionally using an actual Control
+/// RequestGate supplied by a component caller holding the original live Permit.
+pub(crate) async fn failed_admitted_review_with_gate(
+    host: &crate::control::ControlHost,
+    fixture: &WorkerFixture,
+    max_turns: u32,
+    retry_after_ms: Option<u64>,
+    failure_code: Option<&str>,
+    request_gate: Option<Arc<dyn crate::codex::RequestGate>>,
+) -> Arc<RunCompletion> {
+    use crate::codex::{CodexProfile, RpcClient, SessionBinding, SessionState};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    struct Deny;
+    impl crate::codex::ToolBroker for Deny {
+        fn call<'a>(
+            &'a mut self,
+            _: &'a crate::codex::ToolCall,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Err(Error::new(
+                    "fixture_no_execution",
+                    "no tools in failed review fixture",
+                ))
+            })
+        }
+    }
+    let contract = &fixture.contract;
+    let manifest = &contract.instructions().manifest;
+    let WorkerAuthority::Authorized(gate) = contract.authority() else {
+        panic!()
+    };
+    let actual = host.operation(manifest.operation_id).unwrap();
+    let admitted = RunReference::from_receipt(&actual).unwrap().unwrap();
+    assert_eq!(
+        admitted.instruction_digest,
+        contract.instructions().manifest_digest
+    );
+    assert_eq!(admitted.max_turns, max_turns);
     let mut state = SessionState::new(
         SessionBinding {
             schema_version: 1,
@@ -743,6 +797,9 @@ async fn failed_review_inner(
         sw.write_all(format!("{}\n{}\n",json!({"id":request["id"],"result":{"reviewThreadId":"failed-review-fixture","turn":{"id":"failed-review-turn","status":"inProgress"}}}),json!({"method":"turn/completed","params":{"threadId":"failed-review-fixture","turn":{"id":"failed-review-turn","status":"failed","items":[],"error":{"message":"synthetic provider failure","codexErrorInfo":failure_code}}}})).as_bytes()).await.unwrap();
     });
     let mut rpc = RpcClient::from_transport(cr, cw, std::time::Duration::from_secs(2)).unwrap();
+    if let Some(gate) = request_gate {
+        rpc.bind_request_gate(gate).unwrap();
+    }
     rpc.initialize().await.unwrap();
     rpc.review(
         &mut state,

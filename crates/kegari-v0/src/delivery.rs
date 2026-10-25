@@ -4662,5 +4662,12 @@ pub use continuation::*;
 
 #[path = "delivery_review_retry.rs"]
 mod review_retry;
+#[cfg(test)]
 pub(crate) use review_retry::CompletedGrantedReview;
 pub use review_retry::{ReviewRetryRequest, ReviewRetryWork};
+
+// Opaque review-round provenance consumed by the runtime admission path.
+#[path = "delivery_review_round.rs"]
+mod review_round;
+pub use review_round::VerifiedReviewRoundPlan;
+pub(crate) use review_round::{CompletedReviewLineage, CompletedReviewRound, ReviewRoundSource};

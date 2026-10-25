@@ -1,13 +1,58 @@
 # Kegari v0 build progress
 
 Local implementation and validation remain in progress; the Goal is incomplete.
+The child review-round core passed **747 tests, zero failures and
+two required native ignores across 39 groups** in 727.152s.
+Full8 and its strict Clippy, formatting, inventory, diff and dispatch-disabled
+plan checks retained unchanged603 source inputs and observed Rust/Cargo1.99.1
+before/after identities. Source digest:
+`sha256:5e614d0b3417e80dc611d69f5750e7b3610c8cdfeac0b06104e24a8c8e86f3aa`.
+Session69517 is closed. The collector verified 23 retained invocations and
+their log/source/tool artifacts, including earlier failures. The two native ignores
+remain incomplete requirements; this deterministic pass is not operational
+qualification or completion of the Goal.
+The core increment is ready for the coordinating agent's exact diff/index
+inspection and local signed-off commit. No later retry source is installed.
+
+Full6 failed405.337s with241 library passes/3 failures, later groups unrun.
+Source7 corrected the obsolete validation-as-review-round assertion; schedule7
+passed12/12. Source8 corrects the actual round fixtures' refreshed-phase gate:
+after native refresh, use the current Authorized gate and its new phase-scope
+digest, preserving original proofs, timestamps, limits and assertions. Earlier
+compile/schema/lint/legacy-diagnostic failures remain in the
+[round-core report](validation/LOCAL-REVIEW-ROUND-CORE.md). The strict Initial{}
+serde correction preserves canonical JSON and rejects unknown fields. Legacy
+compatibility helpers remain test-only; no native success capability was added.
+
+Next validation retry/passed-successor work is composed only in TEMP at
+`/private/tmp/kegari-validation-combined-core8-v1` (31 files, manifest
+`d16f19050f675692275209e099ec0aed73a9237242127263654f862accf483ae`).
+Exact original/base/draft hashes were checked in order: native3 f302b548,
+paired Direct/Retried9 8acacb87, final clean round9 f68e7241, final pipeline5
+5089ae7b and fixtures/defaults10 b329f12f. Known final integration includes the
+PassedValidationReference reexport; obsolete TEMP comments also need removal.
+This composition is not installed or compiled. Final independent reviews cover
+the actual cause/bounds/current-successor/grant seams; genuine passed/native
+execution qualification is still absent. Original layers remain preserved.
+
+The contract inventory correction remains held at
+`/private/tmp/kegari-contract-inventory-coverage-overlay`:496 blocks (+133), all
+previous363 entries/136 named requirements/stale entries preserved exactly; every
+new block unassessed. Six TEMP parser/retention tests and TEMP consistency check
+passed. Independent review is ongoing. No repository ledger/input change has
+occurred. Old363-block consistency did not establish complete normative coverage.
+External production observation and paired transient recovery remain separate
+unfinished engineering; live/human blockers do not stop authorized local work.
+
+The history evidence below applies to committed source10, not these new inputs.
+
 The owned-target/scoped-history increment passed **721 tests, zero failures
 and 2 native ignores across 39 groups** in 727.621s. Full10 ran at
 unchanged 593 inputs, `sha256:b65dcbbcc2a32882362d2a4c73a50841e8fd811a96043ef6bd4e273c69a16214`,
 with actual before/after Rust/Cargo1.99.1 identities. Source10 strict all-target
 Clippy, formatting, contract inventory, diff and dispatch-disabled evaluation
 plan also passed. The plan contains56 slots and did not dispatch evaluations.
-Session52897 is closed; no Cargo is active. Root exclusively owns source windows,
+Session52897 is closed; root now owns serial core checks. Root exclusively owns source windows,
 serial Cargo, progress and local commits.
 
 This increment retains ordinary owned-target provenance in immutable no-release
@@ -39,17 +84,16 @@ full10 is the current complete-suite evidence. Bounded independent reviews of
 original identity, scoped quarantine, shared failure/lock ordering and native
 receipt ancestry have no unresolved concrete finding in this increment.
 
-The last committed checkpoint is still
-`6936aa21de7a2daa95742c3d81ce06518bbbe6ae` —
-`feat(kegari-v0): retain authenticated no-release history`.
-It passed717/0/2 at584 inputs, recorded in the
-[earlier report](validation/LOCAL-NO-RELEASE-HISTORY.md). Current changes await
-final index/content verification and consolidation into that related unpublished
-commit. The read-only publication check at2026-10-25T21:49:51Z found origin/main
-still44b7578e and6936aa21 absent from all advertised remote heads/tags. A local
-recovery reference must precede amendment. Preserve published44b7578e and946a15f;
-no remote mutation was performed. Record final commit/hash verification below
-after the actual operation; do not infer completion from this plan.
+The verified local checkpoint is
+`6523997487d7952487f9af4d2c8d008c88b1306f` —
+`feat(kegari-v0): preserve scoped immutable delivery history`.
+It consolidates related unpublished6936aa21. Recovery reference
+`refs/codex/recovery/no-release-history-6936aa21` preserves the old commit.
+All39 staged file bytes and593 validated inputs were verified after amendment;
+the tree was clean before starting the next increment. Exact verification is
+`/private/tmp/kegari-v0-owned-target-history-commit-verification.json`.
+Read-only remote heads/tags still placed main at44b7578e before consolidation.
+Published44b7578e and946a15f remain preserved. No remote mutation was performed.
 
 The operator remains **unattended**. Actual-agent and real-provider qualification,
 native containment and required human calibration remain incomplete. Arbitrary
@@ -59,23 +103,26 @@ changes were performed. SPEC remains version1.2 with approved SHA
 `80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326`.
 This checkpoint does not establish readiness to coordinate the lasting build.
 
-Next: finish the local history commit and verify exact retained bytes, then install
-and compile the36-file paired-review/core slice prepared against source10. Add
+Next: commit the verified coherent core increment after exact staging checks. Then integrate and validate
 validation retry and clean-successor lineage only after their concrete producers,
 consumers and independent findings are resolved. Further engineering includes
 paired transient recovery, external production observations, cold/corrected and
 configured-hook recovery, carried acceptance and concrete evaluation composition.
 Live/human blockers remain separate from useful authorized engineering.
 
-## In-flight next drafts (not installed or qualified)
+## Historical preparation notes
+
+This section preserves earlier preparation and validation checkpoints. Its
+in-flight wording is superseded by the current summary above and later reports;
+it is not authority to run stale commands, amend old commits or replace sources.
 
 Root prepared the 36-file core paired-round slice against source10 in
 `/private/tmp/kegari-review-round-core-source10-prepared-v2`, manifest
 `2b5c3e317407cb9b5fb60436a28026d8d671a375e54f702a51e790873c138188`.
 All original bases and selected draft hashes matched. Only the release reader's
 four marker exclusions needed a clean merge onto newer history code. This slice
-is not installed or compiled; root will validate it before layering the unfinished
-validation retry and session recovery work. The first TEMP preparation stopped
+is now installed but not yet compiled successfully; root will validate it before
+layering unfinished validation retry and session recovery work. The first TEMP preparation stopped
 on an absent physical fixture base copy; v2 verifies the retained original hashes
 against actual files and preserves that failed partial TEMP directory.
 
@@ -90,8 +137,8 @@ or execution claim follows. Config's clean-successor design is at
 opaque producer/child handoff and Codex's matching round/Control bridge are being
 prepared separately. All original layers remain held.
 
-Source10 is held during root serial complete validation. Future paired-review/
-validation-retry and paired-session-resume work remain in TEMP only. Root owns `/private/tmp/kegari-review-round-runtime-draft` (runtime,
+Committed source10 passed complete validation. The core paired-review slice is
+installed; future validation-retry and paired-session-resume work remain TEMP only. Root owns `/private/tmp/kegari-review-round-runtime-draft` (runtime,
 worker adapter and scheduler copies). Codex owns
 `/private/tmp/kegari-review-round-draft` (opaque producers, Control and child
 pipeline); Git owns `/private/tmp/kegari-review-round-fixture-draft`. These are
@@ -401,10 +448,10 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 | §§3.1–3.4: strict config, credentials, workflow/reload; REQ-34/35/40/41/50/51/57; H01/H02 | Config/workflow/secret/reload tests, installed asset assembly | 28 focused tests pass including context-composition review fixes; native Keychain implemented but unrun; serialized setup integration in flight |
 | §§3.5–4: preparation, provider reads, authorization/scope/review; REQ-01–04/29/37–39/43/44/62 | Paginated provider fixtures, event provenance and scope revocation | Offline provider/reconciliation/decision fixtures pass in the frozen checkpoint; real provider provenance/compatibility qualification remains unrun |
 | §5: lifecycle/dependencies/corrections; REQ-07–09/19/22–24/30 | Correction races, retained child sets, dependency generations | Local correction/scope primitives tested; provider reconciliation tested; full workflow loop in flight |
-| §6: scheduling/bounds/claims; REQ-12/21/32/35 | Fair account/workspace admission, attempts and pause races | Bounded scheduler/driver and protected process ownership integrated and locally tested; genuine repair/follow-up and narrow same-process recovery tested; cold/corrected/repeated recovery incomplete |
+| §6: scheduling/bounds/claims; REQ-12/21/32/35; V0-T14 | Fair account/workspace admission, attempts, exact review-round ancestry and pause races | Core round Control tests40/40 and child continuation9/9 passed; current full-suite run pending; cold/corrected/repeated and retried-validation recovery incomplete |
 | §7: isolation/Codex/harness; REQ-31/32/34/42/54; H01/H02 | Pinned-schema protocol fixtures, OS sandbox probes, manifest/discovery | Pinned protocol, active corrections and shared worker/evaluation path tested locally; actual containment canaries blocked and live discovery unverified |
 | §8: local/hosted/review/staging/evidence/acceptance; REQ-05/06/10/11/19–21/25–28/43/44/53 | Exact-revision evidence, attestation, Git fixtures, stale tokens/video | Native provider adapters and separate gate progression integrated and locally tested; complete live workflow/media qualification outstanding |
-| §9: candidates/carry/queues/release/recovery; REQ-13/15–18/27/28/30 | A/B isolation, patch bytes, partial effects/holds, correction races | Release/recovery decisions and no-release completion wired with focused fixtures; chained successor and immutable historical target recovery tested; terminal transitive completion and acceptance carry incomplete |
+| §9: candidates/carry/queues/release/recovery; REQ-13/15–18/27/28/30 | A/B isolation, patch bytes, partial effects/holds, correction races | Committed owned-target immutable/scoped history passed721/0/2; actual anchor race tested; external production observation and carried acceptance remain incomplete |
 | §10: complete CLI/control/overview/TLS; REQ-49–51/55–57 | CLI/API observable tests, peer identities, snapshot pagination | CLI/control/dispatcher/native executable factory wired; deterministic CLI/API/transport checks pass; native service qualification unrun |
 | §11: intent/cancellation/recovery/cleanup/logs/handover; REQ-31/33/36/40/41/52/58–62 | Crash boundaries, restart/stop/force, preservation and redaction | Offline control/process/recovery/cleanup fixtures pass in the frozen checkpoint; complete historical and native lifecycle qualification remains incomplete |
 | §12.1 SC-01–SC-26, each retained scenario | Observable deterministic + required live profiles | Partial primitive coverage; no complete end-to-end scenario claimed |

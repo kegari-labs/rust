@@ -187,6 +187,7 @@ fn repair_cycle(
         review_retry,
         failure_code,
         findings,
+        None,
     ))
 }
 async fn repair_cycle_inner(
@@ -194,10 +195,18 @@ async fn repair_cycle_inner(
     review_retry: bool,
     failure_code: Option<&str>,
     findings: bool,
+    round_limit: Option<u32>,
 ) {
     let retry_again = failure_code.is_some();
     let (root, built, old_service, wire, owner) =
-        super::super::tests::fixture_authorization_with_wire(true).await;
+        super::super::tests::fixture_authorization_with_configuration(true, |config| {
+            if let Some(limit) = round_limit {
+                config.runtime.max_review_rounds = limit;
+                config.runtime.max_attempts_per_phase = 3;
+                config.runtime.retry_cap_ms = 1_000;
+            }
+        })
+        .await;
     let binary = old_service.git_path().unwrap();
     let root = root.path().canonicalize().unwrap();
     let source = root.join("source");
@@ -471,8 +480,8 @@ async fn repair_cycle_inner(
         assignment: Some(&review_worker),
         account: &account,
     });
-    if review_retry {
-        review_retry_fixture::run(ReviewFixture {
+    if review_retry || round_limit.is_some() {
+        let fixture = ReviewFixture {
             findings,
             source_proof: &source_proof,
             retry_again,
@@ -496,8 +505,18 @@ async fn repair_cycle_inner(
             repository: &repository,
             account: &account,
             scope: scope(DeliveryPhase::NoChange),
-        })
-        .await;
+        };
+        if let Some(limit) = round_limit {
+            Box::pin(round_fixture::run(
+                fixture,
+                limit,
+                validation_outcome,
+                validation_completion,
+            ))
+            .await;
+        } else {
+            review_retry_fixture::run(fixture).await;
+        }
         return;
     }
     let (_review_records, review_outcome, review_completion) = complete(
@@ -781,6 +800,7 @@ async fn repair_cycle_inner(
         },
         retried_unfinished: retried.clone(),
         review_retry: None,
+        review_round: None,
         source_advanced: None,
         max_seconds: 60,
         max_turns: 20,
@@ -1115,3 +1135,14 @@ async fn repair_cycle_inner(
 #[path = "runtime_delivery_review_retry_tests.rs"]
 mod review_retry_fixture;
 use review_retry_fixture::ReviewFixture;
+
+#[path = "runtime_delivery_round_fixture.rs"]
+mod round_fixture;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exact_round_preparation_reaches_native_join_barrier_and_final_round_repair() {
+    Box::pin(repair_cycle_inner(false, false, None, false, Some(1))).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recurring_findings_reuse_implementation_budget_after_actual_changed_source() {
+    Box::pin(repair_cycle_inner(false, false, None, false, Some(2))).await;
+}

@@ -531,7 +531,7 @@ fn source_advancement_requires_exact_completed_implementation_and_expected_phase
 }
 
 #[test]
-fn validation_cannot_reuse_a_consumed_source_or_exceed_review_rounds() {
+fn validation_deduplicates_sources_without_consuming_review_rounds() {
     let now = Utc::now();
     let previous = validation(1, now);
     let original_source = receipt(2, now);
@@ -551,9 +551,33 @@ fn validation_cannot_reuse_a_consumed_source_or_exceed_review_rounds() {
     );
     next.progress_digest = digest("new-source-tree");
     next.review_rounds_consumed = 3;
+    let scheduled = next_advanced(&records, &next, now).unwrap();
     assert_eq!(
-        next_advanced(&records, &next, now).unwrap_err().code,
-        "review_rounds_exhausted"
+        (
+            scheduled.attempt,
+            scheduled.max_attempts,
+            scheduled.max_review_rounds
+        ),
+        (3, 3, 3)
+    );
+    // Validation allocates no review round, but its independent session bound
+    // still applies. A current reduction cannot renew the captured budget.
+    let mut reduced = limits();
+    reduced.max_attempts_per_phase = 2;
+    let mut validation_phase = phase();
+    validation_phase.phase = "child_local_validation".into();
+    assert_eq!(
+        plan_source_advanced(
+            &reduced,
+            &validation_phase,
+            Uuid::from_u128(2),
+            &records,
+            &next,
+            now,
+        )
+        .unwrap_err()
+        .code,
+        "attempts_exhausted"
     );
     next.review_rounds_consumed = 2;
     assert_eq!(next_advanced(&records, &next, now).unwrap().attempt, 3);

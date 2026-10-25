@@ -192,7 +192,14 @@ pub fn plan(
     receipts: &[Receipt],
     now: DateTime<Utc>,
 ) -> Result<RunSchedule> {
-    plan_inner(runtime, phase, workspace, receipts, None, None, now)
+    plan_inner(
+        runtime,
+        phase,
+        workspace,
+        receipts,
+        PlanCause::default(),
+        now,
+    )
 }
 /// Only a retained exact-source failed review can use terminal review failure
 /// as a retry cause. Ordinary failed runs keep the generic failure taxonomy.
@@ -204,6 +211,20 @@ pub(crate) fn plan_review_retry(
     review: &crate::delivery::ReviewRetryWork,
     now: DateTime<Utc>,
 ) -> Result<RunSchedule> {
+    plan_review_retry_inner(runtime, phase, workspace, receipts, (review, None), now)
+}
+fn plan_review_retry_inner(
+    runtime: &RuntimeConfig,
+    phase: &PhaseKey,
+    workspace: Uuid,
+    receipts: &[Receipt],
+    proofs: (
+        &crate::delivery::ReviewRetryWork,
+        Option<&crate::delivery::VerifiedReviewRoundPlan>,
+    ),
+    now: DateTime<Utc>,
+) -> Result<RunSchedule> {
+    let (review, round) = proofs;
     review.verify_inventory(receipts)?;
     review.verify_retry_cause()?;
     let failed = receipts
@@ -227,7 +248,18 @@ pub(crate) fn plan_review_retry(
     limits.max_review_rounds = limits
         .max_review_rounds
         .min(review.grant().new_budget().max_review_rounds);
-    let mut next = plan_inner(&limits, phase, workspace, receipts, None, Some(review), now)?;
+    let mut next = plan_inner(
+        &limits,
+        phase,
+        workspace,
+        receipts,
+        PlanCause {
+            continuation: None,
+            review_retry: Some(review),
+            round,
+        },
+        now,
+    )?;
     if next.attempt != review.next_attempt()? {
         return Err(Error::new(
             "stale_result",
@@ -268,8 +300,10 @@ pub(crate) fn plan_unfinished(
         phase,
         workspace,
         receipts,
-        Some(PlanTrigger::Unfinished(continuation)),
-        None,
+        PlanCause {
+            continuation: Some(PlanTrigger::Unfinished(continuation)),
+            ..PlanCause::default()
+        },
         now,
     )
 }
@@ -295,11 +329,146 @@ pub(crate) fn plan_source_advanced(
         phase,
         workspace,
         receipts,
-        Some(PlanTrigger::SourceAdvanced(source)),
-        None,
+        PlanCause {
+            continuation: Some(PlanTrigger::SourceAdvanced(source)),
+            ..PlanCause::default()
+        },
         now,
     )
 }
+/// Plan only from the delivery producer's actual current round capability.
+/// Control independently verifies its typed references at atomic admission.
+pub(crate) struct RoundScheduleInput<'a> {
+    pub runtime: &'a RuntimeConfig,
+    pub phase: &'a PhaseKey,
+    pub workspace: Uuid,
+    pub receipts: &'a [Receipt],
+    pub grants: &'a [crate::decisions::VerifiedRetryGrant],
+    pub proof: &'a crate::delivery::VerifiedReviewRoundPlan,
+    pub cause: &'a crate::control::ReviewRoundRunCause,
+    pub review_retry: Option<&'a crate::delivery::ReviewRetryWork>,
+    pub now: DateTime<Utc>,
+}
+pub(crate) fn plan_review_round(input: RoundScheduleInput<'_>) -> Result<RunSchedule> {
+    let RoundScheduleInput {
+        runtime,
+        phase,
+        workspace,
+        receipts,
+        grants,
+        proof,
+        cause,
+        review_retry,
+        now,
+    } = input;
+    use crate::control::{ReviewRoundCause, ReviewRoundRunCause};
+    proof.verify_current(receipts, grants)?;
+    let reference = proof.reference();
+    if proof.subject_phase() != phase
+        || reference.workspace != workspace
+        || reference.runtime != runtime.id
+    {
+        return Err(Error::new(
+            "worker_binding",
+            "round schedule changes exact scope",
+        ));
+    }
+    // This bound belongs to the complete review namespace. Paired implementation
+    // retains its own captured attempt/turn limits, including an older review cap.
+    if !reference.is_repair()
+        && reference.ordinal > runtime.max_review_rounds.min(reference.round_limit)
+    {
+        return Err(Error::new(
+            "review_rounds_exhausted",
+            "the current review namespace has no remaining round",
+        ));
+    }
+    let continuation = match (&reference.cause, cause) {
+        (
+            ReviewRoundCause::Initial {} | ReviewRoundCause::TransientRetry { .. },
+            ReviewRoundRunCause::Review,
+        ) => None,
+        (ReviewRoundCause::PairedRepair { findings }, ReviewRoundRunCause::PairedRepair(link))
+            if link.predecessor == reference.source.implementation.operation
+                && link.predecessor_receipt_digest
+                    == reference.source.implementation.receipt_digest
+                && link.failure_operation == findings.review.operation =>
+        {
+            Some(PlanTrigger::Unfinished(link))
+        }
+        (
+            ReviewRoundCause::RepairContinuation {
+                current_source,
+                validation,
+                ..
+            },
+            ReviewRoundRunCause::PairedRepair(link),
+        ) if link.predecessor == current_source.implementation.operation
+            && link.predecessor_receipt_digest == current_source.implementation.receipt_digest
+            && link.failure_operation == validation.validation.operation =>
+        {
+            Some(PlanTrigger::Unfinished(link))
+        }
+        (
+            ReviewRoundCause::AfterRepair {
+                findings, repair, ..
+            },
+            ReviewRoundRunCause::AfterRepair(link),
+        ) if link.predecessor == findings.review.operation
+            && link.predecessor_receipt_digest == findings.review.receipt_digest
+            && link.source_operation == repair.operation
+            && link.source_receipt_digest == repair.receipt_digest =>
+        {
+            Some(PlanTrigger::SourceAdvanced(link))
+        }
+        _ => {
+            return Err(Error::new(
+                "worker_binding",
+                "round cause differs from actual source",
+            ));
+        }
+    };
+    let mut limits = runtime.clone();
+    if !reference.is_repair() {
+        limits.max_review_rounds = limits.max_review_rounds.min(reference.round_limit);
+    }
+    if let Some(retry) = review_retry {
+        if !matches!(cause, ReviewRoundRunCause::Review) {
+            return Err(Error::new(
+                "worker_binding",
+                "review retry cannot replace a paired cause",
+            ));
+        }
+        return plan_review_retry_inner(
+            &limits,
+            phase,
+            workspace,
+            receipts,
+            (retry, Some(proof)),
+            now,
+        );
+    }
+    plan_inner(
+        &limits,
+        phase,
+        workspace,
+        receipts,
+        PlanCause {
+            continuation,
+            review_retry: None,
+            round: Some(proof),
+        },
+        now,
+    )
+}
+
+#[derive(Default)]
+struct PlanCause<'a> {
+    continuation: Option<PlanTrigger<'a>>,
+    review_retry: Option<&'a crate::delivery::ReviewRetryWork>,
+    round: Option<&'a crate::delivery::VerifiedReviewRoundPlan>,
+}
+
 #[derive(Clone, Copy)]
 enum PlanTrigger<'a> {
     Unfinished(&'a crate::control::RunContinuationReference),
@@ -349,10 +518,14 @@ fn plan_inner(
     phase: &PhaseKey,
     workspace: Uuid,
     receipts: &[Receipt],
-    continuation: Option<PlanTrigger<'_>>,
-    review_retry: Option<&crate::delivery::ReviewRetryWork>,
+    cause: PlanCause<'_>,
     now: DateTime<Utc>,
 ) -> Result<RunSchedule> {
+    let PlanCause {
+        continuation,
+        review_retry,
+        round,
+    } = cause;
     crate::evidence::validate_digest(&phase.generation)?;
     if phase.work.is_empty() || phase.phase.is_empty() || workspace.is_nil() {
         return Err(Error::invalid(
@@ -372,6 +545,17 @@ fn plan_inner(
             }
             history.push((receipt, run));
         }
+    }
+    if round.is_none()
+        && history.iter().any(|(receipt, _)| {
+            receipt.expected.contains_key("review_round")
+                || receipt.expected.contains_key("review_round_preparation")
+        })
+    {
+        return Err(Error::new(
+            "review_round_unavailable",
+            "retained round history requires its exact opaque current plan",
+        ));
     }
     history.sort_by_key(|(_, run)| run.attempt);
     for (index, (_, run)) in history.iter().enumerate() {
@@ -511,7 +695,7 @@ fn plan_inner(
                         "this source and obligation already consumed an admission",
                     ));
                 }
-                if previous.review_rounds() > continuation.review_rounds() {
+                if round.is_none() && previous.review_rounds() > continuation.review_rounds() {
                     return Err(Error::new(
                         "record_corrupt",
                         "admission cannot reset consumed review rounds",
@@ -519,7 +703,11 @@ fn plan_inner(
                 }
             }
         }
-        if continuation.review_rounds() >= next.max_review_rounds {
+        if round.is_none()
+            && !(phase.phase == "child_local_validation"
+                && matches!(continuation, PlanTrigger::SourceAdvanced(_)))
+            && continuation.review_rounds() >= next.max_review_rounds
+        {
             return Err(Error::new(
                 "review_rounds_exhausted",
                 "unfinished repair cannot exceed the original review-round bound",
@@ -607,7 +795,14 @@ fn plan_inner(
     if !matches!(
         error.code.as_str(),
         "process_exit" | "provider_transport" | "timeout" | "stream_timeout" | "stall_timeout"
-    ) && !(review_retry.is_some() && error.code == "turn_incomplete")
+    ) && !((review_retry.is_some()
+        || round.is_some_and(|proof| {
+            matches!(
+                proof.reference().cause,
+                crate::control::ReviewRoundCause::TransientRetry { .. }
+            )
+        }))
+        && error.code == "turn_incomplete")
     {
         return Err(Error::new(
             "persistent_blocker",
