@@ -1881,6 +1881,7 @@ impl RuntimeCoordinator {
                 &reference.phase,
                 reference.max_turns,
             )?;
+            self.check_evaluation_context_contract(contract)?;
             self.registration.verify_active_owner(lease)?;
             if let Some(proof) = parent_reassembly {
                 proof.verify_contract(contract)?;

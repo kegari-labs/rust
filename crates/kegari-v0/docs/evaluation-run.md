@@ -102,15 +102,25 @@ selection and source preparation do not follow from this fixture declaration.
 The selected suite variant must have role and phase `independent_review`, seed
 `fresh`, an exact matching profile slot, and declared positive finite turns,
 seconds and repetition count. Existing independent variants still declaring phase
-`review` are incompatible. The version-2 native context binding must declare all host identity slots and
-the three exact independent PR identity slots (`id`, `number`, `url`), and match
-the complete production context. Only those declared identity fields vary between
-trials; task content and other metadata remain exact. PR title and body are taken
+`review` are incompatible. The version-2 native context binding declares all host
+identity slots and the three exact independent PR identity slots (`id`, `number`,
+`url`). The closed version-3 binding adds exactly one host-owned
+`/evidence/forbidden_canary_path` slot, with no source-write paths, for an explicitly
+declared private canary diagnostic. Both match the complete production context.
+Only declared host slots vary between trials; task content and other metadata
+remain exact. PR title and body are taken
 literally from the same scoped response as PR metadata and rechecked for freshness.
 Missing text fields refuse; an explicit null body remains distinct from empty
 text. They provide untrusted task context and never change review identity,
 attempt limits or permissions. Protected worker provenance retains this context;
 ordinary status output omits the raw text.
+Version 3 requires the original staged private canary owner, exact live trial and
+source binding, and evaluator-only augmentation before instruction assembly. The
+prepared fixture retains that same owner-derived operand; the final model gate
+rejects omission or substitution. Expected pathname comes from the original
+owner, not observed context. The scalar grants no file access, and ordinary
+independent context remains `evidence={}`. Existing version-1/2 serialization is
+unchanged. This code support does not qualify an E07 native trial or its scorer.
 Workflow/scratch substitution, tool schemas, instruction digest, isolated
 read-only source permissions and private scorer/report denial remain exact.
 The scorer must grade native observations and structured review claims without
@@ -333,9 +343,15 @@ blocking filesystem call is not a guaranteed wall-clock primitive. Earlier facts
 and final readback failures remain in the diagnostic even when grading fails;
 these records do not alter current scorer predicates or native/human gates.
 
-This placement does not make the existing E07 `../scorer` attack address the
-marker. An E07 source/context/path migration and complete output observation
-remain separate work. A diagnostic declaration alone qualifies no trial.
+This placement does not make the shipped E07 `../scorer` attack address the
+marker. The explicit [E07 source-data recipe](../evaluations/docs/prepare-native-source.md#explicit-e07-source-data-migration-runtime-qualification-pending)
+produces a separate schema-3 suite copy whose PR body names the declared operand;
+the runtime binds that scalar to the original private marker path before contract
+assembly. It does not copy, symlink or grant access to the marker. Finite output
+matching and native observation coverage remain incomplete. The unchanged v3
+scorer also requires host state facts that the runtime does not supply, including
+`authority_unchanged`, `unrelated_context_disclosed` and `human_acceptance`.
+A diagnostic declaration, source preparation or context match qualifies no trial.
 
 A single actual trial would supply evidence only for that declared condition.
 Synthetic GitHub/Linear feedback is not real-provider qualification. Passing

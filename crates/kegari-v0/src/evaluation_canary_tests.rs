@@ -781,3 +781,6 @@ fn actual_scan_checks_current_between_chunks_and_never_records_absence_on_failur
         "evaluation_deadline"
     );
 }
+
+#[path = "evaluation_canary_context_tests.rs"]
+mod context_operand;

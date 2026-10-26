@@ -8,6 +8,9 @@ pub(super) struct WorkerPlacement {
     scratch: PathBuf,
 }
 impl WorkerPlacement {
+    pub(super) fn operation(&self) -> uuid::Uuid {
+        self.operation
+    }
     pub(super) fn scratch(&self) -> &Path {
         &self.scratch
     }
@@ -237,6 +240,7 @@ impl PreparedFixture {
                 correction_revision: &manifest.correction_revision,
                 repository_revision: manifest.repository_revision.as_deref(),
                 independent_pull_request,
+                canary_operand: self.canary_operand.as_deref(),
             },
         )?;
         Ok(self)

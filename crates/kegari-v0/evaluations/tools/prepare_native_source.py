@@ -818,13 +818,13 @@ def prepare_e07(suite, output):
         working = {k: v for k, v in prepared_source.files.items() if k.split("/")[0] != ".git"}
         require(working == seed.files, "E07 source HEAD differs from the exact recipe tree")
         evidence = {
-            "schema_version": 1, "scope": "Owned E07 source data only; runtime support is missing",
+            "schema_version": 1, "scope": "Owned E07 source data only; no end-to-end runtime or grading qualification",
             "recipe": E07_RECIPE, "recipe_path": E07_RECIPE_PATH,
             "recipe_digest": sha(captured.files[E07_RECIPE_PATH][0]),
             "context_binding_digest": sha(prepared_suite.files[E07_FIXTURE + "/context-binding.json"][0]),
             "policy_digest": sha(prepared_suite.files[E07_POLICY_PATH][0]),
             "runtime_supported": False,
-            "missing_runtime_prerequisites": ["schema-3 exact context binding", "actual owner-bound canary pathname operand before contract assembly"],
+            "missing_runtime_prerequisites": ["finite canary output matching and native observation coverage", "compatible grading of actual runtime facts; unchanged scorer v3 requires unavailable host state facts"],
             "canary_materialized": False, "dispatch_authorized": False,
             "input_suite": str(suite), "output": str(output), "git_executable": git.executable,
             "git_version": version, "fixed_fixture_commit_time": FIXED_TIME,
@@ -842,13 +842,15 @@ def prepare_e07(suite, output):
             "allowed_delta": {"existing_files": ["manifest.json", E07_FIXTURE + "/context.json", E07_FIXTURE + "/repository/WORKFLOW.md"],
                               "new_files": [E07_FIXTURE + "/context-binding.json", E07_POLICY_PATH],
                               "manifest_fields": ["suite_version", "pr_attack.phase", "pr_attack.initial_state", "pr_attack.fixture_digest", "pr_attack.canary_diagnostic"]},
-            "layout": {"suite": "explicit copied E07 schema-3 migration; not supported by current runtime",
+            "layout": {"suite": "explicit copied E07 schema-3 migration; actual native context remains unmaterialized",
                        "source": "new local E07 base < and clean head <=; no E05 objects imported",
                        "empty-git-template": "empty", "empty-git-hooks": "empty"},
             "limits": ["No fixture program, hook, payload or test was executed.",
                        "No canary value/path was created; the declared host slot remains unmaterialized.",
                        "Profile bindings and unresolved text are preserved; no account/model selected.",
-                       "Current runtime lacks schema 3 and the owner-bound operand; this output cannot authorize live execution.",
+                       "Schema-3 context and original owner-bound pathname code are implemented; this preparer neither exercises nor qualifies their native path.",
+                       "runtime_supported=false denotes no end-to-end runnable and gradeable E07 qualification from this source-data preparation, not absent schema-3 code.",
+                       "Actual configured source/suite/subject, account, command, native execution and human review gates remain separate; this output cannot authorize live execution.",
                        "Scorer v3 and all assertions remain unchanged; no native or E07 qualification is claimed.",
                        "No remote commands, runtime activation, human acceptance or deployment."]}
         owned.phase(write_new, owned.root_fd, "SOURCE-EVIDENCE.json", json_bytes(evidence))
@@ -866,7 +868,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", required=True, help="existing canonical native-ready suite directory")
     parser.add_argument("--output", required=True, help="absent canonical owned output directory")
-    parser.add_argument("--recipe", choices=[E07_RECIPE], help="explicit E07 data migration; current runtime support is missing")
+    parser.add_argument("--recipe", choices=[E07_RECIPE], help="explicit E07 source-data migration; no runtime or grading qualification")
     args = parser.parse_args()
     try:
         result = prepare_selected(args.suite, args.output, args.recipe)

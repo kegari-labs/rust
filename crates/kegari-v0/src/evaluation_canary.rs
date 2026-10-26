@@ -6,6 +6,10 @@ use ring::rand::{SecureRandom, SystemRandom};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+#[path = "evaluation_canary_context.rs"]
+mod context_operand;
+pub(crate) use context_operand::{CanaryOperandBinding, OwnedCanaryPathOperand};
+
 const POLICY_BYTES: usize = 4096;
 const CHUNK_BYTES: usize = 64 * 1024;
 const MAX_RECORDS: usize = MAX_FILES * 2;
@@ -344,6 +348,7 @@ struct State {
     marker: Option<Vec<u8>>,
     original_files: BTreeMap<String, Arc<RetainedPrivateFile>>,
     stage_attempted: bool,
+    context_operand: Option<String>,
     contract: Option<Arc<WorkerContract>>,
     scanned_inputs: usize,
     input_complete: bool,
@@ -432,6 +437,7 @@ impl CanaryMaterialization {
                 marker: None,
                 original_files: BTreeMap::new(),
                 stage_attempted: false,
+                context_operand: None,
                 contract: None,
                 scanned_inputs: 0,
                 input_complete: false,

@@ -489,6 +489,7 @@ impl LaunchRequest {
     }
 }
 struct Plan {
+    canary_operand: Option<Arc<crate::evaluation::OwnedCanaryPathOperand>>,
     config: Arc<Config>,
     workspace: Workspace,
     workflow: Workflow,
@@ -527,14 +528,20 @@ pub async fn prepare_admitted(
     runtime: Arc<RuntimeCoordinator>,
     request: LaunchRequest,
 ) -> Result<AdmittedWorker> {
-    prepare_admitted_inner(runtime, request, None).await
+    prepare_admitted_inner(runtime, request, None, None).await
 }
 async fn prepare_admitted_inner(
     runtime: Arc<RuntimeCoordinator>,
     request: LaunchRequest,
     mut trace: Option<&mut evaluation_return::PreparationTrace>,
+    operand: Option<Arc<crate::evaluation::OwnedCanaryPathOperand>>,
 ) -> Result<AdmittedWorker> {
     let mut plan = Plan::read(&runtime, request)?;
+    runtime.verify_evaluation_context_operand(&plan.request, operand.as_ref())?;
+    if let Some(operand) = &operand {
+        operand.augment_context(&mut plan.context)?;
+    }
+    plan.canary_operand = operand;
     if let Some(proof) = plan
         .request
         .delivery
@@ -584,6 +591,11 @@ async fn prepare_admitted_inner(
         },
     };
     let prep_gate = |snapshot: &crate::control::ControlSnapshot| {
+        runtime.check_evaluation_context_operand(
+            snapshot,
+            &plan.request,
+            plan.canary_operand.as_ref(),
+        )?;
         let current = runtime.plan_worker_preparation(
             &plan.request,
             plan.workspace.id,
@@ -675,6 +687,7 @@ async fn prepare_admitted_inner(
             "requested run exceeds the original durable phase turn bound",
         ));
     }
+    runtime.verify_evaluation_context_operand(&plan.request, plan.canary_operand.as_ref())?;
     let contract = prepared.run.contract().clone();
     let admission = RunAdmission {
         request_id: plan.request.operation_id,
@@ -1194,6 +1207,7 @@ impl Plan {
             .account_id
             .clone();
         Ok(Self {
+            canary_operand: None,
             config,
             workspace,
             workflow,
@@ -1761,6 +1775,10 @@ async fn prepare_owned(
             .unwrap_or_default(),
         WorkerAuthority::Independent(_) => vec![".".into()],
     };
+    if let Some(operand) = &plan.canary_operand {
+        operand.verify_isolation(&isolation.validate()?)?;
+        runtime.verify_evaluation_context_operand(&plan.request, Some(operand))?;
+    }
     let prepared = worker_run::prepare(Preparation {config:plan.config.clone(),workflow:plan.workflow.clone(),authority:plan.request.authority.clone(),operation_id:plan.request.operation_id,role:plan.role,phase:plan.request.phase.phase.clone(),context:plan.context.clone(),isolation,repository:plan.source.as_ref().map(|source|RepositoryContext {root:repository,revision:source.revision.commit.clone(),scope_paths}),repository_id:plan.repository_id.clone(),read_resources:grants.resources,review:plan.review.clone(),required_context:vec![],project_doc_max_bytes:32_768,provider_discovery:ProviderDiscovery::Unavailable {reason:"Pinned app-server does not expose an authenticated project-instruction discovery inventory; supplied accessible files are separately hashed".into()},known_secrets:vec![]})?;
     records.write("contract.json", &json!({"scope":prepared.contract().scope_digest(),"instructions":prepared.contract().instructions().manifest,"tool_contract":prepared.contract().tools().digest(),"isolation":prepared.isolation().plan()}))?;
     Ok(Prepared {

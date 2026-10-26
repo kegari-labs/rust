@@ -29,8 +29,10 @@ enum ContextSource {
     IndependentPullRequestId,
     IndependentPullRequestNumber,
     IndependentPullRequestUrl,
+    ForbiddenCanaryPath,
 }
 pub(super) struct HostContext<'a> {
+    pub canary_operand: Option<&'a OwnedCanaryPathOperand>,
     pub workspace: uuid::Uuid,
     pub operation: uuid::Uuid,
     pub profile: &'a Profile,
@@ -42,7 +44,7 @@ pub(super) struct HostContext<'a> {
 }
 impl NativeContextBinding {
     pub(super) fn validate(&self, input: &Value) -> Result<()> {
-        if !matches!(self.schema_version, 1 | 2)
+        if !matches!(self.schema_version, 1..=3)
             || self.slots.len() < 4
             || self.slots.len() > 64
             || self.source_write_paths.len() > MAX_FILES
@@ -70,10 +72,17 @@ impl NativeContextBinding {
                 ));
             }
             if let Some(pointer) = independent_pointer(slot.source)
-                && (self.schema_version != 2 || slot.pointer != pointer)
+                && (!matches!(self.schema_version, 2 | 3) || slot.pointer != pointer)
             {
                 return Err(Error::invalid(
                     "independent subject scalars require version 2 and their exact native field",
+                ));
+            }
+            if slot.source == ContextSource::ForbiddenCanaryPath
+                && (self.schema_version != 3 || slot.pointer != "/evidence/forbidden_canary_path")
+            {
+                return Err(Error::invalid(
+                    "forbidden pathname requires version 3 and its exact declared field",
                 ));
             }
             expected.insert(slot.pointer.clone(), slot.source);
@@ -90,7 +99,7 @@ impl NativeContextBinding {
                 ));
             }
         }
-        if self.schema_version == 2 {
+        if matches!(self.schema_version, 2 | 3) {
             for source in [
                 ContextSource::IndependentPullRequestId,
                 ContextSource::IndependentPullRequestNumber,
@@ -101,6 +110,46 @@ impl NativeContextBinding {
                         "version 2 requires all three exact independent subject scalars",
                     ));
                 }
+            }
+        }
+        if self.schema_version == 3 {
+            let exact = BTreeMap::from([
+                (
+                    "/evidence/forbidden_canary_path".into(),
+                    ContextSource::ForbiddenCanaryPath,
+                ),
+                (
+                    "/issue/pull_request/head_sha".into(),
+                    ContextSource::RepositoryRevision,
+                ),
+                (
+                    "/issue/pull_request/id".into(),
+                    ContextSource::IndependentPullRequestId,
+                ),
+                (
+                    "/issue/pull_request/number".into(),
+                    ContextSource::IndependentPullRequestNumber,
+                ),
+                (
+                    "/issue/pull_request/url".into(),
+                    ContextSource::IndependentPullRequestUrl,
+                ),
+                ("/operation/id".into(), ContextSource::OperationId),
+                ("/phase".into(), ContextSource::Phase),
+                ("/profile".into(), ContextSource::Profile),
+                ("/scope/head".into(), ContextSource::RepositoryRevision),
+                ("/workspace/id".into(), ContextSource::WorkspaceId),
+            ]);
+            if expected != exact
+                || !self.source_write_paths.is_empty()
+                || input.get("evidence")
+                    != Some(
+                        &serde_json::json!({"forbidden_canary_path":{"$kegari":"forbidden_canary_path"}}),
+                    )
+            {
+                return Err(Error::invalid(
+                    "version 3 requires exactly ten independent slots and no write paths",
+                ));
             }
         }
         let mut actual = BTreeMap::new();
@@ -118,6 +167,9 @@ impl NativeContextBinding {
         }
         Ok(())
     }
+    pub(super) fn requires_canary_context(&self) -> bool {
+        self.schema_version == 3
+    }
     pub(super) fn write_paths(&self) -> &[String] {
         &self.source_write_paths
     }
@@ -129,7 +181,7 @@ impl NativeContextBinding {
             ));
         }
         host.profile.validate()?;
-        if self.schema_version == 2 {
+        if matches!(self.schema_version, 2 | 3) {
             let pr = host.independent_pull_request.ok_or_else(|| {
                 Error::new(
                     "evaluation_fidelity",
@@ -156,10 +208,27 @@ impl NativeContextBinding {
                 ));
             }
         }
+        if self.requires_canary_context() != host.canary_operand.is_some() {
+            return Err(Error::new(
+                "canary_binding",
+                "declared context and original canary operand differ",
+            ));
+        }
         let mut expected = input.clone();
         expected.as_object_mut().unwrap().remove("timeline");
         for slot in &self.slots {
             let value = match slot.source {
+                ContextSource::ForbiddenCanaryPath => Value::String(
+                    host.canary_operand
+                        .ok_or_else(|| {
+                            Error::new(
+                                "canary_binding",
+                                "original canary pathname operand unavailable",
+                            )
+                        })?
+                        .path_for_host(host)?
+                        .into(),
+                ),
                 ContextSource::WorkspaceId => serde_json::json!(host.workspace),
                 ContextSource::OperationId => serde_json::json!(host.operation),
                 ContextSource::Profile => serde_json::to_value(host.profile)
@@ -296,6 +365,7 @@ mod tests {
             correction_revision: "unused",
             repository_revision: Some("1234567890123456789012345678901234567890"),
             independent_pull_request: None,
+            canary_operand: None,
         };
         let expected = binding.materialize(&input, &host).unwrap();
         assert!(expected.get("timeline").is_none());
@@ -326,6 +396,7 @@ mod tests {
             worker_placement: None,
             worker_manifest: None,
             canary: None,
+            canary_operand: None,
         };
         fixture.preparation_digest = fixture.preparation_digest().unwrap();
         verify_fixture_context(&expected, &fixture, &host).unwrap();
@@ -452,6 +523,7 @@ mod tests {
             correction_revision: "unused",
             repository_revision: None,
             independent_pull_request: None,
+            canary_operand: None,
         };
         assert_eq!(
             binding.materialize(&input, &host).unwrap_err().code,
@@ -502,6 +574,7 @@ mod tests {
             correction_revision: "unused",
             repository_revision: Some(&pr.head_sha),
             independent_pull_request: Some(&pr),
+            canary_operand: None,
         };
         let expected = binding.materialize(&input, &host).unwrap();
         assert_eq!(expected["issue"]["pull_request"]["id"], 803);
@@ -526,6 +599,7 @@ mod tests {
             worker_placement: None,
             worker_manifest: None,
             canary: None,
+            canary_operand: None,
         };
         fixture.preparation_digest = fixture.preparation_digest().unwrap();
         verify_fixture_context(&expected, &fixture, &host).unwrap();
@@ -549,6 +623,7 @@ mod tests {
         }
         let absent = HostContext {
             independent_pull_request: None,
+            canary_operand: None,
             ..host
         };
         assert!(binding.materialize(&input, &absent).is_err());
@@ -631,6 +706,7 @@ mod tests {
             correction_revision: "unused-component-data",
             repository_revision: Some(&pr.head_sha),
             independent_pull_request: Some(&pr),
+            canary_operand: None,
         };
         let context = binding.materialize(&fixture.input, &host).unwrap();
         verify_fixture_context(&context, &fixture, &host).unwrap();
@@ -678,6 +754,7 @@ mod tests {
         }
         let absent = HostContext {
             independent_pull_request: None,
+            canary_operand: None,
             ..host
         };
         assert_eq!(

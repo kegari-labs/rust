@@ -26,7 +26,9 @@ pub use canary::{
     CanaryBinding, CanaryDiagnostic, CanaryHostInputs, CanaryIdentity, CanaryPolicyReference,
     CanaryRecordReference,
 };
-pub(crate) use canary::{CanaryMaterialization, CanaryStageInput};
+pub(crate) use canary::{
+    CanaryMaterialization, CanaryOperandBinding, CanaryStageInput, OwnedCanaryPathOperand,
+};
 
 #[path = "evaluation_context.rs"]
 mod context_binding;
@@ -445,6 +447,7 @@ pub struct PreparedFixture {
     worker_placement: Option<WorkerPlacement>,
     worker_manifest: Option<String>,
     canary: Option<std::sync::Arc<CanaryMaterialization>>,
+    canary_operand: Option<std::sync::Arc<OwnedCanaryPathOperand>>,
 }
 impl PreparedFixture {
     pub(crate) fn attach_canary(
@@ -460,17 +463,51 @@ impl PreparedFixture {
         self.canary = Some(owner);
         Ok(())
     }
+    pub(crate) fn requires_canary_context(&self) -> Result<bool> {
+        self.verify_preparation()?;
+        if let Some(binding) = &self.context_binding {
+            binding.validate(&self.input)?;
+        }
+        Ok(self
+            .context_binding
+            .as_ref()
+            .is_some_and(NativeContextBinding::requires_canary_context))
+    }
+    pub(crate) fn attach_canary_operand(
+        &mut self,
+        operand: std::sync::Arc<OwnedCanaryPathOperand>,
+    ) -> Result<()> {
+        if !self.requires_canary_context()?
+            || self.canary_operand.is_some()
+            || self.worker_manifest.is_some()
+            || self
+                .canary
+                .as_ref()
+                .is_none_or(|owner| !operand.owner_matches(owner))
+        {
+            return Err(Error::new(
+                "canary_binding",
+                "pathname operand must bind once to its original declared fixture owner",
+            ));
+        }
+        operand.verify_fixture(self)?;
+        self.canary_operand = Some(operand);
+        self.preparation_digest = self.preparation_digest()?;
+        Ok(())
+    }
     fn preparation_digest(&self) -> Result<String> {
-        canonical_digest(
-            1,
-            &serde_json::json!({
-                "root":self.root,"repository":self.repository,"scratch":self.scratch,
-                "codex_home":self.codex_home,"grader_root":self.grader_root,
-                "before":self.before,"input":self.input,"prior":self.prior,
-                "fixture_digest":self.fixture_digest,"context_binding":self.context_binding,
-                "worker_placement":self.worker_placement,"worker_manifest":self.worker_manifest
-            }),
-        )
+        let mut value = serde_json::json!({
+            "root":self.root,"repository":self.repository,"scratch":self.scratch,
+            "codex_home":self.codex_home,"grader_root":self.grader_root,
+            "before":self.before,"input":self.input,"prior":self.prior,
+            "fixture_digest":self.fixture_digest,"context_binding":self.context_binding,
+            "worker_placement":self.worker_placement,"worker_manifest":self.worker_manifest
+        });
+        // Absent operand preserves every legacy preparation digest byte.
+        if let Some(operand) = &self.canary_operand {
+            value["canary_operand"] = serde_json::json!(operand.digest()?);
+        }
+        canonical_digest(1, &value)
     }
     fn verify_preparation(&self) -> Result<()> {
         if self.preparation_digest != self.preparation_digest()? {
@@ -688,6 +725,7 @@ fn prepare_captured_fixture_at(
         worker_placement: placement,
         worker_manifest: None,
         canary: None,
+        canary_operand: None,
     };
     if prepared.worker_placement.is_some() && prepared.context_binding.is_none() {
         return Err(Error::new(
@@ -917,6 +955,7 @@ pub fn assemble_trial(
                 .as_ref()
                 .map(|repository| repository.revision.as_str()),
             independent_pull_request: None,
+            canary_operand: None,
         },
     )?;
     let assembled = instructions::assemble(input)?;
@@ -2013,6 +2052,7 @@ pub(crate) async fn run_live_trial_until(
             correction_revision: &operation.assembled.manifest.correction_revision,
             repository_revision: operation.assembled.manifest.repository_revision.as_deref(),
             independent_pull_request: operation.host.independent_pull_request(),
+            canary_operand: operation.fixture.canary_operand.as_deref(),
         },
     )?;
     verify_grader_boundary(

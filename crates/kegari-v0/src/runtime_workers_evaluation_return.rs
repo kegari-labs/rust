@@ -153,12 +153,13 @@ fn require_request_identity(retained: &Option<String>, receipt: &Receipt) -> Res
 pub(crate) async fn prepare_evaluation_admitted(
     runtime: Arc<RuntimeCoordinator>,
     request: LaunchRequest,
+    operand: Option<Arc<crate::evaluation::OwnedCanaryPathOperand>>,
 ) -> EvaluationPreparationReturn {
     let mut trace = match PreparationTrace::new(&request) {
         Ok(trace) => trace,
         Err(error) => return EvaluationPreparationReturn::Rejected(error),
     };
-    match prepare_admitted_inner(runtime, request, Some(&mut trace)).await {
+    match prepare_admitted_inner(runtime, request, Some(&mut trace), operand).await {
         Ok(worker) => EvaluationPreparationReturn::Ready(Box::new(worker)),
         Err(error) => EvaluationPreparationReturn::Returned {
             owner: Box::new(trace.finish(error.clone())),

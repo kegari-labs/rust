@@ -36,7 +36,7 @@ KEGARI_TEST_NATIVE_SUITE=/absolute/canonical/native-ready-suite \
 
 See [local validation evidence](../../validation/LOCAL-NATIVE-EVALUATION.md) for recorded executions and their exact source identities. Running the component checks does not qualify live model execution, native confinement, actual process exit, scoring or human acceptance.
 
-## Explicit E07 source-data migration (runtime support pending)
+## Explicit E07 source-data migration (runtime qualification pending)
 
 The default invocation and E05 input requirements above are unchanged. The closed
 `--recipe e07-pr-attack-v1` branch is a separate, explicit **data migration**. It
@@ -81,23 +81,31 @@ the complete expected output file bytes/modes and an independent manifest field
 allowlist, not just those counts. Existing file modes remain exact; owned output
 directories stay 0700 as in E05. New declaration files use mode 0600.
 
-**This output is not supported for live execution yet.** Current runtime support
-for schema 3 and the actual owner-bound canary operand before contract assembly
-is still missing. `SOURCE-EVIDENCE.json` records `runtime_supported: false`,
-`dispatch_authorized: false`, `canary_materialized: false` and the precise missing
-prerequisites. These disclosures are evidence fields, not undeclared suite or
-context fields. Current loaders must refuse unsupported schemas/fields; do not
-edit them out to force a run. Scorer `kegari-observable-v3` and all its assertions
-remain unchanged, so this preparation does not qualify E07 or manufacture its
-missing host state facts.
+**Source preparation does not qualify or authorize a live E07 trial.** The runtime
+implements the closed schema-3 declaration and derives its pathname from the
+original staged private canary owner before contract assembly. The actual request,
+source, trial, profile and final admission checks still apply; no raw path or
+observed context can manufacture that owner. This tool does not exercise that
+runtime path or materialize a canary.
+
+`SOURCE-EVIDENCE.json` keeps `runtime_supported: false`, `dispatch_authorized: false`
+and `canary_materialized: false`. Here `runtime_supported` records the preparer's
+lack of end-to-end runnable and gradeable E07 qualification, not the absence of
+schema-3 code. Finite canary output matching and native observation coverage
+remain incomplete. Unchanged scorer `kegari-observable-v3` requires host state
+facts that the runtime does not supply; schema/path support does not manufacture
+them. These disclosures remain evidence fields, not suite/context fields or
+execution grants. Preserve unknown-schema and exact-binding refusals.
 
 The evidence includes exact input/recipe/context-binding/policy hashes, original
 and derived suite identities, commands/results, OIDs/trees, modes, allowed file
-and manifest changes, and the unsupported-runtime limit. On failure, partial
+and manifest changes, and these runtime/grade qualification limits. On failure, partial
 owned output remains inspectable. No output context/manifest exists before a
 real base commit is known; do not copy a null or guessed base from recipe data
-into a loadable fixture. A later runtime implementation and explicit configured
-suite/source/subject binding remain separate prerequisites.
+into a loadable fixture. Actual configured suite/source/subject binding, account
+and command authority, native execution evidence and human review remain separate
+prerequisites. Earlier SOURCE-EVIDENCE outputs retain the code-availability
+statement that was true when they were produced; do not rewrite historical data.
 
 ### E07 component checks
 

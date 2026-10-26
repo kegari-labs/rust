@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[path = "runtime_evaluation_owned_return.rs"]
 mod owned_return;
 use owned_return::{CleanupOwner, CleanupState, EvaluationTerminal};
+#[path = "runtime_evaluation_context.rs"]
+mod context_operand;
 #[path = "runtime_evaluation_deadline.rs"]
 mod deadline;
 #[path = "runtime_evaluation_report.rs"]
@@ -50,8 +52,10 @@ struct VerifiedEvaluationRequest {
     failure_recorded: Mutex<bool>,
     cleanup: Mutex<CleanupState>,
     canary: Mutex<Option<Arc<crate::evaluation::CanaryMaterialization>>>,
+    context_operand: Mutex<Option<Arc<crate::evaluation::OwnedCanaryPathOperand>>>,
 }
 struct PreparedEvaluation {
+    canary_context_required: bool,
     source: Arc<VerifiedEvaluationSource>,
     authority: WorkerAuthority,
 }
@@ -409,6 +413,7 @@ impl RuntimeCoordinator {
             preparation_started: AtomicBool::new(false),
             report_started: AtomicBool::new(false),
             canary: Mutex::new(None),
+            context_operand: Mutex::new(None),
             failure_recorded: Mutex::new(false),
             cleanup: Mutex::new(CleanupState::Empty),
         });
@@ -582,33 +587,33 @@ impl RuntimeCoordinator {
                 "evaluation source binding lock failed",
             )
         })? = Some(PreparedEvaluation {
+            canary_context_required: fixture.requires_canary_context()?,
             source,
             authority: authority.clone(),
         });
         let source = runtime_workers::resolve_source(self, &authority).await?;
+        let request = LaunchRequest {
+            lease: proof.lease.clone(),
+            operation_id: proof.request.request_id,
+            authority,
+            phase,
+            source,
+            delivery: None,
+            unfinished: None,
+            source_advanced: None,
+            retried_unfinished: None,
+            review_retry: None,
+            validation_retry: None,
+            review_round: None,
+            max_seconds: proof.variant.bounds.max_seconds,
+            max_turns: proof.variant.bounds.max_turns,
+        };
+        let operand = self.make_evaluation_context_operand(&proof, &request, &mut fixture)?;
         proof
             .preparation_started
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        let worker = runtime_workers::prepare_evaluation_admitted(
-            self.clone(),
-            LaunchRequest {
-                lease: proof.lease.clone(),
-                operation_id: proof.request.request_id,
-                authority,
-                phase,
-                source,
-                delivery: None,
-                unfinished: None,
-                source_advanced: None,
-                retried_unfinished: None,
-                review_retry: None,
-                validation_retry: None,
-                review_round: None,
-                max_seconds: proof.variant.bounds.max_seconds,
-                max_turns: proof.variant.bounds.max_turns,
-            },
-        )
-        .await;
+        let worker =
+            runtime_workers::prepare_evaluation_admitted(self.clone(), request, operand).await;
         let worker = match worker {
             runtime_workers::EvaluationPreparationReturn::Ready(worker) => worker,
             runtime_workers::EvaluationPreparationReturn::Returned { error, owner } => {

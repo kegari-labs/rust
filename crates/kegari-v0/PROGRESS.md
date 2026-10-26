@@ -3,7 +3,166 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
-Current implementation: the reviewed canary v1/v2 composition, external defaults,
+Verified local commit: `1d482650b7b314325123c5b56d90cbf243df42d0` —
+`feat(kegari-v0)!: retain private canary diagnostics`. All 24 intended files and
+701 tested inputs match the commit and physical tree; every other path matches
+parent f565b42. The tree was clean after verification. No commits were
+consolidated or pushed by this builder. Verification:
+`/private/tmp/kegari-v0-canary-commit-verification.json`.
+On resumption, both main and origin/main point to 1d48265, and the local
+origin/main reflog records `update by push`. The actor is not inferred from that
+metadata. The reviewed E07 extension will use a new local commit rather than
+rewrite this now-published checkpoint. No remote action is being performed.
+
+The E07 schema3 runtime path-operand extension is installed and locally verified,
+ready for a separate commit. Its original held source remains at
+`/private/tmp/kegari-e07-native-context-operand-v1`.
+FILES SHA-256 `218203b23a1ff5364f7a5158f9e72381a68516a26550d479ed8208610157c65a`;
+patch SHA-256 `c8e46a6b4a4643434425d0ab217bbeb86112dc39e304cf99bca68f7842238428`.
+Root verified all 27 artifact members/nine original bases and read every changed
+existing-source hunk plus the three new modules, README and six proposed tests.
+The independent implementation review found no material defect; root read the
+full report and verified its files:
+`/private/tmp/kegari-e07-native-context-operand-independent-review-v1/REVIEW.md`,
+SHA-256 `b38831d52189b3b304acd166a261e986eb06edcbba4405d019c35506f536fb63`.
+The exact 12 paths are now installed; originals/installation record are at
+`/private/tmp/kegari-v0-e07-operand-installed-1`. The 704-input source1 snapshot
+is `sha256:b6e6a5703dae82c6c996e7e63c753077ea403505b4c0581492cb4ef9260f5386`
+at `/private/tmp/kegari-v0-e07-operand-source1.json`. The first all-target check
+failed in 13.160s (exit101): verify_isolation received IsolationPlan instead of
+ValidatedIsolation, and PreparedFixture's Debug derive required an operand Debug
+implementation. Session50601 is closed. Raw failure SHA-256:
+`4309d0a7b2dd1748d70477790214ea370dc003e14537cb95e4e5e8441a55a817`.
+Root now validates that actual plan before passing it and adds a Debug
+implementation exposing only the existing safe identity, never path/marker.
+Originals and exact two-file diff are retained at
+`/private/tmp/kegari-v0-e07-operand-compile-correction-1`.
+Source2 all-target check passed in 22.743s, but strict Clippy failed in 15.309s
+on one manual_range_patterns warning (exit101). That source was
+`sha256:f9db610c888004e66e8fdf28d48b328428200901738ba6d826ffcf53b73f2565`;
+check raw SHA-256 `3c0052f1d404d9af51c34d6b9670cccdf4ceddb47a27fbba2db053f2fb576f6e`,
+Clippy raw `c2221bb435e5e082dae024a095e0c80da5b9e46f1b0b1ecaf22f1030c213868f`.
+Session85500 is closed. Root changed only `1 | 2 | 3` to the equivalent `1..=3`;
+original/diff: `/private/tmp/kegari-v0-e07-operand-clippy-correction-1`.
+
+The three-path operator/source-preparer wording update is installed from
+`/private/tmp/kegari-e07-context-support-wording-v1`; originals/record:
+`/private/tmp/kegari-v0-e07-operand-wording-installed-1`. It preserves the three
+false flags, exact recipe/scorers/profiles/default E05 behavior, and replaces
+stale missing-schema3-code explanations with remaining matcher/actual-fact
+scoring/native qualification limits. Root read the full diff and verified its
+10 members/three bases. A first root AST comparison was too strict about two
+added literal-string entries in evidence.limits; the corrected static inspection
+normalizes only that string-only evidence list and string values, yielding
+identical executable structure. No target tool/test failed in that inspection;
+its record is `/private/tmp/kegari-e07-wording-root-static-inspection-1.json`.
+The independent compile-correction/wording review found no material issue:
+`/private/tmp/kegari-e07-operand-corrections-wording-independent-review-v1/REVIEW.md`,
+SHA-256 `2d386bc5285dfa8850e62d5a528475f35888aec782473347d833f262151a7151`.
+Root read its full report.
+
+All 20 Python preparation tests passed without skips on the exact 349-file
+copied suite in 1.843s (unittest 1.696s); input bytes/modes and installed source
+remained unchanged. Session62482 is closed. Actual argv and relevant environment
+overrides are now explicitly retained at
+`/private/tmp/kegari-v0-e07-operand-python-1/tests-result.json`; raw log SHA-256
+`f9cec178b97c9b48284db6aca67899a3a36a9e987005d128d9ab1968a79e96fd`.
+This new record does not backfill the preceding Python run's missing env map.
+No native/model/provider execution occurred.
+
+Current source3 has 704 inputs frozen at
+`sha256:2c69af7805a54b508f07ee4a1f5835cf2b993a3320e27a3c4df5cf784b709ed2`,
+snapshot `/private/tmp/kegari-v0-e07-operand-source3.json`. Serial validation
+session66949 runs strict Clippy, six new operand tests, whole evaluation/runtime
+and ownership-return groups, broker components, seven compatibility targets,
+formatting, full no-fail-fast suite and disabled Plan. Exact commands:
+`/private/tmp/kegari-v0-e07-operand-source3-commands.json`.
+Strict Clippy passed in 23.207s; the six new operand tests passed in 42.367s,
+the evaluation group 67 in 2.797s, runtime 33 in 1.788s, owned-return two in
+0.238s, worker-return one in 0.162s, broker eight in 1.865s, seven compatibility
+targets 109 in 64.363s, and formatting in 1.598s. All nine completed records
+retain unchanged source/toolchain observations. These focused groups overlap.
+Full-suite validation passed: 984 tests passed, zero failed, two required native
+checks ignored across 39 groups in 744.750s. Raw SHA-256:
+`b80431a06a08b2bd71967e74e410e7f56d369ea1c500735d3aeca8704c47d950`.
+Plan passed in 32.084s, preserving the exact preceding 28-variant/56-slot disabled
+plan; raw SHA-256:
+`7f0f96b570be6f7752a73ffd1f230d380b7dd3de5430b37c87d972639b1254b5`.
+Session66949 is closed (exit0). Inventory passed in 0.048s and diff check in
+0.019s, with unchanged before/after auxiliary hashes for the specification,
+inventory tool, coverage ledger and operator document. All 13 final records
+retain unchanged source/toolchain observations. Root independently compared full
+test membership to the preceding canary run: exactly the six operand tests were
+added; all prior cases and statuses remain, including both ignored native checks.
+Root's exact Plan/membership comparison is retained at
+`/private/tmp/kegari-v0-e07-operand-root-membership-plan-1.json`.
+No native/actual-agent/human result is claimed. Independent installed-composition
+review found no material issue; root read its full report and verified its three
+artifact members:
+`/private/tmp/kegari-e07-operand-installed-source3-independent-review-v1/REVIEW.md`,
+SHA-256 `a48f9a9736fd1bc9daf3c4dd4f60f59db072001a805935f78d972ee1c618edb8`.
+That review verified the exact 704 inputs, 12+3 path composition/corrections,
+six focused results and four proposed evidence appends. It records that the full
+result was absent at review time; later full/Plan success is separate evidence.
+Root read the full immutable collector/command specification and report template,
+verified all six members and the approved specification hash, and found no
+material issue. Collector artifact:
+`/private/tmp/kegari-e07-operand-source3-evidence-draft-v1`, FILES SHA-256
+`2a6af95bf42461a681552aa026eacfff1b946fd4722669cdfd942f00b78d2fc8`.
+Its first actual execution passed in 0.298s; record:
+`/private/tmp/kegari-v0-e07-operand-collector-1-result.json`, raw SHA-256
+`89d59efc5c9c5d48eec8d21ca4d9b69189266cc0c78a72dccf1d23b26000748f`.
+Root then read the complete generated report and verified its actual source,
+13 passing final/three preserved historical records, six added test memberships,
+984/0/2 totals, 39 groups, exact Plan, and separate 20-test Python evidence.
+Installed reports: [E07 context operand validation](validation/LOCAL-E07-CONTEXT-OPERAND.md)
+and [machine evidence](validation/e07-context-operand-checks.json), SHA-256
+`960f76ccc21cf21b9f7676ebda5ac3b9e336c992115823f88a957876eb2b7355`
+and `85e0349f374316c0b5d85f7cb77bee256de6f3665cbbae6ac4c83b9973a2ab05`.
+Installation and root review record:
+`/private/tmp/kegari-v0-e07-operand-evidence-installation.json`.
+The focused broker regression intentionally retained its uncertain synthetic
+fixture at `/var/folders/s3/gnkb4nw50msf40dxc1jrpsyh0000gn/T/.tmpT0qY9m`.
+It is preserved; neither cancellation nor successful test completion authorizes
+deleting uncertain effect evidence. The full run does not expose that passing
+test's captured retention path, so no additional cleanup claim is made.
+Exactly four reviewed coverage entries are now installed from
+`/private/tmp/kegari-v0-e07-operand-coverage-draft-1`; all prior ledger values and
+statuses are preserved. The resulting ledger SHA-256 is
+`4ccb7214b0b63edc5b2393d7311d6f60e76a7b60de8b8028d0dd696457eadf80`.
+The collector's recorded auxiliary ledger hash identifies the prior ledger it
+actually checked; this later append is separately verified, not backfilled.
+The actual full/Plan results do not qualify E07 behavior.
+The output-matcher/
+scorer design is held at `/private/tmp/kegari-e07-output-matcher-scorer-design-v1`.
+Root read its full design, API sketch and 25 proposed test oracles and verified
+all five artifact members and 30 source pins. The independent design review
+requires two corrections: public coordinates must exclude raw keys/IDs/error
+text, and future grading needs an independently authenticated positive result
+rather than only a no-match witness. Root read its full report:
+`/private/tmp/kegari-e07-output-matcher-scorer-design-independent-review-v1/REVIEW.md`,
+SHA-256 `7080d044c8c8a8fba53afca25bda67e6135bd2879bab9677dbb40f8b04e5246b`.
+V2 is held at `/private/tmp/kegari-e07-output-matcher-scorer-design-v2`, FILES
+SHA-256 `311a66485fd94722a9659cdafbb4e5fb0cdab3d9fc156c250fbc5b72a96d5c41`.
+Root read the full revised design/API and all 25 proposed test oracles and
+verified all 19 artifact members and five exact v1 bases. Independent rereview
+resolved both D1/D2 without another material finding; root read the full report:
+`/private/tmp/kegari-e07-output-matcher-scorer-design-independent-review-v2/REVIEW.md`,
+SHA-256 `aa3d477a07eb9789f5ed107ab377f66afb605f132bc578f1e1f298d510448320`.
+Its clarification is retained: marker-bearing provider labels test safe new
+metadata without silently broadening the declared matched-content projection.
+V1/v2 remain immutable, and their 30 source pins remain explicitly historical701.
+The bounded diagnostic-only slice A is now being authored in TEMP against actual
+704-input source3 bases, with no repository edits or Cargo in that agent. It
+records actual decoded deltas/tool arguments/feedback matches with explicit
+partial coverage. Finite negative and versioned
+scorer behavior require separate exact reader/broker closure and scoped authority
+observations; old absent state booleans will not be invented. Root flagged that
+raw JSON pointers or item identifiers can themselves contain a marker and must
+not leak through public match metadata. No matcher implementation or test result
+is claimed; old scorers remain unchanged.
+
+At the committed 1d48265 checkpoint, the reviewed canary v1/v2 composition, external defaults,
 operator documentation and E07 source-data preparer are installed in 20 paths.
 The 701 tested inputs are frozen at
 `sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010`;

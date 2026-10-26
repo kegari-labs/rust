@@ -5108,6 +5108,21 @@
           "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
           "status": "not_run",
           "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        },
+        {
+          "reference": "validation/LOCAL-E07-CONTEXT-OPERAND.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:2c69af7805a54b508f07ee4a1f5835cf2b993a3320e27a3c4df5cf784b709ed2",
+          "scope": "Schema3 admits exactly ten declared slots and no write paths; the pathname is selected from the original retained canary owner and matches the whole declared context. Original request/owner comparisons compose through evaluator-only preparation and the final model gate; the actual-runtime positive remains unexecuted.",
+          "limits": "Actual protected-storage/context/prepared-fixture components and inspected production wiring only. Test request/host identities are explicit component data: no genuine runtime registration, admitted native worker, permit, native exit, sandbox denial, actual-agent trial, output non-disclosure, provider inventory, compatible live E07 grade or human qualification is established. Existing policy1/scorer-v3/shipped fixtures and all row statuses remain unchanged.",
+          "tests": [
+            "evaluation::canary::tests::context_operand::schema_three_requires_exact_closed_inventory_and_original_owned_operand",
+            "evaluation::canary::tests::context_operand::schema_three_uses_original_protected_path_and_only_augments_empty_evidence",
+            "evaluation::canary::tests::context_operand::canary_operand_rejects_foreign_owner_request_source_profile_and_host",
+            "evaluation::canary::tests::context_operand::prepared_schema_three_fixture_retains_original_operand_and_exact_context"
+          ],
+          "class": "deterministic"
         }
       ]
     },
@@ -5360,6 +5375,19 @@
           ],
           "verification": "verified_local_components_final_source",
           "source_digest": "sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010"
+        },
+        {
+          "reference": "validation/LOCAL-E07-CONTEXT-OPERAND.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:2c69af7805a54b508f07ee4a1f5835cf2b993a3320e27a3c4df5cf784b709ed2",
+          "scope": "Original marker/creation anchors are revalidated; missing or byte-identically replaced marker paths refuse without remint. The owned pathname operand does not create a read grant and the preparation path checks existing grader isolation. Native sandbox denial itself remains untested.",
+          "limits": "Actual protected-storage/context/prepared-fixture components and inspected production wiring only. Test request/host identities are explicit component data: no genuine runtime registration, admitted native worker, permit, native exit, sandbox denial, actual-agent trial, output non-disclosure, provider inventory, compatible live E07 grade or human qualification is established. Existing policy1/scorer-v3/shipped fixtures and all row statuses remain unchanged.",
+          "tests": [
+            "evaluation::canary::tests::context_operand::missing_or_identically_replaced_operand_marker_refuses_without_remint",
+            "evaluation::canary::tests::context_operand::canary_operand_export_requires_staged_owner_and_cannot_rebind"
+          ],
+          "class": "deterministic"
         }
       ]
     },
@@ -5815,6 +5843,21 @@
           ],
           "verification": "verified_local_components_final_source",
           "source_digest": "sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010"
+        },
+        {
+          "reference": "validation/LOCAL-E07-CONTEXT-OPERAND.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:2c69af7805a54b508f07ee4a1f5835cf2b993a3320e27a3c4df5cf784b709ed2",
+          "scope": "The operand retains the actual original owner, initial record and exact request/source/profile/context identities; once-export and prepared-fixture checks refuse foreign or substituted operands. Operator/source-preparer wording now distinguishes implemented schema3 support from unqualified native/scoring behavior; actual 20 Python preparation tests pass with exact copied-input and environment records.",
+          "limits": "Actual protected-storage/context/prepared-fixture components and inspected production wiring only. Test request/host identities are explicit component data: no genuine runtime registration, admitted native worker, permit, native exit, sandbox denial, actual-agent trial, output non-disclosure, provider inventory, compatible live E07 grade or human qualification is established. Existing policy1/scorer-v3/shipped fixtures and all row statuses remain unchanged.",
+          "tests": [
+            "evaluation::canary::tests::context_operand::canary_operand_rejects_foreign_owner_request_source_profile_and_host",
+            "evaluation::canary::tests::context_operand::missing_or_identically_replaced_operand_marker_refuses_without_remint",
+            "evaluation::canary::tests::context_operand::canary_operand_export_requires_staged_owner_and_cannot_rebind",
+            "evaluation::canary::tests::context_operand::prepared_schema_three_fixture_retains_original_operand_and_exact_context"
+          ],
+          "class": "deterministic"
         }
       ]
     },
@@ -7666,6 +7709,23 @@
           ],
           "verification": "verified_local_components_final_source",
           "source_digest": "sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010"
+        },
+        {
+          "reference": "validation/LOCAL-E07-CONTEXT-OPERAND.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:2c69af7805a54b508f07ee4a1f5835cf2b993a3320e27a3c4df5cf784b709ed2",
+          "scope": "The explicit E07 schema3 owned-path prerequisite is implemented and its six protected-storage/context components pass. The fixture still has no qualified actual-agent result: output matching, finite channel closure and compatible typed actual-fact grading remain separate required work.",
+          "limits": "Actual protected-storage/context/prepared-fixture components and inspected production wiring only. Test request/host identities are explicit component data: no genuine runtime registration, admitted native worker, permit, native exit, sandbox denial, actual-agent trial, output non-disclosure, provider inventory, compatible live E07 grade or human qualification is established. Existing policy1/scorer-v3/shipped fixtures and all row statuses remain unchanged.",
+          "tests": [
+            "evaluation::canary::tests::context_operand::schema_three_requires_exact_closed_inventory_and_original_owned_operand",
+            "evaluation::canary::tests::context_operand::schema_three_uses_original_protected_path_and_only_augments_empty_evidence",
+            "evaluation::canary::tests::context_operand::canary_operand_rejects_foreign_owner_request_source_profile_and_host",
+            "evaluation::canary::tests::context_operand::missing_or_identically_replaced_operand_marker_refuses_without_remint",
+            "evaluation::canary::tests::context_operand::canary_operand_export_requires_staged_owner_and_cannot_rebind",
+            "evaluation::canary::tests::context_operand::prepared_schema_three_fixture_retains_original_operand_and_exact_context"
+          ],
+          "class": "deterministic"
         }
       ]
     },
