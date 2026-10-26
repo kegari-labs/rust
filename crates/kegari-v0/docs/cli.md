@@ -134,6 +134,13 @@ The marker makes supervised restart fail closed until explicit service start;
 `__control-host` exits successfully for this intentional stopped condition.
 No local service action is available through a remote target.
 
+After recovery, unfinished local admissions or suspended-owner records prevent
+service-shutdown reservation even if live process maps are empty. A latched
+control-persistence failure also requires recovery before reservation. Replaying
+an unfinished shutdown reports `operation_uncertain` and does not repeat it.
+Once local ownership has retired, remote-only uncertainty may remain recorded
+without preventing service stop; handover still has its own reconciliation gates.
+
 `open` obtains the current Linear URL/token through a read operation. The browser
 callback runs only on the reviewing client, and only for an authoritative HTTPS
 `linear.app` URL. `--url-only` never invokes it. Browser failure returns the URL

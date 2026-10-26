@@ -118,7 +118,7 @@ fn pending_protocol_allows_interleaved_tools_but_exit_retains_unknown_work_hold(
 
 #[test]
 fn local_exit_does_not_clear_unknown_remote_effect_or_block_graceful_drain() {
-    let (_temp, host, lease) = started();
+    let (temp, host, lease) = started();
     let permit = host
         .admit(
             &lease,
@@ -167,6 +167,172 @@ fn local_exit_does_not_clear_unknown_remote_effect_or_block_graceful_drain() {
     host.orchestration_exited(&lease).unwrap();
     assert!(!host.snapshot().unwrap().draining);
     assert_eq!(host.snapshot().unwrap().intent.desired, Intent::Stopped);
+    // An unresolved remote result must not be mistaken for an unresolved local
+    // process after its local admission has retired. Recovery retains the
+    // remote receipt while permitting the already-drained service to stop.
+    let unresolved = canonical_digest(1, &host.operation(unknown).unwrap()).unwrap();
+    drop(host);
+    let root = PrivateDir::open(&temp.path().canonicalize().unwrap().join("state")).unwrap();
+    let recovered =
+        ControlHost::recover(PrivateDir::open(root.path()).unwrap(), lease.runtime_id).unwrap();
+    recovered
+        .stop_service(command(lease.runtime_id, Uuid::new_v4()), || {
+            root.write_bytes("fixture-service-shutdown", b"reserved")
+        })
+        .unwrap();
+    assert_eq!(
+        root.read_bytes("fixture-service-shutdown", 64).unwrap(),
+        b"reserved"
+    );
+    assert!(recovered.snapshot().unwrap().service_stopping);
+    assert_eq!(
+        canonical_digest(1, &recovered.operation(unknown).unwrap()).unwrap(),
+        unresolved
+    );
+}
+
+#[test]
+fn recovered_local_ownership_blocks_service_shutdown_without_live_permits() {
+    for kind in ["admission", "owner_suspension"] {
+        let (temp, host, lease) = started();
+        let operation = if kind == "admission" {
+            host.admit(
+                &lease,
+                Uuid::new_v4(),
+                "unfinished-local-work".into(),
+                canonical_digest(1, &"scope").unwrap(),
+                || Ok(()),
+            )
+            .unwrap()
+            .operation_id
+        } else {
+            host.suspend_owner(&lease, "fixture_observation_lost")
+                .unwrap()
+                .operation_id
+        };
+        host.lifecycle(
+            command(lease.runtime_id, Uuid::new_v4()),
+            Lifecycle::Stop,
+            host.snapshot().unwrap().intent.generation,
+        )
+        .unwrap();
+        let unresolved = canonical_digest(1, &host.operation(operation).unwrap()).unwrap();
+        drop(host);
+        let root = PrivateDir::open(&temp.path().canonicalize().unwrap().join("state")).unwrap();
+        let recovered =
+            ControlHost::recover(PrivateDir::open(root.path()).unwrap(), lease.runtime_id).unwrap();
+        let before = recovered.snapshot().unwrap();
+        assert_eq!(before.intent.desired, Intent::Stopped);
+        assert!(before.active_operations.is_empty());
+        assert!(before.pending_local_processes.is_empty());
+        assert!(!before.orchestration_alive);
+        assert!(before.unresolved_operations.contains_key(&operation));
+        let request = command(lease.runtime_id, Uuid::new_v4());
+        let error = recovered
+            .stop_service(request.clone(), || {
+                root.write_bytes("fixture-service-shutdown", b"reserved")
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "stop_in_progress", "{kind}");
+        assert!(!root.path().join("fixture-service-shutdown").exists());
+        assert!(!recovered.snapshot().unwrap().service_stopping);
+        assert_eq!(
+            canonical_digest(1, &recovered.operation(operation).unwrap()).unwrap(),
+            unresolved
+        );
+        assert_eq!(
+            recovered
+                .stop_service(request, || panic!("rejected shutdown must not replay"))
+                .unwrap_err()
+                .code,
+            "stop_in_progress"
+        );
+    }
+}
+
+#[test]
+fn unfinished_service_shutdown_replay_retains_uncertainty_without_reserving() {
+    for sent in [false, true] {
+        let (_temp, root) = directory();
+        let runtime = Uuid::new_v4();
+        let host = ControlHost::setup(
+            PrivateDir::open(root.path()).unwrap(),
+            runtime,
+            Uuid::new_v4(),
+        )
+        .unwrap();
+        let mut request = command(runtime, Uuid::new_v4());
+        request.kind = "service_stop".into();
+        request.payload = json!({"service":"stop"});
+        let store = ReceiptStore::new(root.child("receipts").unwrap());
+        let (mut receipt, _) = store.prepare(&request, 0).unwrap();
+        if sent {
+            store.mark_sent(&mut receipt).unwrap();
+        }
+        let before = canonical_digest(1, &receipt).unwrap();
+        drop(host);
+        let recovered =
+            ControlHost::recover(PrivateDir::open(root.path()).unwrap(), runtime).unwrap();
+        assert_eq!(
+            recovered
+                .stop_service(request, || panic!("unfinished shutdown must not replay"))
+                .unwrap_err()
+                .code,
+            "operation_uncertain"
+        );
+        assert_eq!(
+            canonical_digest(1, &store.get(receipt.request_id).unwrap()).unwrap(),
+            before
+        );
+        assert!(!recovered.snapshot().unwrap().service_stopping);
+    }
+}
+
+#[test]
+fn failed_intent_persistence_blocks_service_reservation_until_recovery() {
+    let (_temp, root) = directory();
+    let runtime = Uuid::new_v4();
+    let host = ControlHost::setup(
+        PrivateDir::open(root.path()).unwrap(),
+        runtime,
+        Uuid::new_v4(),
+    )
+    .unwrap();
+    let retained_intent = root.read_bytes("intent.json", 65536).unwrap();
+    let intent_path = root.path().join("intent.json");
+    fs::remove_file(&intent_path).unwrap();
+    fs::create_dir(&intent_path).unwrap();
+    assert!(
+        host.lifecycle(command(runtime, Uuid::new_v4()), Lifecycle::Start, 0)
+            .is_err()
+    );
+    assert_eq!(host.snapshot().unwrap().intent.desired, Intent::Stopped);
+    assert!(host.snapshot().unwrap().persistence_error.is_some());
+    // Restore the fixture's original durable state. The live host must still
+    // honor its persistence-error latch until the normal recovery path reads it.
+    fs::remove_dir(&intent_path).unwrap();
+    root.write_bytes("intent.json", &retained_intent).unwrap();
+    assert_eq!(
+        host.stop_service(command(runtime, Uuid::new_v4()), || {
+            root.write_bytes("fixture-service-shutdown", b"reserved")
+        })
+        .unwrap_err()
+        .code,
+        "reconciliation_required"
+    );
+    assert!(!root.path().join("fixture-service-shutdown").exists());
+    assert!(!host.snapshot().unwrap().service_stopping);
+    drop(host);
+    let recovered = ControlHost::recover(PrivateDir::open(root.path()).unwrap(), runtime).unwrap();
+    recovered
+        .stop_service(command(runtime, Uuid::new_v4()), || {
+            root.write_bytes("fixture-service-shutdown", b"reserved")
+        })
+        .unwrap();
+    assert_eq!(
+        root.read_bytes("fixture-service-shutdown", 64).unwrap(),
+        b"reserved"
+    );
 }
 
 #[test]

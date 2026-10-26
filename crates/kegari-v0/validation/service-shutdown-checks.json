@@ -1,0 +1,194 @@
+{
+  "target": "aarch64-apple-darwin",
+  "profile": "release",
+  "artifact_mode": "0o555",
+  "inspection_commands": [
+    "--help",
+    "--version",
+    "__build-info",
+    "__handover-info"
+  ],
+  "qualification": "Incomplete; managed-workload implementation pending; no qualification for untrusted external context.",
+  "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-apple-darwin\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)\nrelease: 1.99.1\ncommit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e\ncommit-date: 2026-08-27\nhost: aarch64-apple-darwin\nlibgit2: 1.9.6 (sys:0.21.0 vendored)\nlibcurl: 8.7.1 (sys:0.4.90+curl-8.21.0 system ssl:(SecureTransport) LibreSSL/3.3.6)\nssl: OpenSSL 3.6.3 9 Jun 2026\nos: Mac OS 27.0.1 [64-bit]\n",
+  "build_environment": {
+    "RUSTUP_TOOLCHAIN": "stable",
+    "CARGO_HOME": "/private/tmp/kegari-v0-cargo-cache"
+  },
+  "compiler_environment": {},
+  "compiler_environment_note": "Only explicit environment overrides captured; not a claim of complete linker provenance or bitwise reproducibility.",
+  "application_version": "0.2.0-alpha.2",
+  "source_base_commit": "5489e0d9486a9eeb1e8fa70f00f48cfe10f87a46",
+  "artifact": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/kegari-v0",
+  "artifact_sha256": "19fdb21e361cb90a4193079ebbafda569e8020724accc13901e19e0e8e0dd633",
+  "artifact_size": 40308032,
+  "runtime_build": "sha256:6ea30df674c0dc6efbcad2a664b03e4a9c21f5e026b1ed3319ba3f233f11da9e",
+  "handover_info": {
+    "schema_version": 1,
+    "api_version": 1,
+    "config_schema": 1,
+    "receipt_schema": 1,
+    "runtime_version": "0.2.0-alpha.2",
+    "runtime_build": "sha256:6ea30df674c0dc6efbcad2a664b03e4a9c21f5e026b1ed3319ba3f233f11da9e",
+    "instruction_schema": 1,
+    "asset_version": "3",
+    "assets": {
+      "authority": "sha256:093132ce901d79612deb74bc4fd58b3ee143127b9242f38c72e3ac879bdfc6cd",
+      "child": "sha256:2b737180ae7865ef3333a8ac8f28f8b79d6010e71a4c4f4b3407c0a1382f5d62",
+      "continuation": "sha256:051405a5808c16c0234a3896657b791ff06eea6499e67a75d617f3270a50e5d8",
+      "coordination": "sha256:07554377881779d4008480760389801c4ad6baa8726a51961577d5a504af57ae",
+      "review": "sha256:ecd1ae2c1d9fe5c17f0002eba010323687217b66f221b447bd02d94e268f826c",
+      "validation": "sha256:329827b6c7f47f6522ea802bc5919e2234c185d1b64ea7a2f2c4ef8baf0efc18"
+    }
+  },
+  "source_input_count": 313,
+  "full_artifact_record": {
+    "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/artifact.json",
+    "sha256": "ce77e0fa1b730bec7b7360f02cddc0e4426811c20e8725b2feecdf4335103a78"
+  },
+  "spec_sha256": "35d4515585fe92350ec1cc8b78a5919c834d559a48d48d071239d39305032fb3",
+  "logs": {
+    "release-build.jsonl": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/release-build.jsonl",
+      "sha256": "e34ae1cac42fe5a53996b967b9d1f3689e089598566367e5ded71ea427423155"
+    },
+    "release-build.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/release-build.stderr",
+      "sha256": "a9a0758bb1d5d183513dcf08529957c0f4562a72a6e79cdeda63a06fc655f055"
+    },
+    "tests.stdout": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/tests.stdout",
+      "sha256": "2f0cec42ccc3f231b65873d2d26e8a18ba081f805256cfc9e3021ac0d1e132a1"
+    },
+    "tests.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/tests.stderr",
+      "sha256": "eb6b0f3a3267f68c175e541af1e4c67dff7634bb735adb2df4659116c4a33647"
+    },
+    "clippy.stdout": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/clippy.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "clippy.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/clippy.stderr",
+      "sha256": "83b4ccfe9dd04934a691aecb7ef9c882b7f18f6a9bf060bc054e644b845648cf"
+    },
+    "fmt.stdout": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/fmt.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "fmt.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/fmt.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "regression-red.stdout": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/regression-red.stdout",
+      "sha256": "687c3b019ac59321085b5b8a8de38c001ea9790b74984726fbd299c86f2891d7"
+    },
+    "regression-red.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.2-aarch64-apple-darwin-19fdb21e361c/regression-red.stderr",
+      "sha256": "77a89c6648dc33e8255ac1be28d45cd3d617513f448054e29bb1e4ff980ebec1"
+    }
+  },
+  "test_build_executable_sha256": "5b262e971d9a48563354c426c117cd53988ce1d0ade5d16aa0e344df3b65a7b0",
+  "commands": [
+    {
+      "argv": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "kegari-v0",
+        "--bin",
+        "kegari-v0",
+        "--message-format=json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "kegari-v0",
+        "--test",
+        "main",
+        "--test",
+        "config_harness",
+        "--test",
+        "control_storage",
+        "--test",
+        "control_preparation",
+        "--test",
+        "app",
+        "--test",
+        "local_cli"
+      ],
+      "exit_code": 0,
+      "passed": 85,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "kegari-v0",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    },
+    {
+      "argv": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "regression_before_fix": {
+    "argv": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "kegari-v0",
+      "--test",
+      "control_storage",
+      "recovered_local_ownership_blocks_service_shutdown_without_live_permits",
+      "--",
+      "--exact"
+    ],
+    "exit_code": 101,
+    "observation": "Old implementation acknowledged shutdown with unresolved recovered admission; intermediate regression version failed as expected. The subsequent final suite includes additional replay and persistence tests."
+  },
+  "test_sources": {
+    "crates/kegari-v0/tests/main.rs": "b944ffb43c28a49de88f42a813460178f62043d50d1860f97ff8610b169a9f58",
+    "crates/kegari-v0/tests/config_harness.rs": "d73daaf2fabe868d5aca6a1a494609612a0ae570b7629d5f820cdb5c0bad3201",
+    "crates/kegari-v0/tests/control_storage.rs": "2ec29b350edcf87b61157569b1a7486ecabb5b14122d4fa99d6d4a1797da2107",
+    "crates/kegari-v0/tests/control_preparation.rs": "0d232b94304d21497d13fec09f7d448d3066755dc28b250953791dae8b653290",
+    "crates/kegari-v0/tests/app.rs": "d0b14c95581d2ccc2c1576674d29a2a046a60468ee99cd241fece27764680710",
+    "crates/kegari-v0/tests/local_cli.rs": "9800d8c6584e1b818606b59585d3b30882682605bffb9fd1b7e9e6443bd92b2d"
+  },
+  "independent_review": {
+    "reviewer": "codex_adapter",
+    "result": "No material source/test or final evidence inconsistency. Independently verified313 build inputs,10 log hashes,6 test-source hashes, staged/test binary identities and85 passing release tests. Persistence fixture covers a pre-write filesystem failure and latch recovery, not post-rename/fsync failure."
+  },
+  "limits": [
+    "Managed-workload containment integration is still incomplete; repository-command refusal remains",
+    "No full descendant or untrusted external context qualification",
+    "Four direct inspections exercised staged build artifact; integration entrypoint tests used separately hashed Cargo test binary",
+    "Historical full-suite result remains prior-version evidence; only these six release targets rerun",
+    "No native ignored tests, real-agent/provider/human qualification, signing, installation, activation or remote publication"
+  ]
+}

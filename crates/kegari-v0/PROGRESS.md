@@ -22,14 +22,24 @@ repository-command refusal remains in code until that integration is ready.
 Endpoint Security is not an established prerequisite. Supervision is available;
 native/host/live actions retain their separate explicit approval requirements.
 
-A related service-shutdown correction is currently uncommitted: recovered local
-ownership and persistence uncertainty block reservation, unfinished replay stays
-uncertain, and retired-local/unknown-remote work remains distinguishable. The old
-code failed its new regression; 85 targeted release tests now pass and independent
-source review found no material issue. A separately staged 0.2.0-alpha.2 artifact
-has been prepared; final evidence and the implementation commit are in progress.
-The previous alpha.1 artifact remains unchanged. No service or coordinator was
-installed, activated, signed or published. Held B evaluation drafts remain held.
+The related service-shutdown correction is implemented and locally verified:
+recovered local ownership and persistence uncertainty block reservation,
+unfinished replay stays uncertain, and retired-local/unknown-remote work remains
+distinguishable. The old code failed its new regression; all 85 targeted release
+tests, all-target clippy, formatting and four direct artifact inspections pass.
+Independent source review found no material issue. The exact 0.2.0-alpha.2
+executable, regression failure and validation limits are in
+[service shutdown evidence](validation/LOCAL-SERVICE-SHUTDOWN.md). The alpha.1
+artifact remains unchanged. No service/coordinator was installed, activated,
+signed or published. Held B evaluation drafts remain held.
+
+The accepted scope amendment was committed separately as `fff533f` —
+`docs(kegari-v0): define managed-workload qualification`; the external objective
+matches GOAL.md. The next implementation package is managed-workload supervision,
+not further entitlement research. Handover review also identified remaining
+worker-reconciliation, exact old-supervisor removal, partial-replacement recovery
+and qualification-record workflow gaps for 0.5.0; this shutdown correction alone
+does not close them.
 
 Historical prerelease checkpoint (5489e0d; earlier scope decision was pending):
 The Goal remains active and incomplete. Supervision is available; host/live

@@ -2286,9 +2286,35 @@ impl ControlHost {
                     Error::new("record_corrupt", "invalid stored service rejection")
                 })?);
             }
+            if matches!(receipt.phase, ReceiptPhase::Prepared | ReceiptPhase::Sent) {
+                return Err(Error::new(
+                    "operation_uncertain",
+                    "prior service shutdown has no confirmed result; reconcile before retrying",
+                )
+                .detail(serde_json::json!({"operation_id":receipt.operation_id})));
+            }
             return Ok(receipt);
         }
-        let check = if s.intent.desired != Intent::Stopped
+        // Cold recovery restores unfinished admissions and suspended owners as
+        // holds, not live handles. Do not mistake empty process maps for their
+        // exit. Remote-only holds may remain after actual local retirement.
+        let local_ownership_pending = || -> Result<bool> {
+            for id in s.holds.keys() {
+                if matches!(
+                    self.receipts.get(*id)?.kind.as_str(),
+                    "admission" | "owner_suspension"
+                ) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        };
+        let check = if s.error.is_some() {
+            Err(Error::new(
+                "reconciliation_required",
+                "service shutdown requires reconciled durable control state",
+            ))
+        } else if s.intent.desired != Intent::Stopped
             || s.alive
             || !s.permits.is_empty()
             || !s.background_commands.is_empty()
@@ -2300,7 +2326,14 @@ impl ControlHost {
                 "service shutdown requires STOPPED and no active owned local work",
             ))
         } else {
-            verify_and_persist()
+            match local_ownership_pending() {
+                Ok(true) => Err(Error::new(
+                    "stop_in_progress",
+                    "service shutdown requires reconciliation of prior local ownership",
+                )),
+                Ok(false) => verify_and_persist(),
+                Err(error) => Err(error),
+            }
         };
         if let Err(error) = check {
             receipt.phase = ReceiptPhase::Reconciled;

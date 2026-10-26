@@ -25,7 +25,7 @@ The two explicitly ignored native tests remain blocked, not passed.
 
 ## Versioned prerelease executable
 
-The application is versioned as `0.2.0-alpha.1`; the package and executable remain
+The application is versioned as `0.2.0-alpha.2`; the package and executable remain
 `kegari-v0`. This prerelease does not complete the 0.2.0 containment milestone.
 Repository command execution still refuses `process_tree_unverified`, and native,
 provider, actual-agent and human qualification remain incomplete.
@@ -54,8 +54,9 @@ checksum or a complete record of compiler settings. Release and debug profiles
 have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
-running coordinator. See [prerelease evidence](validation/LOCAL-PRERELEASE.md)
-for the exact artifact and checks performed.
+running coordinator. See [alpha.2 lifecycle and build evidence](validation/LOCAL-SERVICE-SHUTDOWN.md)
+for the exact artifact and checks performed. The
+[alpha.1 report](validation/LOCAL-PRERELEASE.md) remains historical evidence.
 
 ## Operator and repository preparation
 
