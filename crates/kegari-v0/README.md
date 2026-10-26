@@ -27,7 +27,7 @@ owned-child signalling and the remaining native qualification are still pending.
 
 ## Versioned prerelease executable
 
-The application is versioned as `0.2.0-alpha.4`; the package and executable remain
+The application is versioned as `0.2.0-alpha.5`; the package and executable remain
 `kegari-v0`. This prerelease does not complete the 0.2.0 containment milestone.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or
 unqualified declared profiles (`managed_profile_unqualified`), and native,
@@ -57,8 +57,9 @@ checksum or a complete record of compiler settings. Release and debug profiles
 have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
-running coordinator. See [alpha.4 setup/profile and build evidence](validation/MANAGED-SETUP.md)
+running coordinator. See [alpha.5 command supervision evidence](validation/MANAGED-COMMAND-SUPERVISION.md)
 for the exact artifact and checks performed. The
+[alpha.4 setup/profile report](validation/MANAGED-SETUP.md),
 [alpha.3 report](validation/OWNED-GROUP-LIFECYCLE.md),
 [alpha.2 report](validation/LOCAL-SERVICE-SHUTDOWN.md) and
 [alpha.1 report](validation/LOCAL-PRERELEASE.md) remain historical evidence.
@@ -66,14 +67,14 @@ for the exact artifact and checks performed. The
 ## First launch
 
 Running `./kegari-v0` without a command requests the local runtime's `overview`;
-it does not open a setup wizard or start a service. Before setup, alpha.4 reports
+it does not open a setup wizard or start a service. Before setup, alpha.4 and later report
 `target_unavailable: no local runtime is configured` and directs you to
 `kegari-v0 setup --help`. Alpha.2's earlier message was
 `no registered local runtime; use explicit local setup`; both mean that no local
 runtime has been configured yet. Use `./kegari-v0 --help` or
 `./kegari-v0 setup --help` to inspect the available commands without setup.
 
-Alpha.4 is an inspectable development artifact, not a qualified installation ready
+Alpha.5 is an inspectable development artifact, not a qualified installation ready
 for activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
 requires the supported profile and native/provider prerequisites to be established
 first, then a final protected, versioned binary and explicit runtime configuration.

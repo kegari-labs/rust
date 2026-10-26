@@ -46,6 +46,12 @@ pub trait StartedCommand: Send {
 /// argument. Fixture implementations must report DeterministicFixture.
 pub trait CommandBoundary: Send + Sync {
     fn evidence_class(&self) -> ExecutionEvidenceClass;
+    /// Process-free prerequisite check before reserving native ownership. The
+    /// actual start must repeat its own checks; this is not a launch capability.
+    /// Injected deterministic boundaries have no native prerequisite by default.
+    fn preflight(&self, _isolation: &ValidatedIsolation) -> Result<()> {
+        Ok(())
+    }
     fn start(
         &self,
         isolation: &ValidatedIsolation,
@@ -90,6 +96,12 @@ impl CommandBoundary for SandboxBoundary {
     fn evidence_class(&self) -> ExecutionEvidenceClass {
         ExecutionEvidenceClass::ConfinedExecution
     }
+    fn preflight(&self, _isolation: &ValidatedIsolation) -> Result<()> {
+        Err(Error::new(
+            "process_journal_required",
+            "native repository execution requires the current operation's durable process journal",
+        ))
+    }
     fn start(
         &self,
         _isolation: &ValidatedIsolation,
@@ -121,6 +133,9 @@ impl JournaledSandboxBoundary {
 impl CommandBoundary for JournaledSandboxBoundary {
     fn evidence_class(&self) -> ExecutionEvidenceClass {
         ExecutionEvidenceClass::ConfinedExecution
+    }
+    fn preflight(&self, isolation: &ValidatedIsolation) -> Result<()> {
+        isolation::repository_command_prerequisite(isolation)
     }
     fn start(
         &self,
@@ -987,9 +1002,8 @@ impl LocalExecutor<'_> {
             evidence_class: self.boundary.evidence_class(),
         })
     }
-    /// Synchronous actual process creation. The host persists sent/unknown and
-    /// registers `RunningCheck::cancellation` in the same serialized effect gate.
-    pub fn start_check(&self, prepared: PreparedCheck) -> Result<RunningCheck> {
+    /// Recheck known no-spawn failures before reserving the effect's owned slot.
+    pub fn preflight_check(&self, prepared: &PreparedCheck) -> Result<()> {
         let original =
             self.check_ownership_binding(&prepared.binding, prepared.effective.as_ref())?;
         self.launch_identity(original)?;
@@ -1041,6 +1055,12 @@ impl LocalExecutor<'_> {
                 ));
             }
         }
+        self.boundary.preflight(self.isolation)
+    }
+    /// Synchronous actual process creation. The host persists sent/unknown and
+    /// reserves cancellation ownership in the same serialized effect gate.
+    pub fn start_check(&self, prepared: PreparedCheck) -> Result<RunningCheck> {
+        self.preflight_check(&prepared)?;
         let command = self.boundary.start(
             self.isolation,
             &prepared.resolved.argv,
@@ -1530,8 +1550,8 @@ impl LocalExecutor<'_> {
         })
     }
 
-    /// Start and register cancellation inside the durable effect admission gate.
-    pub fn start_hook(&self, prepared: PreparedHook) -> Result<RunningHook> {
+    /// A skipped hook has no native prerequisite and cannot start a process.
+    pub fn preflight_hook(&self, prepared: &PreparedHook) -> Result<()> {
         self.launch_identity(&prepared.binding)?;
         if self.boundary.evidence_class() != prepared.record.evidence_class {
             return Err(Error::new(
@@ -1539,6 +1559,14 @@ impl LocalExecutor<'_> {
                 "hook execution boundary changed after preparation",
             ));
         }
+        if prepared.requires_execution() {
+            self.boundary.preflight(self.isolation)?;
+        }
+        Ok(())
+    }
+    /// Start inside the durable effect gate after reserving cancellation ownership.
+    pub fn start_hook(&self, prepared: PreparedHook) -> Result<RunningHook> {
+        self.preflight_hook(&prepared)?;
         let command = prepared
             .argv
             .as_ref()

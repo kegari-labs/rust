@@ -41,11 +41,17 @@ use std::future::Future;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 use uuid::Uuid;
 
 const MAX_TOOL_BYTES: usize = 65_536;
 const MAX_CALLS: usize = 4096;
+// Match the per-owner tool/host-process ceiling and the whole Control inventory
+// ceiling. Reservations check both limits before their command is started.
+const MAX_REGISTERED_COMMANDS: usize = 65_536;
 
 type ActiveCommands =
     BTreeMap<Uuid, BTreeMap<Uuid, Arc<dyn crate::execution::CommandCancellation>>>;
@@ -54,7 +60,99 @@ type ActiveCommands =
 pub struct ExecutionRegistry {
     active: Mutex<ActiveCommands>,
 }
+
+enum ReservedCommand {
+    Owned(Arc<dyn crate::execution::CommandCancellation>),
+    NeverStarted,
+}
+#[derive(Default)]
+struct CommandSlot {
+    command: OnceLock<ReservedCommand>,
+    cancel_requested: AtomicBool,
+}
+impl crate::execution::CommandCancellation for CommandSlot {
+    fn cancel(&self) -> Result<()> {
+        self.cancel_requested.store(true, Ordering::SeqCst);
+        match self.command.get() {
+            Some(ReservedCommand::Owned(command)) => command.cancel(),
+            Some(ReservedCommand::NeverStarted) => Ok(()),
+            None => Err(Error::new(
+                "operation_uncertain",
+                "reserved command start has not returned its owned handle",
+            )),
+        }
+    }
+    fn exited(&self) -> Result<bool> {
+        match self.command.get() {
+            Some(ReservedCommand::Owned(command)) => command.exited(),
+            Some(ReservedCommand::NeverStarted) => Ok(true),
+            None => Ok(false),
+        }
+    }
+}
+/// The sole attachment authority for a registry-held slot. Dropping it leaves
+/// unknown ownership; a boundary error cannot be inferred to mean no spawn.
+pub(crate) struct ExecutionReservation {
+    slot: Arc<CommandSlot>,
+}
+impl ExecutionReservation {
+    pub(crate) fn attach(
+        self,
+        command: Arc<dyn crate::execution::CommandCancellation>,
+    ) -> Result<()> {
+        // This non-Clone token is the only writer. Store ownership before the
+        // fallible cancellation, including cancellation requested before attach.
+        let bound = self
+            .slot
+            .command
+            .get_or_init(|| ReservedCommand::Owned(command));
+        if self.slot.cancel_requested.load(Ordering::SeqCst)
+            && let ReservedCommand::Owned(command) = bound
+        {
+            command.cancel()?;
+        }
+        Ok(())
+    }
+    /// Only a known no-spawn path (including an actual skipped hook) may call
+    /// this. In particular, an opaque start error must retain the unknown slot.
+    pub(crate) fn never_started(self) {
+        self.slot
+            .command
+            .get_or_init(|| ReservedCommand::NeverStarted);
+    }
+}
 impl ExecutionRegistry {
+    pub(crate) fn reserve(&self, operation: Uuid, effect: Uuid) -> Result<ExecutionReservation> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| Error::new("ownership_conflict", "execution registry lock failed"))?;
+        if active
+            .get(&operation)
+            .is_some_and(|effects| effects.contains_key(&effect))
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "local effect already has an owned process",
+            ));
+        }
+        if active
+            .get(&operation)
+            .is_some_and(|effects| effects.len() >= MAX_CALLS)
+            || active.values().map(BTreeMap::len).sum::<usize>() >= MAX_REGISTERED_COMMANDS
+        {
+            return Err(Error::new(
+                "record_limit",
+                "owned command registry exceeds its finite inventory",
+            ));
+        }
+        let slot = Arc::new(CommandSlot::default());
+        active
+            .entry(operation)
+            .or_default()
+            .insert(effect, slot.clone());
+        Ok(ExecutionReservation { slot })
+    }
     pub(crate) fn register(
         &self,
         operation: Uuid,
@@ -97,7 +195,8 @@ impl ExecutionRegistry {
             .copied()
             .collect())
     }
-    /// Drop only handles whose actual owned process/task has confirmed exit.
+    /// Drop only known no-spawn slots or handles whose actual owned process/task
+    /// has confirmed exit.
     /// This does not acknowledge any receipt or promote retained evidence.
     pub fn observe_exited(&self, operation: Uuid) -> Result<usize> {
         let mut active = self
@@ -137,11 +236,25 @@ impl ExecutionRegistry {
             .lock()
             .map_err(|_| Error::new("ownership_conflict", "execution registry lock failed"))?
             .get(&operation)
-            .map(|effects| effects.values().cloned().collect())
+            .map(|effects| {
+                effects
+                    .iter()
+                    .map(|(id, handle)| (*id, handle.clone()))
+                    .collect()
+            })
             .unwrap_or_default();
         let count = handles.len();
-        for handle in handles {
-            handle.cancel()?;
+        let mut failures = Vec::new();
+        for (effect, handle) in handles {
+            if let Err(error) = handle.cancel() {
+                failures.push((effect, error));
+            }
+        }
+        if let Some((_, first)) = failures.first() {
+            return Err(first.clone().detail(json!({
+                "original_details": first.details,
+                "owned_cancellation_failures": failures
+            })));
         }
         Ok(count)
     }
@@ -1869,14 +1982,12 @@ impl ScopedWorker {
                         &contract.authority,
                     )?)
                 },
-                |_| {
+                |receipt| {
+                    executor.preflight_check(&prepared)?;
+                    let reservation =
+                        executions.reserve(permit.operation_id, receipt.operation_id)?;
                     let running = executor.start_check(prepared)?;
-                    let cancel = running.cancellation();
-                    if let Err(error) = executions.register(permit.operation_id, id, cancel.clone())
-                    {
-                        cancel.cancel()?;
-                        return Err(error);
-                    }
+                    reservation.attach(running.cancellation())?;
                     Ok(running)
                 },
             )?;
@@ -3130,6 +3241,10 @@ impl ToolBroker for RecoveryJournal {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "worker_execution_registry_tests.rs"]
+mod execution_registry_tests;
 
 #[cfg(test)]
 #[path = "worker_managed_binding_tests.rs"]

@@ -13,6 +13,10 @@ use tokio::process::Command;
 mod managed_execution;
 pub use managed_execution::BoundManagedExecution;
 
+#[cfg(all(test, target_os = "macos"))]
+#[path = "isolation_native_tests.rs"]
+mod native_tests;
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionRole {
@@ -559,6 +563,8 @@ async fn bounded_output<R: tokio::io::AsyncRead + Unpin>(
         let take = n.min(limit.saturating_sub(bytes.len()));
         bytes.extend_from_slice(&buffer[..take]);
         truncated |= take < n;
+        // A ready pipe must not starve cancellation or the supervisor's deadline.
+        tokio::task::yield_now().await;
     }
     Ok((bytes, truncated))
 }
@@ -597,8 +603,8 @@ pub fn command_launch_identity(
     })
 }
 /// A resolved managed declaration is distinct from native qualification. Retain
-/// pre-spawn refusal until the supported profile's actual qualification path is
-/// implemented and its observations can justify native repository execution.
+/// pre-spawn refusal until actual release qualification supports the shipped
+/// workload profile and the configured inventory is verified against it.
 pub fn repository_command_prerequisite(isolation: &ValidatedIsolation) -> Result<()> {
     isolation.revalidate()?;
     match &isolation.plan.managed_execution {
@@ -608,7 +614,7 @@ pub fn repository_command_prerequisite(isolation: &ValidatedIsolation) -> Result
         )),
         Some(profile) => Err(Error::new(
             "managed_profile_unqualified",
-            "managed foreground policy is bound, but native qualification for this profile is not yet available",
+            "managed foreground policy is bound, but its supported tool profile still requires native qualification evidence",
         ).detail(serde_json::json!({"profile": profile.policy_digest()}))),
     }
 }
@@ -697,6 +703,33 @@ fn start_command_inner(
         ));
     }
     repository_command_prerequisite(isolation)?;
+    spawn_command_inner(
+        isolation,
+        argv,
+        timeout,
+        output_limit,
+        secret_values,
+        journal,
+    )
+}
+
+// Only the qualified entry above calls this in production. Native qualification
+// fixtures exercise this exact spawn path with a disposable journal; they do not
+// create runtime qualification or relax the public entry's prerequisite.
+fn spawn_command_inner(
+    isolation: &ValidatedIsolation,
+    argv: &[String],
+    timeout: Duration,
+    output_limit: usize,
+    secret_values: &[String],
+    journal: Option<CommandJournal>,
+) -> Result<OwnedCommand> {
+    if journal.is_none() {
+        return Err(Error::new(
+            "execution_authority_absent",
+            "managed commands require an admitted durable process journal before spawn",
+        ));
+    }
     let executable = isolation.resolve_executable(&argv[0])?;
     let profile = isolation.seatbelt_profile()?;
     let mut command = Command::new("/usr/bin/sandbox-exec");
@@ -784,55 +817,209 @@ fn start_command_inner(
         .stderr
         .take()
         .ok_or_else(|| Error::new("process_error", "missing stderr pipe"))?;
-    let out_eof = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let err_eof = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let out_observed = out_eof.clone();
-    let err_observed = err_eof.clone();
-    Ok(OwnedCommand {
-        argv: argv.to_vec(),
-        cwd: isolation.plan.cwd.clone(),
-        isolation_digest: isolation.digest.clone(),
-        started,
-        timeout,
-        secret_values: secret_values.to_vec(),
-        process: std::sync::Arc::new(std::sync::Mutex::new(CommandProcess {
-            child,
-            group,
-            terminal: None,
-            reaped: None,
-            out_eof,
-            err_eof,
-            guard,
-            capture_error,
-        })),
-        out_task: tokio::spawn(async move {
-            let result = bounded_output(stdout, output_limit).await;
+    Ok(OwnedCommand::supervise(
+        CommandRun {
+            argv: argv.to_vec(),
+            cwd: isolation.plan.cwd.clone(),
+            isolation_digest: isolation.digest.clone(),
+            started,
+            timeout,
+            secret_values: secret_values.to_vec(),
+        },
+        CommandProcess::new(child, group, guard, capture_error),
+        stdout,
+        stderr,
+        output_limit,
+    ))
+}
+
+const COMMAND_EXIT_GRACE: Duration = Duration::from_secs(5);
+const COMMAND_OUTPUT_GRACE: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct CommandOutputs {
+    eof: [std::sync::atomic::AtomicBool; 2],
+    joined: std::sync::atomic::AtomicBool,
+    uncertain: std::sync::atomic::AtomicBool,
+}
+impl CommandOutputs {
+    fn fail(&self) {
+        self.uncertain
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn closed(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        // Read the publication flag before the monotone failure latch. A reader
+        // must not pair an old clean latch with a newly joined failed collector.
+        self.joined.load(SeqCst)
+            && self.eof[0].load(SeqCst)
+            && self.eof[1].load(SeqCst)
+            && !self.uncertain.load(SeqCst)
+    }
+}
+struct CommandCollector {
+    outputs: std::sync::Arc<CommandOutputs>,
+    stream: usize,
+    complete: bool,
+}
+impl CommandCollector {
+    fn finish(&mut self) {
+        self.outputs.eof[self.stream].store(true, std::sync::atomic::Ordering::SeqCst);
+        self.complete = true;
+    }
+}
+impl Drop for CommandCollector {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.outputs.fail();
+        }
+    }
+}
+type CollectedCommandOutput = (Vec<u8>, bool);
+type CommandCollectorTask = tokio::task::JoinHandle<std::io::Result<CollectedCommandOutput>>;
+struct CommandOutputTasks {
+    stdout: Option<CommandCollectorTask>,
+    stderr: Option<CommandCollectorTask>,
+    outputs: std::sync::Arc<CommandOutputs>,
+}
+impl CommandOutputTasks {
+    fn spawn<R>(
+        input: R,
+        limit: usize,
+        outputs: std::sync::Arc<CommandOutputs>,
+        stream: usize,
+    ) -> CommandCollectorTask
+    where
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    {
+        // Construct the guard before spawn: cancellation before the task's first
+        // poll must also record that EOF was not collected.
+        let mut guard = CommandCollector {
+            outputs,
+            stream,
+            complete: false,
+        };
+        tokio::spawn(async move {
+            let result = bounded_output(input, limit).await;
             if result.is_ok() {
-                out_observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                // Borrow the whole guard so its Drop state is retained by the
+                // future, including cancellation before the first task poll.
+                guard.finish();
             }
             result
-        }),
-        err_task: tokio::spawn(async move {
-            let result = bounded_output(stderr, output_limit).await;
-            if result.is_ok() {
-                err_observed.store(true, std::sync::atomic::Ordering::SeqCst);
-            }
+        })
+    }
+    async fn join_one(
+        task: &mut Option<CommandCollectorTask>,
+    ) -> Option<Result<CollectedCommandOutput>> {
+        let result = task.as_mut()?.await;
+        // An already joined handle must never be polled or aborted again, even
+        // if the other collector later fails or reaches its deadline.
+        task.take();
+        Some(
             result
-        }),
-    })
+                .map_err(|_| {
+                    Error::new(
+                        "operation_uncertain",
+                        "command output collector interrupted",
+                    )
+                })
+                .and_then(|result| result.map_err(|error| Error::io("read command output", error))),
+        )
+    }
+    async fn join_pending(
+        &mut self,
+    ) -> (
+        Option<Result<CollectedCommandOutput>>,
+        Option<Result<CollectedCommandOutput>>,
+    ) {
+        tokio::join!(
+            Self::join_one(&mut self.stdout),
+            Self::join_one(&mut self.stderr)
+        )
+    }
+    fn abort_pending(&self) {
+        for task in [&self.stdout, &self.stderr].into_iter().flatten() {
+            task.abort();
+        }
+    }
+    async fn collect(mut self) -> Result<(CollectedCommandOutput, CollectedCommandOutput)> {
+        let joined = tokio::time::timeout(COMMAND_OUTPUT_GRACE, self.join_pending()).await;
+        match joined {
+            Ok((stdout, stderr)) => {
+                let result = stdout
+                    .zip(stderr)
+                    .ok_or_else(|| {
+                        Error::new("operation_uncertain", "command output ownership was lost")
+                    })
+                    .and_then(|(stdout, stderr)| Ok((stdout?, stderr?)));
+                if result.is_err() {
+                    self.outputs.fail();
+                }
+                self.outputs
+                    .joined
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                result
+            }
+            Err(_) => {
+                // Failure is visible before joining or publishing cancellation
+                // status. Actual Tokio pipe reads and bounded_output cooperate
+                // with abort; neither collector is left as a running drain loop.
+                self.outputs.fail();
+                self.abort_pending();
+                if tokio::time::timeout(COMMAND_OUTPUT_GRACE, self.join_pending())
+                    .await
+                    .is_ok()
+                {
+                    self.outputs
+                        .joined
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                Err(Error::new(
+                    "operation_uncertain",
+                    "command output did not reach joined EOF; preserve run ownership",
+                ))
+            }
+        }
+    }
+}
+impl Drop for CommandOutputTasks {
+    fn drop(&mut self) {
+        if self.stdout.is_some() || self.stderr.is_some() {
+            self.outputs.fail();
+            self.abort_pending();
+        }
+    }
 }
 
 struct CommandProcess {
     child: tokio::process::Child,
     group: crate::process_group::OwnedGroup,
-    terminal: Option<std::process::ExitStatus>,
     reaped: Option<crate::process_group::OwnedGroupExit>,
-    out_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    err_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    outputs: std::sync::Arc<CommandOutputs>,
     guard: Option<crate::process_records::SpawnGuard>,
+    journal_retired: bool,
     capture_error: Option<Error>,
+    cancelled_at: Option<std::time::Instant>,
 }
 impl CommandProcess {
+    fn new(
+        child: tokio::process::Child,
+        group: crate::process_group::OwnedGroup,
+        guard: Option<crate::process_records::SpawnGuard>,
+        capture_error: Option<Error>,
+    ) -> Self {
+        Self {
+            child,
+            group,
+            reaped: None,
+            outputs: Default::default(),
+            guard,
+            journal_retired: false,
+            capture_error,
+            cancelled_at: None,
+        }
+    }
     fn observe(&mut self) -> Result<Option<std::process::ExitStatus>> {
         if self.reaped.is_none() {
             self.reaped = self.group.try_reap_tokio(&mut self.child)?;
@@ -840,11 +1027,25 @@ impl CommandProcess {
         if let Some(exit) = self.reaped.as_ref()
             && let Some(guard) = self.guard.as_mut()
         {
+            // Retain both the actual exit token and guard on a storage failure.
+            // A later cancellation observation retries this exact retirement.
             guard.group_exited(exit)?;
+            self.journal_retired = true;
             self.guard = None;
         }
-        self.terminal = self.reaped.as_ref().map(|exit| exit.status());
-        Ok(self.terminal)
+        Ok(self.reaped.as_ref().map(|exit| exit.status()))
+    }
+    fn cancel(&mut self) -> Result<()> {
+        self.cancelled_at
+            .get_or_insert_with(std::time::Instant::now);
+        let observed = self.observe();
+        if self.reaped.is_none() {
+            // Observation failure is not permission to abandon the owned child.
+            // Signalling still requires the original unreaped group identity.
+            self.group
+                .terminate(crate::process_group::Termination::Kill)?;
+        }
+        observed.map(|_| ())
     }
 }
 /// Non-serializable capability anchored to an actual unreaped owned child.
@@ -854,130 +1055,205 @@ pub struct OwnedCommandCancellation {
     process: std::sync::Arc<std::sync::Mutex<CommandProcess>>,
 }
 impl OwnedCommandCancellation {
-    /// Observes only the directly owned process group and inherited streams.
-    /// This is diagnostic evidence, not permission to release run ownership.
+    /// Observes only the directly owned managed group and joined inherited
+    /// streams. It does not establish arbitrary escaped-descendant containment.
     pub fn group_exited(&self) -> Result<bool> {
         let mut process = self
             .process
             .lock()
             .map_err(|_| Error::new("process_error", "owned command lock failed"))?;
         process.observe()?;
-        Ok(process.terminal.is_some()
-            && process.out_eof.load(std::sync::atomic::Ordering::SeqCst)
-            && process.err_eof.load(std::sync::atomic::Ordering::SeqCst))
+        Ok(process.reaped.is_some() && process.outputs.closed())
     }
     pub fn exited(&self) -> Result<bool> {
-        if !self.group_exited()? {
-            return Ok(false);
-        }
-        Err(process_tree_unverified())
-    }
-    pub fn cancel(&self) -> Result<()> {
         let mut process = self
             .process
             .lock()
             .map_err(|_| Error::new("process_error", "owned command lock failed"))?;
-        if process.observe()?.is_some() {
-            return Ok(());
-        }
-        process
-            .group
-            .terminate(crate::process_group::Termination::Kill)
+        process.observe()?;
+        Ok(process.reaped.is_some() && process.journal_retired && process.outputs.closed())
+    }
+    pub fn cancel(&self) -> Result<()> {
+        self.process
+            .lock()
+            .map_err(|_| Error::new("process_error", "owned command lock failed"))?
+            .cancel()
     }
 }
-pub struct OwnedCommand {
+struct CommandRun {
     argv: Vec<String>,
     cwd: PathBuf,
     isolation_digest: String,
     started: std::time::Instant,
     timeout: Duration,
     secret_values: Vec<String>,
+}
+pub struct OwnedCommand {
     process: std::sync::Arc<std::sync::Mutex<CommandProcess>>,
-    out_task: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
-    err_task: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
+    supervisor: Option<tokio::task::JoinHandle<Result<CommandOutcome>>>,
+    settled: bool,
 }
 impl OwnedCommand {
+    fn supervise<O, E>(
+        run: CommandRun,
+        process: CommandProcess,
+        stdout: O,
+        stderr: E,
+        limit: usize,
+    ) -> Self
+    where
+        O: tokio::io::AsyncRead + Unpin + Send + 'static,
+        E: tokio::io::AsyncRead + Unpin + Send + 'static,
+    {
+        let outputs = process.outputs.clone();
+        let tasks = CommandOutputTasks {
+            stdout: Some(CommandOutputTasks::spawn(stdout, limit, outputs.clone(), 0)),
+            stderr: Some(CommandOutputTasks::spawn(stderr, limit, outputs.clone(), 1)),
+            outputs,
+        };
+        let process = std::sync::Arc::new(std::sync::Mutex::new(process));
+        let cancellation = OwnedCommandCancellation {
+            process: process.clone(),
+        };
+        // This task owns cleanup even when the caller drops wait(). The only
+        // streaming input is a Tokio pipe. Deadlines bound polling/retries and
+        // cooperative async reads; they cannot preempt a blocked synchronous
+        // OS or journal syscall. No arbitrary user callback runs in this task.
+        let supervisor = tokio::spawn(async move { run.supervise(cancellation, tasks).await });
+        Self {
+            process,
+            supervisor: Some(supervisor),
+            settled: false,
+        }
+    }
     pub fn cancellation(&self) -> OwnedCommandCancellation {
         OwnedCommandCancellation {
             process: self.process.clone(),
         }
     }
-    pub async fn wait(self) -> Result<CommandOutcome> {
-        let cancellation = self.cancellation();
-        if self
+    pub async fn wait(mut self) -> Result<CommandOutcome> {
+        let result = self
+            .supervisor
+            .take()
+            .ok_or_else(|| {
+                Error::new(
+                    "operation_uncertain",
+                    "command supervisor ownership was lost",
+                )
+            })?
+            .await;
+        self.settled = true;
+        match result {
+            Ok(result) => result,
+            Err(_) => {
+                if let Ok(process) = self.process.lock() {
+                    process.outputs.fail();
+                }
+                let _ = self.cancellation().cancel();
+                Err(Error::new(
+                    "operation_uncertain",
+                    "command supervisor interrupted; preserve run ownership",
+                ))
+            }
+        }
+    }
+}
+impl Drop for OwnedCommand {
+    fn drop(&mut self) {
+        if !self.settled {
+            // Do not abort the supervisor: it retains both collectors and the
+            // actual child until its bounded cleanup attempt has settled.
+            let _ = self.cancellation().cancel();
+        }
+    }
+}
+impl CommandRun {
+    async fn observe_until_exit(
+        &self,
+        cancellation: &OwnedCommandCancellation,
+    ) -> Result<(std::process::ExitStatus, bool)> {
+        let mut failure = cancellation
             .process
             .lock()
             .map_err(|_| Error::new("process_error", "owned command lock failed"))?
             .capture_error
-            .is_some()
-        {
-            cancellation.cancel()?;
+            .clone();
+        if failure.is_some() {
+            let _ = cancellation.cancel();
         }
         let mut timed_out = false;
-        let status = loop {
-            let status = {
-                let mut process = self
+        loop {
+            let (observed, cancelled_at, output_uncertain) = {
+                let mut process = cancellation
                     .process
                     .lock()
                     .map_err(|_| Error::new("process_error", "owned command lock failed"))?;
-                process.observe()?
+                (
+                    process.observe(),
+                    process.cancelled_at,
+                    process
+                        .outputs
+                        .uncertain
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                )
             };
-            if let Some(status) = status {
-                break status;
+            match observed {
+                Ok(Some(status)) => return failure.map_or(Ok((status, timed_out)), Err),
+                Ok(None) => (),
+                Err(error) => {
+                    failure.get_or_insert(error);
+                    let _ = cancellation.cancel();
+                }
+            }
+            if output_uncertain {
+                failure.get_or_insert_with(|| {
+                    Error::new(
+                        "operation_uncertain",
+                        "command output collector failed; preserve ownership",
+                    )
+                });
+                let _ = cancellation.cancel();
             }
             if !timed_out && self.started.elapsed() >= self.timeout {
                 timed_out = true;
-                cancellation.cancel()?;
+                if let Err(error) = cancellation.cancel() {
+                    failure.get_or_insert(error);
+                }
             }
-            if timed_out
-                && self.started.elapsed() >= self.timeout.saturating_add(Duration::from_secs(5))
-            {
-                return Err(Error::new(
-                    "operation_uncertain",
-                    "terminated command has not been reaped; preserve ownership",
-                ));
+            if cancelled_at.is_some_and(|at| at.elapsed() >= COMMAND_EXIT_GRACE) {
+                return Err(failure.unwrap_or_else(|| {
+                    Error::new(
+                        "operation_uncertain",
+                        "terminated command has not retired; preserve ownership",
+                    )
+                }));
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
-        };
-        let mut out_task = self.out_task;
-        let mut err_task = self.err_task;
-        // Descendants holding inherited pipes cannot prolong the result forever.
-        let collect = async {
-            let out = (&mut out_task)
-                .await
-                .map_err(|_| Error::new("process_error", "stdout collector interrupted"))?
-                .map_err(|e| Error::io("read command output", e))?;
-            let err = (&mut err_task)
-                .await
-                .map_err(|_| Error::new("process_error", "stderr collector interrupted"))?
-                .map_err(|e| Error::io("read command diagnostics", e))?;
-            Ok::<_, Error>((out, err))
-        };
-        let ((out, out_truncated), (err, err_truncated)) =
-            match tokio::time::timeout(Duration::from_secs(1), collect).await {
-                Ok(result) => result?,
-                Err(_) => {
-                    out_task.abort();
-                    err_task.abort();
-                    return Err(Error::new(
-                        "operation_uncertain",
-                        "command descendants retain output pipes; preserve the run",
-                    ));
-                }
-            };
+        }
+    }
+    async fn supervise(
+        self,
+        cancellation: OwnedCommandCancellation,
+        tasks: CommandOutputTasks,
+    ) -> Result<CommandOutcome> {
+        let status = self.observe_until_exit(&cancellation).await;
+        if status.is_err() {
+            let _ = cancellation.cancel();
+        }
+        // Always settle BOTH collectors, including after a process/journal error.
+        let collected = tasks.collect().await;
+        let (status, timed_out) = status?;
+        let ((out, out_truncated), (err, err_truncated)) = collected?;
+        if !cancellation.exited()? {
+            return Err(Error::new(
+                "operation_uncertain",
+                "managed command lacks durable group retirement and joined output; preserve ownership",
+            ));
+        }
         let stderr = redact(
             String::from_utf8_lossy(&err).into_owned(),
             &self.secret_values,
         );
-        if let Some(error) = self
-            .process
-            .lock()
-            .map_err(|_| Error::new("process_error", "owned command lock failed"))?
-            .capture_error
-            .take()
-        {
-            return Err(error);
-        }
         if stderr.contains("sandbox-exec: sandbox_apply")
             || stderr.contains("sandbox-exec: sandbox_init")
         {
@@ -986,7 +1262,7 @@ impl OwnedCommand {
                 "host policy prevented applying the execution sandbox",
             ));
         }
-        let outcome = CommandOutcome {
+        Ok(CommandOutcome {
             schema_version: 1,
             argv: self.argv,
             cwd: self.cwd,
@@ -1000,26 +1276,8 @@ impl OwnedCommand {
             stderr,
             output_truncated: out_truncated || err_truncated,
             elapsed_ms: self.started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-        };
-        // Seatbelt's current process-fork rule does not prove that descendants
-        // cannot create another session/group and close inherited streams. A
-        // clean leader/group exit therefore cannot establish check success or
-        // release the caller's Sent receipt/permit. Preserve actual diagnostics
-        // while withholding that stronger capability until containment exists.
-        Err(process_tree_unverified().detail(serde_json::json!({
-            "group_exit_code": outcome.exit_code,
-            "group_timed_out": outcome.timed_out,
-            "group_elapsed_ms": outcome.elapsed_ms,
-            "isolation_digest": outcome.isolation_digest,
-        })))
+        })
     }
-}
-
-fn process_tree_unverified() -> Error {
-    Error::new(
-        "process_tree_unverified",
-        "owned group exited, but session-escaping descendants are not contained or tracked; preserve run ownership and uncertain effects",
-    )
 }
 
 pub async fn run_command(
@@ -1140,55 +1398,8 @@ mod owned_exit_tests {
             "process_tree_unverified"
         );
     }
-    #[tokio::test]
-    async fn clean_group_and_streams_do_not_prove_arbitrary_command_tree_exit() {
-        let mut command = Command::new("/usr/bin/true");
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let (mut child, group) =
-            crate::process_group::OwnedGroup::spawn_tokio(&mut command).unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let out_eof = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let err_eof = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let out_observed = out_eof.clone();
-        let err_observed = err_eof.clone();
-        let owned = OwnedCommand {
-            argv: vec!["/usr/bin/true".into()],
-            cwd: std::env::temp_dir(),
-            isolation_digest: "deterministic-owned-process-fixture".into(),
-            started: std::time::Instant::now(),
-            timeout: Duration::from_secs(2),
-            secret_values: vec![],
-            process: std::sync::Arc::new(std::sync::Mutex::new(CommandProcess {
-                child,
-                group,
-                terminal: None,
-                reaped: None,
-                out_eof,
-                err_eof,
-                guard: None,
-                capture_error: None,
-            })),
-            out_task: tokio::spawn(async move {
-                let result = bounded_output(stdout, 1024).await;
-                out_observed.store(true, std::sync::atomic::Ordering::SeqCst);
-                result
-            }),
-            err_task: tokio::spawn(async move {
-                let result = bounded_output(stderr, 1024).await;
-                err_observed.store(true, std::sync::atomic::Ordering::SeqCst);
-                result
-            }),
-        };
-        let cancellation = owned.cancellation();
-        assert_eq!(
-            owned.wait().await.unwrap_err().code,
-            "process_tree_unverified"
-        );
-        assert!(cancellation.group_exited().unwrap());
-        assert_eq!(
-            cancellation.exited().unwrap_err().code,
-            "process_tree_unverified"
-        );
-    }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "isolation_command_tests.rs"]
+mod command_tests;

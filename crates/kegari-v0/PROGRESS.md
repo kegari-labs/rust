@@ -6,25 +6,50 @@ paused. The previous pause followed the explicit "Keep the goal paused" /
 "Do not start implementation yet" instruction, rather than an entitlement
 prerequisite. Supervision and existing action restrictions remain in force.
 
-Current verified increment after `f0120cd`: alpha.4 adds guided initial local setup and
-host-owned managed foreground policy/tool inventory binding. The final release
-suite passed 1,041 tests (two explicitly ignored native tests), and all-target
-clippy, formatting, inventory and five exact staged-binary inspections passed.
-The exact alpha.4 executable and verification scope are in
-[managed setup evidence](validation/MANAGED-SETUP.md). Independent review found
-and resolved a guided-setup registration race and a dangling scratch-build
-symlink check; final source review found no additional material issue.
-A policy declaration does not constitute
-native qualification; normal repository commands retain a specific prerequisite
-refusal. Registered-service lifecycle and qualified command completion remain
-unfinished. Next implement the finite authenticated native qualification producer
-and the supported managed-command completion path using actual owned exit,
-durable guard release and joined output collectors; then registered-service
-start/readiness/stop/exit and all dependent writer/cleanup gates. Do not treat
-the policy JSON or the existing whole-runtime handover qualification record as
-that command qualification. Preserve role/resource isolation and current action
-restrictions. The prior goal turn made progress by committing and delivering the
-verified alpha.3 increment; this is continuation, not a restart.
+Current verified increment after `354b27a`: **0.2.0-alpha.5** implements
+owned managed-command completion and retained bounded supervision, reserves
+check/hook/clone ownership before starts, and attempts every fenced cancellation.
+The release suite passed 1,051 tests with zero failures and three native tests
+ignored across 39 groups. A subsequent test-only lock-scope correction passed its
+exact regression; all-target clippy, formatting, inventory and five staged-binary
+inspections pass. Production/native-fixture source is unchanged since the full
+suite. Initial fixture failures and lint failures are preserved with the source
+manifests in [managed command evidence](validation/MANAGED-COMMAND-SUPERVISION.md).
+Independent final review found no remaining material issue in this increment.
+
+The exact alpha.5 executable is staged under
+`target/prereleases/kegari-v0-0.2.0-alpha.5-aarch64-apple-darwin-b7f0e3ca25de/`;
+SHA-256 `b7f0e3ca25de43318ac0b1a0c0074482791799c794acc7205e8d35826e505e3d`.
+It is an inspectable development artifact, not an installed/qualified coordinator.
+Normal repository commands retain the missing/unqualified-profile refusal.
+Group exit, durable guard release and joined EOF now support the managed closure
+path; actual supported-profile qualification and registered services remain.
+The owned supervisor continues cleanup if its caller drops the wait. Async
+cleanup deadlines cannot preempt a blocked synchronous OS/storage call.
+
+Next finish the closed shipped supported-profile/case manifest, verify configured
+tool inventories against that support contract and obtain separately approved
+native evidence. SPEC does not require a new per-profile runtime qualification
+API/issuer/registry; that extra proposed dependency is explicitly deferred in
+[the qualification design](docs/managed-qualification-design.md). Earlier notes
+calling that producer the next mandatory prerequisite are superseded. Qualification
+must still identify tools, toolchain/SDK inputs, host/OS constraints, lifecycle
+assumptions and the actual evidence; operator-supplied hashes alone do not qualify
+a tool. Preserve role/resource isolation and the current action restrictions.
+
+Then integrate registered service start/readiness/stop/exit and writer gates.
+A service cannot simply keep a separate Sent start effect open: Control holds its
+work key and would prevent the next check. The minimum coherent first service
+slice is a finite owned check bundle with narrowly typed continuation under the
+same admitted effect, and service writers stopped/joined before final artifact
+snapshots. Do not add a generic held-work bypass or count a service declaration
+as lifecycle implementation. Later 0.3–0.7 milestones remain unchanged/incomplete.
+
+Previous verified increment `354b27a` —
+`feat(kegari-v0)!: bind managed foreground policy to execution scope` — delivered
+alpha.4 policy/tool bindings after the guided-setup commit `2eab4ae`. Its 1,041-test
+suite and exact artifact remain in [managed setup evidence](validation/MANAGED-SETUP.md).
+No commits are consolidated in this separate lifecycle increment.
 
 Supervised request NQ-01A was explicitly approved and executed once: the read-only
 native identity test passed (one selected test, zero failures, no timeout,
@@ -53,6 +78,27 @@ captures its identity, signals that group with SIGKILL, reaps it and checks that
 signalling after reap is refused. The helper expires naturally after five seconds.
 No setup, Keychain, service, provider or pre-existing process is in scope. The
 request is retained beside the pinned executable; it has not been run.
+
+NQ-02A is prepared and awaiting separate explicit approval: one ignored native
+managed-command component test containing three fixed cases, outer timeout
+30 seconds and one attempt. Pinned full-suite test binary:
+`target/native-qualification/nq-02a-a989ca4d2520/managed-command-test`, SHA-256
+`a989ca4d2520ca9a10a858bee23a043db87e5052eebc3eb79bea3f030c375227`.
+Exact argv selects only
+`isolation::native_tests::managed_foreground_native_exit_output_and_timeout_are_journaled`
+with `--ignored --exact --test-threads=1 --nocapture`. The cases run fixed shell
+output/fixture file-access checks, shell exit 7, and an owned `/bin/sleep 5` timed
+out after 100 ms. They use the production Seatbelt/spawn/supervisor path and real
+native identity, group, journal and output observations with a disposable
+synthetic fixture lease. They do not test authenticated Control admission or
+issue operational qualification. Only own groups may be signalled; no existing
+process, setup, Keychain, service, provider or other test is authorized. The test
+and wrapper preserve evidence roots on failure/timeout. The request, immutable
+binary, one-attempt wrapper and full-suite source manifest are retained beside
+the binary. It predates only the later test-only lock-scope lint correction;
+production/native-fixture code is unchanged. No attempt marker/result exists.
+NQ-01B and NQ-02A are pending decisions, not live processes. All owned Cargo and
+artifact inspection processes for alpha.5 have finished.
 
 The guided setup change is committed as `2eab4ae` —
 `feat(kegari-v0): guide initial local setup with reviewed configuration`.

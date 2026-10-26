@@ -1533,7 +1533,9 @@ async fn prepare_owned(
             permit,
             || fresh_plan_preparation(runtime, plan),
             |receipt| {
-                let running = git.as_ref().ok_or_else(|| Error::new("source_unavailable", "source Git adapter is missing"))?.start_journaled_operation(
+                let git = git.as_ref().ok_or_else(|| Error::new("source_unavailable", "source Git adapter is missing"))?;
+                let reservation = runtime.executions.reserve(permit.operation_id, receipt.operation_id)?;
+                let running = git.start_journaled_operation(
                     GitLimits::default(),
                     start_gate,
                     processes.clone(),
@@ -1597,11 +1599,7 @@ async fn prepare_owned(
                         }
                     },
                 )?;
-                runtime.executions.register(
-                    permit.operation_id,
-                    receipt.operation_id,
-                    Arc::new(running.cancellation()),
-                )?;
+                reservation.attach(Arc::new(running.cancellation()))?;
                 Ok(running)
             },
         )?;
@@ -1872,13 +1870,15 @@ async fn after_create(
         permit,
         || fresh_plan_preparation(runtime, plan),
         |receipt| {
+            executor.preflight_hook(&prepared)?;
+            let reservation = runtime
+                .executions
+                .reserve(permit.operation_id, receipt.operation_id)?;
             let running = executor.start_hook(prepared)?;
             if let Some(cancellation) = running.cancellation() {
-                runtime.executions.register(
-                    permit.operation_id,
-                    receipt.operation_id,
-                    cancellation,
-                )?;
+                reservation.attach(cancellation)?;
+            } else {
+                reservation.never_started();
             }
             Ok(running)
         },

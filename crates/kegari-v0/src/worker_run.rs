@@ -2019,10 +2019,15 @@ impl ExecutorRunHooks {
             permit,
             || self.fresh(permit),
             |receipt| {
+                executor.preflight_hook(&prepared)?;
+                let reservation = self
+                    .registry
+                    .reserve(permit.operation_id, receipt.operation_id)?;
                 let running = executor.start_hook(prepared)?;
                 if let Some(cancel) = running.cancellation() {
-                    self.registry
-                        .register(permit.operation_id, receipt.operation_id, cancel)?;
+                    reservation.attach(cancel)?;
+                } else {
+                    reservation.never_started();
                 }
                 Ok(running)
             },
