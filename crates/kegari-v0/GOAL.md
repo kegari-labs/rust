@@ -1,5 +1,80 @@
 /goal Implement and independently validate the complete Kegari v0 application and its delivered agent harness against /Users/lgr/Development/com.kegari/com.kegari.rust/crates/kegari-v0/SPEC.md. Continue through implementation, testing, review and corrections until the specification's definition of done is supported by actual evidence. Preserve its scope, authority, isolation, acceptance, release and recovery guarantees. If a required permission, resource or decision prevents completion, finish all independent authorized work and report the precise blocker without marking the goal complete.
 
+Versioned completion plan — amendment
+
+Continue the existing Kegari v0 assignment from its current repository state.
+Retain the package and executable name kegari-v0. Version the application
+within 0.x.y; reserve 1.0.0 for a future, explicitly agreed production-readiness
+decision. Do not begin the lasting kegari implementation as part of this goal.
+
+This amendment changes sequencing and release milestones. It does not weaken
+SPEC version 1.2, broaden permissions or remove any existing completion gate.
+
+First reconcile the actual branch, working tree, staging, PROGRESS.md,
+validation evidence, outstanding processes and interrupted subagent drafts.
+Preserve valid work and failures. Treat incomplete TEMP drafts as unverified
+until inspected against current source. Do not resume the previous evaluation
+work merely because it was the last activity before the pause.
+
+Prioritize these milestones:
+
+0.2.0: Implement and validate supported process containment/descendant
+ownership, integrate commands, checks, hooks, cancellation, retirement and
+cleanup, and deliver a versioned release-mode executable with matching assets.
+
+0.3.0: Complete cold workflow recovery and reassembly, fresh-authority
+revalidation, and supported provider-intervention resolution/readmission.
+
+0.4.0: Complete required external-target proof and authenticated visual
+evidence recovery, including stale and substituted evidence rejection.
+
+0.5.0: Complete the operator handover route, qualification-record workflow,
+immutable installation procedure, compatibility checks and operator guidance.
+
+0.6.0: Complete finite output observation, typed authenticated grading,
+all required native evaluation contexts/callers and genuine prior-state
+preparation for continuation/recovery cases.
+
+0.7.0: Complete all separately authorized real-agent, real-integration,
+native-host and human qualification required by SPEC; resolve material
+findings and independently audit the final implementation and evidence.
+
+Use prerelease versions while a milestone is incomplete. Use 0.x.1 and later
+patches only for actual compatible corrections; do not place new capability
+or incompatible persisted-format changes in a patch release. Keep application,
+instruction, protocol, configuration and evidence schema identities explicit.
+
+Begin containment work with a finite feasibility investigation and focused
+adversarial experiments. Establish launch-time enrollment, escaped-descendant
+ownership, cancellation, identity safety, failure detection and restart
+semantics. Do not treat process-group exit, EOF, polling or self-reported
+success as proof of complete containment.
+
+If no conforming mechanism is available under current constraints, retain the
+refusal, document the rejected alternatives and exact missing prerequisite,
+and continue genuinely independent authorized work. Do not repeatedly retry
+unchanged denied probes or build further layers that assume containment works.
+
+For each milestone, implement a coherent increment, run relevant checks,
+obtain independent review, resolve findings and deliver an exact-source build
+and concise evidence summary. Use full regression validation at meaningful
+integration/release boundaries. Reuse still-valid evidence; rerun checks when
+changes or findings invalidate it. Keep progress bookkeeping proportional.
+
+Distinguish implemented, locally verified, natively verified, behaviorally
+qualified and human-reviewed states. Preserve failures, interrupted outcomes
+and uncertainty. A passing build or completed minor milestone is not completion
+of the comprehensive goal.
+
+Continue through the milestones without requiring routine “continue” prompts.
+Existing approval, unattended-operation, commit, remote-operation, installation
+and deployment restrictions remain effective. Prepare concrete bounded plans
+for actions needing additional authority; do not infer it from resumption.
+
+Complete this goal only when the full v0 specification and its evidence
+obligations are satisfied. Production 1.0.0 and activation of the lasting build
+remain outside this assignment.
+
 This is one comprehensive implementation-and-correction assignment. “One-shot” means I should not have to keep asking you to continue; it does not mean accepting the first generated implementation or completing everything in one model response. Begin the authorized local implementation after the initial inspection and concise plan. Do not stop at a proposal, scaffolding, a compiling binary or a happy-path demonstration.
 
 Authoritative inputs and starting point
