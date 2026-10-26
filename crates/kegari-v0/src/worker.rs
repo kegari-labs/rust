@@ -952,6 +952,12 @@ impl ScopedWorker {
     pub(crate) fn correction_wake(&self) -> Result<Option<Arc<tokio::sync::Notify>>> {
         self.host.correction_wake(self.permit.operation_id)
     }
+    pub(crate) fn independent_pull_request(&self) -> Option<&crate::providers::PullRequest> {
+        match self.contract.authority() {
+            WorkerAuthority::Independent(gate) => Some(gate.pull_request()),
+            WorkerAuthority::Authorized(_) => None,
+        }
+    }
     pub(crate) fn bound_context(&self) -> &Value {
         &self.contract.context
     }

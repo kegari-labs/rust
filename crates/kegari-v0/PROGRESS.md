@@ -3,6 +3,171 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
+Current source14 installs the reviewed native evaluator caller, literal PR text,
+exact trial subjects, owned failure cleanup, grading-error evidence, first native
+E05 context fixture, source-preparation tool and operator guidance. Its 672 build
+inputs are unchanged at
+`sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e`.
+All-target check passed in 14.425s, strict Clippy in 14.666s, and all 13 Python
+source-tool tests in 0.780s. Those tests include actual disposable local Git data
+preparation; they do not qualify native execution. Retained source preparation
+also passed in 0.251s and reproduced the base/head below. Output is owned local
+fixture data at `/private/tmp/kegari-v0-native-evaluation-source-output-14/prepared`.
+The final Rust suite passed **863 tests, zero failures and two required native
+ignores across 39 groups** in 835.770s. Formatting, both dispatch-disabled Plans,
+contract inventory and diff checks passed. Session72931 is closed; no owned check
+process remains. All 35 invocation artifacts, source/tool/log identities and
+retained source-preparation bytes/modes were verified. See
+[the native evaluator report](validation/LOCAL-NATIVE-EVALUATION.md) and
+[machine evidence](validation/native-evaluation-checks.json), SHA-256
+`97ea13128dff8d31a766f9546b1617926f33c94ee276dad87d3c9a446356b151`.
+The ledger appends partial local evidence to 18 clauses and eight named items;
+459 clauses remain not_assessed/37 partial, and 121 named items
+not_assessed/15 partial. No requirement is passed. Coverage SHA-256:
+`71790c6b2e3f6445b093c0a4d47f3c61fc7f654e03851a32b4e32ed3868a1c5b`.
+Actual-agent/provider/native containment and human qualification remain incomplete.
+The coherent native evaluator increment is ready for the authorized local commit;
+its separate scope from prior carry recovery warrants a distinct commit. No
+history rewrite, consolidation or remote action is planned.
+
+Source13 only rustfmt-formatted the exact-TrialKey test assertion; its intentional
+source transition from source12 and original bytes remain retained. Source12
+strict Clippy and 49 focused evaluation tests passed on their own exact inputs.
+Earlier source10 compile errors (two test-only PrivateDir::clone calls) and
+source11 lint errors are preserved with the corrections. Root reopens the actual
+protected test directory, derives Default, keeps the existing boxed transfer on
+error, simplifies equivalent borrowing/conditions and reorders a helper. No lint
+suppression, weakened assertion or replacement authority was used.
+The exact reviewed owned-return composition is
+`/private/tmp/kegari-native-owned-return-on-source9-v2`, manifest
+`49016fbd334d030a67d7106b6dd09bce2fbb5c0528ba7173eefd252bbbc07ed0`.
+Source-tool v2 fixes bounded directory enumeration and protected output ownership;
+independent review found no remaining material defect in those corrections.
+Six tool/docs integration paths and originals are retained at
+`/private/tmp/kegari-v0-native-evaluation-installed-source14`.
+Coverage/report integration is complete. The evidence collector
+independently binds exact final commands, log paths, source identity and both
+required native-ignore names after review identified filename-only classification.
+No claim is derived from a label alone. The next-fixture data proposal is held at
+`/private/tmp/kegari-native-next-fixtures-proposal-v1`, manifest
+`9ec55d56f3858bfeb1f7da4c99645c4400f582b297588887e2a5eb8b437923f3`.
+`independent_eligible` needs coordination and `clean_review` needs product review;
+neither is relabeled. PR-attack migration preserves three currently unavailable
+host-observation assertions and has no invented base/head OIDs or runnable manifest.
+The separate 15-file
+retired-parent producer composition remains uninstalled in TEMP; it explicitly
+cannot prove receipt-set completeness from retained receipt scans alone.
+
+The 28-file native evaluator source1 is installed from the reviewed caller-v4,
+subject-v2 and terminal-report layers, rebased on current main. Exact composition:
+`/private/tmp/kegari-native-evaluation-caller-composed-v5`, manifest
+`5289c0d7765868493717d4cfaaf4169cde9d14bd2bbdd5a74e7bad82644952c8`.
+All bases/new paths and installed bytes were verified; originals are retained at
+`/private/tmp/kegari-v0-native-evaluation-installed-source1`. Both clean merges
+preserve current cold recovery, exact per-trial subjects and terminal classification.
+Initial all-target check passed in 24.809s on 662 unchanged inputs at
+`sha256:4e0d2ee0c9a33522d66110a63ed7954e486f5d7ada23b976d3604777f5f30ac2`.
+Formatting changed no bytes. Strict Clippy2 failed on a nested if and a
+one-element loop; source3 simplifies those without changing their conditions or
+responses. Original source and failed invocation remain retained. Session59176
+and session18639 are closed. Source3 strict Clippy passed in 24.649s; focused
+evaluation tests then reported 36 passed/1 failed because the new report test used
+a symlinked macOS temporary path. Source4 canonicalizes only that actual owned
+test directory, preserving storage protection and every assertion. Session38918
+is closed. Source4 focused library evaluation passed all 37 tests in 13.268s.
+Source5 adds two independently reviewed CLI/HTTP boundary regressions; all
+136 tests across 7 related API/CLI/app/config/evaluation integration groups
+passed in 68.952s. Session30344 and session29780 are closed. Actual
+ownership through preparation/unused-trial failure remains a separate in-flight
+TEMP correction. No native evaluator is
+qualified and compatible native fixtures remain incomplete.
+
+The reviewed ten-file PR-text layer is now installed as source6 from
+`/private/tmp/kegari-native-independent-pr-text-on-source5`, manifest
+`d85e60668cd2fb24355a78391d6233b86949e0bcab411ba15543c6dfc19787ab`.
+All exact current bases and bytes were verified. The two clean merges preserve
+actual evaluator transfer gates and the provider lint correction. Metadata and
+literal text come from the same bounded wire response; full current/active/source
+comparison binds text without changing review/work identity. General status omits
+raw text; protected worker claim provenance also retains the gate text. Root read
+the complete patch; independent review found no additional material defect
+(`/private/tmp/kegari-native-independent-pr-text-independent-review/REVIEW.md`,
+SHA-256 `9399d35663e001547dc5a447ca361ca997a0de055a176f1270a7b05ebb6997b7`).
+Source6 all-target check passed in 23.234s, strict Clippy in 24.814s and all
+98 provider/reconcile/worker tests across three groups in 59.254s. Its focused
+library evaluation group passed 38 tests in 42.548s, and the retained
+import-history regression passed in 20.331s. Sessions48446,80599,32742
+are closed. Exact invocation/log/source identities are retained under
+`/private/tmp/kegari-v0-native-evaluation-{check,clippy,text}-6-*`.
+Scoring-error loss of already-collected report evidence is confirmed separately
+and under correction; no false success or qualification is claimed.
+
+Evaluator source6 had 662 build inputs at
+`sha256:7fbe90aefd480e2c012bb7a7906fc32f8f72b4add9ae4332e0bcfc42255d6cdb`.
+All-target compile, strict Clippy and focused results retain their exact earlier
+source identities. No current full-suite or native qualification is claimed.
+The four-file grading-evidence layer is now installed as source7 after full
+root review and exact base/hash verification. Independent review found no further
+material production defect; its exact report is
+`/private/tmp/kegari-native-evaluation-grading-evidence-independent-review/REVIEW.md`
+(`c9381deafa10f4ec9e5026c112ec126e065c7f483995b5ab7284c1fc26df51bc`).
+Source7 all-target check passed in 21.839s, strict Clippy in 22.825s and 42
+library evaluation tests in 35.521s. Integration checks passed 29 evaluation
+tests and 12 report tests, with one new report test failing because it selected
+comparison row zero instead of its exact trial key. The original failure is
+retained. Source8 corrects only this test lookup; all 13 report tests then passed
+in 3.338s. Sessions85815 and95686 are closed.
+Manifest `ae9c391ebcaa09b724953565cf7301593950ec595e57acee7f104f13abbf440e`;
+663 inputs at
+`sha256:0e7e5dfac055469156da19c8b8b41de550579c054b2fd2bce5bd5f9fbbcaf5f8`.
+Current source8 retains 663 inputs at
+`sha256:922a318a5e25c18417618cf6b3de178d611f99c4a9cd29ab58ff205796b8d9f5`.
+It retains exact scorer errors and observed effects without substituting a
+successful grade or changing execution/cleanup authority. Original inputs are at
+`/private/tmp/kegari-v0-native-evaluation-installed-source7`.
+The original owned-return TEMP layer was held while root found two compile defects
+(signature and missing original preparation reference); separate overlays correct
+both. Independent review then found receipt-capture retry and cross-owner drain
+liveness gaps. The shared exact admission encoder and independent drain loop
+resolve those findings in installed source10. A third compile correction removes
+a nonexistent Receipt.created_at reference; the actual Permit.registered_at
+remains bound through the immutable payload digest. Original drafts are retained.
+The retired-parent producer is also held and explicitly records that retained
+receipt scans cannot prove completeness without an owner-emitted receipt index.
+
+Root prepared the first native E05 fixture at
+`/private/tmp/kegari-native-independent-fixture-draft-v1`, manifest
+`b165ab63a368cc4a0a8a3780af55e079ac62949494d1a586b6df74c858005746`.
+Its real owned local Git base is `f27eea6d92b3a6e7cb6973c5e389fedd225c31d5`
+(`test(evaluation): seed inclusive boundary review base`), and head is
+`2b2b21aca2c287e5f89a35100fb3aa5c3fec1d06`
+(`test(evaluation): introduce boundary defect for independent review`).
+These are disposable fixture commits, with signed human attribution and no
+consolidation or remote access. Exact commands/objects/modes are retained in
+SOURCE-EVIDENCE.json. The suite-v4 draft preserves 28 variants/56
+trials and an unresolved profile; exact production Plan passed in 32.082s with
+dispatch_authorized=false. All fixture/scorer inputs were unchanged. Session67298
+is closed. The five fixture files and two-file component test bridge are now
+installed as source9 after exact current-base/hash verification; originals are at
+`/private/tmp/kegari-v0-native-evaluation-installed-source9`. The bridge reads the
+required native scope declaration and exercises actual fixture capture and whole
+context matching with explicitly data-only host values. It creates no worker or
+source capability. Independent bridge review found no further material defect.
+The actual captured-context component passed in 14.444s and all 42
+evaluation/report integration tests passed in 13.074s. Session99121 is closed.
+Source9 has 664 inputs at
+`sha256:e79fbe3d8a4665cf81f622b21d759b3f1ee0a189930f3cdc1dec7a0a06f083be`.
+Actual native context/source admission and reusable source-preparation tooling
+remain incomplete. The PR-text production path is installed and tested above.
+Fixture/source data grants no runtime capability.
+
+The completed-current carry checkpoint is
+`2770aa5c43bc24343a2344ce687306928f14fd16` —
+`feat(kegari-v0): recover completed carried acceptance from exact history`.
+All 23 committed files and 653 tested inputs matched; the tree was clean afterward.
+No commits were consolidated, rewritten or pushed. Verification is retained at
+`/private/tmp/kegari-v0-completed-current-carry-commit-verification.json`.
+
 Completed-current carry recovery source3 passed **825 tests, zero
 failures and 2 required native ignores across 39 groups**
 in 843.114s. All-target check, strict Clippy,
@@ -32,17 +197,21 @@ linking committed deterministic evidence and explicit native not_run. It contain
 no requirement is marked passed. Coverage hash:
 `e7ff810b945b9008a405ed835be980b833aad1bf82b433ca0f786419990f016c`.
 
-Next useful work is the concrete native evaluator caller. Its reviewed 23-file
-TEMP composition is `/private/tmp/kegari-native-evaluation-caller-composed-v4`
-(manifest `231a86032d1c7fb376074b6cd05d5736e89781bef557458b067a98a353fe92be`).
-Separate TEMP work adds exact full-plan synthetic trial identities, preserves
-actual ownership through preparation/unused-trial return and classifies native
-finalization failure before report publication. The terminal-report correction is
-`/private/tmp/kegari-native-evaluation-terminal-report-overlay` (manifest
-`884f4185e3e99313b2fc48f9c86dabe05de7270b2d9be1322c50b711d5b2177f`).
-The caller remains uninstalled/uncompiled; compatible full fixtures, real native
-execution, providers and human calibration remain incomplete. Root owns all
-repository changes/checks/commits; agents work in separate TEMP layers.
+Next useful work is to commit the verified source14 native caller increment.
+Then integrate the separately reviewed retired
+parent-run producer and complete the remaining native fixture/observation paths.
+The exact 15-file retired composition is
+`/private/tmp/kegari-retired-parent-run-on-native-source13-v1`, manifest
+`59a386b092e23e6b31c593fc77f29e24ae4b1f0d31a1ca932505b917bd24aae0`.
+Root and independent review verified all three clean merges preserve evaluator
+ownership, exact identity, completion retries and existing cold-carry behavior.
+Its source bases match source14; it remains uninstalled and uncompiled. Receipt
+completeness still needs an actual dispatch-time effect index; retained scans
+alone cannot supply it. Native model/provider/containment execution and human
+calibration remain incomplete. Root owns repository changes/checks/commits;
+agents work only in separate TEMP layers. Earlier caller-v4 and terminal-report
+artifacts remain preserved at their recorded TEMP paths; source14 supersedes
+those intermediate uninstalled checkpoints.
 
 The verified carried-acceptance checkpoint is
 `7b933f2cb5d11f149846ba81628ef5c5cc6c1501` —

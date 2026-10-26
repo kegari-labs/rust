@@ -216,6 +216,18 @@ impl RuntimeCoordinator {
             .contract
             .as_ref()
             .ok_or_else(|| incompatible("joined contract missing"))?;
+        if self
+            .configuration
+            .snapshot()?
+            .workspaces
+            .values()
+            .find(|w| w.id == contract.instructions().manifest.workspace_id)
+            .is_some_and(|w| w.evaluation.is_some())
+        {
+            return Err(incompatible(
+                "evaluation trial requires explicit inspection; automatic session recovery is disabled",
+            ));
+        }
         let receipt = self.control.operation(previous.operation_id)?;
         let reference = RunReference::from_receipt(&receipt)?
             .ok_or_else(|| incompatible("joined admission missing"))?;

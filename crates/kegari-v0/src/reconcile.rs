@@ -255,6 +255,9 @@ pub struct IndependentJob {
     pub workspace_id: Uuid,
     pub repository_id: u64,
     pub pull_request: PullRequest,
+    /// Ephemeral task input: never serialize the provider body into general status.
+    #[serde(skip)]
+    pub pull_request_text: Option<crate::providers::PullRequestText>,
     pub review_identity: String,
     pub phase: String,
 }
@@ -288,7 +291,7 @@ struct Collected {
     issues: BTreeMap<Uuid, IssueObservation>,
     missing: BTreeSet<Uuid>,
     repositories: BTreeMap<u64, Repository>,
-    independent: BTreeMap<u64, Vec<PullRequest>>,
+    independent: BTreeMap<u64, Vec<crate::providers::IndependentPullRequest>>,
 }
 #[derive(Clone, Debug)]
 pub struct Reconciler {
@@ -523,7 +526,7 @@ impl Reconciler {
                     .github
                     .independent_review_candidates(&repository.identity)
                     .await?;
-                prs.sort_by_key(|pr| pr.number);
+                prs.sort_by_key(|pr| pr.pull_request.number);
                 independent.insert(*id, prs);
             }
         }
@@ -1246,7 +1249,8 @@ fn project(
         output.parents.insert(*parent_id, parent);
     }
     for (repository, prs) in facts.independent {
-        for pr in prs {
+        for observed in prs {
+            let pr = observed.pull_request;
             let review_identity = canonical_digest(
                 1,
                 &serde_json::json!({"repository":repository,"pr":pr.number,"head":pr.head_sha,"base":pr.base_sha}),
@@ -1255,6 +1259,7 @@ fn project(
                 workspace_id: workspace.id,
                 repository_id: repository,
                 pull_request: pr,
+                pull_request_text: Some(observed.text),
                 review_identity,
                 phase: "candidate_requires_admission".into(),
             });
@@ -1896,6 +1901,7 @@ pub struct IndependentReviewGate {
     workspace_id: Uuid,
     repository_id: u64,
     pull_request: PullRequest,
+    pull_request_text: crate::providers::PullRequestText,
     review_identity: String,
     config_revision: String,
     workflow_digest: String,
@@ -1913,6 +1919,17 @@ impl IndependentReviewGate {
     pub fn pull_request(&self) -> &PullRequest {
         &self.pull_request
     }
+    pub fn pull_request_text(&self) -> &crate::providers::PullRequestText {
+        &self.pull_request_text
+    }
+    /// Complete literal context from the actual scoped observation, not an
+    /// authority decoder or a way to substitute arbitrary task fields.
+    pub fn context_pull_request(&self) -> crate::providers::IndependentPullRequest {
+        crate::providers::IndependentPullRequest {
+            pull_request: self.pull_request.clone(),
+            text: self.pull_request_text.clone(),
+        }
+    }
     pub fn review_identity(&self) -> &str {
         &self.review_identity
     }
@@ -1928,7 +1945,7 @@ impl IndependentReviewGate {
     pub fn digest(&self) -> Result<String> {
         canonical_digest(
             1,
-            &serde_json::json!({"workspace":self.workspace_id,"repository":self.repository_id,"pr":self.pull_request,"review":self.review_identity,"config":self.config_revision,"workflow":self.workflow_digest,"profile":self.profile,"repository_digest":self.repository_digest}),
+            &serde_json::json!({"workspace":self.workspace_id,"repository":self.repository_id,"pr":self.pull_request,"text":self.pull_request_text,"review":self.review_identity,"config":self.config_revision,"workflow":self.workflow_digest,"profile":self.profile,"repository_digest":self.repository_digest}),
         )
     }
     pub fn compare_current(
@@ -2405,10 +2422,18 @@ impl RuntimeProjection {
             .independent_review_profile
             .clone()
             .ok_or_else(|| Error::invalid("independent review profile missing"))?;
+        let pull_request_text = job.pull_request_text.as_ref().ok_or_else(|| {
+            Error::new(
+                "incomplete_snapshot",
+                "independent review lacks actual requested PR title/body",
+            )
+        })?;
+        pull_request_text.validate()?;
         Ok(IndependentReviewGate {
             workspace_id,
             repository_id,
             pull_request: job.pull_request.clone(),
+            pull_request_text: pull_request_text.clone(),
             review_identity: job.review_identity.clone(),
             config_revision: workspace.config_revision.clone(),
             workflow_digest: workspace.workflow_digest.clone(),
@@ -2889,6 +2914,7 @@ impl IndependentReviewGate {
         if current.workspace_id != self.workspace_id
             || current.repository_id != self.repository_id
             || current.review_identity != self.review_identity
+            || current.pull_request_text != self.pull_request_text
             || canonical_digest(1, &current.pull_request)?
                 != canonical_digest(1, &self.pull_request)?
         {

@@ -93,6 +93,9 @@ impl WorkflowControl for RuntimeWorkflow {
             "accounts":self.runtime.account_observations()?}))
     }
     fn command_targets(&self, request: &CommandRequest) -> Result<Vec<String>> {
+        if request.command == crate::api::CommandName::EvaluationRun {
+            return self.runtime.evaluation_targets(request);
+        }
         self.decisions.command_targets(request)
     }
     fn execute(
@@ -101,6 +104,9 @@ impl WorkflowControl for RuntimeWorkflow {
         request: CommandRequest,
         parent: Receipt,
     ) -> HostFuture<'_, Receipt> {
+        if request.command == crate::api::CommandName::EvaluationRun {
+            return Box::pin(self.runtime.execute_evaluation(actor, request, parent));
+        }
         Box::pin(self.decisions.execute(actor, request, parent))
     }
     fn cleanup_plan(&self, operation: Uuid) -> HostFuture<'_, Value> {

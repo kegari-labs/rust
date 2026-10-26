@@ -8,6 +8,10 @@ use std::net::IpAddr;
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 
+#[path = "config_evaluation.rs"]
+mod evaluation;
+pub use evaluation::EvaluationBinding;
+
 fn schema_one() -> u32 {
     1
 }
@@ -137,6 +141,8 @@ pub struct Workspace {
     pub repositories: BTreeMap<String, Repository>,
     #[serde(default)]
     pub test_resources: BTreeMap<String, TestResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation: Option<EvaluationBinding>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -529,6 +535,7 @@ pub enum ControlRole {
     Accept,
     Release,
     Recover,
+    Evaluate,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -583,6 +590,11 @@ impl Config {
         }
         for workspace in next.workspaces.values_mut() {
             workspace.workflow = resolve(&workspace.workflow, home, &env)?;
+            if let Some(evaluation) = &mut workspace.evaluation {
+                evaluation.suite_manifest = resolve(&evaluation.suite_manifest, home, &env)?;
+                evaluation.report_root = resolve(&evaluation.report_root, home, &env)?;
+                evaluation.fixture_root = resolve(&evaluation.fixture_root, home, &env)?;
+            }
             for repository in workspace.repositories.values_mut() {
                 repository.source = resolve(&repository.source, home, &env)?;
             }
@@ -596,6 +608,11 @@ impl Config {
             https.tailscale_executable = resolve(&https.tailscale_executable, home, &env)?;
         }
         next.validate()?;
+        for workspace in next.workspaces.values() {
+            if let Some(evaluation) = &workspace.evaluation {
+                evaluation.validate_resolved_paths(&next, workspace)?;
+            }
+        }
         *self = next;
         Ok(())
     }
@@ -835,6 +852,7 @@ impl Config {
                 }
             }
         }
+        evaluation::validate_bindings(self)?;
         if self.control.local_users.is_empty() {
             return Err(Error::invalid("at least one local operator is required"));
         }

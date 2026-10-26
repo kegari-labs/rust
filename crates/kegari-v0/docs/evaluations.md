@@ -2,12 +2,16 @@
 
 The bounded trial loop, report CLI and 28 versioned variants are implemented. Deterministic
 replay tests validate the graders and boundaries; they are **not actual-agent
-qualification**. No live trial has been launched. The profile slot is unresolved,
-the concrete fixture/native context and live authority composition is still
-required, OS sandbox and
-provider compatibility remain unqualified, and human review remains pending.
+qualification**. No live trial has been launched. The profile slot is unresolved.
+The first `independent_malicious` E05 fixture has a compatible native context;
+other fixture migrations, OS sandbox/provider qualification and human review remain
+pending. The explicit one-trial caller and owned failure cleanup are implemented;
+local component and full-suite checks pass as recorded in
+[local validation](../validation/LOCAL-NATIVE-EVALUATION.md). Actual native cleanup
+qualification remains pending. See [the operator contract](evaluation-run.md) for
+prerequisites and limits.
 
-Suite version 3 uses grader `kegari-observable-v3`. It binds the complete trial
+Suite version 4 uses grader `kegari-observable-v3`. It binds the complete trial
 declaration and prepared context, rejects undeclared host-metadata hints and
 counts nested `.git` paths in source/scope grading. Only the repository root's
 Git administration is checked separately. Earlier grader results remain
@@ -65,18 +69,23 @@ these comparisons must not be relaxed to make a native context pass.
 
 Native context declarations can now include `context-binding.json` beside
 `context.json`. This file is part of the declared fixture digest and private
-preparation seal. Its schema version is `1`, with sorted unique `source_write_paths`
+preparation seal. Schema versions `1` and `2` have sorted unique `source_write_paths`
 and `slots` entries containing a JSON `pointer` and typed `source`. Each declared
 location in `context.json` must contain exactly `{"$kegari":"SOURCE"}`; every
 placeholder must be declared exactly once. Required slots are `/workspace/id`,
 `/operation/id`, `/profile` and `/phase`. Additional sources are limited to the
 actual assembly's `work_generation`, `correction_revision` and
-`repository_revision`. Digests and revision identities are validated. The binding
+`repository_revision`. Version `2` additionally requires the three exact independent
+PR identity slots at `/issue/pull_request/id`, `/issue/pull_request/number` and
+`/issue/pull_request/url`; they come from the actual independent worker authority.
+Direct replay assembly cannot supply that authority. Literal title/body and all
+other task fields remain exact. Digests and revision identities are validated. The binding
 cannot copy arbitrary observed context, infer substitutions, or omit extra fields.
 The complete rendered context, including all native metadata and assignment
 payloads, must equal the production worker's context. Timeline input remains
 outside the initial prompt. This matcher is implemented; migration of the suite's
-native provider fixtures remains incomplete; the owned-clone bridge below still
+native provider fixtures remains incomplete beyond the first `independent_malicious`
+E05 fixture; the owned-clone bridge below still
 requires complete runtime evaluation coverage.
 
 For a native worker, `prepare_worker_fixture` binds the one declared workflow
@@ -137,8 +146,10 @@ An outcome sink reference establishes only that this completed session recorded
 this claim. It does not prove PR feedback publication, supporting-link truth,
 validation success, current delivery readiness or sandbox confinement. Those
 require their independent native provider/receipt/effect evidence; this grading
-migration does not supply the still-missing concrete native trial caller. Other
-legacy fixture state predicates remain explicit native-composition blockers.
+migration is distinct from the explicit one-trial caller. That caller has the
+first compatible native fixture and locally tested owned failure cleanup. Actual
+execution qualification remains pending. Other legacy fixture state predicates
+remain explicit native-composition blockers.
 
 Non-review `AgentSummary` rubrics remain unchanged and still need their separate
 production contract migration. Old observation data without a review field stays
@@ -150,6 +161,15 @@ controls, not successful agent trials.
 
 ## Production integration contract
 
+The explicit local `evaluation run` composition is documented separately in
+[One explicit native evaluation trial](evaluation-run.md), with an additive
+[configuration fragment](../examples/evaluation-binding.fragment.toml). It
+selects one declared fresh independent-review slot and consumes an already
+prepared disposable Git source. It does not migrate all fixtures, run the full
+suite, create Git commits or authorize an invocation merely by loading config.
+The general suite integration requirements below remain relevant; in particular,
+the total executor deadline must include preparation and final collection.
+
 The runtime must explicitly invoke the suite; startup, polling, configuration
 checks and profile edits must not call it. The API is in `src/evaluation.rs`:
 
@@ -157,9 +177,10 @@ checks and profile edits must not call it. The API is in `src/evaluation.rs`:
    supplies an exact allowed Codex profile, verified account and authorization
    reference. A profile file is configuration, not permission.
 2. Create a new `ReportStore`, and invoke `run_suite`. For each trial, prepare a
-   fresh fixture outside the suite/scorer/report roots. The runtime prepares a
-   real disposable Git repository and captures the actual revision using its
-   Git adapter; the runner never invents a commit identity or source revision.
+   fresh fixture outside the suite/scorer/report roots. A host must provide a
+   real disposable Git repository and capture the actual revision using its Git
+   adapter; the one-trial caller verifies an operator-supplied repository. Neither
+   route may invent a commit identity or source revision.
 3. Resolve actual executable/write grants and `ValidatedIsolation`; explicitly
    forbid scorer/report/auth/controller roots. Load that fixture's actual
    `WORKFLOW.md`. Use `assemble_trial` with the real `AssemblyInput`, concrete
@@ -216,9 +237,10 @@ checks and profile edits must not call it. The API is in `src/evaluation.rs`:
    provenance, and summary claims against host facts. Neither tool-call
    presence nor a generic success summary is a pass.
 
-The API supports the production path without an evaluation-only replacement
-broker. That concrete runtime composition has not yet been exercised; API and
-fixture completion must not be described as end-to-end live validation.
+The one-trial caller uses the production worker, broker and adapter with an
+explicitly isolated synthetic provider transport. That concrete composition has
+not yet been exercised; API and fixture completion must not be described as
+end-to-end live validation.
 
 Each live trial also requires the actual scoped worker's opaque
 `WorkerProviderLaunch`. It binds the original admission, complete instructions,

@@ -32,6 +32,18 @@ use uuid::Uuid;
 pub trait ConfigurationInputs: Send + Sync {
     fn environment(&self, name: &str) -> Option<String>;
     fn transport(&self, name: &str) -> Option<Arc<dyn HttpTransport>>;
+    fn configure_evaluations(&self, config: &Config) -> Result<()> {
+        if config.workspaces.values().any(|w| w.evaluation.is_some()) {
+            return Err(Error::new(
+                "evaluation_unavailable",
+                "evaluation requires a concrete reserved provider registry",
+            ));
+        }
+        Ok(())
+    }
+    fn evaluation_providers(&self) -> Option<Arc<crate::evaluation_provider::EvaluationProviders>> {
+        None
+    }
     fn codex<'a>(
         &'a self,
         connection: &'a Connection,
@@ -43,8 +55,9 @@ impl ConfigurationInputs for NativeConfigurationInputs {
     fn environment(&self, name: &str) -> Option<String> {
         std::env::var(name).ok()
     }
-    fn transport(&self, _: &str) -> Option<Arc<dyn HttpTransport>> {
-        None
+    fn transport(&self, name: &str) -> Option<Arc<dyn HttpTransport>> {
+        name.starts_with("evaluation-")
+            .then(|| crate::evaluation_provider::EvaluationProviders::unconfigured_transport(name))
     }
     fn codex<'a>(
         &'a self,
@@ -231,6 +244,7 @@ impl ConfigManager {
         inputs: Arc<dyn ConfigurationInputs>,
     ) -> Result<Self> {
         config.validate()?;
+        inputs.configure_evaluations(&config)?;
         let owner = registration.snapshot()?;
         let revision = config.revision()?;
         if owner.runtime_id != config.runtime.id
@@ -641,6 +655,7 @@ impl ConfigManager {
             .parent()
             .ok_or_else(|| Error::invalid("registered state root has no host home"))?;
         candidate.resolve_paths(home, |name| self.inputs.environment(name))?;
+        self.inputs.configure_evaluations(&candidate)?;
         candidate.load_workflows()?;
         let mut imports = Vec::new();
         let mut observations = Vec::new();
@@ -845,6 +860,7 @@ async fn verification_report(
     probe_root: &Path,
 ) -> Result<Value> {
     config.validate()?;
+    inputs.configure_evaluations(config)?;
     let mut checks = Vec::new();
     let mut failed = false;
     match config.load_workflows() {
@@ -953,6 +969,19 @@ pub async fn repository_prerequisites(
                 "configured repository is absent from complete authorized discovery",
             )
         })?;
+        if workspace.evaluation.is_some() {
+            if repository.archived
+                || repository.disabled
+                || repository.permissions.get("pull").and_then(Value::as_bool) != Some(true)
+            {
+                return Err(Error::new(
+                    "repository_inaccessible",
+                    "declared evaluation repository lacks observed synthetic read access",
+                ));
+            }
+            reports.push(json!({"repository":id,"kind":"declared_synthetic_evaluation","read_access":true,"production_workflows_verified":false,"native_trial_qualified":false}));
+            continue;
+        }
         if repository.archived
             || repository.disabled
             || repository.permissions.get("pull").and_then(Value::as_bool) != Some(true)

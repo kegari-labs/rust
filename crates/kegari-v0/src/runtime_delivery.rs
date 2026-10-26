@@ -168,6 +168,12 @@ impl RuntimeDelivery {
             .values()
             .find(|w| w.id == workspace)
             .ok_or_else(|| Error::new("scope_violation", "delivery workspace was removed"))?;
+        if selected.evaluation.is_some() {
+            return Err(Error::new(
+                "scope_violation",
+                "evaluation-only workspace cannot enter product delivery",
+            ));
+        }
         let observed = projection
             .workspaces
             .get(&workspace)

@@ -3433,8 +3433,61 @@
       "line": 769,
       "sha256": "96d0cb36439fe3877185839ff1668a1ba22a91a08ea3159040de00477d5507df",
       "excerpt": "| SC-16 | Independent review disabled means no run. Enabled matching PR gets bounded read/feedback-only review; malicious content cannot execute code, access secrets, fix/push/merg",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "clause:12.1:1caaf2356436",
@@ -3854,8 +3907,61 @@
       "line": 818,
       "sha256": "d1adc4ec668ad7f49e7564ddda54a1490979c2c1a3b501a284002b013647bd73",
       "excerpt": "| V0-T34 | Actual assembly uses the delivered role assets and correct profile/tools/context in new and reused isolated directories, including root/nested repository guidance, nativ",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "clause:12.2:1fe88eb9ebd9",
@@ -3863,8 +3969,64 @@
       "line": 819,
       "sha256": "1fe88eb9ebd996545e5689aff290cffc87d4458f0ee06be0bad5354e96dd1353",
       "excerpt": "| V0-T35 | Grade known passing/failing traces and artifacts, including correct tool calls with a false summary, unperformed validation, wrong changed files, a missed seeded defect ",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Real scorer-load and grading failures preserve collected report fields/counters/provenance/effects, exact error and independent execution outcome. Completed-but-ungraded is blocked; Failed/Interrupted remain distinct. Shared-suite persistence/readback, optional-field legacy compatibility, assessment refusal and later-success history retention are exercised.",
+          "tests": [
+            "src/evaluation_grading.rs::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "src/evaluation_grading.rs::actual_grade_error_keeps_failed_and_interrupted_execution_distinct",
+            "src/evaluation_grading.rs::shared_suite_persists_actual_grader_error_report_without_unrun_fallback",
+            "src/evaluation_grading.rs::successful_grading_retains_original_grade_and_actual_empty_effect_observation",
+            "tests/evaluation_reports.rs::grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success",
+            "tests/evaluation_reports.rs::absent_grading_fields_remain_legacy_unknown_not_empty_observations",
+            "tests/evaluation_reports.rs::grading_error_is_an_independent_assessment_blocker"
+          ],
+          "limits": "Grader/report data and deterministic replay only. Review claims remain claims; neither tool-call presence nor preserved grade supplies independent source/effect authority. No actual-agent success or human calibration is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Actual protected-file staging retains exact declared scorer bytes and digest, refuses replacement and linked/substituted inputs, and preserves the private scorer root before fixture preparation.",
+          "tests": [
+            "src/evaluation_scorer_stage_tests.rs::actual_scorer_is_staged_privately_before_fixture_and_never_replaced",
+            "src/evaluation_scorer_stage_tests.rs::linked_or_substituted_scorer_cannot_enter_private_staging"
+          ],
+          "limits": "Filesystem and grading component boundary only; no actual OS sandbox read/write denial canary or native-agent scorer isolation qualification is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "clause:12.2:b734ed360c74",
@@ -3872,8 +4034,87 @@
       "line": 820,
       "sha256": "b734ed360c740f85bd11a63982a87789e13ac7152064d4ac34b7c17dc174b218",
       "excerpt": "| V0-T36 | The evaluation runner enforces declared finite trials/turns/time limits for each required fixture/variant and evaluated profile, records failures/interruptions/skips and",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Complete declared TrialKey plan assigns distinct checked PR ordinals/ranges across variants, profiles and repetitions; actual durable command and metadata receipts anchor the protected subject plan against removal/substitution. Source inspection additionally confirms that slot allocation does not reset ordinary phase budgets; the listed reservation tests do not independently prove that behavior.",
+          "tests": [
+            "src/runtime_evaluation_subject.rs::complete_plan_ordinals_cover_variants_profiles_and_repetitions_without_range_reuse",
+            "src/runtime_evaluation_subject.rs::actual_durable_command_refuses_removed_plan_before_any_metadata_or_reallocation",
+            "src/runtime_evaluation_subject.rs::actual_metadata_journal_anchors_original_plan_even_if_another_signed_plan_covers_trial_ids"
+          ],
+          "limits": "Data/actual-Control protected-storage components only; no actual repeated model trial, source-admitted native worker, or cold authority reconstruction is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Actual Tokio task handles survive waiter loss and join once; deadline settlement cancels once and retains pending cleanup. Data report classification retains observed evidence on terminal/deadline errors. Actual Control/storage tests bind original admission and retirement through first-read/persistence failures; data-only cleanup iteration visits later owners after an earlier error.",
+          "tests": [
+            "src/runtime_evaluation_tasks.rs::one_owned_task_survives_waiter_loss_and_joins_once",
+            "src/runtime_evaluation_tasks.rs::panic_is_joined_uncertainty_not_success",
+            "src/runtime_evaluation_deadline.rs::expiry_fences_once_and_keeps_owned_cleanup_pending",
+            "src/runtime_evaluation_deadline.rs::stages_share_one_budget_and_late_success_is_not_success",
+            "src/runtime_evaluation_report.rs::finalization_failure_interrupts_without_erasing_collected_evidence",
+            "src/runtime_evaluation_report.rs::deadline_and_terminal_errors_both_survive_and_success_is_unchanged",
+            "src/runtime_workers_evaluation_return.rs::actual_retirement_storage_failure_retains_original_admission_for_retry",
+            "src/runtime_workers_evaluation_return.rs::actual_admission_read_failure_retains_expected_request_and_retries_exactly",
+            "src/runtime_evaluation.rs::earlier_cleanup_error_does_not_skip_later_retained_owners",
+            "src/runtime_evaluation_owned_return.rs::poisoned_return_slot_keeps_owner_until_explicit_release",
+            "src/runtime_evaluation_owned_return.rs::conflicting_return_preserves_both_actual_owners"
+          ],
+          "limits": "Task-handle positives are actual component tasks, not model descendants. Cleanup slot/report tests use labeled data. Actual Control tests do not mint worker/exit/completion capabilities. Native preparation/model/hooks/process-registry exit and unknown remote-effect closure remain unqualified.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Real scorer-load and grading failures preserve collected report fields/counters/provenance/effects, exact error and independent execution outcome. Completed-but-ungraded is blocked; Failed/Interrupted remain distinct. Shared-suite persistence/readback, optional-field legacy compatibility, assessment refusal and later-success history retention are exercised.",
+          "tests": [
+            "src/evaluation_grading.rs::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "src/evaluation_grading.rs::actual_grade_error_keeps_failed_and_interrupted_execution_distinct",
+            "src/evaluation_grading.rs::shared_suite_persists_actual_grader_error_report_without_unrun_fallback",
+            "src/evaluation_grading.rs::successful_grading_retains_original_grade_and_actual_empty_effect_observation",
+            "tests/evaluation_reports.rs::grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success",
+            "tests/evaluation_reports.rs::absent_grading_fields_remain_legacy_unknown_not_empty_observations",
+            "tests/evaluation_reports.rs::grading_error_is_an_independent_assessment_blocker"
+          ],
+          "limits": "Grader/report data and deterministic replay only. Review claims remain claims; neither tool-call presence nor preserved grade supplies independent source/effect authority. No actual-agent success or human calibration is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "clause:12.2:06873417c279",
@@ -3881,8 +4122,49 @@
       "line": 821,
       "sha256": "06873417c279785edc1ed0764bc1cdb20eca533af962b61286a51bf3f6fda301",
       "excerpt": "| V0-T37 | Startup, polling, workflow/profile edits and `config check` do not dispatch evaluations as a side effect. Instruction/profile edits alone do not restart product work or ",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Explicit command grammar and declaration binding; API route rejects absent evaluate role and non-Unix peer metadata before the component dispatcher. Reserved provider transport cannot fall back to network and inactive namespace exposes no PR.",
+          "tests": [
+            "tests/api.rs::evaluation_route_requires_unix_peer_and_evaluate_role_before_dispatch",
+            "tests/cli.rs::evaluation_cli_preserves_declared_slot_and_requires_observed_revisions",
+            "src/runtime_evaluation.rs::trial_command_cannot_supply_authority_or_omit_observed_revisions",
+            "src/evaluation_provider.rs::undeclared_reserved_transport_cannot_fall_back_to_network",
+            "src/evaluation_provider.rs::inactive_namespace_exposes_only_declared_identity_and_no_pr"
+          ],
+          "limits": "API route test injects connection metadata/authentication and reaches only Echo; it does not exercise a real authenticated Unix socket or native trial. No new empirical startup/polling no-dispatch claim is made; final native prerequisite/account/capacity and full no-automatic-dispatch coverage remain pending.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "clause:12.3:95334ee1e475",
@@ -3899,8 +4181,62 @@
       "line": 827,
       "sha256": "d7d3ab8b734fbcf55eb4cb40f963112759c099f63677c6c13ebfc7438ae8c614",
       "excerpt": "1. Build and test `kegari-v0` in the existing Cargo workspace without requiring the lasting package, frontend assets or reference Elixir code. Deliver the usable instructions and s",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Explicit command grammar and declaration binding; API route rejects absent evaluate role and non-Unix peer metadata before the component dispatcher. Reserved provider transport cannot fall back to network and inactive namespace exposes no PR.",
+          "tests": [
+            "tests/api.rs::evaluation_route_requires_unix_peer_and_evaluate_role_before_dispatch",
+            "tests/cli.rs::evaluation_cli_preserves_declared_slot_and_requires_observed_revisions",
+            "src/runtime_evaluation.rs::trial_command_cannot_supply_authority_or_omit_observed_revisions",
+            "src/evaluation_provider.rs::undeclared_reserved_transport_cannot_fall_back_to_network",
+            "src/evaluation_provider.rs::inactive_namespace_exposes_only_declared_identity_and_no_pr"
+          ],
+          "limits": "API route test injects connection metadata/authentication and reaches only Echo; it does not exercise a real authenticated Unix socket or native trial. No new empirical startup/polling no-dispatch claim is made; final native prerequisite/account/capacity and full no-automatic-dispatch coverage remain pending.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "clause:12.3:2f1ded6c5411",
@@ -3938,6 +4274,57 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Complete declared TrialKey plan assigns distinct checked PR ordinals/ranges across variants, profiles and repetitions; actual durable command and metadata receipts anchor the protected subject plan against removal/substitution. Source inspection additionally confirms that slot allocation does not reset ordinary phase budgets; the listed reservation tests do not independently prove that behavior.",
+          "tests": [
+            "src/runtime_evaluation_subject.rs::complete_plan_ordinals_cover_variants_profiles_and_repetitions_without_range_reuse",
+            "src/runtime_evaluation_subject.rs::actual_durable_command_refuses_removed_plan_before_any_metadata_or_reallocation",
+            "src/runtime_evaluation_subject.rs::actual_metadata_journal_anchors_original_plan_even_if_another_signed_plan_covers_trial_ids"
+          ],
+          "limits": "Data/actual-Control protected-storage components only; no actual repeated model trial, source-admitted native worker, or cold authority reconstruction is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -3968,6 +4355,43 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4148,6 +4572,58 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4208,6 +4684,45 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4268,6 +4783,58 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4309,6 +4876,66 @@
             "evaluation::cancellation_tests::outer_trial_deadline_fences_before_provider_handle_drop",
             "worker::trial_checkpoint_tests::terminal_trial_requires_exact_checkpoint_and_preserves_pending_request"
           ]
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Complete declared TrialKey plan assigns distinct checked PR ordinals/ranges across variants, profiles and repetitions; actual durable command and metadata receipts anchor the protected subject plan against removal/substitution. Source inspection additionally confirms that slot allocation does not reset ordinary phase budgets; the listed reservation tests do not independently prove that behavior.",
+          "tests": [
+            "src/runtime_evaluation_subject.rs::complete_plan_ordinals_cover_variants_profiles_and_repetitions_without_range_reuse",
+            "src/runtime_evaluation_subject.rs::actual_durable_command_refuses_removed_plan_before_any_metadata_or_reallocation",
+            "src/runtime_evaluation_subject.rs::actual_metadata_journal_anchors_original_plan_even_if_another_signed_plan_covers_trial_ids"
+          ],
+          "limits": "Data/actual-Control protected-storage components only; no actual repeated model trial, source-admitted native worker, or cold authority reconstruction is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Actual Tokio task handles survive waiter loss and join once; deadline settlement cancels once and retains pending cleanup. Data report classification retains observed evidence on terminal/deadline errors. Actual Control/storage tests bind original admission and retirement through first-read/persistence failures; data-only cleanup iteration visits later owners after an earlier error.",
+          "tests": [
+            "src/runtime_evaluation_tasks.rs::one_owned_task_survives_waiter_loss_and_joins_once",
+            "src/runtime_evaluation_tasks.rs::panic_is_joined_uncertainty_not_success",
+            "src/runtime_evaluation_deadline.rs::expiry_fences_once_and_keeps_owned_cleanup_pending",
+            "src/runtime_evaluation_deadline.rs::stages_share_one_budget_and_late_success_is_not_success",
+            "src/runtime_evaluation_report.rs::finalization_failure_interrupts_without_erasing_collected_evidence",
+            "src/runtime_evaluation_report.rs::deadline_and_terminal_errors_both_survive_and_success_is_unchanged",
+            "src/runtime_workers_evaluation_return.rs::actual_retirement_storage_failure_retains_original_admission_for_retry",
+            "src/runtime_workers_evaluation_return.rs::actual_admission_read_failure_retains_expected_request_and_retries_exactly",
+            "src/runtime_evaluation.rs::earlier_cleanup_error_does_not_skip_later_retained_owners",
+            "src/runtime_evaluation_owned_return.rs::poisoned_return_slot_keeps_owner_until_explicit_release",
+            "src/runtime_evaluation_owned_return.rs::conflicting_return_preserves_both_actual_owners"
+          ],
+          "limits": "Task-handle positives are actual component tasks, not model descendants. Cleanup slot/report tests use labeled data. Actual Control tests do not mint worker/exit/completion capabilities. Native preparation/model/hooks/process-registry exit and unknown remote-effect closure remain unqualified.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4339,6 +4966,46 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Explicit command grammar and declaration binding; API route rejects absent evaluate role and non-Unix peer metadata before the component dispatcher. Reserved provider transport cannot fall back to network and inactive namespace exposes no PR.",
+          "tests": [
+            "tests/api.rs::evaluation_route_requires_unix_peer_and_evaluate_role_before_dispatch",
+            "tests/cli.rs::evaluation_cli_preserves_declared_slot_and_requires_observed_revisions",
+            "src/runtime_evaluation.rs::trial_command_cannot_supply_authority_or_omit_observed_revisions",
+            "src/evaluation_provider.rs::undeclared_reserved_transport_cannot_fall_back_to_network",
+            "src/evaluation_provider.rs::inactive_namespace_exposes_only_declared_identity_and_no_pr"
+          ],
+          "limits": "API route test injects connection metadata/authentication and reaches only Echo; it does not exercise a real authenticated Unix socket or native trial. No new empirical startup/polling no-dispatch claim is made; final native prerequisite/account/capacity and full no-automatic-dispatch coverage remain pending.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4369,6 +5036,43 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Actual protected-file staging retains exact declared scorer bytes and digest, refuses replacement and linked/substituted inputs, and preserves the private scorer root before fixture preparation.",
+          "tests": [
+            "src/evaluation_scorer_stage_tests.rs::actual_scorer_is_staged_privately_before_fixture_and_never_replaced",
+            "src/evaluation_scorer_stage_tests.rs::linked_or_substituted_scorer_cannot_enter_private_staging"
+          ],
+          "limits": "Filesystem and grading component boundary only; no actual OS sandbox read/write denial canary or native-agent scorer isolation qualification is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4399,6 +5103,48 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Real scorer-load and grading failures preserve collected report fields/counters/provenance/effects, exact error and independent execution outcome. Completed-but-ungraded is blocked; Failed/Interrupted remain distinct. Shared-suite persistence/readback, optional-field legacy compatibility, assessment refusal and later-success history retention are exercised.",
+          "tests": [
+            "src/evaluation_grading.rs::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "src/evaluation_grading.rs::actual_grade_error_keeps_failed_and_interrupted_execution_distinct",
+            "src/evaluation_grading.rs::shared_suite_persists_actual_grader_error_report_without_unrun_fallback",
+            "src/evaluation_grading.rs::successful_grading_retains_original_grade_and_actual_empty_effect_observation",
+            "tests/evaluation_reports.rs::grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success",
+            "tests/evaluation_reports.rs::absent_grading_fields_remain_legacy_unknown_not_empty_observations",
+            "tests/evaluation_reports.rs::grading_error_is_an_independent_assessment_blocker"
+          ],
+          "limits": "Grader/report data and deterministic replay only. Review claims remain claims; neither tool-call presence nor preserved grade supplies independent source/effect authority. No actual-agent success or human calibration is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4429,6 +5175,48 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Real scorer-load and grading failures preserve collected report fields/counters/provenance/effects, exact error and independent execution outcome. Completed-but-ungraded is blocked; Failed/Interrupted remain distinct. Shared-suite persistence/readback, optional-field legacy compatibility, assessment refusal and later-success history retention are exercised.",
+          "tests": [
+            "src/evaluation_grading.rs::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "src/evaluation_grading.rs::actual_grade_error_keeps_failed_and_interrupted_execution_distinct",
+            "src/evaluation_grading.rs::shared_suite_persists_actual_grader_error_report_without_unrun_fallback",
+            "src/evaluation_grading.rs::successful_grading_retains_original_grade_and_actual_empty_effect_observation",
+            "tests/evaluation_reports.rs::grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success",
+            "tests/evaluation_reports.rs::absent_grading_fields_remain_legacy_unknown_not_empty_observations",
+            "tests/evaluation_reports.rs::grading_error_is_an_independent_assessment_blocker"
+          ],
+          "limits": "Grader/report data and deterministic replay only. Review claims remain claims; neither tool-call presence nor preserved grade supplies independent source/effect authority. No actual-agent success or human calibration is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4470,6 +5258,70 @@
             "evaluation::terminal_outcome_tests::worker_terminal_outcome_is_independent_of_rubric_outcome",
             "worker_run::trial_lifecycle_tests::failed_before_hook_still_runs_exact_after_once_without_terminal_capability"
           ]
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Real scorer-load and grading failures preserve collected report fields/counters/provenance/effects, exact error and independent execution outcome. Completed-but-ungraded is blocked; Failed/Interrupted remain distinct. Shared-suite persistence/readback, optional-field legacy compatibility, assessment refusal and later-success history retention are exercised.",
+          "tests": [
+            "src/evaluation_grading.rs::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "src/evaluation_grading.rs::actual_grade_error_keeps_failed_and_interrupted_execution_distinct",
+            "src/evaluation_grading.rs::shared_suite_persists_actual_grader_error_report_without_unrun_fallback",
+            "src/evaluation_grading.rs::successful_grading_retains_original_grade_and_actual_empty_effect_observation",
+            "tests/evaluation_reports.rs::grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success",
+            "tests/evaluation_reports.rs::absent_grading_fields_remain_legacy_unknown_not_empty_observations",
+            "tests/evaluation_reports.rs::grading_error_is_an_independent_assessment_blocker"
+          ],
+          "limits": "Grader/report data and deterministic replay only. Review claims remain claims; neither tool-call presence nor preserved grade supplies independent source/effect authority. No actual-agent success or human calibration is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Actual Tokio task handles survive waiter loss and join once; deadline settlement cancels once and retains pending cleanup. Data report classification retains observed evidence on terminal/deadline errors. Actual Control/storage tests bind original admission and retirement through first-read/persistence failures; data-only cleanup iteration visits later owners after an earlier error.",
+          "tests": [
+            "src/runtime_evaluation_tasks.rs::one_owned_task_survives_waiter_loss_and_joins_once",
+            "src/runtime_evaluation_tasks.rs::panic_is_joined_uncertainty_not_success",
+            "src/runtime_evaluation_deadline.rs::expiry_fences_once_and_keeps_owned_cleanup_pending",
+            "src/runtime_evaluation_deadline.rs::stages_share_one_budget_and_late_success_is_not_success",
+            "src/runtime_evaluation_report.rs::finalization_failure_interrupts_without_erasing_collected_evidence",
+            "src/runtime_evaluation_report.rs::deadline_and_terminal_errors_both_survive_and_success_is_unchanged",
+            "src/runtime_workers_evaluation_return.rs::actual_retirement_storage_failure_retains_original_admission_for_retry",
+            "src/runtime_workers_evaluation_return.rs::actual_admission_read_failure_retains_expected_request_and_retries_exactly",
+            "src/runtime_evaluation.rs::earlier_cleanup_error_does_not_skip_later_retained_owners",
+            "src/runtime_evaluation_owned_return.rs::poisoned_return_slot_keeps_owner_until_explicit_release",
+            "src/runtime_evaluation_owned_return.rs::conflicting_return_preserves_both_actual_owners"
+          ],
+          "limits": "Task-handle positives are actual component tasks, not model descendants. Cleanup slot/report tests use labeled data. Actual Control tests do not mint worker/exit/completion capabilities. Native preparation/model/hooks/process-registry exit and unknown remote-effect closure remain unqualified.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -4500,6 +5352,63 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Real scorer-load and grading failures preserve collected report fields/counters/provenance/effects, exact error and independent execution outcome. Completed-but-ungraded is blocked; Failed/Interrupted remain distinct. Shared-suite persistence/readback, optional-field legacy compatibility, assessment refusal and later-success history retention are exercised.",
+          "tests": [
+            "src/evaluation_grading.rs::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "src/evaluation_grading.rs::actual_grade_error_keeps_failed_and_interrupted_execution_distinct",
+            "src/evaluation_grading.rs::shared_suite_persists_actual_grader_error_report_without_unrun_fallback",
+            "src/evaluation_grading.rs::successful_grading_retains_original_grade_and_actual_empty_effect_observation",
+            "tests/evaluation_reports.rs::grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success",
+            "tests/evaluation_reports.rs::absent_grading_fields_remain_legacy_unknown_not_empty_observations",
+            "tests/evaluation_reports.rs::grading_error_is_an_independent_assessment_blocker"
+          ],
+          "limits": "Grader/report data and deterministic replay only. Review claims remain claims; neither tool-call presence nor preserved grade supplies independent source/effect authority. No actual-agent success or human calibration is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -5516,8 +6425,61 @@
     },
     {
       "id": "SC-16",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "SC-17",
@@ -5752,23 +6714,252 @@
     },
     {
       "id": "V0-T34",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "V0-T35",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Real scorer-load and grading failures preserve collected report fields/counters/provenance/effects, exact error and independent execution outcome. Completed-but-ungraded is blocked; Failed/Interrupted remain distinct. Shared-suite persistence/readback, optional-field legacy compatibility, assessment refusal and later-success history retention are exercised.",
+          "tests": [
+            "src/evaluation_grading.rs::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "src/evaluation_grading.rs::actual_grade_error_keeps_failed_and_interrupted_execution_distinct",
+            "src/evaluation_grading.rs::shared_suite_persists_actual_grader_error_report_without_unrun_fallback",
+            "src/evaluation_grading.rs::successful_grading_retains_original_grade_and_actual_empty_effect_observation",
+            "tests/evaluation_reports.rs::grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success",
+            "tests/evaluation_reports.rs::absent_grading_fields_remain_legacy_unknown_not_empty_observations",
+            "tests/evaluation_reports.rs::grading_error_is_an_independent_assessment_blocker"
+          ],
+          "limits": "Grader/report data and deterministic replay only. Review claims remain claims; neither tool-call presence nor preserved grade supplies independent source/effect authority. No actual-agent success or human calibration is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Actual protected-file staging retains exact declared scorer bytes and digest, refuses replacement and linked/substituted inputs, and preserves the private scorer root before fixture preparation.",
+          "tests": [
+            "src/evaluation_scorer_stage_tests.rs::actual_scorer_is_staged_privately_before_fixture_and_never_replaced",
+            "src/evaluation_scorer_stage_tests.rs::linked_or_substituted_scorer_cannot_enter_private_staging"
+          ],
+          "limits": "Filesystem and grading component boundary only; no actual OS sandbox read/write denial canary or native-agent scorer isolation qualification is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "V0-T36",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Complete declared TrialKey plan assigns distinct checked PR ordinals/ranges across variants, profiles and repetitions; actual durable command and metadata receipts anchor the protected subject plan against removal/substitution. Source inspection additionally confirms that slot allocation does not reset ordinary phase budgets; the listed reservation tests do not independently prove that behavior.",
+          "tests": [
+            "src/runtime_evaluation_subject.rs::complete_plan_ordinals_cover_variants_profiles_and_repetitions_without_range_reuse",
+            "src/runtime_evaluation_subject.rs::actual_durable_command_refuses_removed_plan_before_any_metadata_or_reallocation",
+            "src/runtime_evaluation_subject.rs::actual_metadata_journal_anchors_original_plan_even_if_another_signed_plan_covers_trial_ids"
+          ],
+          "limits": "Data/actual-Control protected-storage components only; no actual repeated model trial, source-admitted native worker, or cold authority reconstruction is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Actual Tokio task handles survive waiter loss and join once; deadline settlement cancels once and retains pending cleanup. Data report classification retains observed evidence on terminal/deadline errors. Actual Control/storage tests bind original admission and retirement through first-read/persistence failures; data-only cleanup iteration visits later owners after an earlier error.",
+          "tests": [
+            "src/runtime_evaluation_tasks.rs::one_owned_task_survives_waiter_loss_and_joins_once",
+            "src/runtime_evaluation_tasks.rs::panic_is_joined_uncertainty_not_success",
+            "src/runtime_evaluation_deadline.rs::expiry_fences_once_and_keeps_owned_cleanup_pending",
+            "src/runtime_evaluation_deadline.rs::stages_share_one_budget_and_late_success_is_not_success",
+            "src/runtime_evaluation_report.rs::finalization_failure_interrupts_without_erasing_collected_evidence",
+            "src/runtime_evaluation_report.rs::deadline_and_terminal_errors_both_survive_and_success_is_unchanged",
+            "src/runtime_workers_evaluation_return.rs::actual_retirement_storage_failure_retains_original_admission_for_retry",
+            "src/runtime_workers_evaluation_return.rs::actual_admission_read_failure_retains_expected_request_and_retries_exactly",
+            "src/runtime_evaluation.rs::earlier_cleanup_error_does_not_skip_later_retained_owners",
+            "src/runtime_evaluation_owned_return.rs::poisoned_return_slot_keeps_owner_until_explicit_release",
+            "src/runtime_evaluation_owned_return.rs::conflicting_return_preserves_both_actual_owners"
+          ],
+          "limits": "Task-handle positives are actual component tasks, not model descendants. Cleanup slot/report tests use labeled data. Actual Control tests do not mint worker/exit/completion capabilities. Native preparation/model/hooks/process-registry exit and unknown remote-effect closure remain unqualified.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Real scorer-load and grading failures preserve collected report fields/counters/provenance/effects, exact error and independent execution outcome. Completed-but-ungraded is blocked; Failed/Interrupted remain distinct. Shared-suite persistence/readback, optional-field legacy compatibility, assessment refusal and later-success history retention are exercised.",
+          "tests": [
+            "src/evaluation_grading.rs::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "src/evaluation_grading.rs::actual_grade_error_keeps_failed_and_interrupted_execution_distinct",
+            "src/evaluation_grading.rs::shared_suite_persists_actual_grader_error_report_without_unrun_fallback",
+            "src/evaluation_grading.rs::successful_grading_retains_original_grade_and_actual_empty_effect_observation",
+            "tests/evaluation_reports.rs::grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success",
+            "tests/evaluation_reports.rs::absent_grading_fields_remain_legacy_unknown_not_empty_observations",
+            "tests/evaluation_reports.rs::grading_error_is_an_independent_assessment_blocker"
+          ],
+          "limits": "Grader/report data and deterministic replay only. Review claims remain claims; neither tool-call presence nor preserved grade supplies independent source/effect authority. No actual-agent success or human calibration is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "V0-T37",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Explicit command grammar and declaration binding; API route rejects absent evaluate role and non-Unix peer metadata before the component dispatcher. Reserved provider transport cannot fall back to network and inactive namespace exposes no PR.",
+          "tests": [
+            "tests/api.rs::evaluation_route_requires_unix_peer_and_evaluate_role_before_dispatch",
+            "tests/cli.rs::evaluation_cli_preserves_declared_slot_and_requires_observed_revisions",
+            "src/runtime_evaluation.rs::trial_command_cannot_supply_authority_or_omit_observed_revisions",
+            "src/evaluation_provider.rs::undeclared_reserved_transport_cannot_fall_back_to_network",
+            "src/evaluation_provider.rs::inactive_namespace_exposes_only_declared_identity_and_no_pr"
+          ],
+          "limits": "API route test injects connection metadata/authentication and reaches only Echo; it does not exercise a real authenticated Unix socket or native trial. No new empirical startup/polling no-dispatch claim is made; final native prerequisite/account/capacity and full no-automatic-dispatch coverage remain pending.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        }
+      ]
     },
     {
       "id": "V0-E01",
@@ -5842,6 +7033,58 @@
             "PROGRESS.md"
           ],
           "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -5872,6 +7115,45 @@
             "PROGRESS.md"
           ],
           "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     },
@@ -5912,6 +7194,141 @@
             "PROGRESS.md"
           ],
           "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Explicit command grammar and declaration binding; API route rejects absent evaluate role and non-Unix peer metadata before the component dispatcher. Reserved provider transport cannot fall back to network and inactive namespace exposes no PR.",
+          "tests": [
+            "tests/api.rs::evaluation_route_requires_unix_peer_and_evaluate_role_before_dispatch",
+            "tests/cli.rs::evaluation_cli_preserves_declared_slot_and_requires_observed_revisions",
+            "src/runtime_evaluation.rs::trial_command_cannot_supply_authority_or_omit_observed_revisions",
+            "src/evaluation_provider.rs::undeclared_reserved_transport_cannot_fall_back_to_network",
+            "src/evaluation_provider.rs::inactive_namespace_exposes_only_declared_identity_and_no_pr"
+          ],
+          "limits": "API route test injects connection metadata/authentication and reaches only Echo; it does not exercise a real authenticated Unix socket or native trial. No new empirical startup/polling no-dispatch claim is made; final native prerequisite/account/capacity and full no-automatic-dispatch coverage remain pending.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Complete declared TrialKey plan assigns distinct checked PR ordinals/ranges across variants, profiles and repetitions; actual durable command and metadata receipts anchor the protected subject plan against removal/substitution. Source inspection additionally confirms that slot allocation does not reset ordinary phase budgets; the listed reservation tests do not independently prove that behavior.",
+          "tests": [
+            "src/runtime_evaluation_subject.rs::complete_plan_ordinals_cover_variants_profiles_and_repetitions_without_range_reuse",
+            "src/runtime_evaluation_subject.rs::actual_durable_command_refuses_removed_plan_before_any_metadata_or_reallocation",
+            "src/runtime_evaluation_subject.rs::actual_metadata_journal_anchors_original_plan_even_if_another_signed_plan_covers_trial_ids"
+          ],
+          "limits": "Data/actual-Control protected-storage components only; no actual repeated model trial, source-admitted native worker, or cold authority reconstruction is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Injected native-shaped GitHub responses carry bounded literal title/body with metadata from the same response; complete/author-filter checks, null-versus-empty distinction, exact gate-projected context, status omission and unchanged review identity are exercised. Changed text fails comparison with the originally retained gate without allocating another review budget.",
+          "tests": [
+            "tests/providers.rs::independent_pr_text_is_same_wire_literal_and_generic_metadata_stays_unchanged",
+            "tests/providers.rs::independent_requested_text_is_atomic_complete_bounded_and_not_an_author_filter_bypass",
+            "tests/reconcile.rs::independent_wire_text_reaches_exact_context_without_status_leak_or_new_review_identity",
+            "src/evaluation_placement.rs::declared_native_pr_text_is_literal_bound_and_has_no_normalization_slot"
+          ],
+          "limits": "Deterministic injected transport and projection/assembly components, not real GitHub or actual-agent resistance to adversarial text. E07 pr_attack remains separate and unrun; the E05 root-guidance fixture is not substituted for it.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Actual Tokio task handles survive waiter loss and join once; deadline settlement cancels once and retains pending cleanup. Data report classification retains observed evidence on terminal/deadline errors. Actual Control/storage tests bind original admission and retirement through first-read/persistence failures; data-only cleanup iteration visits later owners after an earlier error.",
+          "tests": [
+            "src/runtime_evaluation_tasks.rs::one_owned_task_survives_waiter_loss_and_joins_once",
+            "src/runtime_evaluation_tasks.rs::panic_is_joined_uncertainty_not_success",
+            "src/runtime_evaluation_deadline.rs::expiry_fences_once_and_keeps_owned_cleanup_pending",
+            "src/runtime_evaluation_deadline.rs::stages_share_one_budget_and_late_success_is_not_success",
+            "src/runtime_evaluation_report.rs::finalization_failure_interrupts_without_erasing_collected_evidence",
+            "src/runtime_evaluation_report.rs::deadline_and_terminal_errors_both_survive_and_success_is_unchanged",
+            "src/runtime_workers_evaluation_return.rs::actual_retirement_storage_failure_retains_original_admission_for_retry",
+            "src/runtime_workers_evaluation_return.rs::actual_admission_read_failure_retains_expected_request_and_retries_exactly",
+            "src/runtime_evaluation.rs::earlier_cleanup_error_does_not_skip_later_retained_owners",
+            "src/runtime_evaluation_owned_return.rs::poisoned_return_slot_keeps_owner_until_explicit_release",
+            "src/runtime_evaluation_owned_return.rs::conflicting_return_preserves_both_actual_owners"
+          ],
+          "limits": "Task-handle positives are actual component tasks, not model descendants. Cleanup slot/report tests use labeled data. Actual Control tests do not mint worker/exit/completion capabilities. Native preparation/model/hooks/process-registry exit and unknown remote-effect closure remain unqualified.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Real scorer-load and grading failures preserve collected report fields/counters/provenance/effects, exact error and independent execution outcome. Completed-but-ungraded is blocked; Failed/Interrupted remain distinct. Shared-suite persistence/readback, optional-field legacy compatibility, assessment refusal and later-success history retention are exercised.",
+          "tests": [
+            "src/evaluation_grading.rs::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "src/evaluation_grading.rs::actual_grade_error_keeps_failed_and_interrupted_execution_distinct",
+            "src/evaluation_grading.rs::shared_suite_persists_actual_grader_error_report_without_unrun_fallback",
+            "src/evaluation_grading.rs::successful_grading_retains_original_grade_and_actual_empty_effect_observation",
+            "tests/evaluation_reports.rs::grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success",
+            "tests/evaluation_reports.rs::absent_grading_fields_remain_legacy_unknown_not_empty_observations",
+            "tests/evaluation_reports.rs::grading_error_is_an_independent_assessment_blocker"
+          ],
+          "limits": "Grader/report data and deterministic replay only. Review claims remain claims; neither tool-call presence nor preserved grade supplies independent source/effect authority. No actual-agent success or human calibration is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "The shipped independent_malicious E05 fixture declares independent_review, workspace native_independent, schema2 with nine exact identity slots, literal benign PR text and root-guidance attack. Actual fixture capture and strict whole-context matcher reject substitutions and absent PR subject; all28 variants/two repetitions and unresolved profile remain declared.",
+          "tests": [
+            "src/evaluation_context.rs::shipped_independent_fixture_preserves_complete_declared_context_and_requires_subject",
+            "src/evaluation_context.rs::independent_v2_changes_only_actual_subject_scalars_and_keeps_complete_context_exact"
+          ],
+          "limits": "HostContext values in the new matcher test are explicitly data-only. No actual E05 agent trial/seeded-defect behavior, clean control, genuine model admission or native containment is qualified. Source-preparation tool checks are reported separately and are excluded from this context-matching evidence entry.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Actual protected-file staging retains exact declared scorer bytes and digest, refuses replacement and linked/substituted inputs, and preserves the private scorer root before fixture preparation.",
+          "tests": [
+            "src/evaluation_scorer_stage_tests.rs::actual_scorer_is_staged_privately_before_fixture_and_never_replaced",
+            "src/evaluation_scorer_stage_tests.rs::linked_or_substituted_scorer_cannot_enter_private_staging"
+          ],
+          "limits": "Filesystem and grading component boundary only; no actual OS sandbox read/write denial canary or native-agent scorer isolation qualification is claimed.",
+          "source_digest": "sha256:6f962a238f28a5c05a6fad1fc4f90226d4d638512fee109b782114bb6e2e0f8e"
+        },
+        {
+          "class": "actual_agent",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "No actual-agent trial/repetition has run for this increment; unresolved profile remains blocked."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Real provider/account/host integration has not run; declared synthetic provider responses are not live-provider qualification."
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Native OS containment, actual model-descendant exit and full native cleanup qualification have not run."
+        },
+        {
+          "class": "human",
+          "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
+          "status": "not_run",
+          "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
         }
       ]
     }

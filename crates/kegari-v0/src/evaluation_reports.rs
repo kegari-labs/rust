@@ -99,6 +99,12 @@ impl ReportArchive {
                         && (!started
                             || serde_json::to_value(&report.profile).ok()
                                 != serde_json::to_value(profile).ok()))
+                    || (report.grading_error.is_some()
+                        && (report.grade.is_some()
+                            || matches!(
+                                report.outcome,
+                                TrialOutcome::DeterministicPassHumanPending | TrialOutcome::Skipped
+                            )))
                     || (report.outcome == TrialOutcome::DeterministicPassHumanPending
                         && (report.grade.as_ref().is_none_or(|g| {
                             !g.deterministic_pass
@@ -188,6 +194,7 @@ impl ReportArchive {
             "reason":r.reason,"started_at":(!r.started_at.is_empty()).then_some(&r.started_at),"ended_at":(!r.ended_at.is_empty()).then_some(&r.ended_at),
             "elapsed_ms":(!self.reconstructed.contains(&r.trial.name()?)).then_some(r.elapsed_ms),"turns_started":r.turns_started,"usage_tokens":r.usage_tokens,
             "earlier_usage_unknown":r.earlier_usage_unknown,"unresolved_remote_effects":r.unresolved_remote_effects,
+            "grading_error":r.grading_error,"observed_effects":r.observed_effects,
             "runtime_build":r.runtime_build,"review_claim":r.review_claim,"instruction_digest":r.instruction_manifest.as_ref().map(|m|canonical_digest(1,m)).transpose()?
         }))).collect::<Result<Vec<_>>>()?;
         Ok(
@@ -305,6 +312,8 @@ pub struct TrialComparison {
     pub candidate_elapsed_ms: Option<u64>,
     pub baseline_usage_tokens: Option<u64>,
     pub candidate_usage_tokens: Option<u64>,
+    pub baseline_grading_error: Option<evaluation::GradingError>,
+    pub candidate_grading_error: Option<evaluation::GradingError>,
     pub prior_failure_requires_resolution: bool,
 }
 pub fn compare(baseline: &ReportArchive, candidate: &ReportArchive) -> Result<Value> {
@@ -423,10 +432,11 @@ pub fn compare(baseline: &ReportArchive, candidate: &ReportArchive) -> Result<Va
                 .then_some(b.elapsed_ms),
             baseline_usage_tokens: a.usage_tokens,
             candidate_usage_tokens: b.usage_tokens,
-            prior_failure_requires_resolution: matches!(
-                a.outcome,
-                TrialOutcome::Failed | TrialOutcome::Interrupted
-            ) || a.unresolved_remote_effects,
+            baseline_grading_error: a.grading_error.clone(),
+            candidate_grading_error: b.grading_error.clone(),
+            prior_failure_requires_resolution: a.grading_error.is_some()
+                || matches!(a.outcome, TrialOutcome::Failed | TrialOutcome::Interrupted)
+                || a.unresolved_remote_effects,
         });
     }
     Ok(

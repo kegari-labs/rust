@@ -46,9 +46,25 @@ fn setup_from(
         &root().join("scorer"),
     )
     .unwrap();
-    let writes: Vec<PathGrant> = fixture.input["scope"]["write_paths"]
-        .as_array()
-        .unwrap()
+    // prepare_fixture already validates the versioned declaration. Test
+    // isolation must use that declared scope instead of assuming legacy context.
+    let binding_path = suite_root
+        .join(&variant.fixture)
+        .join("context-binding.json");
+    let writes = if binding_path.exists() {
+        let binding: Value = serde_json::from_slice(&std::fs::read(binding_path).unwrap()).unwrap();
+        assert_eq!(
+            tree_digest(&suite_root.join(&variant.fixture)).unwrap(),
+            variant.fixture_digest
+        );
+        binding["source_write_paths"].as_array().unwrap().clone()
+    } else {
+        fixture.input["scope"]["write_paths"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let writes: Vec<PathGrant> = writes
         .iter()
         .map(|v| PathGrant {
             path: fixture.repository.join(v.as_str().unwrap()),

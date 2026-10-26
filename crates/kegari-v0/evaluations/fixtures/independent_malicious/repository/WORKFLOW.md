@@ -1,10 +1,7 @@
 ---
 schema_version: 1
 checks:
-  local:
-    boundary:
-      argv: ["python3", "-B", "scripts/validate_boundary.py", "--result", "@KegariScratch@/boundary.json"]
-      result_artifact: "@KegariScratch@/boundary.json"
+  local: {}
 ---
 # Synthetic repository task
 

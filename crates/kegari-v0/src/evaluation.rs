@@ -28,6 +28,10 @@ mod placement;
 use placement::WorkerPlacement;
 pub use placement::prepare_worker_fixture;
 
+#[path = "evaluation_grading.rs"]
+mod grading;
+pub use grading::{GradingError, GradingStage};
+
 #[path = "evaluation_review.rs"]
 mod review;
 pub use review::{ObservedReviewClaim, ReviewSourceRepository};
@@ -335,6 +339,37 @@ fn relative(text: &str) -> Result<&Path> {
 fn bounded_read(path: &Path) -> Result<Vec<u8>> {
     Ok(fixture_capture::read_file(path, MAX_EVIDENCE_BYTES)?.into_bytes())
 }
+/// Stage the actual declared scorer in an owned private directory before native
+/// fixture preparation. Its bytes remain excluded from the worker context.
+pub(crate) fn prepare_private_scorer(
+    suite_root: &Path,
+    variant: &Variant,
+    report: &crate::storage::PrivateDir,
+    operation: uuid::Uuid,
+) -> Result<crate::storage::PrivateDir> {
+    if operation.is_nil() || !identifier(&variant.id) {
+        return Err(Error::invalid(
+            "private scorer needs exact operation and variant",
+        ));
+    }
+    let path = suite_root.join(relative(&variant.scorer)?);
+    // Descriptor-backed bounded capture rejects symlinks, hardlinks, special
+    // files and a changing file. Validate exactly these bytes before writing.
+    let bytes = bounded_read(&path)?;
+    if bytes_digest(&bytes) != variant.scorer_digest {
+        return Err(Error::new(
+            "grader_changed",
+            "declared scorer changed before staging",
+        ));
+    }
+    let scorer: Scorer =
+        serde_json::from_slice(&bytes).map_err(|_| Error::invalid("invalid declared scorer"))?;
+    scorer.validate()?;
+    let directory = report.child("grader")?.child(&operation.to_string())?;
+    directory.create_bytes_exclusive(&format!("{}.json", variant.id), &bytes)?;
+    Ok(directory)
+}
+
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     serde_json::from_slice(&bounded_read(path)?)
         .map_err(|_| Error::invalid("invalid evaluation JSON"))
@@ -846,6 +881,7 @@ pub fn assemble_trial(
                 .repository
                 .as_ref()
                 .map(|repository| repository.revision.as_str()),
+            independent_pull_request: None,
         },
     )?;
     let assembled = instructions::assemble(input)?;
@@ -1409,7 +1445,7 @@ pub trait LiveLease: Send + Sync {
     fn check(&self) -> Result<()>;
     fn authority_reference(&self) -> &str;
 }
-pub trait LiveAuthority {
+pub trait LiveAuthority: Send {
     fn acquire(&mut self, request: &LiveRequest) -> Result<Box<dyn LiveLease>>;
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1461,6 +1497,13 @@ pub struct TrialReport {
     pub outcome: TrialOutcome,
     pub reason: String,
     pub grade: Option<Grade>,
+    /// A host scoring failure is separate from execution and cannot grant a pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grading_error: Option<GradingError>,
+    /// None means no final effect observation was retained (including legacy
+    /// reports); Some(empty) means the host actually observed no effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_effects: Option<Vec<String>>,
     pub turns_started: u32,
     pub usage_tokens: Option<u64>,
     pub earlier_usage_unknown: bool,
@@ -1514,6 +1557,8 @@ impl TrialReport {
             outcome,
             reason: reason.into(),
             grade: None,
+            grading_error: None,
+            observed_effects: None,
             turns_started: 0,
             usage_tokens: None,
             earlier_usage_unknown: true,
@@ -1700,6 +1745,9 @@ pub(crate) struct TrialExecutionObservation {
     hook_error: Option<Error>,
 }
 impl TrialExecutionObservation {
+    pub(crate) fn outcome(&self) -> &crate::worker_run::RunOutcome {
+        &self.outcome
+    }
     pub(crate) fn state(&self) -> &SessionState {
         &self.state
     }
@@ -1837,6 +1885,7 @@ pub async fn run_live_trial(
             work_generation: &operation.assembled.manifest.work_generation,
             correction_revision: &operation.assembled.manifest.correction_revision,
             repository_revision: operation.assembled.manifest.repository_revision.as_deref(),
+            independent_pull_request: operation.host.independent_pull_request(),
         },
     )?;
     verify_grader_boundary(
@@ -2330,37 +2379,13 @@ pub async fn run_live_trial(
     cancellation.disarm();
     let observed = audited.host.observe();
     if let Ok(facts) = observed {
-        report.artifacts = facts.artifacts.clone();
-        report.review_claim = facts.review_claim.clone();
-        report.evidence_references = facts.evidence_references.clone();
-        let scorer = Scorer::load(
-            &operation
-                .fixture
-                .grader_root
-                .join(format!("{}.json", variant.id)),
-            &variant.scorer_digest,
-        )?;
-        let result = grade(
-            &scorer,
+        grading::collect(
+            &mut report,
             operation.fixture,
             operation.isolation,
+            variant,
             &facts,
-            &variant.prohibited_effects,
-        )?;
-        if report.reason == "agent finished; observable grading required" {
-            report.outcome = if result.deterministic_pass {
-                TrialOutcome::DeterministicPassHumanPending
-            } else {
-                TrialOutcome::Failed
-            };
-            report.reason = if result.deterministic_pass {
-                "deterministic predicates satisfied; mandatory human review pending"
-            } else {
-                "observable required behavior failed"
-            }
-            .into();
-        }
-        report.grade = Some(result);
+        );
     } else if let Err(error) = observed {
         report.reason = format!(
             "{}; verified final observation unavailable: {}: {}",
@@ -2412,6 +2437,95 @@ impl ReportStore {
     }
     pub fn finish(&self, report: &TrialReport) -> Result<()> {
         self.write(&format!("{}.result.json", report.trial.name()?), report)
+    }
+    pub(crate) fn finish_owned_failure(
+        root: &Path,
+        suite: &SuiteManifest,
+        variant: &Variant,
+        trial: &TrialKey,
+        error: &Error,
+        interrupted: bool,
+    ) -> Result<()> {
+        let store = Self {
+            directory: crate::storage::PrivateDir::open(root)?,
+        };
+        let original: SuiteManifest = serde_json::from_slice(
+            &store
+                .directory
+                .read_bytes("suite.json", MAX_EVIDENCE_BYTES as u64)?,
+        )
+        .map_err(|_| {
+            Error::new(
+                "evaluation_record_conflict",
+                "original suite record is invalid",
+            )
+        })?;
+        let started: Value = serde_json::from_slice(&store.directory.read_bytes(
+            &format!("{}.started.json", trial.name()?),
+            MAX_EVIDENCE_BYTES as u64,
+        )?)
+        .map_err(|_| {
+            Error::new(
+                "evaluation_record_conflict",
+                "original started record is invalid",
+            )
+        })?;
+        if original.digest()? != suite.digest()?
+            || started["trial"]
+                != serde_json::to_value(trial)
+                    .map_err(|_| Error::invalid("trial encoding failed"))?
+            || started["started_at"].as_str().is_none()
+        {
+            return Err(Error::new(
+                "evaluation_record_conflict",
+                "owned failure differs from its original started trial",
+            ));
+        }
+        let filename = format!("{}.result.json", trial.name()?);
+        let previous = store
+            .directory
+            .read_bytes(&filename, MAX_EVIDENCE_BYTES as u64)
+            .and_then(|bytes| {
+                serde_json::from_slice::<TrialReport>(&bytes).map_err(|_| {
+                    Error::new(
+                        "evaluation_record_conflict",
+                        "retained trial result is invalid",
+                    )
+                })
+            });
+        match previous {
+            Ok(previous)
+                if previous.trial == *trial && previous.suite_digest == suite.digest()? =>
+            {
+                return Ok(());
+            }
+            Ok(_) => {
+                return Err(Error::new(
+                    "evaluation_record_conflict",
+                    "another report occupies the original trial",
+                ));
+            }
+            Err(error) if error.code == "record_missing" => (),
+            Err(error) => return Err(error),
+        }
+        let mut report = TrialReport::unrun(
+            suite,
+            variant,
+            trial.clone(),
+            if interrupted {
+                TrialOutcome::Interrupted
+            } else {
+                TrialOutcome::Blocked
+            },
+            &format!("{}: {}", error.code, error.message),
+        )?;
+        report.started_at = started["started_at"]
+            .as_str()
+            .expect("checked timestamp")
+            .into();
+        report.unresolved_remote_effects = interrupted;
+        report.omissions.push("The actual owned evaluator task returned this error before a complete graded report. No model execution success or joined model capability is inferred from this report.".into());
+        store.finish(&report)
     }
     pub fn interrupted(&self, suite: &SuiteManifest) -> Result<Vec<TrialReport>> {
         let archive = crate::evaluation_reports::ReportArchive::open(self.root())?;
@@ -2600,6 +2714,7 @@ pub fn assess(suite: &SuiteManifest, reports: &[TrialReport]) -> Result<SuiteAss
                 .grade
                 .as_ref()
                 .is_none_or(|grade| !grade.deterministic_pass)
+            || report.grading_error.is_some()
             || report.unresolved_remote_effects
         {
             blocking.push(report.trial.name()?);
@@ -2802,5 +2917,70 @@ mod terminal_outcome_tests {
                 RunOutcome::Failed
             ));
         }
+    }
+}
+
+#[cfg(test)]
+#[path = "evaluation_scorer_stage_tests.rs"]
+mod scorer_stage_tests;
+
+#[cfg(test)]
+mod owned_failure_report_tests {
+    use super::*;
+    #[test]
+    fn owned_error_fills_only_its_original_unfinished_report() {
+        let suite = SuiteManifest::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("evaluations/manifest.json"),
+        )
+        .unwrap();
+        let key = suite.plan().unwrap().remove(0);
+        let variant = suite
+            .variants
+            .iter()
+            .find(|variant| variant.id == key.variant)
+            .unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("report");
+        let store = ReportStore::create(&root, &suite).unwrap();
+        store.started(&key).unwrap();
+        let error = Error::new(
+            "evaluation_fidelity",
+            "actual task rejected fixture before model preparation",
+        );
+        ReportStore::finish_owned_failure(&root, &suite, variant, &key, &error, false).unwrap();
+        let name = format!("{}.result.json", key.name().unwrap());
+        let before = store
+            .directory
+            .read_bytes(&name, MAX_EVIDENCE_BYTES as u64)
+            .unwrap();
+        let observed: TrialReport = serde_json::from_slice(&before).unwrap();
+        assert_eq!(observed.outcome, TrialOutcome::Blocked);
+        assert_eq!(observed.evidence_class, EvidenceClass::NotRun);
+        assert!(observed.grade.is_none());
+        assert!(!observed.unresolved_remote_effects);
+        ReportStore::finish_owned_failure(
+            &root,
+            &suite,
+            variant,
+            &key,
+            &Error::new("late", "must not replace original"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            store
+                .directory
+                .read_bytes(&name, MAX_EVIDENCE_BYTES as u64)
+                .unwrap(),
+            before
+        );
+        let mut other = key.clone();
+        other.repetition += 1;
+        assert_eq!(
+            ReportStore::finish_owned_failure(&root, &suite, variant, &other, &error, false)
+                .unwrap_err()
+                .code,
+            "record_missing"
+        );
     }
 }

@@ -42,6 +42,12 @@ use std::{
     sync::Arc,
 };
 use uuid::Uuid;
+#[path = "runtime_workers_evaluation_return.rs"]
+mod evaluation_return;
+pub(crate) use evaluation_return::{
+    EvaluationPreparationReturn, EvaluationWorkerTransfer, PreparationReturned,
+    TrialTransferFailure, prepare_evaluation_admitted,
+};
 #[path = "runtime_workers_resume.rs"]
 mod session_resume;
 pub(crate) use session_resume::prepare_paired_resumed;
@@ -111,7 +117,7 @@ pub async fn resolve_source(
         .min(std::time::Duration::from_secs(30));
     let target = match authority {
         WorkerAuthority::Authorized(_) => ProviderSource::Staging(&configured.staging),
-        WorkerAuthority::Independent(gate) => ProviderSource::Review(gate.pull_request()),
+        WorkerAuthority::Independent(gate) => ProviderSource::Review(gate),
     };
     let result = tokio::time::timeout(bound, provider_revision(&github, repository, target))
         .await
@@ -136,7 +142,7 @@ pub async fn resolve_source(
 
 enum ProviderSource<'a> {
     Staging(&'a str),
-    Review(&'a crate::providers::PullRequest),
+    Review(&'a crate::reconcile::IndependentReviewGate),
 }
 async fn provider_revision(
     github: &crate::providers::GithubClient,
@@ -151,10 +157,12 @@ async fn provider_revision(
         }
         ProviderSource::Review(expected) => {
             require_current_review(
-                &github.pull_request(repository, expected.number).await?,
+                &github
+                    .independent_review_pull_request(repository, expected.pull_request().number)
+                    .await?,
                 expected,
             )?;
-            expected.head_sha.clone()
+            expected.pull_request().head_sha.clone()
         }
     };
     let observed = github.commit(repository, &commit).await?;
@@ -180,7 +188,9 @@ async fn provider_revision(
             ));
         }
         ProviderSource::Review(expected) => require_current_review(
-            &github.pull_request(repository, expected.number).await?,
+            &github
+                .independent_review_pull_request(repository, expected.pull_request().number)
+                .await?,
             expected,
         )?,
         _ => {}
@@ -189,9 +199,18 @@ async fn provider_revision(
 }
 
 fn require_current_review(
-    actual: &crate::providers::PullRequest,
-    expected: &crate::providers::PullRequest,
+    actual: &crate::providers::IndependentPullRequest,
+    expected: &crate::reconcile::IndependentReviewGate,
 ) -> Result<()> {
+    actual.text.validate()?;
+    if &actual.text != expected.pull_request_text() {
+        return Err(Error::new(
+            "stale_revision",
+            "independent review task text changed during source resolution",
+        ));
+    }
+    let actual = &actual.pull_request;
+    let expected = expected.pull_request();
     if actual.repository_id != expected.repository_id
         || actual.id != expected.id
         || actual.number != expected.number
@@ -508,6 +527,13 @@ pub async fn prepare_admitted(
     runtime: Arc<RuntimeCoordinator>,
     request: LaunchRequest,
 ) -> Result<AdmittedWorker> {
+    prepare_admitted_inner(runtime, request, None).await
+}
+async fn prepare_admitted_inner(
+    runtime: Arc<RuntimeCoordinator>,
+    request: LaunchRequest,
+    mut trace: Option<&mut evaluation_return::PreparationTrace>,
+) -> Result<AdmittedWorker> {
     let mut plan = Plan::read(&runtime, request)?;
     if let Some(proof) = plan
         .request
@@ -566,6 +592,7 @@ pub async fn prepare_admitted(
         )?;
         require_preparation_schedule(&initial_schedule, &current, plan.request.max_turns)
     };
+    let prep_reference = prep_admission.reference.clone();
     let prep_permit = if let Some(proof) = plan
         .request
         .delivery
@@ -594,6 +621,9 @@ pub async fn prepare_admitted(
             prep_gate,
         )?
     };
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.preparation(&prep_permit, prep_reference, &runtime.control)?;
+    }
     let prepared = prepare_owned(&runtime, &plan, &prep_permit).await;
     let observed_exit = runtime
         .executions
@@ -616,13 +646,17 @@ pub async fn prepare_admitted(
             "preparation retains an unconfirmed owned process and its durable effect",
         ));
     }
-    runtime.control.retire_local(
-        prep_id,
-        match &prepared {
-            Ok(_) => json!({"phase":"worker_preparation","result":"prepared"}),
-            Err(error) => json!({"phase":"worker_preparation","result":"blocked","error":error}),
-        },
-    )?;
+    let prep_observation = match &prepared {
+        Ok(_) => json!({"phase":"worker_preparation","result":"prepared"}),
+        Err(error) => json!({"phase":"worker_preparation","result":"blocked","error":error}),
+    };
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.preparation_retiring(prep_observation.clone());
+    }
+    let prep_closed = runtime.control.retire_local(prep_id, prep_observation)?;
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.preparation_closed(prep_closed);
+    }
     let mut prepared = prepared?;
     if let Some(proof) = plan
         .request
@@ -659,6 +693,7 @@ pub async fn prepare_admitted(
             attempt: schedule.attempt,
         },
     };
+    let admitted_budget = admission.reference.clone();
     let permit = if plan
         .request
         .delivery
@@ -718,6 +753,9 @@ pub async fn prepare_admitted(
             }
         }
     };
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.admitted(&permit, &contract, admitted_budget, &runtime.control)?;
+    }
     let start: Result<AdmittedWorker> = (|| {
         runtime.register_run(permit.clone(), contract.clone())?;
         if let Some(round) = &plan.request.review_round {
@@ -818,10 +856,16 @@ pub async fn prepare_admitted(
             .active_operations()?
             .contains(&permit.operation_id)
         {
-            runtime.control.retire_local(
-                permit.operation_id,
-                json!({"outcome":"failed","error":error,"phase":"worker_start"}),
-            )?;
+            let observation = json!({"outcome":"failed","error":error,"phase":"worker_start"});
+            if let Some(trace) = trace.as_deref_mut() {
+                trace.model_retiring(observation.clone());
+            }
+            let closed = runtime
+                .control
+                .retire_local(permit.operation_id, observation)?;
+            if let Some(trace) = trace {
+                trace.model_closed(closed);
+            }
         }
         return Err(error.clone());
     }
@@ -845,6 +889,10 @@ impl AdmittedWorker {
             .input
             .take()
             .ok_or_else(|| Error::new("ownership_conflict", "admitted worker already consumed"))?;
+        self.runtime.ordinary_worker_transfer(
+            self.permit.operation_id,
+            prepared.contract().instructions().manifest.workspace_id,
+        )?;
         let run = worker_run::run(prepared, self.permit.clone(), services, options)?;
         self.runtime.track_run(run)?;
         self.transferred = true;
@@ -855,6 +903,8 @@ impl AdmittedWorker {
             .input
             .take()
             .ok_or_else(|| Error::new("ownership_conflict", "admitted worker already consumed"))?;
+        self.runtime
+            .evaluation_trial_transfer(&self.permit, prepared.contract(), &options)?;
         let trial =
             worker_run::AdmittedTrial::new(prepared, self.permit.clone(), services, options)?;
         self.transferred = true;
@@ -1044,7 +1094,7 @@ impl Plan {
                 };
                 (
                     AgentRole::IndependentReview,
-                    json!({"issue":{"pull_request":gate.pull_request(),"repository":repository},"parent":null,"children":[],"workspace":{"id":workspace.id,"name":projection.workspaces[&workspace.id].workspace_name},"scope":{"repository":repository.identity,"head":gate.pull_request().head_sha,"base":gate.pull_request().base_sha,"source_writes":false},"dependencies":[],"corrections":[],"evidence":{},"attempt":null,"phase":request.phase.phase,"profile":gate.profile(),"operation":{"id":request.operation_id}}),
+                    json!({"issue":{"pull_request":gate.context_pull_request(),"repository":repository},"parent":null,"children":[],"workspace":{"id":workspace.id,"name":projection.workspaces[&workspace.id].workspace_name},"scope":{"repository":repository.identity,"head":gate.pull_request().head_sha,"base":gate.pull_request().base_sha,"source_writes":false},"dependencies":[],"corrections":[],"evidence":{},"attempt":null,"phase":request.phase.phase,"profile":gate.profile(),"operation":{"id":request.operation_id}}),
                     Some(review),
                     gate.review_identity().into(),
                     "independent_review".into(),

@@ -1,0 +1,75 @@
+# Additive template for docs/evaluation-run.md; NOT a complete configuration.
+# All <...> values must be replaced with actual observed/declared inputs.
+# The illustrative UUID/numeric provider IDs below are synthetic fixture identities.
+# Preserve all existing required configuration and operator roles. This authorizes no run.
+
+[control.local_users."<ACTUAL_OS_UID>"]
+id = "<EXISTING_OPERATOR_ID>"
+linear_user_id = "<EXISTING_OPERATOR_LINEAR_UUID>"
+roles = ["inspect", "evaluate"] # Merge with existing required roles, do not drop them.
+
+[connections."evaluation-11111111-2222-4333-8444-555555555555-github"]
+kind = "github"
+account_id = "303"
+endpoint = "https://github.11111111-2222-4333-8444-555555555555.evaluation.invalid"
+credential_ref = "$EVAL_GITHUB_FIXTURE_TOKEN"
+
+[connections."evaluation-11111111-2222-4333-8444-555555555555-linear"]
+kind = "linear"
+account_id = "22222222-3333-4444-8555-666666666666"
+endpoint = "https://linear.11111111-2222-4333-8444-555555555555.evaluation.invalid/graphql"
+credential_ref = "$EVAL_LINEAR_FIXTURE_TOKEN"
+
+[workspaces.native_independent]
+id = "11111111-2222-4333-8444-555555555555"
+linear_workspace_id = "33333333-4444-4555-8666-777777777777"
+github_connection = "evaluation-11111111-2222-4333-8444-555555555555-github"
+linear_connection = "evaluation-11111111-2222-4333-8444-555555555555-linear"
+codex_connection = "<EXISTING_VERIFIED_CODEX_CONNECTION>"
+workflow = "/absolute/path/to/compatible/WORKFLOW.md"
+max_agents = 1
+# Retain/declare all required Linear selection/state, actor, coordination profile
+# and routing label tables. Their omission here is not an implicit empty default.
+
+[workspaces.native_independent.independent_review]
+enabled = true
+
+[workspaces.native_independent.github]
+organizations = []
+repositories = ["101"]
+pr_authors = ["202"]
+
+[workspaces.native_independent.release]
+mode = "manual"
+spacing_seconds = 0
+
+[workspaces.native_independent.profiles.independent_review]
+tool = "codex"
+model = "<EXACT_ALLOWED_MODEL>"
+reasoning = "<VERIFIED_REASONING_VALUE>"
+speed = "<VERIFIED_SPEED>" # standard or fast; match the actual suite profile.
+
+[workspaces.native_independent.repositories."101"]
+source = "/absolute/path/to/supplied-disposable-git-source"
+hostname = "github.11111111-2222-4333-8444-555555555555.evaluation.invalid"
+deployment = "none"
+# Preserve all required repository contract fields, including actual check/workflow
+# declarations. The evaluation-only preflight does not qualify product workflows.
+
+[workspaces.native_independent.evaluation]
+schema_version = 1
+suite_manifest = "/absolute/path/to/versioned-native-suite/manifest.json"
+suite_digest = "sha256:<EXACT_SUITE_DIGEST>"
+report_root = "/absolute/private/path/to/evaluation-reports"
+fixture_root = "/absolute/disposable/path/to/evaluation-seeds"
+case = "<DECLARED_CASE>"
+variant = "<DECLARED_NATIVE_VARIANT>"
+profile = "<BOUND_SUITE_PROFILE_SLOT>"
+repository_id = 101
+pull_request = 7 # Starting number; the full 56-slot plan reserves 7 through 62.
+author_id = 202
+base_commit = "<ACTUAL_FULL_BASE_OID>"
+head_commit = "<ACTUAL_FULL_SINGLE_PARENT_HEAD_OID>"
+# No test_resources. Report/seed/execution/source roots must be mutually isolated.
+# The first native fixture uses this exact workspace name. Other metadata remains exact.
+# No live call, native qualification or budget approval is implied.

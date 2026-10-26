@@ -494,3 +494,130 @@ fn review_prose_is_retained_verbatim_for_human_review_without_qualifying_replay(
             .is_none()
     );
 }
+
+#[test]
+fn grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success() {
+    // Report data only: no production worker, account or authority is created.
+    let suite = suite();
+    let failure = GradingError {
+        stage: GradingStage::ScorerLoad,
+        error: kegari_v0::error::Error::new("grader_changed", "scorer was modified")
+            .detail(json!({"component":"exact retained error details"})),
+    };
+    let mut blocked = report(&suite, TrialOutcome::Blocked);
+    blocked.grading_error = Some(failure.clone());
+    blocked.observed_effects = Some(vec!["data-only:observed-effect".into()]);
+    blocked.turns_started = 2;
+    blocked.usage_tokens = Some(37);
+    let (_left_temp, left) = archive(&suite);
+    left.started(&blocked.trial).unwrap();
+    left.finish(&blocked).unwrap();
+    let left = ReportArchive::open(left.root()).unwrap();
+    let loaded = &left.reports()[0];
+    assert_eq!(loaded.grading_error, Some(failure.clone()));
+    assert_eq!(loaded.observed_effects, blocked.observed_effects);
+    assert_eq!(loaded.turns_started, 2);
+    assert_eq!(loaded.usage_tokens, Some(37));
+    assert_eq!(
+        left.inspection().unwrap()["trials"][0]["grading_error"],
+        serde_json::to_value(&failure).unwrap()
+    );
+    let (_right_temp, right) = archive(&suite);
+    let passed = report(&suite, TrialOutcome::DeterministicPassHumanPending);
+    right.finish(&passed).unwrap();
+    let right = ReportArchive::open(right.root()).unwrap();
+    let compared = compare(&left, &right).unwrap();
+    let trial = compared["trials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["trial"] == serde_json::to_value(&blocked.trial).unwrap())
+        .unwrap();
+    assert_eq!(trial["prior_failure_requires_resolution"], true);
+    assert_eq!(
+        trial["baseline_grading_error"],
+        serde_json::to_value(&failure).unwrap()
+    );
+    assert_eq!(compared["qualified"], false);
+    for outcome in [
+        TrialOutcome::DeterministicPassHumanPending,
+        TrialOutcome::Failed,
+    ] {
+        let (_temp, store) = archive(&suite);
+        let mut forged = passed.clone();
+        forged.outcome = outcome;
+        forged.grading_error = Some(failure.clone());
+        store.finish(&forged).unwrap();
+        assert_eq!(
+            ReportArchive::open(store.root()).err().unwrap().code,
+            "evaluation_record_conflict"
+        );
+        assert!(
+            assess(&suite, &[forged])
+                .unwrap()
+                .blocking_trials
+                .contains(&passed.trial.name().unwrap())
+        );
+    }
+}
+
+#[test]
+fn absent_grading_fields_remain_legacy_unknown_not_empty_observations() {
+    let suite = suite();
+    let original = report(&suite, TrialOutcome::Blocked);
+    let bytes = serde_json::to_vec(&original).unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value.get("grading_error").is_none());
+    assert!(value.get("observed_effects").is_none());
+    let restored: TrialReport = serde_json::from_slice(&bytes).unwrap();
+    assert!(restored.grading_error.is_none());
+    assert!(restored.observed_effects.is_none());
+    assert_eq!(serde_json::to_vec(&restored).unwrap(), bytes);
+    let (_temp, store) = archive(&suite);
+    store.finish(&restored).unwrap();
+    let archive = ReportArchive::open(store.root()).unwrap();
+    assert!(archive.inspection().unwrap()["trials"][0]["observed_effects"].is_null());
+    let mut observed_empty = restored;
+    observed_empty.observed_effects = Some(vec![]);
+    let encoded = serde_json::to_value(&observed_empty).unwrap();
+    assert_eq!(encoded["observed_effects"], json!([]));
+}
+
+#[test]
+fn grading_error_is_an_independent_assessment_blocker() {
+    // Reuses the existing complete report-reader data fixture, not a worker
+    // capability or a claim that native model execution occurred.
+    let mut suite = suite();
+    suite.profiles[0].binding = Some(ProfileBinding {
+        profile: kegari_v0::config::Profile {
+            tool: "codex".into(),
+            model: "report-fixture-model".into(),
+            reasoning: "high".into(),
+            speed: kegari_v0::config::Speed::Standard,
+        },
+        account_id: "report-fixture".into(),
+        operator_reference: "not-live-authority".into(),
+    });
+    suite.profiles[0].unresolved = None;
+    let mut shape = actual_report_fixture(&suite);
+    let name = shape.trial.name().unwrap();
+    assert!(
+        !assess(&suite, &[shape.clone()])
+            .unwrap()
+            .blocking_trials
+            .contains(&name)
+    );
+    shape.grading_error = Some(GradingError {
+        stage: GradingStage::Grade,
+        error: kegari_v0::error::Error::new(
+            "evaluation_fidelity",
+            "actual grader rejected changed fixture",
+        ),
+    });
+    assert!(
+        assess(&suite, &[shape])
+            .unwrap()
+            .blocking_trials
+            .contains(&name)
+    );
+}

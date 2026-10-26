@@ -14,6 +14,12 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "control_admission_identity.rs"]
+mod admission_identity;
+pub(crate) use admission_identity::{
+    ordinary_preparation_request_digest, ordinary_run_request_digest, receipt_request_digest,
+};
+
 #[path = "control_parent_reassembly.rs"]
 mod parent_reassembly;
 pub(crate) use parent_reassembly::{
@@ -402,10 +408,7 @@ impl ReceiptStore {
                 "mutation needs verified actor, kind and canonical targets",
             ));
         }
-        let digest = canonical_digest(
-            1,
-            &serde_json::json!({"kind":request.kind,"targets":request.canonical_targets,"expected":request.expected,"payload":request.payload,"principal":request.actor.principal}),
-        )?;
+        let digest = admission_identity::payload_digest(request)?;
         match self.get(request.request_id) {
             Ok(receipt) => {
                 if receipt.runtime_id != request.runtime_id
@@ -1272,140 +1275,7 @@ impl ControlHost {
             scope_digest,
             registered_at: Utc::now(),
         };
-        // A durable reference allows conservative recovery without persisting a shadow issue store.
-        let mut expected = BTreeMap::from([
-            ("scope".into(), permit.scope_digest.clone()),
-            ("control".into(), permit.control_generation.to_string()),
-        ]);
-        if let Some(
-            AdmissionReference::Run(reference)
-            | AdmissionReference::ParentRun(reference, _, _)
-            | AdmissionReference::RoundRun(reference, _)
-            | AdmissionReference::ContinuedRun(reference, _)
-            | AdmissionReference::SourceAdvancedRun(reference, _)
-            | AdmissionReference::ResumedRun(reference, _)
-            | AdmissionReference::RoundResumedRun(reference, _, _),
-        ) = &reference
-        {
-            expected.insert(
-                "run".into(),
-                serde_json::to_string(&reference)
-                    .map_err(|_| Error::invalid("run reference encoding"))?,
-            );
-        }
-        if let Some(AdmissionReference::ContinuedRun(_, continuation)) = &reference {
-            expected.insert(
-                "continuation".into(),
-                serde_json::to_string(continuation)
-                    .map_err(|_| Error::invalid("continuation reference encoding"))?,
-            );
-        }
-        if let Some(AdmissionReference::SourceAdvancedRun(_, source)) = &reference {
-            expected.insert(
-                "source_advanced".into(),
-                serde_json::to_string(source)
-                    .map_err(|_| Error::invalid("source-advanced reference encoding"))?,
-            );
-        }
-        if let Some(
-            AdmissionReference::ResumedRun(_, resume)
-            | AdmissionReference::RoundResumedRun(_, resume, _),
-        ) = &reference
-        {
-            expected.insert(
-                "session_resume".into(),
-                serde_json::to_string(resume)
-                    .map_err(|_| Error::invalid("session resume reference encoding"))?,
-            );
-        }
-        if let Some(
-            AdmissionReference::Preparation(reference)
-            | AdmissionReference::ParentPreparation(reference, _)
-            | AdmissionReference::RoundPreparation(reference, _),
-        ) = &reference
-        {
-            expected.insert(
-                "worker_preparation".into(),
-                serde_json::to_string(reference)
-                    .map_err(|_| Error::invalid("worker preparation reference encoding"))?,
-            );
-        }
-        if let Some(
-            AdmissionReference::SessionRecovery(reference)
-            | AdmissionReference::RoundSessionRecovery(reference, _),
-        ) = &reference
-        {
-            expected.insert(
-                "session_recovery_preparation".into(),
-                serde_json::to_string(reference)
-                    .map_err(|_| Error::invalid("recovery preparation encoding"))?,
-            );
-        }
-        match &reference {
-            Some(AdmissionReference::ParentPreparation(_, proof)) => {
-                expected.insert(
-                    "parent_reassembly".into(),
-                    serde_json::to_string(proof.as_ref())
-                        .map_err(|_| Error::invalid("parent reassembly encoding"))?,
-                );
-            }
-            Some(AdmissionReference::ParentRun(_, proof, preparation)) => {
-                expected.insert(
-                    "parent_reassembly".into(),
-                    serde_json::to_string(proof.as_ref())
-                        .map_err(|_| Error::invalid("parent reassembly encoding"))?,
-                );
-                expected.insert(
-                    "parent_reassembly_preparation".into(),
-                    serde_json::to_string(preparation)
-                        .map_err(|_| Error::invalid("parent reassembly preparation encoding"))?,
-                );
-            }
-            Some(AdmissionReference::RoundPreparation(_, round)) => {
-                expected.insert(
-                    "review_round".into(),
-                    serde_json::to_string(round.as_ref())
-                        .map_err(|_| Error::invalid("round preparation encoding"))?,
-                );
-            }
-            Some(AdmissionReference::RoundRun(_, provenance)) => {
-                provenance.persist(&mut expected)?
-            }
-            Some(AdmissionReference::RoundSessionRecovery(_, provenance)) => {
-                provenance.persist(&mut expected)?
-            }
-            Some(AdmissionReference::RoundResumedRun(_, _, provenance)) => {
-                provenance.persist(&mut expected)?
-            }
-            _ => (),
-        }
-        if let Some(AdmissionReference::Metadata(reference)) = reference {
-            expected.insert(
-                "metadata".into(),
-                serde_json::to_string(&reference)
-                    .map_err(|_| Error::invalid("metadata reference encoding"))?,
-            );
-        } else if let Some(AdmissionReference::ReleaseResume(reference)) = reference {
-            expected.insert(
-                "release_resume".into(),
-                serde_json::to_string(&reference)
-                    .map_err(|_| Error::invalid("release resume reference encoding"))?,
-            );
-        }
-        let request = MutationRequest {
-            request_id,
-            runtime_id: lease.runtime_id,
-            actor: Actor {
-                identity: format!("owner:{}", lease.owner_id),
-                roles: BTreeSet::new(),
-                principal: None,
-            },
-            kind: "admission".into(),
-            canonical_targets: vec![permit.work_key.clone()],
-            expected,
-            payload: serde_json::to_value(&permit)
-                .map_err(|_| Error::invalid("permit encoding"))?,
-        };
+        let request = admission_identity::request(&permit, reference)?;
         let (_, fresh) = self.receipts.prepare(&request, lease.owner_generation)?;
         if !fresh {
             return Err(Error::new(

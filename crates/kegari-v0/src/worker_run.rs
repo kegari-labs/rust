@@ -45,6 +45,12 @@ pub use recovery::{
     VerifiedSessionResume,
 };
 
+#[path = "worker_run_evaluation_return.rs"]
+mod evaluation_return;
+pub(crate) use evaluation_return::{
+    OwnedTrialReturn, RetainedTrialCompletion, VerifiedUnusedAdmission, returned_admission_digest,
+};
+
 #[derive(Clone)]
 pub struct Preparation {
     pub config: Arc<Config>,
@@ -1123,6 +1129,9 @@ impl AdmittedTrial {
         })
     }
     pub fn finish(mut self) -> Result<VerifiedTrialCompletion> {
+        self.try_finish()
+    }
+    fn try_finish(&mut self) -> Result<VerifiedTrialCompletion> {
         if !self.lifecycle.execution_started() || !self.lifecycle.after_finished() {
             return Err(Error::new(
                 "reconciliation_required",
@@ -1135,28 +1144,23 @@ impl AdmittedTrial {
             .as_mut()
             .ok_or_else(|| Error::new("ownership_conflict", "trial already consumed"))?;
         let after = self.lifecycle.after_result()?;
-        let observation = self
+        let mut terminal = self
             .lifecycle
             .terminal
             .lock()
-            .map_err(|_| Error::new("ownership_conflict", "trial terminal lock failed"))?
-            .take()
-            .ok_or_else(|| {
-                Error::new(
-                    "reconciliation_required",
-                    "trial has no actual terminal execution observation",
-                )
-            })?;
+            .map_err(|_| Error::new("ownership_conflict", "trial terminal lock failed"))?;
+        let observation = terminal.as_ref().ok_or_else(|| {
+            Error::new(
+                "reconciliation_required",
+                "trial has no actual terminal execution observation",
+            )
+        })?;
         let state = session
             .broker
             .trial_checkpoint(observation.state(), observation.pending())?;
-        let (outcome, error, hook_error) = observation.into_result();
-        if matches!(outcome, RunOutcome::Completed) {
+        if matches!(observation.outcome(), RunOutcome::Completed) {
             session.broker.completed_checkpoint()?;
         }
-        // The exact real hook result remains distinct from the model outcome.
-        // A bounded timeout may remain a hook error after its callback drains.
-        let hook_error = hook_error.or_else(|| after.as_ref().err().cloned());
         session
             .registry
             .observe_exited(session.permit.operation_id)?;
@@ -1170,12 +1174,15 @@ impl AdmittedTrial {
                 "trial retains an unconfirmed owned local effect",
             ));
         }
+        // All fallible terminal validation is complete. Preserve the original
+        // private observation across errors so owned cleanup can retry safely.
+        let observation = terminal.take().expect("validated retained terminal");
+        let (outcome, error, hook_error) = observation.into_result();
+        let hook_error = hook_error.or_else(|| after.as_ref().err().cloned());
+        drop(terminal);
         let checks = session.broker.take_verified_checks();
         let failed_checks = session.broker.take_failed_checks();
-        let session = self
-            .session
-            .take()
-            .ok_or_else(|| Error::new("ownership_conflict", "trial already consumed"))?;
+        let session = self.session.take().expect("validated retained session");
         Ok(VerifiedTrialCompletion {
             completion: RunCompletion {
                 operation_id: session.permit.operation_id,

@@ -547,6 +547,7 @@ fn operator_actor(operator: &Operator, principal: Principal) -> Result<Actor> {
                     ControlRole::Accept => "accept",
                     ControlRole::Release => "release",
                     ControlRole::Recover => "recover",
+                    ControlRole::Evaluate => "evaluate",
                 }
                 .into()
             })

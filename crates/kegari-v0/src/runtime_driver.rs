@@ -673,6 +673,7 @@ impl RuntimeDriver {
         Ok(())
     }
     async fn drain_finished(&self) -> Result<()> {
+        self.runtime.drain_evaluations().await?;
         let finished = {
             let mut state = self.state()?;
             let ids: Vec<_> = state
@@ -835,6 +836,7 @@ impl RuntimeDriver {
         Ok(drain_observation(
             snapshot,
             state.tasks.len()
+                + self.runtime.pending_evaluations()?
                 + usize::from(self.progression_status()?.pending)
                 + usize::from(self.observations.pending()?),
             self.runtime.executions.active_operations()?.len(),

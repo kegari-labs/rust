@@ -55,9 +55,36 @@ pub enum Command {
     Retry(Retry),
     Cleanup(Cleanup),
     #[command(subcommand)]
+    Evaluation(EvaluationCommand),
+    #[command(subcommand)]
     Target(TargetCommand),
     #[command(subcommand)]
     Service(ServiceCommand),
+}
+#[derive(Subcommand, Debug)]
+pub enum EvaluationCommand {
+    Run(EvaluationRun),
+}
+#[derive(Args, Debug)]
+pub struct EvaluationRun {
+    #[arg(long)]
+    pub workspace: Uuid,
+    #[arg(long)]
+    pub suite_digest: String,
+    #[arg(long)]
+    pub case: String,
+    #[arg(long)]
+    pub variant: String,
+    #[arg(long)]
+    pub profile: String,
+    #[arg(long)]
+    pub repetition: u32,
+    #[arg(long)]
+    pub expected_config: String,
+    #[arg(long)]
+    pub expected_control: u64,
+    #[command(flatten)]
+    pub mutation: Mutation,
 }
 #[derive(Args, Debug, Default)]
 pub struct WorkspaceFilter {
@@ -797,6 +824,25 @@ impl Cli {
                     CommandName::OperationReconcile,
                     json!({"operation":operation}),
                 ))
+            }
+            Command::Evaluation(EvaluationCommand::Run(value)) => {
+                not_nil(value.workspace)?;
+                crate::evidence::validate_digest(&value.suite_digest)?;
+                nonempty(&value.expected_config, "expected config")?;
+                if value.repetition == 0 {
+                    return Err(Error::new(
+                        "invalid_input",
+                        "evaluation repetition must be positive",
+                    ));
+                }
+                request_id = value.mutation.request_id;
+                let mut command = ServerCommand::new(
+                    CommandName::EvaluationRun,
+                    json!({"workspace":value.workspace,"suite_digest":value.suite_digest,"case":value.case,"variant":value.variant,"profile":value.profile,"repetition":value.repetition}),
+                );
+                command.expected_config_revision = Some(value.expected_config);
+                command.expected_control_generation = Some(value.expected_control);
+                Action::Server(command)
             }
             Command::Retry(value) => {
                 work_reference(&value.work)?;

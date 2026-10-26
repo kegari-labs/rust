@@ -83,6 +83,10 @@ pub(crate) fn select(
             .ok_or_else(|| {
                 Error::new("stale_config", "observed workspace is no longer configured")
             })?;
+        // Declared evaluation subjects require their actual explicit local task.
+        if configured.evaluation.is_some() {
+            continue;
+        }
         let account = &config.connections[&configured.codex_connection].account_id;
         for parent in workspace.parents.values() {
             let parent_key = parent.key.identity()?;

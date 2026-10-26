@@ -1130,7 +1130,7 @@ async fn admitted_fork_review_acquires_exact_head_and_base_into_independent_clon
         merge_commit_sha: None,
         url: "https://github.com/fixture/repo/pull/4".into(),
     };
-    fixture.wire.api_values.lock().unwrap().insert("/repos/fixture/repo/pulls/4".into(),json!({"id":pr.id,"number":pr.number,"user":{"id":pr.author_id},"state":pr.state,"draft":pr.draft,"head":{"sha":pr.head_sha,"ref":pr.head_ref,"repo":{"id":99}},"base":{"sha":pr.base_sha,"ref":pr.base_ref,"repo":{"id":42}},"merged":false,"merge_commit_sha":null,"html_url":pr.url}));
+    fixture.wire.api_values.lock().unwrap().insert("/repos/fixture/repo/pulls/4".into(),json!({"id":pr.id,"number":pr.number,"title":"Fixture independent review","body":null,"user":{"id":pr.author_id},"state":pr.state,"draft":pr.draft,"head":{"sha":pr.head_sha,"ref":pr.head_ref,"repo":{"id":99}},"base":{"sha":pr.base_sha,"ref":pr.base_ref,"repo":{"id":42}},"merged":false,"merge_commit_sha":null,"html_url":pr.url}));
     fixture.wire.api_values.lock().unwrap().insert(
         format!("/repos/fixture/repo/git/commits/{}", base.commit),
         json!({"sha":base.commit,"tree":{"sha":base.tree},"parents":[]}),
@@ -1156,6 +1156,10 @@ async fn admitted_fork_review_acquires_exact_head_and_base_into_independent_clon
         workspace_id: Uuid::from_u128(2),
         repository_id: 42,
         pull_request: pr.clone(),
+        pull_request_text: Some(crate::providers::PullRequestText {
+            title: "Fixture independent review".into(),
+            body: None,
+        }),
         review_identity: review_identity.clone(),
         phase: "candidate_requires_admission".into(),
     }];

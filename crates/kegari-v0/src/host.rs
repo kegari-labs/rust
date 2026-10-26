@@ -6,7 +6,7 @@ use crate::{
         ConfigurationControl, HostDispatcher, HostFuture, HostServices, RuntimeInspection,
         WorkflowControl,
     },
-    configuration::{ConfigManager, ConfigurationInputs, NativeConfigurationInputs},
+    configuration::{ConfigManager, ConfigurationInputs},
     control::{Actor, ControlHost, Receipt},
     digest::canonical_digest,
     error::{Error, Result},
@@ -69,7 +69,8 @@ pub async fn run_native(factory: &dyn HostRuntimeFactory) -> Result<()> {
     let logs = Arc::new(LogSink::new(registration.root().child("logs")?));
     let keychain = Arc::new(Keychain::new(config.runtime.id)?);
     let secrets: Arc<dyn SecretStore> = keychain.clone();
-    let inputs: Arc<dyn ConfigurationInputs> = Arc::new(NativeConfigurationInputs);
+    let inputs: Arc<dyn ConfigurationInputs> =
+        Arc::new(crate::evaluation_provider::EvaluationConfigurationInputs::new());
     // TLS prerequisites are independently reported by the transport monitor.
     // Its initial failure cannot remove a valid private Unix control endpoint.
     let authentication = Arc::new(TransportAuthentication::new(config.control.clone(), None));

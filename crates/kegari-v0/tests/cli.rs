@@ -70,6 +70,76 @@ fn request(command: CommandName, args: Value) -> CommandRequest {
         expected_control_generation: None,
     }
 }
+
+#[test]
+fn evaluation_cli_preserves_declared_slot_and_requires_observed_revisions() {
+    let workspace = Uuid::new_v4().to_string();
+    let request_id = Uuid::new_v4();
+    let request_text = request_id.to_string();
+    let suite = kegari_v0::digest::bytes_digest(b"declared suite");
+    let config = kegari_v0::digest::bytes_digest(b"observed config");
+    let args = vec![
+        "kegari-v0",
+        "--target",
+        "local",
+        "--json",
+        "evaluation",
+        "run",
+        "--workspace",
+        &workspace,
+        "--suite-digest",
+        &suite,
+        "--case",
+        "V0-E05",
+        "--variant",
+        "independent_malicious",
+        "--profile",
+        "operator_evaluated",
+        "--repetition",
+        "2",
+        "--expected-config",
+        &config,
+        "--expected-control",
+        "7",
+        "--request-id",
+        &request_text,
+    ];
+    let mut inputs = Inputs::default();
+    let invocation = Cli::try_parse_from(&args)
+        .unwrap()
+        .prepare(&mut inputs)
+        .unwrap();
+    assert_eq!(inputs.reads, 0);
+    assert_eq!(invocation.request_id, request_id);
+    let command = server(&invocation).request(runtime(), invocation.request_id);
+    command.validate(runtime()).unwrap();
+    assert_eq!(command.command, CommandName::EvaluationRun);
+    assert_eq!(
+        command.expected_config_revision.as_deref(),
+        Some(config.as_str())
+    );
+    assert_eq!(command.expected_control_generation, Some(7));
+    assert_eq!(
+        command.args,
+        json!({
+            "workspace": workspace, "suite_digest": suite, "case": "V0-E05",
+            "variant": "independent_malicious", "profile": "operator_evaluated",
+            "repetition": 2
+        })
+    );
+    for required in ["--expected-config", "--expected-control"] {
+        let mut missing = args.clone();
+        let index = missing.iter().position(|arg| *arg == required).unwrap();
+        missing.drain(index..=index + 1);
+        assert!(Cli::try_parse_from(missing).is_err());
+    }
+    for forbidden in ["--max-seconds", "--source", "--permit"] {
+        let mut injected = args.clone();
+        injected.extend([forbidden, "injected"]);
+        assert!(Cli::try_parse_from(injected).is_err());
+    }
+}
+
 #[test]
 fn default_overview_and_every_public_command_are_parsed() {
     assert_eq!(server(&prepare(&[])).command, CommandName::Overview);

@@ -433,6 +433,10 @@ impl Fixture {
                             workspace_id: id(3),
                             repository_id: 42,
                             pull_request: pr,
+                            pull_request_text: Some(kegari_v0::providers::PullRequestText {
+                                title: "Fixture independent review".into(),
+                                body: None,
+                            }),
                             review_identity: bytes_digest(b"independent-review"),
                             phase: "review".into(),
                         }],

@@ -1407,6 +1407,75 @@ pub struct PullRequest {
     pub merge_commit_sha: Option<String>,
     pub url: String,
 }
+/// Literal, bounded task input from the same scoped wire object as PR metadata.
+/// Neither this data nor its text grants authority or enables repository code.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PullRequestText {
+    pub title: String,
+    pub body: Option<String>,
+}
+impl std::fmt::Debug for PullRequestText {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PullRequestText")
+            .field("title_bytes", &self.title.len())
+            .field("body_bytes", &self.body.as_ref().map(String::len))
+            .finish()
+    }
+}
+impl PullRequestText {
+    pub fn validate(&self) -> Result<()> {
+        if self.title.trim().is_empty() {
+            return Err(Error::new(
+                "provider_response",
+                "independent PR title is missing or blank",
+            ));
+        }
+        let bytes =
+            serde_json::to_vec(self).map_err(|_| Error::invalid("PR text encoding failed"))?;
+        if bytes.len() > crate::instructions::MAX_CONTEXT_BYTES {
+            return Err(Error::new(
+                "bounded_input",
+                "independent PR text exceeds the production context bound",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn from_value(value: &Value) -> Result<Self> {
+        let title = value.get("title").and_then(Value::as_str).ok_or_else(|| {
+            Error::new(
+                "provider_response",
+                "requested independent PR title is absent or malformed",
+            )
+        })?;
+        let body = match value.get("body") {
+            Some(Value::Null) => None,
+            Some(Value::String(body)) => Some(body.clone()),
+            _ => {
+                return Err(Error::new(
+                    "provider_response",
+                    "requested independent PR body is absent or malformed",
+                ));
+            }
+        };
+        let text = Self {
+            title: title.into(),
+            body,
+        };
+        text.validate()?;
+        Ok(text)
+    }
+}
+/// An observation only. Generic PullRequest serialization remains unchanged.
+#[derive(Clone, Debug, Serialize)]
+pub struct IndependentPullRequest {
+    #[serde(flatten)]
+    pub pull_request: PullRequest,
+    #[serde(flatten)]
+    pub text: PullRequestText,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GithubRecord {
     pub repository_id: u64,
@@ -1713,7 +1782,7 @@ impl GithubClient {
             "GitHub collection exceeded configured page bound",
         ))
     }
-    pub async fn pull_requests(&self, repo: &RepositoryIdentity) -> Result<Vec<PullRequest>> {
+    async fn pull_request_values(&self, repo: &RepositoryIdentity) -> Result<Vec<Value>> {
         self.repository(repo).await?;
         self.pages(
             self.repo_url(repo, &["pulls"])?,
@@ -1721,18 +1790,11 @@ impl GithubClient {
             None,
             Some(repo),
         )
-        .await?
-        .into_iter()
-        .map(|v| normalize_pr(v, repo.id))
-        .collect()
+        .await
     }
-    pub async fn pull_request(
-        &self,
-        repo: &RepositoryIdentity,
-        number: u64,
-    ) -> Result<PullRequest> {
+    async fn pull_request_value(&self, repo: &RepositoryIdentity, number: u64) -> Result<Value> {
         self.repository(repo).await?;
-        let (v, _) = self
+        let (value, _) = self
             .http
             .json(
                 Method::Get,
@@ -1740,9 +1802,37 @@ impl GithubClient {
                 None,
             )
             .await?;
-        let pr = normalize_pr(v, repo.id)?;
+        Ok(value)
+    }
+    pub async fn pull_requests(&self, repo: &RepositoryIdentity) -> Result<Vec<PullRequest>> {
+        self.pull_request_values(repo)
+            .await?
+            .into_iter()
+            .map(|value| normalize_pr(value, repo.id))
+            .collect()
+    }
+    pub async fn pull_request(
+        &self,
+        repo: &RepositoryIdentity,
+        number: u64,
+    ) -> Result<PullRequest> {
+        let pr = normalize_pr(self.pull_request_value(repo, number).await?, repo.id)?;
         if pr.number != number {
             return Err(Error::new("identity_mismatch", "PR number changed"));
+        }
+        Ok(pr)
+    }
+    pub async fn independent_review_pull_request(
+        &self,
+        repo: &RepositoryIdentity,
+        number: u64,
+    ) -> Result<IndependentPullRequest> {
+        let pr = normalize_independent_pr(self.pull_request_value(repo, number).await?, repo.id)?;
+        if pr.pull_request.number != number {
+            return Err(Error::new(
+                "identity_mismatch",
+                "independent PR number changed",
+            ));
         }
         Ok(pr)
     }
@@ -2113,6 +2203,13 @@ fn normalize_pr(v: Value, repository: u64) -> Result<PullRequest> {
         merge_commit_sha: merge,
         url: validated_url(text_at(&v, "/html_url")?)?,
     })
+}
+fn normalize_independent_pr(value: Value, repository: u64) -> Result<IndependentPullRequest> {
+    // Both parts are derived from one response. No second read can mix an old
+    // source identity with a new title/body.
+    let text = PullRequestText::from_value(&value)?;
+    let pull_request = normalize_pr(value, repository)?;
+    Ok(IndependentPullRequest { pull_request, text })
 }
 fn normalize_run(v: Value, repository: u64) -> Result<WorkflowRun> {
     if positive_id(&v, "/repository/id")? != repository {
@@ -4019,17 +4116,33 @@ impl GithubClient {
     pub async fn independent_review_candidates(
         &self,
         repository: &RepositoryIdentity,
-    ) -> Result<Vec<PullRequest>> {
-        Ok(self
-            .pull_requests(repository)
-            .await?
-            .into_iter()
-            .filter(|pr| {
-                pr.state == "open"
-                    && !pr.draft
-                    && self.selection.permits_pr_author(&pr.author_id.to_string())
-            })
-            .collect())
+    ) -> Result<Vec<IndependentPullRequest>> {
+        let mut output = Vec::new();
+        let mut text_bytes = 0usize;
+        for value in self.pull_request_values(repository).await? {
+            let observed = normalize_independent_pr(value, repository.id)?;
+            text_bytes = text_bytes
+                .checked_add(
+                    serde_json::to_vec(&observed.text)
+                        .map_err(|_| Error::invalid("PR text encoding failed"))?
+                        .len(),
+                )
+                .filter(|total| *total <= self.http.policy.max_body)
+                .ok_or_else(|| {
+                    Error::new(
+                        "bounded_input",
+                        "independent PR text inventory exceeds provider resource bound",
+                    )
+                })?;
+            let pr = &observed.pull_request;
+            if pr.state == "open"
+                && !pr.draft
+                && self.selection.permits_pr_author(&pr.author_id.to_string())
+            {
+                output.push(observed);
+            }
+        }
+        Ok(output)
     }
 }
 

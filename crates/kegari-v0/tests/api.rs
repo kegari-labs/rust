@@ -56,6 +56,89 @@ impl Authentication for MappedPeer {
     }
 }
 
+struct EvaluationPeer;
+impl Authentication for EvaluationPeer {
+    fn authenticate(&self, _: Peer) -> Pin<Box<dyn Future<Output = Result<Actor>> + Send + '_>> {
+        Box::pin(async {
+            Ok(Actor {
+                identity: "evaluation-route-component".into(),
+                principal: None,
+                roles: BTreeSet::from(["evaluate".into()]),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn evaluation_route_requires_unix_peer_and_evaluate_role_before_dispatch() {
+    let (mut state, _, calls) = state(&["inspect", "lifecycle", "configure"]);
+    let command = json!({
+        "api_version": 1,
+        "runtime_id": state.runtime_id,
+        "request_id": Uuid::new_v4(),
+        "command": "evaluation_run",
+        "args": {
+            "workspace": Uuid::new_v4(),
+            "suite_digest": kegari_v0::digest::bytes_digest(b"declared suite"),
+            "case": "V0-E05",
+            "variant": "independent_malicious",
+            "profile": "operator_evaluated",
+            "repetition": 2
+        },
+        "expected_config_revision": kegari_v0::digest::bytes_digest(b"observed config"),
+        "expected_control_generation": 7
+    });
+    let local = Peer::Unix { uid: 501 };
+    let response = connection_router(state.clone(), local.clone())
+        .oneshot(request(
+            &state,
+            "POST",
+            "/v1/commands",
+            Body::from(command.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    state.authentication = Arc::new(EvaluationPeer);
+    let response = connection_router(
+        state.clone(),
+        Peer::DirectTls {
+            address: "100.64.0.2:17000".parse().unwrap(),
+        },
+    )
+    .oneshot(request(
+        &state,
+        "POST",
+        "/v1/commands",
+        Body::from(command.to_string()),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    // A route pass reaches only the observation-only Echo dispatcher here. It
+    // cannot construct the runtime's authenticated command or execute a model.
+    let result = envelope(
+        connection_router(state.clone(), local)
+            .oneshot(request(
+                &state,
+                "POST",
+                "/v1/commands",
+                Body::from(command.to_string()),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(result.ok);
+    assert_eq!(result.data["command"], "evaluation_run");
+    assert_eq!(result.data["args"], command["args"]);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn mapped_remote_operator_cannot_shutdown_local_control_service() {
     let (mut state, _, calls) = state(&["lifecycle"]);

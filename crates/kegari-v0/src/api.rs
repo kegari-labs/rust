@@ -68,6 +68,8 @@ pub enum CommandName {
     Start,
     /// Local Unix peer only; never exposed as a remote service action.
     ServiceStop,
+    /// One explicit local native evaluation; no remote endpoint authorization.
+    EvaluationRun,
     OperationShow,
     OperationReconcile,
     Retry,
@@ -92,6 +94,7 @@ impl CommandName {
     }
     pub fn role(&self, args: &Value) -> &'static str {
         match self {
+            Self::EvaluationRun => "evaluate",
             Self::Approve => "accept",
             Self::Correct => "correct",
             Self::Release => "release",
@@ -174,6 +177,14 @@ impl CommandRequest {
             CommandName::Retry => &["work", "reason"],
             CommandName::ReleaseRecover => &["parent", "operation", "action", "reason", "result"],
             CommandName::Cleanup => &["operation", "apply", "plan", "snapshot_id", "cursor"],
+            CommandName::EvaluationRun => &[
+                "workspace",
+                "suite_digest",
+                "case",
+                "variant",
+                "profile",
+                "repetition",
+            ],
         };
         if args.keys().any(|key| !allowed.contains(&key.as_str())) {
             return Err(Error::new(
@@ -193,7 +204,7 @@ impl CommandRequest {
         // strings as an absent filter and accidentally broaden an inspection.
         for key in allowed {
             if args.contains_key(*key)
-                && !["force", "wait", "apply", "timeout_seconds"].contains(key)
+                && !["force", "wait", "apply", "timeout_seconds", "repetition"].contains(key)
             {
                 text(key)?;
             }
@@ -219,6 +230,30 @@ impl CommandRequest {
                 )
             {
                 text(key)?;
+            }
+        }
+        if self.command == CommandName::EvaluationRun {
+            for key in ["workspace", "suite_digest", "case", "variant", "profile"] {
+                text(key)?;
+            }
+            Uuid::parse_str(text("workspace")?).map_err(|_| {
+                Error::new(
+                    "invalid_input",
+                    "evaluation workspace must be canonical UUID",
+                )
+            })?;
+            crate::evidence::validate_digest(text("suite_digest")?)?;
+            if args
+                .get("repetition")
+                .and_then(Value::as_u64)
+                .is_none_or(|n| n == 0 || n > u32::MAX as u64)
+                || self.expected_config_revision.is_none()
+                || self.expected_control_generation.is_none()
+            {
+                return Err(Error::new(
+                    "invalid_input",
+                    "evaluation needs exact declared repetition and expected config/control revisions",
+                ));
             }
         }
         if matches!(self.command, CommandName::Approve | CommandName::Release) {
@@ -598,13 +633,17 @@ async fn dispatch(
     secret: Option<crate::secrets::Secret>,
 ) -> Response {
     let id = command.request_id;
-    if command.command == CommandName::ServiceStop && !verified.local {
+    if matches!(
+        command.command,
+        CommandName::ServiceStop | CommandName::EvaluationRun
+    ) && !verified.local
+    {
         return response(
             state.runtime_id,
             id,
             Err(Error::new(
                 "access_denied",
-                "service shutdown requires the registered host's Unix peer",
+                "this command requires the registered host's Unix peer",
             )),
             false,
         );
@@ -837,4 +876,23 @@ pub fn router(state: ApiState) -> Router {
 /// request parsers never accept a peer supplied in JSON or a header.
 pub fn connection_router(state: ApiState, peer: Peer) -> Router {
     router(state).layer(axum::Extension(peer))
+}
+
+/// Identity only: a declared repetition is a finite trial slot, not authority.
+/// The actual command receipt retains this before any evaluator task starts.
+pub(crate) fn evaluation_trial_identity(request: &CommandRequest) -> Result<String> {
+    request.validate(request.runtime_id)?;
+    if request.command != CommandName::EvaluationRun {
+        return Err(Error::invalid("not an evaluation command"));
+    }
+    let workspace = Uuid::parse_str(
+        request.args["workspace"]
+            .as_str()
+            .ok_or_else(|| Error::invalid("evaluation workspace missing"))?,
+    )
+    .map_err(|_| Error::invalid("evaluation workspace invalid"))?;
+    crate::digest::canonical_digest(
+        1,
+        &serde_json::json!({"runtime":request.runtime_id,"workspace":workspace,"suite":request.args["suite_digest"],"case":request.args["case"],"variant":request.args["variant"],"profile":request.args["profile"],"repetition":request.args["repetition"]}),
+    )
 }

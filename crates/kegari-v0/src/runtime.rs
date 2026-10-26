@@ -26,6 +26,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
+#[path = "runtime_evaluation.rs"]
+mod evaluation;
+pub(crate) use evaluation::{VerifiedEvaluationExit, VerifiedEvaluationSource};
 #[path = "runtime_corrections.rs"]
 mod correction_transitions;
 #[path = "runtime_paired_recovery.rs"]
@@ -106,6 +109,7 @@ pub struct RuntimeCoordinator {
     claims: PrivateDir,
     workers: Mutex<BTreeMap<Uuid, OwnedWorkerRun>>,
     state: Mutex<State>,
+    evaluations: evaluation::Evaluations,
 }
 impl RuntimeCoordinator {
     pub fn invalidate_delivery(&self, parent: &IssueKey, error: Error) -> Result<()> {
@@ -410,6 +414,7 @@ impl RuntimeCoordinator {
             claims,
             workers: Mutex::new(BTreeMap::new()),
             state: Mutex::new(State::default()),
+            evaluations: evaluation::Evaluations::default(),
         }))
     }
     pub fn next_attempt(
@@ -430,6 +435,13 @@ impl RuntimeCoordinator {
         snapshot: &crate::control::ControlSnapshot,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
         request.validate_binding()?;
+        self.check_evaluation_worker(
+            snapshot,
+            request.operation_id,
+            &request.authority,
+            &request.phase,
+            request.max_turns,
+        )?;
         self.registration.verify_active_owner(&request.lease)?;
         let current = self.current_admission_authority(&request.authority)?;
         request.authority.compare(&current)?;
@@ -1851,7 +1863,15 @@ impl RuntimeCoordinator {
         let active = self
             .observations
             .capture_active(workspace, revision, workflow)?;
+        let evaluation_operation = input.request_id;
         let final_gate = |snapshot: &crate::control::ControlSnapshot| {
+            self.check_evaluation_worker(
+                snapshot,
+                evaluation_operation,
+                contract.authority(),
+                &reference.phase,
+                reference.max_turns,
+            )?;
             self.registration.verify_active_owner(lease)?;
             if let Some(proof) = parent_reassembly {
                 proof.verify_contract(contract)?;
@@ -2345,7 +2365,19 @@ impl RuntimeCoordinator {
         &self,
         verified: crate::worker_run::VerifiedTrialCompletion,
     ) -> Result<Arc<RunCompletion>> {
-        let completion = Arc::new(verified.into_completion());
+        self.finish_trial_completion(
+            &crate::worker_run::RetainedTrialCompletion::from_verified(verified),
+            false,
+        )
+    }
+    // Private actual-capability caller may retry only the identical retained Arc.
+    // A retirement/storage error must not destroy the original terminal evidence.
+    fn finish_trial_completion(
+        &self,
+        verified: &crate::worker_run::RetainedTrialCompletion,
+        retry: bool,
+    ) -> Result<Arc<RunCompletion>> {
+        let completion = verified.completion().clone();
         let id = completion.operation_id;
         let observed = completion.observation();
         self.control.serialize_observation(|_| {
@@ -2353,11 +2385,15 @@ impl RuntimeCoordinator {
                 .state
                 .lock()
                 .map_err(|_| Error::new("runtime_unavailable", "trial completion lock failed"))?;
-            if state.completions.contains_key(&id) {
-                return Err(Error::new(
-                    "ownership_conflict",
-                    "trial completion already retained",
-                ));
+            if let Some(previous) = state.completions.get(&id) {
+                return if retry && Arc::ptr_eq(previous, &completion) {
+                    Ok(())
+                } else {
+                    Err(Error::new(
+                        "ownership_conflict",
+                        "trial completion already retained",
+                    ))
+                };
             }
             let run = state.runs.get_mut(&id).ok_or_else(|| {
                 Error::new("ownership_conflict", "trial admission is not registered")
@@ -2382,7 +2418,74 @@ impl RuntimeCoordinator {
             state.completions.insert(id, completion.clone());
             Ok(())
         })?;
-        if let Err(error) = self.control.retire_local(id, observed) {
+        let retirement = if retry {
+            self.control.operation(id).and_then(|actual| {
+                if actual.phase == crate::control::ReceiptPhase::Reconciled {
+                    let registered = self
+                        .state
+                        .lock()
+                        .map_err(|_| Error::new("runtime_unavailable", "trial retry lock failed"))?
+                        .runs
+                        .get(&id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            Error::new("worker_binding", "trial retry lost admission")
+                        })?;
+                    evaluation::closed_model_observation(
+                        &actual,
+                        &registered.permit,
+                        &registered.budget,
+                        &observed,
+                    )?
+                    .then_some(actual)
+                    .ok_or_else(|| {
+                        Error::new(
+                            "reconciliation_required",
+                            "trial retirement remains uncertain",
+                        )
+                    })
+                } else {
+                    self.control.retire_local(id, observed)
+                }
+            })
+        } else {
+            self.control.retire_local(id, observed)
+        };
+        let retirement = if retry {
+            retirement.and_then(|receipt| {
+                let registered = self
+                    .state
+                    .lock()
+                    .map_err(|_| {
+                        Error::new(
+                            "runtime_unavailable",
+                            "trial retirement validation lock failed",
+                        )
+                    })?
+                    .runs
+                    .get(&id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::new("worker_binding", "trial retirement lost admission")
+                    })?;
+                if evaluation::closed_model_observation(
+                    &receipt,
+                    &registered.permit,
+                    &registered.budget,
+                    &completion.observation(),
+                )? {
+                    Ok(receipt)
+                } else {
+                    Err(Error::new(
+                        "reconciliation_required",
+                        "trial retains unresolved effects",
+                    ))
+                }
+            })
+        } else {
+            retirement
+        };
+        if let Err(error) = retirement {
             self.state
                 .lock()
                 .map_err(|_| Error::new("runtime_unavailable", "trial retirement lock failed"))?

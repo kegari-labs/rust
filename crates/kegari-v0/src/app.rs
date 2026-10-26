@@ -569,7 +569,8 @@ impl HostDispatcher {
                     self.page(&actor, &request, Some(&plan))?,
                 )
             }
-            Approve | Correct | Release | OperationReconcile | Retry | ReleaseRecover | Cleanup => {
+            Approve | Correct | Release | OperationReconcile | Retry | ReleaseRecover | Cleanup
+            | EvaluationRun => {
                 self.queue_mutation(actor, request, None, &config, false)
                     .await
             }
@@ -601,11 +602,31 @@ impl HostDispatcher {
         let mut mutation = mutation_request(&actor, &request, targets);
         mutation.kind = format!("command/{:?}", request.command);
         mutation.payload = json!({"arguments":request.args,"secret_digest":secret.as_ref().map(|s|crate::digest::bytes_digest(s.bytes()))});
+        let evaluation_trial = if request.command == CommandName::EvaluationRun {
+            Some(crate::api::evaluation_trial_identity(&request)?)
+        } else {
+            None
+        };
+        if let Some(identity) = &evaluation_trial {
+            mutation
+                .expected
+                .insert("evaluation_trial".into(), identity.clone());
+        }
+        let command_id = mutation.request_id;
         let control = self.services.control.clone();
+        let command_history = control.clone();
         let configuration = self.services.configuration.clone();
         let authenticated = actor.clone();
         let (receipt, fresh) = tokio::task::spawn_blocking(move || {
             control.queue_command(mutation, &role, || {
+                if let Some(identity)=&evaluation_trial {
+                    for prior in command_history.operations()? {
+                        if prior.kind=="command/EvaluationRun" && prior.request_id!=command_id {
+                            let previous=prior.expected.get("evaluation_trial").ok_or_else(||Error::new("record_corrupt","retained evaluation command lacks its exact finite trial identity"))?;
+                            if previous==identity {return Err(Error::new("evaluation_trial_exists","this declared repetition already has an original command; inspect it rather than rerun").detail(json!({"operation_id":prior.operation_id})));}
+                        }
+                    }
+                }
                 configuration
                     .authority_fences()?
                     .check_actor(&authenticated, &role)?;
@@ -625,6 +646,7 @@ impl HostDispatcher {
             // Ownership belongs to the host, not to the HTTP request future.
             // The observer records even a panic or bounded-task timeout as an
             // uncertain operation; neither path creates a replacement request.
+            let evaluation = request.command == CommandName::EvaluationRun;
             let job = tokio::spawn(async move {
                 let task = async move {
                     if configuration_command {
@@ -633,6 +655,11 @@ impl HostDispatcher {
                         workflow.execute(actor, request, parent).await
                     }
                 };
+                if evaluation {
+                    // This explicit task is also retained and joined by the actual
+                    // runtime driver; its finite session/hook bounds own timeout.
+                    return task.await.map(|effect|json!({"effect_operation_id":effect.operation_id,"receipt":effect}));
+                }
                 match tokio::time::timeout(std::time::Duration::from_secs(300),task).await {
                     Ok(result)=>result.map(|effect|json!({"effect_operation_id":effect.operation_id,"receipt":effect})),
                     Err(_)=>Err(Error::new("operation_uncertain","command task exceeded its bound; reconcile its operation before retrying").detail(json!({"operation_id":operation,"effect_operation_id":command_effect_id(operation)}))),
@@ -743,6 +770,7 @@ pub fn verify_current_actor(config: &Config, actor: &Actor, role: &str) -> Resul
         "accept" => ControlRole::Accept,
         "release" => ControlRole::Release,
         "recover" => ControlRole::Recover,
+        "evaluate" => ControlRole::Evaluate,
         _ => return Err(Error::new("access_denied", "unknown operator role")),
     };
     if !verified_operator(config, actor)?.roles.contains(&expected) {

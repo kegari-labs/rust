@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "slots": [
+    {
+      "pointer": "/issue/pull_request/head_sha",
+      "source": "repository_revision"
+    },
+    {
+      "pointer": "/issue/pull_request/id",
+      "source": "independent_pull_request_id"
+    },
+    {
+      "pointer": "/issue/pull_request/number",
+      "source": "independent_pull_request_number"
+    },
+    {
+      "pointer": "/issue/pull_request/url",
+      "source": "independent_pull_request_url"
+    },
+    {
+      "pointer": "/operation/id",
+      "source": "operation_id"
+    },
+    {
+      "pointer": "/phase",
+      "source": "phase"
+    },
+    {
+      "pointer": "/profile",
+      "source": "profile"
+    },
+    {
+      "pointer": "/scope/head",
+      "source": "repository_revision"
+    },
+    {
+      "pointer": "/workspace/id",
+      "source": "workspace_id"
+    }
+  ],
+  "source_write_paths": []
+}
