@@ -1,11 +1,9 @@
 # CLI and client transport
 
-The entrypoint draft is retained outside the source tree until the concrete
-host factory is integrated; the currently built `main.rs` remains the original
-empty scaffold. The pending entrypoint routes public commands through the typed
-client and exact hidden build/supervisor/host entrypoints. `local_cli` implements client-only preferences,
+The executable routes public commands through the typed local/HTTPS client and
+dispatches exact hidden build/supervisor/host entrypoints. `local_cli` implements client-only preferences,
 bounded terminal TOML guidance, explicit local bootstrap, browser opening and
-native service actions. The host factory is integrated separately through `host`;
+native service actions. The executable supplies `NativeRuntimeFactory` through `host`;
 provider/Keychain/native ownership qualification remains incomplete. No real host
 bootstrap, LaunchAgent installation/start/stop, browser launch, credential import
 or remote mutation was executed during deterministic tests. Service installation
@@ -18,6 +16,61 @@ selects one named HTTPS origin/runtime pin. Missing/unreachable targets fail;
 there is no fallback or automatic repinning. The public grammar follows every
 command in SPEC §10.1. Hidden supervisor/build-information modes belong to the
 entrypoint, not remote commands.
+
+## First install and local status
+
+With no command, `./kegari-v0` means `overview`. Before initial setup alpha.2 reports
+`target_unavailable: no registered local runtime; use explicit local setup`.
+This is an absent registration, not an invitation to launch a hidden entrypoint.
+`--help`, `--version` and `setup --help` do not require a registered runtime.
+
+Alpha.2 can be inspected as a development artifact, but is not qualified or ready
+for activation. The sequence below describes the intended authorized installation
+after the supported profile and required native/provider prerequisites are
+established; it is not a recommendation to activate this prerelease now.
+
+For that installation, first copy the binary to its final protected, versioned
+path. Prepare a complete runtime TOML document using the
+[configuration contract](configuration.md); real host/account/workspace IDs,
+operator mappings, paths and permitted provider configuration must be supplied.
+Setup compares `runtime.host_id` with the actual OS host identity. There is no
+public host-identity export command or complete ready-to-use runtime configuration
+template yet, so bootstrap onboarding remains incomplete. Do not invent an ID to
+pass that check.
+
+The explicit sequence is below; replace both example absolute paths with the
+actual installed binary and prepared configuration. Each step must succeed before
+continuing. These commands perform setup and service actions, not just inspection.
+
+```sh
+/absolute/versioned/kegari-v0 setup --from /absolute/path/runtime.toml --noninteractive
+/absolute/versioned/kegari-v0 service install --binary /absolute/versioned/kegari-v0
+/absolute/versioned/kegari-v0 service start
+/absolute/versioned/kegari-v0 status
+/absolute/versioned/kegari-v0 config check --noninteractive
+```
+
+Initial setup records STOPPED intent. Service installation writes the LaunchAgent
+without loading it; `service start` starts the control host and preserves that
+intent. Check actual readiness with `status` and `config check`; metadata checks
+do not establish operational qualification. Only after qualification and current
+execution prerequisites are satisfied, and the operator explicitly intends to
+admit work, the separate orchestration command is:
+
+```sh
+/absolute/versioned/kegari-v0 start
+```
+
+The earlier setup/service sequence does not grant qualification or start product
+work. Do not use `start` to bypass a reported blocker.
+
+Interactive `setup` without `--from` uses the bounded whole-document TOML editor
+described below. It is not a field-by-field onboarding wizard. A registered but
+unreachable runtime requires service/ownership diagnosis, and partial setup
+requires reconciliation; neither condition authorizes deleting registration or
+rerunning setup as a replacement installation.
+
+## Runtime commands
 
 ```sh
 kegari-v0 --json overview

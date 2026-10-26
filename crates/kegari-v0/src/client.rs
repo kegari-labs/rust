@@ -155,8 +155,9 @@ impl TargetStore {
             None => records.local.ok_or_else(|| {
                 Error::new(
                     "target_unavailable",
-                    "no registered local runtime; use explicit local setup",
+                    "no local runtime is configured; inspect explicit setup requirements with `kegari-v0 setup --help`",
                 )
+                .next("Run `kegari-v0 setup --help` to inspect setup; this read does not register a runtime or start a service")
             }),
         }
     }

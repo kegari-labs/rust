@@ -886,6 +886,63 @@ impl LocalActions for LocalFixture {
     }
 }
 #[tokio::test]
+async fn no_argument_first_launch_explains_setup_without_registering_or_starting() {
+    let temp = TempDir::new().unwrap();
+    let account = kegari_v0::platform::AccountHome {
+        uid: 501,
+        user: "first-launch-fixture".into(),
+        home: temp.path().canonicalize().unwrap(),
+    };
+    let store = kegari_v0::local_cli::target_store(&account).unwrap();
+    assert!(
+        kegari_v0::local_cli::registered_target(&account, &store)
+            .unwrap()
+            .is_none()
+    );
+    let mut inputs = Inputs::default();
+    let invocation = Cli::try_parse_from(["kegari-v0"])
+        .unwrap()
+        .prepare(&mut inputs)
+        .unwrap();
+    assert_eq!(server(&invocation).command, CommandName::Overview);
+    let mut local = LocalFixture::default();
+    let response = execute(invocation, &store, &mut local).await;
+    assert!(!response.ok);
+    assert_eq!(response.exit_code(), 4);
+    assert!(response.runtime_id.is_none());
+    let error = response.error.as_ref().unwrap();
+    assert_eq!(error.code, "target_unavailable");
+    assert!(error.message.contains("kegari-v0 setup --help"));
+    assert!(error.message.contains("explicit setup"));
+    assert!(
+        error
+            .next_action
+            .as_deref()
+            .unwrap()
+            .contains("kegari-v0 setup --help")
+    );
+    let mut human = Vec::new();
+    write_output(&response, false, None, &mut human).unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("Result: target_unavailable"));
+    assert!(human.contains("Next action: Run `kegari-v0 setup --help`"));
+    let mut encoded = Vec::new();
+    write_output(&response, true, None, &mut encoded).unwrap();
+    let encoded: Value = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(encoded["error"]["code"], "target_unavailable");
+    assert_eq!(encoded["error"]["next_action"], json!(error.next_action));
+    assert_eq!(inputs.reads, 0);
+    assert_eq!(local.bootstraps, 0);
+    assert_eq!(local.services, 0);
+    assert!(local.browsers.is_empty());
+    assert!(
+        std::fs::read_dir(kegari_v0::local_cli::state_root(&account))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+#[tokio::test]
 async fn setup_bootstraps_only_when_explicitly_local_and_unregistered() {
     let temp = TempDir::new().unwrap();
     let store = TargetStore::new(

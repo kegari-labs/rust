@@ -58,6 +58,28 @@ running coordinator. See [alpha.2 lifecycle and build evidence](validation/LOCAL
 for the exact artifact and checks performed. The
 [alpha.1 report](validation/LOCAL-PRERELEASE.md) remains historical evidence.
 
+## First launch
+
+Running `./kegari-v0` without a command requests the local runtime's `overview`;
+it does not open a setup wizard or start a service. On a new alpha.2 installation,
+`target_unavailable: no registered local runtime; use explicit local setup` means
+that no local runtime has been configured yet. Use `./kegari-v0 --help` or
+`./kegari-v0 setup --help` to inspect the available commands without setup.
+
+Alpha.2 is an inspectable development artifact, not a qualified installation ready
+for activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
+requires the supported profile and native/provider prerequisites to be established
+first, then a final protected, versioned binary and complete runtime configuration.
+The interactive `setup` command accepts a complete TOML document; it does not
+discover or fill in your accounts, host identity or workspace policy. This package
+does not yet include a complete ready-to-use `runtime.toml` or a public command to
+export the required local host identity. This is an unfinished onboarding step;
+the starter `WORKFLOW.md` is repository guidance, not runtime configuration.
+
+Setup, service installation and control-host start are separate actions. They do
+not qualify the prerelease or implicitly start orchestration. Missing native,
+provider and execution prerequisites remain blockers.
+
 ## Operator and repository preparation
 
 Read the [configuration contract](docs/configuration.md),
