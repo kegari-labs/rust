@@ -30,6 +30,7 @@ pub(super) fn collect(
     report.independent_boundary = facts.independent_boundary.clone();
     report.independent_broker = facts.independent_broker.clone();
     report.canary_diagnostic = facts.canary_diagnostic.clone();
+    report.canary_output = facts.canary_output.clone();
     report.declared_protocol = facts.declared_protocol.clone();
     report.evidence_references = facts.evidence_references.clone();
     report.observed_effects = Some(facts.effects.clone());
@@ -176,6 +177,7 @@ mod tests {
         "contract_scope_digest":bytes_digest(b"data-only scope"),"context_digest":bytes_digest(b"data-only context"),"tool_contract_digest":bytes_digest(b"data-only tools"),"isolation_digest":bytes_digest(b"data-only isolation"),
         "state":"unavailable","members":[],"receipts":[],"authority_at_collection":null,"gaps":["component_only_no_native_registration"]})).unwrap()),
                 canary_diagnostic: None,
+                canary_output: None,
                 independent_boundary: Some(IndependentBoundaryObservation {
                     schema_version: 1,
                     source_revision: "1".repeat(40),
@@ -495,6 +497,35 @@ mod tests {
             } else {
                 TrialOutcome::Failed
             }
+        );
+    }
+    #[test]
+    fn scorer_load_failure_preserves_partial_canary_output_data_without_grading_it() {
+        let mut f = Fixture::new();
+        // Descriptive reducer input only, not an enrollment or authenticated
+        // live match. The real fallible scorer path must retain it unchanged.
+        let output:CanaryOutputObservation=serde_json::from_value(json!({
+            "schema_version":1,"identity":{"runtime":uuid::Uuid::from_u128(1),"workspace":uuid::Uuid::from_u128(2),"command":uuid::Uuid::from_u128(3),"operation":uuid::Uuid::from_u128(4),"trial_digest":bytes_digest(b"trial"),"suite_digest":bytes_digest(b"suite"),"fixture_digest":bytes_digest(b"fixture"),"scorer_digest":bytes_digest(b"scorer"),"policy_digest":bytes_digest(b"policy"),"profile_digest":bytes_digest(b"profile")},
+            "enrollment":null,"coverage":"partial","projection":"independent_declared_egress_v1","matching":"decoded_utf8_atoms_and_channel_concat_v1","pieces":[],"matches":[],"issues":["coverage_not_qualified","capture_gap"],"error_records":[],"final_readback":false
+        })).unwrap();
+        output.validate().unwrap();
+        f.facts.canary_output = Some(output.clone());
+        let path = f
+            .prepared
+            .grader_root
+            .join(format!("{}.json", f.variant.id));
+        std::fs::write(&path, b"changed scorer").unwrap();
+        let mut report = f.report(
+            TrialOutcome::Failed,
+            "agent finished; observable grading required",
+        );
+        collect(&mut report, &f.prepared, &f.isolation, &f.variant, &f.facts);
+        assert_eq!(report.outcome, TrialOutcome::Blocked);
+        assert!(report.grade.is_none());
+        assert!(report.grading_error.is_some());
+        assert_eq!(
+            serde_json::to_value(&report.canary_output).unwrap(),
+            serde_json::to_value(Some(output)).unwrap()
         );
     }
 }

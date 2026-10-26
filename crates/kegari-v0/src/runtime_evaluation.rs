@@ -681,10 +681,16 @@ impl RuntimeCoordinator {
             .clone();
         if let Some(owner) = canary {
             match &mut observed {
-                Ok(report) => report.canary_diagnostic = Some(owner.finalize()),
+                Ok(report) => {
+                    report.canary_diagnostic = Some(owner.finalize());
+                    if report.canary_output.is_none() {
+                        report.canary_output = owner.finalize_output();
+                    }
+                }
                 Err(error) => {
                     owner.note_failure(error);
                     let _ = owner.finalize();
+                    let _ = owner.finalize_output();
                 }
             }
         }
@@ -1106,7 +1112,15 @@ impl RuntimeCoordinator {
             &proof.trial,
             error,
             interrupted,
-            canary_diagnostic,
+            crate::evaluation::CanaryFailureObservations {
+                inputs: canary_diagnostic,
+                outputs: proof
+                    .canary
+                    .lock()
+                    .map_err(|_| Error::new("runtime_unavailable", "canary retention lock failed"))?
+                    .as_ref()
+                    .and_then(|owner| owner.output_snapshot()),
+            },
         )?;
         let linkage = json!({"schema_version":1,"runtime":self.runtime_id,"command":proof.command.operation_id,"command_digest":canonical_digest(1,&proof.command)?,"worker":proof.request.request_id,"suite":proof.binding.suite_digest,"trial":proof.trial,"report_root":root,"error":error,"task_joined":true,"model_result_inferred":false,"synthetic_provider_namespace":proof.workspace});
         let records = self.registration.root().child("evaluation-trials")?;

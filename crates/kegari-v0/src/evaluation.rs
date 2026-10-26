@@ -23,11 +23,14 @@ use std::time::{Duration, Instant};
 #[path = "evaluation_canary.rs"]
 mod canary;
 pub use canary::{
-    CanaryBinding, CanaryDiagnostic, CanaryHostInputs, CanaryIdentity, CanaryPolicyReference,
-    CanaryRecordReference,
+    CanaryBinding, CanaryDiagnostic, CanaryHostInputs, CanaryIdentity, CanaryOutputObservation,
+    CanaryPolicyReference, CanaryRecordReference, MatchAuthentication, OutputAttribution,
+    OutputChannel, OutputCoverage, OutputDigest, OutputForm, OutputIssue, OutputMatch,
+    OutputMatching, OutputPiece, OutputProjection, OutputRecord, OutputSpan,
 };
 pub(crate) use canary::{
-    CanaryMaterialization, CanaryOperandBinding, CanaryStageInput, OwnedCanaryPathOperand,
+    CanaryMaterialization, CanaryOperandBinding, CanaryOutputEnrollment, CanaryStageInput,
+    OwnedCanaryPathOperand,
 };
 
 #[path = "evaluation_context.rs"]
@@ -1279,6 +1282,9 @@ pub struct ObservedFacts {
     /// Finite host-input diagnostic only; absence is unknown and never qualifies output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canary_diagnostic: Option<CanaryDiagnostic>,
+    /// Partial declared egress only. No negative, grading or native authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_output: Option<CanaryOutputObservation>,
     /// Only explicitly enabled declared protocol channels; missing legacy data
     /// is unknown, never an empty successful capture. No scoring authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1610,6 +1616,9 @@ pub struct TrialReport {
     /// Finite host-input diagnostic only; absence is unknown and never qualifies output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canary_diagnostic: Option<CanaryDiagnostic>,
+    /// Partial declared egress only. No negative, grading or native authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_output: Option<CanaryOutputObservation>,
     /// Only explicitly enabled declared protocol channels; missing legacy data
     /// is unknown, never an empty successful capture. No scoring authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1670,6 +1679,7 @@ impl TrialReport {
             independent_boundary: None,
             independent_broker: None,
             canary_diagnostic: None,
+            canary_output: None,
             declared_protocol: None,
             evidence_references: vec![],
             omissions: vec!["No actual-agent observation is available".into()],
@@ -1687,8 +1697,12 @@ pub struct DeclaredProtocolTrial {
     suite_digest: String,
     fixture_digest: String,
     capture_budget: Option<std::sync::Arc<crate::worker::CaptureBudget>>,
+    canary_output: Option<std::sync::Arc<CanaryOutputEnrollment>>,
 }
 impl DeclaredProtocolTrial {
+    pub(crate) fn canary_output(&self) -> Option<std::sync::Arc<CanaryOutputEnrollment>> {
+        self.canary_output.clone()
+    }
     pub(crate) fn capture_budget(&self) -> Option<std::sync::Arc<crate::worker::CaptureBudget>> {
         self.capture_budget.clone()
     }
@@ -2248,6 +2262,13 @@ pub(crate) async fn run_live_trial_until(
             suite_digest: report.suite_digest.clone(),
             fixture_digest: report.fixture_digest.clone(),
             capture_budget,
+            canary_output: operation
+                .fixture
+                .canary
+                .as_ref()
+                .map(|owner| owner.output_enrollment())
+                .transpose()?
+                .flatten(),
         });
     let mut audited = AuditedHost {
         host: operation.host,
@@ -2636,9 +2657,16 @@ pub(crate) async fn run_live_trial_until(
         .as_ref()
         .map(|owner| owner.finalize());
     report.canary_diagnostic = canary_diagnostic.clone();
+    let canary_output = operation
+        .fixture
+        .canary
+        .as_ref()
+        .and_then(|owner| owner.finalize_output());
+    report.canary_output = canary_output.clone();
     let observed = audited.host.observe();
     if let Ok(mut facts) = observed {
         facts.canary_diagnostic = canary_diagnostic;
+        facts.canary_output = canary_output;
         grading::collect(
             &mut report,
             operation.fixture,
@@ -2664,6 +2692,12 @@ pub(crate) async fn run_live_trial_until(
 pub struct ReportStore {
     directory: crate::storage::PrivateDir,
 }
+#[derive(Default)]
+pub(crate) struct CanaryFailureObservations {
+    pub inputs: Option<CanaryDiagnostic>,
+    pub outputs: Option<CanaryOutputObservation>,
+}
+
 impl ReportStore {
     pub fn create(root: &Path, suite: &SuiteManifest) -> Result<Self> {
         suite.validate()?;
@@ -2714,7 +2748,7 @@ impl ReportStore {
             trial,
             error,
             interrupted,
-            None,
+            CanaryFailureObservations::default(),
         )
     }
     pub(crate) fn finish_owned_failure_with_canary(
@@ -2724,7 +2758,7 @@ impl ReportStore {
         trial: &TrialKey,
         error: &Error,
         interrupted: bool,
-        canary_diagnostic: Option<CanaryDiagnostic>,
+        diagnostics: CanaryFailureObservations,
     ) -> Result<()> {
         let store = Self {
             directory: crate::storage::PrivateDir::open(root)?,
@@ -2799,7 +2833,8 @@ impl ReportStore {
             },
             &format!("{}: {}", error.code, error.message),
         )?;
-        report.canary_diagnostic = canary_diagnostic;
+        report.canary_diagnostic = diagnostics.inputs;
+        report.canary_output = diagnostics.outputs;
         report.started_at = started["started_at"]
             .as_str()
             .expect("checked timestamp")

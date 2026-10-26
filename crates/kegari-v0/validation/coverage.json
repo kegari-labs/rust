@@ -5123,6 +5123,20 @@
             "evaluation::canary::tests::context_operand::prepared_schema_three_fixture_retains_original_operand_and_exact_context"
           ],
           "class": "deterministic"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-DECLARED-OUTPUT-MATCHER.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:c4a8b71e52ef8b4c93523766e8293b6d7a1883e0804fa3700cb4a8458bcd32af",
+          "limits": "Actual local protected-file and RPC duplex components plus inspected production wiring only. Component SessionState/broker inputs do not construct a genuine registered native enrollment. Coverage remains Partial/CoverageNotQualified; no finite negative, complete output/effect inventory, native containment, actual accepted provider feedback, typed E07 grade, actual-agent trial or human qualification is established. Public canary_output omits arbitrary labels and marker bytes; unchanged legacy report fields do not acquire a universal secrecy guarantee. Existing scorer-v3, shipped policies/recipes/fixtures/profiles and all prior row statuses remain unchanged.",
+          "scope": "The opt-in policy2 path enrolls output capture through the original retained canary owner. Inspected worker wiring observes decoded requests before filtering and feedback intent before broker mutation; the actual RpcClient duplex component verifies pre-parser, whitelist and intervention-refusal ordering without native enrollment.",
+          "tests": [
+            "codex::observation::tests::output_callback_ordering::actual_duplex_retains_root_arguments_before_parse_whitelist_and_intervention_refusal",
+            "evaluation::canary::output::tests::root_string_array_and_key_projection_precede_shape_refusal",
+            "evaluation::canary::output::tests::policy_two_requires_exact_projection_and_policy_one_does_not_enable_it"
+          ]
         }
       ]
     },
@@ -5694,6 +5708,19 @@
           ],
           "verification": "verified_local_components_final_source",
           "source_digest": "sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-DECLARED-OUTPUT-MATCHER.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:c4a8b71e52ef8b4c93523766e8293b6d7a1883e0804fa3700cb4a8458bcd32af",
+          "limits": "Actual local protected-file and RPC duplex components plus inspected production wiring only. Component SessionState/broker inputs do not construct a genuine registered native enrollment. Coverage remains Partial/CoverageNotQualified; no finite negative, complete output/effect inventory, native containment, actual accepted provider feedback, typed E07 grade, actual-agent trial or human qualification is established. Public canary_output omits arbitrary labels and marker bytes; unchanged legacy report fields do not acquire a universal secrecy guarantee. Existing scorer-v3, shipped policies/recipes/fixtures/profiles and all prior row statuses remain unchanged.",
+          "scope": "Optional output facts survive real scorer-load failure and protected report-store readback. Omitted persisted fields retain legacy bytes; the inspection view adds a null field. Descriptive output records do not grant grader authority or establish complete coverage.",
+          "tests": [
+            "evaluation::grading::tests::scorer_load_failure_preserves_partial_canary_output_data_without_grading_it",
+            "evaluation::canary::output::tests::partial_output_data_survives_archive_failure_record_and_old_absence_bytes"
+          ]
         }
       ]
     },
@@ -5858,6 +5885,22 @@
             "evaluation::canary::tests::context_operand::prepared_schema_three_fixture_retains_original_operand_and_exact_context"
           ],
           "class": "deterministic"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-DECLARED-OUTPUT-MATCHER.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:c4a8b71e52ef8b4c93523766e8293b6d7a1883e0804fa3700cb4a8458bcd32af",
+          "limits": "Actual local protected-file and RPC duplex components plus inspected production wiring only. Component SessionState/broker inputs do not construct a genuine registered native enrollment. Coverage remains Partial/CoverageNotQualified; no finite negative, complete output/effect inventory, native containment, actual accepted provider feedback, typed E07 grade, actual-agent trial or human qualification is established. Public canary_output omits arbitrary labels and marker bytes; unchanged legacy report fields do not acquire a universal secrecy guarantee. Existing scorer-v3, shipped policies/recipes/fixtures/profiles and all prior row statuses remain unchanged.",
+          "scope": "Public output coordinates use closed enums, ordinals, offsets and validated digests while raw labels remain in protected originals. Positive authentication requires original matched-record and marker readback independently of unrelated tail gaps; identical-byte replacement refuses authentication. Protected failure membership and the original shared budget/deadline are retained.",
+          "tests": [
+            "evaluation::canary::output::tests::label_only_marker_is_protected_metadata_not_matched_content",
+            "evaluation::canary::output::tests::positive_original_readback_does_not_require_unrelated_record_success",
+            "evaluation::canary::output::tests::identical_byte_substitution_of_matched_record_refuses_first_authentication",
+            "evaluation::canary::output::tests::substituted_marker_refuses_positive_but_preserves_captured_spans",
+            "evaluation::canary::output::tests::original_deadline_and_shared_budget_refuse_without_output_reset"
+          ]
         }
       ]
     },
@@ -7726,6 +7769,21 @@
             "evaluation::canary::tests::context_operand::prepared_schema_three_fixture_retains_original_operand_and_exact_context"
           ],
           "class": "deterministic"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-DECLARED-OUTPUT-MATCHER.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:c4a8b71e52ef8b4c93523766e8293b6d7a1883e0804fa3700cb4a8458bcd32af",
+          "limits": "Actual local protected-file and RPC duplex components plus inspected production wiring only. Component SessionState/broker inputs do not construct a genuine registered native enrollment. Coverage remains Partial/CoverageNotQualified; no finite negative, complete output/effect inventory, native containment, actual accepted provider feedback, typed E07 grade, actual-agent trial or human qualification is established. Public canary_output omits arbitrary labels and marker bytes; unchanged legacy report fields do not acquire a universal secrecy guarantee. Existing scorer-v3, shipped policies/recipes/fixtures/profiles and all prior row statuses remain unchanged.",
+          "scope": "The declared-output prerequisite matches four exact marker encodings over decoded text, JSON string/key atoms and declared channel concatenations. Actual protected-file components preserve positive spans and conservative failures. Same-item deltas retain one stream across callback establishment, while missing/foreign item identities do not concatenate. These observations remain partial and are not consumed by the unchanged grader.",
+          "tests": [
+            "evaluation::canary::output::tests::exact_forms_match_across_scan_chunks_and_piece_boundaries",
+            "evaluation::canary::output::tests::delta_stream_crosses_callback_establishment_boundary_without_losing_attribution",
+            "evaluation::canary::output::tests::distinct_or_unidentified_delta_items_never_share_concatenation_streams",
+            "evaluation::canary::output::tests::delta_positive_survives_different_complete_text_without_negative_inference"
+          ]
         }
       ]
     },

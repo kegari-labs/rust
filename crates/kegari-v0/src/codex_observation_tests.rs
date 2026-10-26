@@ -567,3 +567,201 @@ fn processed_request_inventory_detects_missing_prefix_but_never_proves_stream_en
 
 #[path = "codex_transport_observation_tests.rs"]
 mod transport_tests;
+
+// Actual JSON-RPC transport ordering only. This component sink is deliberately
+// not a ScopedWorker, canary enrollment, declared trial or native capability.
+mod output_callback_ordering {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[derive(Default)]
+    struct AttemptBroker {
+        requests: Vec<(u64, Value)>,
+        sequences: Vec<u64>,
+        order: Vec<(&'static str, u64)>,
+    }
+    impl ToolBroker for AttemptBroker {
+        fn observe_protocol(&mut self, event: ProtocolObservation<'_>) {
+            match event {
+                ProtocolObservation::ServerRequest {
+                    rpc_id,
+                    sequence,
+                    method,
+                    params,
+                    ..
+                } => {
+                    assert_eq!(method, "item/tool/call");
+                    let id = rpc_id.as_u64().unwrap();
+                    self.requests.push((id, params.clone()));
+                    self.sequences.push(sequence);
+                    self.order.push(("raw", id));
+                }
+                ProtocolObservation::ToolResult {
+                    rpc_id, error_code, ..
+                } => {
+                    let id = rpc_id.as_u64().unwrap();
+                    assert_eq!(
+                        error_code,
+                        Some(if id <= 2 {
+                            "invalid_input"
+                        } else {
+                            "unsupported_tool"
+                        })
+                    );
+                    self.order.push(("result", id));
+                }
+                _ => (),
+            }
+        }
+        fn observe_session(&mut self, _: &SessionState) -> Result<()> {
+            let id = self.requests.last().expect("raw request arrived first").0;
+            self.order.push(("checkpoint", id));
+            Ok(())
+        }
+        fn call<'a>(
+            &'a mut self,
+            call: &'a ToolCall,
+        ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+            let id = call.call_id.parse::<u64>().unwrap();
+            assert_eq!(self.order.last(), Some(&("checkpoint", id)));
+            let (observed_id, params) = self.requests.last().unwrap();
+            assert_eq!(*observed_id, id);
+            assert_eq!(params["arguments"], call.arguments);
+            self.order.push(("dispatch", id));
+            Box::pin(async move {
+                // Explicit component object-shape refusal. The production
+                // ScopedWorker::validate_call uses its own unchanged gate.
+                assert!(!call.arguments.is_object());
+                Err(Error::new(
+                    "invalid_input",
+                    "component requires object arguments",
+                ))
+            })
+        }
+    }
+    async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> Value {
+        let mut line = String::new();
+        assert!(reader.read_line(&mut line).await.unwrap() > 0);
+        serde_json::from_str(&line).unwrap()
+    }
+    async fn write_frame<W: tokio::io::AsyncWrite + Unpin>(writer: &mut W, value: Value) {
+        writer
+            .write_all(format!("{value}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn actual_duplex_retains_root_arguments_before_parse_whitelist_and_intervention_refusal()
+    {
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let (cr, cw) = tokio::io::split(client);
+        let (sr, mut sw) = tokio::io::split(server);
+        let string = json!("component root string");
+        let array = json!(["component array text", {"nested": "component value"}]);
+        let expected = [string.clone(), array.clone()];
+        let server = async move {
+            let mut sr = BufReader::new(sr);
+            let initialize = read_frame(&mut sr).await;
+            assert_eq!(initialize["method"], "initialize");
+            write_frame(&mut sw, json!({"id":initialize["id"],"result":{"userAgent":"component","platformFamily":"unix","platformOs":"macos","codexHome":"/component/auth"}})).await;
+            assert_eq!(read_frame(&mut sr).await["method"], "initialized");
+            assert_eq!(read_frame(&mut sr).await["method"], "turn/interrupt");
+            for (id, tool, arguments) in [
+                (1, "known", string),
+                (2, "known", array),
+                (3, "unsupported", json!("unsupported root text")),
+                (4, "known", json!(["blocked root text"])),
+            ] {
+                if id == 4 {
+                    write_frame(&mut sw, json!({"method":"turn/started","params":{"threadId":"thread","turn":{"id":"turn","status":"inProgress","error":{"message":"restricted","codexErrorInfo":"cyberPolicy"}}}})).await;
+                }
+                write_frame(&mut sw, json!({"id":id,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","callId":id.to_string(),"tool":tool,"arguments":arguments}})).await;
+                let response = read_frame(&mut sr).await;
+                assert_eq!(response["id"], id);
+                assert_eq!(response["result"]["success"], false);
+                let result: Value = serde_json::from_str(
+                    response["result"]["contentItems"][0]["text"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    result["error"]["code"],
+                    if id <= 2 {
+                        "invalid_input"
+                    } else {
+                        "unsupported_tool"
+                    }
+                );
+            }
+            // Malformed metadata fails actual adapter parsing. Its arguments
+            // must already have reached the raw callback, with no dispatch or
+            // manufactured successful result event.
+            write_frame(&mut sw, json!({"id":5,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","tool":"known","arguments":"before malformed callId refusal"}})).await;
+        };
+        let client = async move {
+            let mut rpc = RpcClient::from_transport(cr, cw, Duration::from_secs(2)).unwrap();
+            rpc.initialize().await.unwrap();
+            // Component adapter whitelist only; no grant or runtime admission.
+            rpc.allowed_tools.insert("known".into());
+            let mut broker = AttemptBroker::default();
+            let mut state = active();
+            let error = rpc
+                .request(
+                    "turn/interrupt",
+                    json!({"threadId":"thread","turnId":"turn"}),
+                    Some(&mut state),
+                    &mut broker,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "protocol_error");
+            assert!(state.intervention.is_some());
+            assert_eq!(rpc.observed_server_request_count(), 5);
+            broker
+        };
+        // Both duplex halves/futures stay owned here and are dropped together
+        // on timeout/panic. There is no detached task, process or cleanup claim.
+        let (_, broker) = tokio::time::timeout(Duration::from_secs(4), async {
+            tokio::join!(server, client)
+        })
+        .await
+        .expect("bounded actual protocol exchange");
+        assert_eq!(broker.sequences, [1, 2, 3, 4, 5]);
+        assert_eq!(broker.requests.len(), 5);
+        for (index, value) in expected.iter().enumerate() {
+            assert_eq!(&broker.requests[index].1["arguments"], value);
+        }
+        assert_eq!(broker.requests[2].1["arguments"], "unsupported root text");
+        assert_eq!(
+            broker.requests[3].1["arguments"],
+            json!(["blocked root text"])
+        );
+        assert_eq!(
+            broker.requests[4].1["arguments"],
+            "before malformed callId refusal"
+        );
+        let order: Vec<_> = broker
+            .order
+            .into_iter()
+            .filter(|(kind, _)| *kind != "checkpoint")
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("raw", 1),
+                ("dispatch", 1),
+                ("result", 1),
+                ("raw", 2),
+                ("dispatch", 2),
+                ("result", 2),
+                ("raw", 3),
+                ("result", 3),
+                ("raw", 4),
+                ("result", 4),
+                ("raw", 5),
+            ]
+        );
+    }
+}

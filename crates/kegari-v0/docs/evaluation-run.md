@@ -297,8 +297,8 @@ the existing configuration and explicit command must name that new identity.
 Ordinary source preparation preserves a declared policy but does not add one.
 This opt-in grants no additional execution permission or account allowance.
 
-The reference has schema version 1, an exact digest of the sidecar bytes and a
-path of the form `diagnostics/<bounded-identifier>.json` relative to the suite:
+For input-only diagnostics, the reference has schema version 1, an exact digest
+of the sidecar bytes and a path of the form `diagnostics/<bounded-identifier>.json` relative to the suite:
 
 ```json
 {
@@ -327,7 +327,7 @@ private grader child. It stages the original policy and materialization record
 exclusively, then records the actual admitted contract in a separate binding
 record. A failed or partial stage retains its evidence; deleting a record cannot
 regenerate the marker or renew the allowance. Marker bytes and reversible forms
-are omitted from public diagnostic reports. This uses no real credentials.
+are omitted from the `canary_diagnostic` field. This uses no real credentials.
 
 The host checks the exact prompt, context/tool projections, supplied instruction
 files, fixture input and captured owned repository bytes against the four forms.
@@ -352,6 +352,48 @@ matching and native observation coverage remain incomplete. The unchanged v3
 scorer also requires host state facts that the runtime does not supply, including
 `authority_unchanged`, `unrelated_context_disclosed` and `human_acceptance`.
 A diagnostic declaration, source preparation or context match qualifies no trial.
+
+A separately reviewed suite can opt into declared-output diagnostics with a
+schema-version-2 reference and sidecar. Keep the same purpose, recipe, placement,
+host input set and four forms shown above, set the sidecar's `schema_version` to
+`2`, and add exactly:
+
+```json
+{
+  "output_projection": "independent_declared_egress_v1",
+  "matching": "decoded_utf8_atoms_and_channel_concat_v1"
+}
+```
+
+These two fields extend the full sidecar; this fragment is not a complete policy.
+The reference must name the exact new sidecar digest, and the copied suite's
+version and digest must change accordingly. Version 1 remains input-only and
+rejects these output declarations. The existing E07 source-data recipe still
+emits version 1; it does not silently enable output capture.
+
+Version 2 observes declared message text and deltas, decoded tool-argument keys
+and strings (including root strings/arrays before ordinary refusal), and parsed
+feedback bodies before provider transmission. It matches each piece and bounded
+ordered concatenations within a channel using the same four literal encodings.
+Cross-field concatenation can match adjacent unrelated fields; attribution stays
+explicit. Provider labels, hidden reasoning, other encodings, cross-channel
+splits, native network/filesystem traffic and remote published-content readback
+are outside that declared content projection.
+
+Exact selected bytes and raw labels remain in the original protected output
+records. The optional `canary_output` field exposes only safe metadata, matches,
+attribution and readback diagnostics. Its safety contract does not make the
+aggregate report universally redacted: existing protocol/broker fields can still
+contain raw provider identifiers or error labels. Review those legacy fields
+before sharing an aggregate report.
+
+An authenticated match requires its original marker, binding and matched
+records; unrelated incomplete capture does not erase it. A replaced matched
+record cannot be authenticated from a saved report. Empty matches never prove
+absence: this increment supplies neither complete finite-channel closure nor a
+new grading predicate. Capture, matching and verification keep the original
+shared budget/deadline, and failure retains partial observations. Native,
+provider, scoring and human qualification remain separate.
 
 A single actual trial would supply evidence only for that declared condition.
 Synthetic GitHub/Linear feedback is not real-provider qualification. Passing

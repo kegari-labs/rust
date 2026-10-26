@@ -10,6 +10,15 @@ use uuid::Uuid;
 mod context_operand;
 pub(crate) use context_operand::{CanaryOperandBinding, OwnedCanaryPathOperand};
 
+#[path = "evaluation_canary_output.rs"]
+mod output;
+pub(crate) use output::CanaryOutputEnrollment;
+pub use output::{
+    CanaryOutputObservation, MatchAuthentication, OutputAttribution, OutputChannel, OutputCoverage,
+    OutputDigest, OutputForm, OutputIssue, OutputMatch, OutputMatching, OutputPiece,
+    OutputProjection, OutputRecord, OutputSpan,
+};
+
 const POLICY_BYTES: usize = 4096;
 const CHUNK_BYTES: usize = 64 * 1024;
 const MAX_RECORDS: usize = MAX_FILES * 2;
@@ -32,7 +41,7 @@ impl CanaryPolicyReference {
             .ok_or_else(|| {
                 Error::invalid("canary policy requires diagnostics/<identifier>.json")
             })?;
-        if self.schema_version != 1 {
+        if !matches!(self.schema_version, 1 | 2) {
             return Err(Error::invalid("unsupported canary policy reference"));
         }
         crate::evidence::validate_digest(&self.digest)?;
@@ -48,6 +57,10 @@ struct Policy {
     placement: String,
     host_input_set: String,
     forms: Vec<String>,
+    #[serde(default)]
+    output_projection: Option<String>,
+    #[serde(default)]
+    matching: Option<String>,
 }
 fn validate_policy(reference: &CanaryPolicyReference, bytes: &[u8]) -> Result<()> {
     reference.validate()?;
@@ -57,9 +70,27 @@ fn validate_policy(reference: &CanaryPolicyReference, bytes: &[u8]) -> Result<()
             "canary policy bytes differ from declaration",
         ));
     }
+    // Policy1 keeps its original closed field set, including rejection of
+    // present-null output fields; policy2 is an explicit opt-in only.
+    if reference.schema_version == 1 {
+        let original: Value = serde_json::from_slice(bytes)
+            .map_err(|_| Error::invalid("invalid canary diagnostic policy"))?;
+        if original.get("output_projection").is_some() || original.get("matching").is_some() {
+            return Err(Error::invalid("policy1 does not declare output matching"));
+        }
+    }
     let policy: Policy = serde_json::from_slice(bytes)
         .map_err(|_| Error::invalid("invalid canary diagnostic policy"))?;
-    if policy.schema_version != 1
+    let output_valid = match reference.schema_version {
+        1 => policy.output_projection.is_none() && policy.matching.is_none(),
+        2 => {
+            policy.output_projection.as_deref() == Some("independent_declared_egress_v1")
+                && policy.matching.as_deref() == Some("decoded_utf8_atoms_and_channel_concat_v1")
+        }
+        _ => false,
+    };
+    if policy.schema_version != reference.schema_version
+        || !output_valid
         || policy.purpose != "independent_canary_diagnostic"
         || policy.recipe != "os_random_256_ascii_v1"
         || policy.placement != "private_grader_child_v1"
@@ -361,6 +392,7 @@ pub(crate) struct CanaryMaterialization {
     budget: Arc<CaptureBudget>,
     deadline: tokio::time::Instant,
     state: Mutex<State>,
+    output: Mutex<Option<Arc<CanaryOutputEnrollment>>>,
 }
 impl std::fmt::Debug for CanaryMaterialization {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -432,6 +464,7 @@ impl CanaryMaterialization {
             reference,
             budget: Arc::new(CaptureBudget::default()),
             deadline: input.deadline,
+            output: Mutex::new(None),
             state: Mutex::new(State {
                 directory: None,
                 marker: None,
@@ -816,6 +849,17 @@ impl CanaryMaterialization {
             "identity":self.identity,"actual_permit":permit,"registered_boundary":identity}))?;
         let enrollment = self.write_original("enrollment.json", &bytes)?;
         self.lock()?.diagnostic.enrollment = Some(enrollment);
+        if self.reference.schema_version == 2 {
+            let capture = CanaryOutputEnrollment::pending(self, permit, contract)?;
+            // Retain before the first output directory/write attempt. Neither
+            // this lock nor initialization enters Control or runtime state.
+            *self
+                .output
+                .lock()
+                .map_err(|_| Error::new("canary_unavailable", "output retention unavailable"))? =
+                Some(capture.clone());
+            capture.initialize();
+        }
         Ok(self.budget.clone())
     }
     pub(super) fn verify_trial(
@@ -1183,6 +1227,45 @@ impl CanaryDiagnostic {
             }
         }
         Ok(())
+    }
+}
+
+impl CanaryMaterialization {
+    pub(crate) fn output_enrollment(&self) -> Result<Option<Arc<CanaryOutputEnrollment>>> {
+        self.output
+            .lock()
+            .map(|value| value.clone())
+            .map_err(|_| Error::new("canary_unavailable", "output retention unavailable"))
+    }
+    pub(crate) fn output_snapshot(&self) -> Option<CanaryOutputObservation> {
+        if self.reference.schema_version != 2 {
+            return None;
+        }
+        Some(
+            self.output
+                .lock()
+                .ok()
+                .and_then(|value| value.clone())
+                .map_or_else(
+                    || CanaryOutputObservation::pending(self.identity.clone()),
+                    |capture| capture.snapshot(),
+                ),
+        )
+    }
+    pub(crate) fn finalize_output(&self) -> Option<CanaryOutputObservation> {
+        if self.reference.schema_version != 2 {
+            return None;
+        }
+        Some(
+            self.output
+                .lock()
+                .ok()
+                .and_then(|value| value.clone())
+                .map_or_else(
+                    || CanaryOutputObservation::pending(self.identity.clone()),
+                    |capture| capture.finalize(),
+                ),
+        )
     }
 }
 

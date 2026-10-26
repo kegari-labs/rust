@@ -361,7 +361,10 @@ fn existing_leaf_refusal_retains_expected_anchor_and_failure_report_readback() {
         &case.trial,
         &error,
         false,
-        Some(diagnostic.clone()),
+        CanaryFailureObservations {
+            inputs: Some(diagnostic.clone()),
+            outputs: None,
+        },
     )
     .unwrap();
     let archive = crate::evaluation_reports::ReportArchive::open(&report_root).unwrap();
@@ -503,6 +506,7 @@ fn actual_scorer_load_failure_keeps_materialization_diagnostic_without_native_cl
         independent_boundary: None,
         independent_broker: None,
         canary_diagnostic: Some(diagnostic.clone()),
+        canary_output: None,
         declared_protocol: None,
         evidence_references: vec![],
     };

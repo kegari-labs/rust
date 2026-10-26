@@ -899,6 +899,7 @@ pub struct ScopedWorker {
     // Enabled only by the declared evaluator, never ordinary worker creation.
     protocol_capture: Option<crate::codex::ProtocolCapture>,
     capture_budget: Option<Arc<CaptureBudget>>,
+    canary_output: Option<Arc<crate::evaluation::CanaryOutputEnrollment>>,
     broker_capture: Option<BrokerCapture>,
     applied_transition: Option<Arc<crate::corrections::VerifiedCorrectionTransition>>,
     correction_turn: Option<(String, String)>,
@@ -986,6 +987,7 @@ impl ScopedWorker {
             session: None,
             protocol_capture: None,
             capture_budget: None,
+            canary_output: None,
             broker_capture: None,
             applied_transition: None,
             correction_turn: None,
@@ -1587,14 +1589,19 @@ impl ScopedWorker {
                     expected_head: target.head.clone(),
                     body: a.body.clone(),
                 };
-                if let Some(capture) = &mut self.broker_capture {
+                if self.broker_capture.is_some() || self.canary_output.is_some() {
                     let identity = self
                         .providers
                         .independent_feedback_request(request.clone(), &command)
                         .and_then(|request| {
                             crate::control::broker_request_digest(&request, &self.permit)
                         });
-                    capture.feedback(&self.journal, id, target, &a.body, identity);
+                    if let Some(output) = &self.canary_output {
+                        output.feedback(id, &target, &a.body, identity.clone());
+                    }
+                    if let Some(capture) = &mut self.broker_capture {
+                        capture.feedback(&self.journal, id, target, &a.body, identity);
+                    }
                 }
                 let response = self
                     .providers
@@ -2014,6 +2021,9 @@ impl ToolBroker for ScopedWorker {
             self.broker_capture =
                 BrokerCapture::new(&self.permit, &self.contract, declaration, budget.clone());
             self.capture_budget = Some(budget);
+            self.canary_output = declaration
+                .canary_output()
+                .filter(|output| output.matches_owner(&self.permit, &self.contract));
         }
         self.protocol_capture = Some(capture);
     }
@@ -2035,6 +2045,11 @@ impl ToolBroker for ScopedWorker {
             | crate::codex::ProtocolObservation::AgentMessageDelta { state, .. } => Some(*state),
         };
         let bound = state.is_none_or(|s| self.verify_session_contract(s).is_ok());
+        // Raw attempt/text capture precedes the legacy semantic bound filter;
+        // foreign/unbound observations retain explicit attribution only.
+        if let Some(output) = &self.canary_output {
+            output.observe_protocol(&event, bound);
+        }
         let capture = self
             .protocol_capture
             .as_mut()
@@ -2322,6 +2337,7 @@ impl TrialHost for ScopedWorker {
             independent_boundary,
             independent_broker: self.broker_observation(),
             canary_diagnostic: None,
+            canary_output: self.canary_output.as_ref().map(|output| output.snapshot()),
             declared_protocol: self.protocol_capture.as_ref().map(|capture| {
                 capture.finish(self.session.as_ref(), self.pending.as_deref(), &|leaf| {
                     self.journal.dir.read_bounded(leaf, 256 * 1024)
