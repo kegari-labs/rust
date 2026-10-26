@@ -914,7 +914,9 @@ pub struct TrialLifecycle {
     after_started: AtomicBool,
     launched: AtomicBool,
     after_finished: AtomicBool,
-    after_observation: Mutex<Option<AfterHookObservation>>,
+    after_observation: Mutex<Option<Result<AfterHookObservation>>>,
+    terminal: Mutex<Option<crate::evaluation::TrialExecutionObservation>>,
+    after_bound: Duration,
     max_seconds: u64,
 }
 impl TrialLifecycle {
@@ -923,6 +925,53 @@ impl TrialLifecycle {
     }
     pub fn max_seconds(&self) -> u64 {
         self.max_seconds
+    }
+    pub(crate) fn execution_started(&self) -> bool {
+        self.before_started.load(Ordering::SeqCst)
+    }
+    pub(crate) fn after_finished(&self) -> bool {
+        self.after_finished.load(Ordering::SeqCst)
+    }
+    pub(crate) fn after_bound(&self) -> Duration {
+        self.after_bound
+    }
+    pub(crate) fn after_result(&self) -> Result<Result<AfterHookObservation>> {
+        self.after_observation
+            .lock()
+            .map_err(|_| Error::new("ownership_conflict", "trial hook observation lock failed"))?
+            .clone()
+            .ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "trial has no actual after-hook observation",
+                )
+            })
+    }
+    pub(crate) fn retain_execution(
+        &self,
+        observation: crate::evaluation::TrialExecutionObservation,
+    ) -> Result<()> {
+        if !self.execution_started()
+            || !self.after_finished()
+            || observation.state().binding.operation_id != self.permit.operation_id.to_string()
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "trial execution lacks its actual lifecycle",
+            ));
+        }
+        let mut terminal = self
+            .terminal
+            .lock()
+            .map_err(|_| Error::new("ownership_conflict", "trial terminal lock failed"))?;
+        if terminal.is_some() {
+            return Err(Error::new(
+                "ownership_conflict",
+                "trial terminal observation is single-use",
+            ));
+        }
+        *terminal = Some(observation);
+        Ok(())
     }
     pub async fn before(&self) -> Result<()> {
         if self.before_started.swap(true, Ordering::SeqCst) {
@@ -947,21 +996,21 @@ impl TrialLifecycle {
         self.hooks.launched(&self.permit).await
     }
     pub async fn after(&self, state: &SessionState) -> Result<()> {
-        if !self.launched.load(Ordering::SeqCst)
+        if !self.before_started.load(Ordering::SeqCst)
             || state.binding.operation_id != self.permit.operation_id.to_string()
             || self.after_started.swap(true, Ordering::SeqCst)
         {
             return Err(Error::new(
                 "ownership_conflict",
-                "trial after hook lacks its exact launched session",
+                "trial after hook lacks its exact attempted session",
             ));
         }
-        let observation = self.hooks.after(&self.permit, state).await?;
+        let observation = self.hooks.after(&self.permit, state).await;
         *self.after_observation.lock().map_err(|_| {
             Error::new("ownership_conflict", "trial hook observation lock failed")
-        })? = Some(observation);
+        })? = Some(observation.clone());
         self.after_finished.store(true, Ordering::SeqCst);
-        Ok(())
+        observation.map(|_| ())
     }
 }
 /// Consumes one actual prepared/admitted worker into the evaluator's ordinary
@@ -1002,6 +1051,17 @@ impl AdmittedTrial {
             launched: AtomicBool::new(false),
             after_finished: AtomicBool::new(false),
             after_observation: Mutex::new(None),
+            terminal: Mutex::new(None),
+            after_bound: Duration::from_millis(
+                session
+                    .prepared
+                    .contract
+                    .workflow()
+                    .front_matter
+                    .hooks
+                    .timeout_ms,
+            )
+            .min(Duration::from_secs(session.options.max_seconds)),
             max_seconds: session.options.max_seconds,
         };
         Ok(Self {
@@ -1063,12 +1123,10 @@ impl AdmittedTrial {
         })
     }
     pub fn finish(mut self) -> Result<VerifiedTrialCompletion> {
-        if !self.provider.launched.load(Ordering::SeqCst)
-            || !self.lifecycle.after_finished.load(Ordering::SeqCst)
-        {
+        if !self.lifecycle.execution_started() || !self.lifecycle.after_finished() {
             return Err(Error::new(
                 "reconciliation_required",
-                "trial has not completed its actual provider and hook lifecycle",
+                "trial has not joined its actual execution and hook lifecycle",
             ));
         }
         self.provider.finish()?;
@@ -1076,20 +1134,29 @@ impl AdmittedTrial {
             .session
             .as_mut()
             .ok_or_else(|| Error::new("ownership_conflict", "trial already consumed"))?;
-        let after = self
+        let after = self.lifecycle.after_result()?;
+        let observation = self
             .lifecycle
-            .after_observation
+            .terminal
             .lock()
-            .map_err(|_| Error::new("ownership_conflict", "trial hook observation lock failed"))?
-            .clone()
+            .map_err(|_| Error::new("ownership_conflict", "trial terminal lock failed"))?
+            .take()
             .ok_or_else(|| {
                 Error::new(
                     "reconciliation_required",
-                    "trial has no actual after-hook observation",
+                    "trial has no actual terminal execution observation",
                 )
             })?;
-        session.broker.record_after_hook(Ok(&after))?;
-        let state = session.broker.completed_checkpoint()?;
+        let state = session
+            .broker
+            .trial_checkpoint(observation.state(), observation.pending())?;
+        let (outcome, error, hook_error) = observation.into_result();
+        if matches!(outcome, RunOutcome::Completed) {
+            session.broker.completed_checkpoint()?;
+        }
+        // The exact real hook result remains distinct from the model outcome.
+        // A bounded timeout may remain a hook error after its callback drains.
+        let hook_error = hook_error.or_else(|| after.as_ref().err().cloned());
         session
             .registry
             .observe_exited(session.permit.operation_id)?;
@@ -1113,10 +1180,10 @@ impl AdmittedTrial {
             completion: RunCompletion {
                 operation_id: session.permit.operation_id,
                 state,
-                outcome: RunOutcome::Completed,
-                error: None,
+                outcome,
+                error,
                 elapsed_ms: self.started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                hook_error: None,
+                hook_error,
                 checks,
                 failed_checks,
                 execution: session.execution,
@@ -2123,3 +2190,144 @@ fn verify_after_observation(
 #[cfg(test)]
 #[path = "worker_protocol_tests.rs"]
 mod protocol_tests;
+
+#[cfg(test)]
+mod trial_lifecycle_tests {
+    use super::*;
+    use crate::control::{Lease, Lifecycle};
+    use crate::storage::PrivateDir;
+    use std::collections::BTreeSet;
+    use std::sync::atomic::AtomicUsize;
+
+    struct FailedHooks {
+        after: AtomicUsize,
+    }
+    impl RunHooks for FailedHooks {
+        fn before<'a>(&'a self, _: &'a Permit) -> RunFuture<'a, ()> {
+            Box::pin(async { Err(Error::new("hook_failed", "synthetic component before hook")) })
+        }
+        fn launched<'a>(&'a self, _: &'a Permit) -> RunFuture<'a, ()> {
+            Box::pin(async { Err(Error::new("test_unexpected", "component must not launch")) })
+        }
+        fn after<'a>(
+            &'a self,
+            _: &'a Permit,
+            _: &'a SessionState,
+        ) -> RunFuture<'a, AfterHookObservation> {
+            Box::pin(async move {
+                self.after.fetch_add(1, Ordering::SeqCst);
+                Err(Error::new("hook_failed", "synthetic component after hook"))
+            })
+        }
+    }
+    #[tokio::test]
+    async fn failed_before_hook_still_runs_exact_after_once_without_terminal_capability() {
+        // Real Control admission; hooks are explicit deterministic component
+        // inputs. No provider/owned exit/native completion is manufactured.
+        let root = tempfile::tempdir().unwrap();
+        let runtime = Uuid::new_v4();
+        let control = ControlHost::setup(
+            PrivateDir::create(&root.path().canonicalize().unwrap().join("control")).unwrap(),
+            runtime,
+            Uuid::new_v4(),
+        )
+        .unwrap();
+        control
+            .lifecycle(
+                MutationRequest {
+                    request_id: Uuid::new_v4(),
+                    runtime_id: runtime,
+                    actor: Actor {
+                        identity: "fixture".into(),
+                        principal: None,
+                        roles: BTreeSet::from(["lifecycle".into()]),
+                    },
+                    kind: "start".into(),
+                    canonical_targets: vec![runtime.to_string()],
+                    expected: BTreeMap::new(),
+                    payload: Value::Null,
+                },
+                Lifecycle::Start,
+                0,
+            )
+            .unwrap();
+        let lease = Lease {
+            runtime_id: runtime,
+            owner_generation: 1,
+            owner_id: Uuid::new_v4(),
+        };
+        control.attach_reconciled(lease.clone()).unwrap();
+        let permit = control
+            .admit(
+                &lease,
+                Uuid::new_v4(),
+                "component-work".into(),
+                crate::digest::bytes_digest(b"scope"),
+                || Ok(()),
+            )
+            .unwrap();
+        let hooks = Arc::new(FailedHooks {
+            after: AtomicUsize::new(0),
+        });
+        let lifecycle = TrialLifecycle {
+            permit: permit.clone(),
+            hooks: hooks.clone(),
+            before_started: AtomicBool::new(false),
+            before_finished: AtomicBool::new(false),
+            after_started: AtomicBool::new(false),
+            launched: AtomicBool::new(false),
+            after_finished: AtomicBool::new(false),
+            after_observation: Mutex::new(None),
+            terminal: Mutex::new(None),
+            after_bound: Duration::from_secs(1),
+            max_seconds: 1,
+        };
+        let mut state = SessionState::new(
+            SessionBinding {
+                schema_version: 1,
+                account_id: "account".into(),
+                work_identity: permit.work_key.clone(),
+                operation_id: Uuid::new_v4().to_string(),
+                generation: crate::digest::bytes_digest(b"generation"),
+                instruction_digest: crate::digest::bytes_digest(b"instructions"),
+                isolation_digest: crate::digest::bytes_digest(b"isolation"),
+                profile: CodexProfile {
+                    model: "model".into(),
+                    reasoning: "high".into(),
+                    speed: "standard".into(),
+                },
+                cwd: root.path().canonicalize().unwrap(),
+            },
+            1,
+        )
+        .unwrap();
+        assert!(lifecycle.after(&state).await.is_err());
+        assert_eq!(hooks.after.load(Ordering::SeqCst), 0);
+        assert_eq!(lifecycle.before().await.unwrap_err().code, "hook_failed");
+        assert!(lifecycle.after(&state).await.is_err());
+        assert_eq!(hooks.after.load(Ordering::SeqCst), 0);
+        state.binding.operation_id = permit.operation_id.to_string();
+        assert_eq!(
+            lifecycle.after(&state).await.unwrap_err().code,
+            "hook_failed"
+        );
+        assert!(lifecycle.after_finished());
+        assert_eq!(hooks.after.load(Ordering::SeqCst), 1);
+        assert!(
+            lifecycle
+                .after_observation
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .is_err()
+        );
+        assert!(lifecycle.after(&state).await.is_err());
+        assert!(lifecycle.terminal.lock().unwrap().is_none());
+        assert_eq!(hooks.after.load(Ordering::SeqCst), 1);
+        assert_ne!(
+            control.operation(permit.operation_id).unwrap().phase,
+            crate::control::ReceiptPhase::Reconciled
+        );
+    }
+}

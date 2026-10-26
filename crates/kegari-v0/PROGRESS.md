@@ -3,6 +3,30 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
+Evaluation terminal-finalization source1 passed **100 focused tests across six
+groups**, all-target check, strict Clippy, formatting, inventory, diff and a
+nonexecuting Plan. All 629 inputs stayed unchanged at
+`sha256:95f47600a9a67c9b8f7399eb526a4949caa3f4ed08081b788478de3aa9ce554a`.
+Sessions88617 and94425 are closed; no root Cargo process remains running. All ten
+invocation artifacts and tool identities were verified. See
+[the terminal-finalization report](validation/LOCAL-TRIAL-FINALIZATION.md) and
+[machine evidence](validation/trial-finalization-checks.json). The four-file
+change retains actual execution, checkpoint, hook and owned-exit evidence
+independently of rubric outcome. Actual native finalization remains unqualified.
+This is ready for its own local commit because it changes evaluator lifecycle
+semantics separately from paired repair recovery.
+
+Carry43, same-grant transient6, the test-module ordering correction and carried
+no-release8 now compose cleanly into 48 TEMP Rust files at
+`/private/tmp/kegari-carry-composed-on-finalization-source1-v5`, manifest
+`17e3968c579bea9a531d2620966c96ecd6c1e30bf0ab061e16fa89ebbce3f581`.
+The exact three-way merge preserves terminal-finalization runtime behavior.
+All copies parse; they are uninstalled/uncompiled pending the active-grant
+observer correction and independent review. Partial v4 remains preserved after
+a composition script assumed the wrong TEMP base layout; no product source was
+changed by that failed script. Cold-current carry planning and the concrete
+one-trial caller continue in separate TEMP assignments.
+
 Paired recovery source6 passed **798 tests, zero failures and two required native
 ignores across 39 groups** in 809.522s. All-target check, strict Clippy, formatting,
 dispatch-disabled Plan, the 496-block/136-named inventory and diff checks passed.
@@ -21,11 +45,13 @@ receipt ancestry, repeated recursive traversal, recursive Arc destruction and
 two direct-only completed-repair checks. Required native positive execution
 remains unrun; no serialized reference manufactures a capability. Earlier
 source1 compilation and source3 Clippy failures are retained in the report.
-The increment is ready for its own local signed-off commit, separate from the
-preceding evaluation-grader change because it changes runtime recovery authority.
+The verified local checkpoint is `8bce8ff5e2511412cbd2adfb95a4f5602a3f257a` —
+`feat(kegari-v0): preserve paired repair recovery lineage`. All 49 committed
+files and 629 tested inputs match; the tree was clean afterward. No commits were
+consolidated, rewritten or pushed. Verification is retained at
+`/private/tmp/kegari-v0-paired-recovery-commit-verification.json`. The separate
+commit preserves the runtime-recovery boundary from the earlier evaluation grader.
 
-Next: install the independently reviewed four-file evaluation terminal-finalization
-change and run its source-bound checks, then integrate the remaining carry layers.
 The combined carry43 TEMP draft is held at
 `/private/tmp/kegari-carry-composed-on-paired-source6-v3`, manifest
 `a8ece743d274e104d4165a1c347744c8c59fb9e35366c75d3a63b868826fdf9d`.

@@ -1689,6 +1689,42 @@ pub struct TrialOperation<'a> {
     pub report_root: &'a Path,
 }
 
+/// Private execution evidence, captured only by the actual evaluator below.
+/// A grade or serialized report cannot construct or revise this observation.
+/// It is consumed once by the original admitted trial after real local exit.
+pub(crate) struct TrialExecutionObservation {
+    state: SessionState,
+    pending: Option<String>,
+    outcome: crate::worker_run::RunOutcome,
+    error: Option<Error>,
+    hook_error: Option<Error>,
+}
+impl TrialExecutionObservation {
+    pub(crate) fn state(&self) -> &SessionState {
+        &self.state
+    }
+    pub(crate) fn pending(&self) -> Option<&str> {
+        self.pending.as_deref()
+    }
+    pub(crate) fn into_result(
+        self,
+    ) -> (crate::worker_run::RunOutcome, Option<Error>, Option<Error>) {
+        (self.outcome, self.error, self.hook_error)
+    }
+}
+fn execution_outcome(
+    result: &Result<()>,
+    interrupted: bool,
+    turns: u32,
+) -> crate::worker_run::RunOutcome {
+    use crate::worker_run::RunOutcome;
+    match result {
+        Ok(()) => RunOutcome::Completed,
+        Err(_) if interrupted => RunOutcome::Interrupted,
+        Err(_) if turns == 0 => RunOutcome::Blocked,
+        Err(_) => RunOutcome::Failed,
+    }
+}
 /// Future cancellation must fence the actual operation before dropping its
 /// provider handles. The outer suite deadline can interrupt any awaited stage,
 /// including startup or orderly shutdown, before explicit cleanup is reached.
@@ -1968,68 +2004,198 @@ pub async fn run_live_trial(
         trace: vec![],
     };
     let operation_deadline = tokio::time::Instant::now() + limit;
-    let execution=tokio::time::timeout(limit,async {
+    let mut core = Box::pin(async {
         operation.fixture.verify_initial_scratch()?;
-        verify_grader_instructions(&operation.assembled.manifest, &[operation.fixture.grader_root.clone(),operation.report_root.to_owned()])?;
+        verify_grader_instructions(
+            &operation.assembled.manifest,
+            &[
+                operation.fixture.grader_root.clone(),
+                operation.report_root.to_owned(),
+            ],
+        )?;
         operation.lifecycle.before().await?;
-        let spawned=operation.provider.launch().await?;
-        client=Some(spawned);
-        let client=client.as_mut().ok_or_else(||Error::invalid("adapter unavailable"))?;
+        let spawned = operation.provider.launch().await?;
+        client = Some(spawned);
+        let client = client
+            .as_mut()
+            .ok_or_else(|| Error::invalid("adapter unavailable"))?;
         client.initialize().await?;
         client.verify_account(&profile.account_id).await?;
-        state.binding.profile.validate_catalog(&client.discover_models().await?)?;
-        let limits=client.rate_limits().await?;
+        state
+            .binding
+            .profile
+            .validate_catalog(&client.discover_models().await?)?;
+        let limits = client.rate_limits().await?;
         audited.host.rate_limits(&limits)?;
         lease.check()?;
-        client.verify_execution_configuration(operation.permissions,&operation.fixture.repository).await?;
+        client
+            .verify_execution_configuration(operation.permissions, &operation.fixture.repository)
+            .await?;
         audited.host.checkpoint(&state, Some("thread/start"))?;
-        client.start_thread(&mut state,operation.isolation,operation.permissions,&operation.assembled.prompt,operation.tools.definitions().to_vec()).await?;
+        client
+            .start_thread(
+                &mut state,
+                operation.isolation,
+                operation.permissions,
+                &operation.assembled.prompt,
+                operation.tools.definitions().to_vec(),
+            )
+            .await?;
         audited.host.checkpoint(&state, None)?;
         operation.lifecycle.launched().await?;
-        report.evidence_class=EvidenceClass::ActualAgent;
-        audited.host.checkpoint(&state, Some(if matches!(variant.role,AgentRole::Review|AgentRole::IndependentReview) {"review/start"} else {"turn/start"}))?;
-        if matches!(variant.role,AgentRole::Review|AgentRole::IndependentReview) {
-            client.review(&mut state,&operation.assembled.prompt,&mut audited).await?;
+        report.evidence_class = EvidenceClass::ActualAgent;
+        audited.host.checkpoint(
+            &state,
+            Some(
+                if matches!(
+                    variant.role,
+                    AgentRole::Review | AgentRole::IndependentReview
+                ) {
+                    "review/start"
+                } else {
+                    "turn/start"
+                },
+            ),
+        )?;
+        if matches!(
+            variant.role,
+            AgentRole::Review | AgentRole::IndependentReview
+        ) {
+            client
+                .review(&mut state, &operation.assembled.prompt, &mut audited)
+                .await?;
         } else {
             client.start_turn(&mut state,operation.permissions,"Execute the admitted task using the supplied actual state and repository instructions. Submit truthful evidence through the available scoped tools.",&mut audited).await?;
         }
         audited.host.checkpoint(&state, None)?;
         for correction in &corrections {
             lease.check()?;
-            audited.host.correction_event(correction.watermark, &correction.input)?;
-            if !crate::worker_run::advance_correction(client, &mut state, operation.permissions, &mut audited).await? {
-                return Err(Error::new("correction_provenance_unavailable", "declared correction has no current installed native route"));
+            audited
+                .host
+                .correction_event(correction.watermark, &correction.input)?;
+            if !crate::worker_run::advance_correction(
+                client,
+                &mut state,
+                operation.permissions,
+                &mut audited,
+            )
+            .await?
+            {
+                return Err(Error::new(
+                    "correction_provenance_unavailable",
+                    "declared correction has no current installed native route",
+                ));
             }
         }
         loop {
             lease.check()?;
-            if crate::worker_run::advance_correction(client, &mut state, operation.permissions, &mut audited).await? { continue; }
+            if crate::worker_run::advance_correction(
+                client,
+                &mut state,
+                operation.permissions,
+                &mut audited,
+            )
+            .await?
+            {
+                continue;
+            }
             audited.host.finalize_correction(&mut state)?;
             audited.host.checkpoint(&state, None)?;
-            if state.intervention.is_some() { return Err(Error::new("provider_intervention","provider resolution is required")); }
-            if state.input_required { return Err(Error::new("input_required","worker requested interactive input")); }
-            if let Some(status)=&state.terminal && !audited.host.correction_waiting()? {
-                return if status=="completed" && state.completion_is_current() {Ok(())} else {Err(Error::new("turn_incomplete","turn did not complete with current corrections"))};
+            if state.intervention.is_some() {
+                return Err(Error::new(
+                    "provider_intervention",
+                    "provider resolution is required",
+                ));
             }
-            let event=if state.turn_id.is_none() && audited.host.correction_waiting()? {
-                client.pump_waiting(&mut state,&mut audited,operation_deadline,correction_wake.as_deref()).await?
-            } else { client.pump_or_wake(&mut state,&mut audited,Duration::from_secs(30),Duration::from_secs(60),correction_wake.as_deref()).await? };
-            if event.is_some_and(|event|matches!(event.kind,EventKind::TurnCancelled|EventKind::ProcessExit)) { return Err(Error::new("interrupted","worker was interrupted")); }
+            if state.input_required {
+                return Err(Error::new(
+                    "input_required",
+                    "worker requested interactive input",
+                ));
+            }
+            if let Some(status) = &state.terminal
+                && !audited.host.correction_waiting()?
+            {
+                return if status == "completed" && state.completion_is_current() {
+                    Ok(())
+                } else {
+                    Err(Error::new(
+                        "turn_incomplete",
+                        "turn did not complete with current corrections",
+                    ))
+                };
+            }
+            let event = if state.turn_id.is_none() && audited.host.correction_waiting()? {
+                client
+                    .pump_waiting(
+                        &mut state,
+                        &mut audited,
+                        operation_deadline,
+                        correction_wake.as_deref(),
+                    )
+                    .await?
+            } else {
+                client
+                    .pump_or_wake(
+                        &mut state,
+                        &mut audited,
+                        Duration::from_secs(30),
+                        Duration::from_secs(60),
+                        correction_wake.as_deref(),
+                    )
+                    .await?
+            };
+            if event.is_some_and(|event| {
+                matches!(
+                    event.kind,
+                    EventKind::TurnCancelled | EventKind::ProcessExit
+                )
+            }) {
+                return Err(Error::new("interrupted", "worker was interrupted"));
+            }
         }
-    }).await;
-    let cancel_error = if !matches!(&execution, Ok(Ok(()))) {
+    });
+    let timed = tokio::time::timeout(limit, &mut core).await;
+    let timed_out = timed.is_err();
+    let cancel_error = if !matches!(&timed, Ok(Ok(()))) {
         operation.provider.cancel().err()
     } else {
         None
     };
-    let checkpoint = audited.host.checkpoint(
-        &state,
-        if execution.as_ref().is_err() {
-            Some("interrupted_unknown")
-        } else {
-            None
-        },
-    );
+    // Keep the actual callback future owned while registered effects drain.
+    // Timeout never upgrades a dropped callback into proof of quiescence.
+    let callback_drained = if timed_out {
+        tokio::time::timeout(Duration::from_secs(15), &mut core)
+            .await
+            .is_ok()
+    } else {
+        true
+    };
+    let execution = match timed {
+        Ok(result) => result,
+        Err(_) => Err(Error::new(
+            "timeout",
+            "finite evaluation duration exhausted",
+        )),
+    };
+    drop(core);
+    let interrupted = timed_out
+        || execution.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.code.as_str(),
+                "interrupted" | "request_timeout" | "process_exit" | "operation_uncertain"
+            )
+        });
+    if interrupted {
+        state.interruption("evaluation_interruption");
+    }
+    let pending = audited
+        .host
+        .trial_pending_method()
+        .or_else(|| interrupted.then(|| "interrupted_unknown".to_owned()));
+    let checkpoint = audited.host.checkpoint(&state, pending.as_deref());
+    let final_outcome = execution_outcome(&execution, interrupted, state.turns_started);
+    let final_error = execution.as_ref().err().cloned();
     report.turns_started = state.turns_started;
     report.earlier_usage_unknown = !state.usage.earlier_usage_unknown.is_empty();
     report.usage_tokens = state
@@ -2040,32 +2206,24 @@ pub async fn run_live_trial(
     report.earlier_usage_unknown |= report.usage_tokens.is_none();
     report.trace = std::mem::take(&mut audited.trace);
     report.omissions=vec!["Activity is digest-only; arbitrary prompts/provider payloads and tool bodies are omitted. This is not byte-identical replay.".into()];
-    match execution {
-        Err(_) => {
-            report.outcome = TrialOutcome::Interrupted;
-            report.reason =
-                "finite trial duration exhausted; outstanding effects require reconciliation"
-                    .into();
-            report.unresolved_remote_effects = true;
-        }
-        Ok(Err(error)) => {
-            report.outcome = if state.turns_started == 0 {
-                TrialOutcome::Blocked
-            } else if ["interrupted", "request_timeout", "process_exit"]
-                .contains(&error.code.as_str())
-            {
+    match &execution {
+        Err(error) => {
+            report.outcome = if interrupted {
                 TrialOutcome::Interrupted
+            } else if state.turns_started == 0 {
+                TrialOutcome::Blocked
             } else {
                 TrialOutcome::Failed
             };
             report.reason = format!("{}: {}", error.code, error.message);
             report.unresolved_remote_effects = report.outcome == TrialOutcome::Interrupted;
         }
-        Ok(Ok(())) => {
+        Ok(()) => {
             report.outcome = TrialOutcome::Failed;
             report.reason = "agent finished; observable grading required".into();
         }
     }
+    report.unresolved_remote_effects |= pending.is_some();
     if checkpoint.is_err() {
         report.outcome = TrialOutcome::Interrupted;
         report.reason = "session checkpoint failed; reconcile unknown provider effects".into();
@@ -2115,27 +2273,57 @@ pub async fn run_live_trial(
                 .push_str(&format!("; cancellation failed: {}", error.code));
         }
     }
-    if state.completion_is_current() && !report.unresolved_remote_effects {
-        match tokio::time::timeout(
-            limit.saturating_sub(start.elapsed()),
-            operation.lifecycle.after(&state),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            result => {
+    let mut hook_error = None;
+    if operation.lifecycle.execution_started() {
+        let mut after = Box::pin(operation.lifecycle.after(&state));
+        let hook = tokio::time::timeout(operation.lifecycle.after_bound(), &mut after).await;
+        hook_error = match hook {
+            Ok(result) => result.err(),
+            Err(_) => {
                 let _ = operation.provider.cancel();
-                report.outcome = TrialOutcome::Interrupted;
-                report.unresolved_remote_effects = true;
-                report.reason = match result {
-                    Ok(Err(error)) => {
-                        format!("actual after-run hook did not complete: {}", error.code)
-                    }
-                    Err(_) => "finite trial duration expired during actual after-run hook".into(),
-                    Ok(Ok(())) => unreachable!(),
-                };
+                let _ = tokio::time::timeout(Duration::from_secs(15), &mut after).await;
+                Some(Error::new(
+                    "operation_uncertain",
+                    "actual evaluation after hook exceeded its finite bound",
+                ))
             }
+        };
+        drop(after);
+        if let Some(error) = &hook_error {
+            report.outcome = TrialOutcome::Interrupted;
+            report.unresolved_remote_effects = true;
+            report.reason = format!("actual after-run hook did not complete: {}", error.code);
         }
+    }
+    // Persist the actual hook result even if a later local-exit check refuses
+    // terminal capability. This is independent of grading and report storage.
+    let hook_recorded = if operation.lifecycle.after_finished() {
+        let after = operation.lifecycle.after_result()?;
+        audited.host.record_after_hook(match &hook_error {
+            Some(error) => Err(error),
+            None => after.as_ref(),
+        })
+    } else {
+        Err(Error::new(
+            "operation_uncertain",
+            "actual after-hook callback has not drained",
+        ))
+    };
+    if operation.lifecycle.execution_started() && hook_recorded.is_err() {
+        report.outcome = TrialOutcome::Interrupted;
+        report.unresolved_remote_effects = true;
+        report.reason = "actual after-hook observation could not be durably retained".into();
+    }
+    if checkpoint.is_ok() && callback_drained && hook_recorded.is_ok() {
+        operation
+            .lifecycle
+            .retain_execution(TrialExecutionObservation {
+                state: state.clone(),
+                pending,
+                outcome: final_outcome,
+                error: final_error,
+                hook_error,
+            })?;
     }
     // Owned termination has been observed, or cancellation was explicitly
     // attempted and the unknown result retained in the report above.
@@ -2570,5 +2758,49 @@ mod cancellation_tests {
             control.operation(permit.operation_id).unwrap().phase,
             crate::control::ReceiptPhase::Reconciled
         );
+    }
+}
+
+#[cfg(test)]
+mod terminal_outcome_tests {
+    use super::*;
+    use crate::worker_run::RunOutcome;
+
+    #[test]
+    fn worker_terminal_outcome_is_independent_of_rubric_outcome() {
+        // These plain-data checks exercise execution classification only. They
+        // create no admitted trial, joined process, or completion capability.
+        assert!(matches!(
+            execution_outcome(&Ok(()), false, 1),
+            RunOutcome::Completed
+        ));
+        let failed = Err(Error::new("turn_incomplete", "actual terminal failed"));
+        assert!(matches!(
+            execution_outcome(&failed, false, 1),
+            RunOutcome::Failed
+        ));
+        assert!(matches!(
+            execution_outcome(&failed, false, 0),
+            RunOutcome::Blocked
+        ));
+        assert!(matches!(
+            execution_outcome(&failed, true, 0),
+            RunOutcome::Interrupted
+        ));
+        // A failed grade cannot demote a completed model execution, and a passing
+        // grade cannot promote a failed one: the classifier accepts neither.
+        for _grade in [
+            TrialOutcome::Failed,
+            TrialOutcome::DeterministicPassHumanPending,
+        ] {
+            assert!(matches!(
+                execution_outcome(&Ok(()), false, 1),
+                RunOutcome::Completed
+            ));
+            assert!(matches!(
+                execution_outcome(&failed, false, 1),
+                RunOutcome::Failed
+            ));
+        }
     }
 }

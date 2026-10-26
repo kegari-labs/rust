@@ -1089,6 +1089,26 @@ impl ScopedWorker {
         )?;
         state.acknowledge_correction(required.watermark)
     }
+    /// The evaluator may inspect the pending method but cannot clear it merely
+    /// because a failed or cancelled task returned. Its terminal capability is
+    /// separately bound to the exact persisted checkpoint.
+    pub(crate) fn trial_pending_method(&self) -> Option<String> {
+        self.pending.clone()
+    }
+    pub(crate) fn trial_checkpoint(
+        &self,
+        expected: &SessionState,
+        pending: Option<&str>,
+    ) -> Result<SessionState> {
+        let actual = self.session.as_ref().ok_or_else(|| {
+            Error::new(
+                "reconciliation_required",
+                "worker has no durable final checkpoint",
+            )
+        })?;
+        verify_trial_checkpoint(actual, self.pending.as_deref(), expected, pending)?;
+        Ok(actual.clone())
+    }
     pub(crate) fn completed_checkpoint(&self) -> Result<SessionState> {
         let state = self.session.as_ref().ok_or_else(|| {
             Error::new(
@@ -2121,6 +2141,23 @@ impl TrialHost for ScopedWorker {
         Ok(())
     }
 }
+fn verify_trial_checkpoint(
+    actual: &SessionState,
+    actual_pending: Option<&str>,
+    expected: &SessionState,
+    expected_pending: Option<&str>,
+) -> Result<()> {
+    if canonical_digest(1, actual)? != canonical_digest(1, expected)?
+        || actual_pending != expected_pending
+    {
+        return Err(Error::new(
+            "worker_binding",
+            "trial terminal observation differs from its durable session checkpoint",
+        ));
+    }
+    Ok(())
+}
+
 fn parse<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T> {
     serde_json::from_value(value.clone()).map_err(|_| {
         Error::new(
@@ -2719,5 +2756,46 @@ impl ToolBroker for RecoveryJournal {
                 "metadata recovery cannot invoke worker tools",
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod trial_checkpoint_tests {
+    use super::*;
+    #[test]
+    fn terminal_trial_requires_exact_checkpoint_and_preserves_pending_request() {
+        // Session DTO only: this helper cannot mint a scoped worker or a joined
+        // completion. It tests the exact comparison used by the real broker.
+        let state = SessionState::new(
+            crate::codex::SessionBinding {
+                schema_version: 1,
+                account_id: "account".into(),
+                work_identity: "work".into(),
+                operation_id: Uuid::new_v4().to_string(),
+                generation: crate::digest::bytes_digest(b"generation"),
+                instruction_digest: crate::digest::bytes_digest(b"instructions"),
+                isolation_digest: crate::digest::bytes_digest(b"isolation"),
+                profile: crate::codex::CodexProfile {
+                    model: "model".into(),
+                    reasoning: "high".into(),
+                    speed: "standard".into(),
+                },
+                cwd: std::path::PathBuf::from("/tmp/trial-checkpoint"),
+            },
+            2,
+        )
+        .unwrap();
+        verify_trial_checkpoint(&state, Some("turn/start"), &state, Some("turn/start")).unwrap();
+        assert!(verify_trial_checkpoint(&state, Some("turn/start"), &state, None).is_err());
+        assert!(verify_trial_checkpoint(&state, None, &state, Some("turn/start")).is_err());
+        let mut changed = state.clone();
+        changed.turns_started = 1;
+        assert!(verify_trial_checkpoint(&state, None, &changed, None).is_err());
+        changed = state.clone();
+        changed.binding.operation_id = Uuid::new_v4().to_string();
+        assert!(verify_trial_checkpoint(&state, None, &changed, None).is_err());
+        changed = state.clone();
+        changed.binding.instruction_digest = crate::digest::bytes_digest(b"changed contract");
+        assert!(verify_trial_checkpoint(&state, None, &changed, None).is_err());
     }
 }

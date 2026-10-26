@@ -2268,7 +2268,8 @@ impl RuntimeCoordinator {
             if !Arc::ptr_eq(&run.contract, contract)
                 || !completion.local_exit_confirmed
                 || completion.state.binding.operation_id != id.to_string()
-                || !completion.state.completion_is_current()
+                || matches!(completion.outcome, crate::worker_run::RunOutcome::Completed)
+                    && !completion.state.completion_is_current()
             {
                 return Err(Error::new(
                     "worker_binding",
