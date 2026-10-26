@@ -13,14 +13,27 @@ invocation artifacts and tool identities were verified. See
 [machine evidence](validation/trial-finalization-checks.json). The four-file
 change retains actual execution, checkpoint, hook and owned-exit evidence
 independently of rubric outcome. Actual native finalization remains unqualified.
-This is ready for its own local commit because it changes evaluator lifecycle
-semantics separately from paired repair recovery.
+The verified local checkpoint is `b295c0fdc5e56cc402c043c391ed9b2710cc8938` —
+`fix(kegari-v0): finalize failed trials from actual lifecycle evidence`. All seven
+committed files and 629 tested inputs match, with a clean tree afterward. No
+commits were consolidated, rewritten or pushed; this separate increment changes
+evaluator lifecycle semantics. Verification:
+`/private/tmp/kegari-v0-trial-finalization-commit-verification.json`.
 
 Carry43, same-grant transient6, the test-module ordering correction and carried
 no-release8 now compose cleanly into 48 TEMP Rust files at
 `/private/tmp/kegari-carry-composed-on-finalization-source1-v5`, manifest
 `17e3968c579bea9a531d2620966c96ecd6c1e30bf0ab061e16fa89ebbce3f581`.
 The exact three-way merge preserves terminal-finalization runtime behavior.
+The later active-grant8 correction is composed into 50 files at
+`/private/tmp/kegari-carry-composed-on-finalization-source1-v7`, manifest
+`8d4bddf3b7f661ade59b5866b238e3dbd6cf350af0252d01e67c9fed199cbc8b`.
+It fixes the ordinary-admission lookup during active carry and release, including
+outer publication selection. Independent review then found its exact-parent work
+check wrongly rejects the actual E2E child's integrated proof. Codex owns a narrow
+follow-up that must authorize the exact retained child; installation remains
+pending. Partial v6 preserves a second TEMP base-layout script failure with no
+repository source changes. The previous active8 remains immutable.
 All copies parse; they are uninstalled/uncompiled pending the active-grant
 observer correction and independent review. Partial v4 remains preserved after
 a composition script assumed the wrong TEMP base layout; no product source was
@@ -67,8 +80,15 @@ carry draft is included in the paired source's validation claim.
 
 Mandatory actual-agent repeats, native/provider and containment qualification,
 human calibration, cold/current carry and other recorded implementation gaps
-remain incomplete. Coverage remains 476 of 496 clauses and 127 of 136 named
-requirements not assessed; existing partial assessments are not qualification.
+remain incomplete. The coverage ledger now links six recovery/budget clauses to exact executed
+component regressions and adds two scoped terminal-finalization references. These
+remain partial: 470 of 496 clauses and 127 of 136 named requirements are not
+assessed; 26 clauses and nine named requirements are partial. No full pass was
+added. Referenced files and passed test names were checked against retained logs;
+the inventory check passes. This documentation-only update occurred after both
+source-bound validation sets, whose auxiliary hashes remain historical evidence.
+The ledger/progress evidence reconciliation is ready as a separate documentation
+checkpoint spanning the two verified increments; runtime source is unchanged.
 The dated checkpoint narrative below records prior states, including work that
 has since advanced; the current summary and linked source-bound reports govern.
 

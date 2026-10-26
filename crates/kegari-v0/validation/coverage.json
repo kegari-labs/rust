@@ -1458,8 +1458,31 @@
       "line": 346,
       "sha256": "176ef521e10011ae85b5a23d9d9cd76efd2b8424001b6739f792c3670785a700",
       "excerpt": "Each phase/work-generation has at most `max_attempts_per_phase` admitted worker sessions, including the initial session (default 3, not three additional retries). Each session has ",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "partial",
+          "scope": "Paired resumed repair and continued failed validation retain the implementation attempt floor, review ordinal and nonincreasing caps."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/paired-recovery-checks.json",
+          "status": "scoped_pass",
+          "source_commit": "8bce8ff5e2511412cbd2adfb95a4f5602a3f257a",
+          "tests": [
+            "control::round_admission::tests::recovery_tests::paired_resume_preserves_implementation_scalar_floor_independently_of_round_ordinal",
+            "control::round_admission::tests::continued_final_round_pair_uses_latest_validation_and_original_attempt_cap"
+          ]
+        },
+        {
+          "class": "real_integration",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "not_run",
+          "scope": "Genuine resumed repair followed by qualified failed checks, cold current reconstruction and complete provider/host qualification remain incomplete."
+        }
+      ]
     },
     {
       "id": "clause:6.4:1c515bc42c49",
@@ -1467,8 +1490,31 @@
       "line": 348,
       "sha256": "1c515bc42c49b819dccd558362c473f01dc720083923c25c36732e224357d845",
       "excerpt": "Budgets MUST survive restart, filter/profile edits and duplicate notifications through run receipts/provider run records. A materially new permitted correction creates a new budget",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "partial",
+          "scope": "Paired metadata/model readmission preserves the original budget and exact native-grant/receipt ancestry; serialized references cannot recreate actual capabilities."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/paired-recovery-checks.json",
+          "status": "scoped_pass",
+          "source_commit": "8bce8ff5e2511412cbd2adfb95a4f5602a3f257a",
+          "tests": [
+            "control::round_admission::tests::recovery_tests::paired_recovery_admits_exact_metadata_then_resume_without_new_round_or_budget",
+            "control::round_admission::tests::recovery_tests::new_grant_initial_source_retains_older_resumed_pair_passed_references"
+          ]
+        },
+        {
+          "class": "real_integration",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "not_run",
+          "scope": "Genuine resumed repair followed by qualified failed checks, cold current reconstruction and complete provider/host qualification remain incomplete."
+        }
+      ]
     },
     {
       "id": "clause:6.4:4467293455e2",
@@ -1485,8 +1531,31 @@
       "line": 352,
       "sha256": "ea747813b153283036b7698a3c57fd8abde41cb7343a3e1a68065dbb4fc4dec0",
       "excerpt": "| Retryable process/transport failure with known no ambiguous mutation | Exponential retry at `min(10000 * 2^(failure_index-1), retry_cap_ms)`; first delay 10 seconds; honor longer",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "partial",
+          "scope": "Local fixtures check preserved transient round identity, closed failed-provider classification and refusal of automatic persistent/unknown failures; this is not complete end-to-end retry qualification."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/paired-recovery-checks.json",
+          "status": "scoped_pass",
+          "source_commit": "8bce8ff5e2511412cbd2adfb95a4f5602a3f257a",
+          "tests": [
+            "control::review_round::tests::transient_retry_preserves_round_but_never_grants_retry_authority",
+            "runtime_delivery::child::continuation_tests::granted_review_does_not_automatically_retry_auth_unknown_or_nontransient_failure"
+          ]
+        },
+        {
+          "class": "real_integration",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "not_run",
+          "scope": "Genuine resumed repair followed by qualified failed checks, cold current reconstruction and complete provider/host qualification remain incomplete."
+        }
+      ]
     },
     {
       "id": "clause:6.4:1dec1262e6b8",
@@ -1494,8 +1563,31 @@
       "line": 353,
       "sha256": "1dec1262e6b892c9c06e0d1eb4c2ca85e648d72cc2d9e656c8d90cc2d67d9228",
       "excerpt": "| Worker completes with verified unfinished progress | Reconcile first; earliest next session after 1000 ms, only when a legitimate remaining step and budget/gates permit |",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "partial",
+          "scope": "Continuation and preparation fixtures recheck original bounds, current trigger and minimum spacing without manufacturing joined execution."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/paired-recovery-checks.json",
+          "status": "scoped_pass",
+          "source_commit": "8bce8ff5e2511412cbd2adfb95a4f5602a3f257a",
+          "tests": [
+            "runtime_schedule::continuation_tests::changed_source_repeats_required_phase_with_its_original_bounds_and_spacing",
+            "runtime_workers::source_tests::preparation_rechecks_selected_attempt_caps_trigger_and_spacing_before_receipt"
+          ]
+        },
+        {
+          "class": "real_integration",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "not_run",
+          "scope": "Genuine resumed repair followed by qualified failed checks, cold current reconstruction and complete provider/host qualification remain incomplete."
+        }
+      ]
     },
     {
       "id": "clause:6.4:88124faf33bc",
@@ -1539,8 +1631,31 @@
       "line": 358,
       "sha256": "225a1bb368d10f234251fb45faef50a49a0fd66699b7457a7b3edc668428635e",
       "excerpt": "| Unknown external mutation outcome | Reconcile; block affected effects until established; never blind replay |",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "partial",
+          "scope": "Actual Control component paths reject ambiguous terminal recovery without new receipts and preserve unrelated unknown-effect holds."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/paired-recovery-checks.json",
+          "status": "scoped_pass",
+          "source_commit": "8bce8ff5e2511412cbd2adfb95a4f5602a3f257a",
+          "tests": [
+            "control::round_admission::tests::recovery_tests::paired_recovery_rejects_changed_origin_preparation_and_unknown_terminal_without_writes",
+            "control::session_resume::tests::exact_resume_admission_consumes_once_and_preserves_successor_unknown_effects"
+          ]
+        },
+        {
+          "class": "real_integration",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "not_run",
+          "scope": "Genuine resumed repair followed by qualified failed checks, cold current reconstruction and complete provider/host qualification remain incomplete."
+        }
+      ]
     },
     {
       "id": "clause:6.4:c830190276fd",
@@ -2979,8 +3094,31 @@
       "line": 716,
       "sha256": "a0f9ce016c7e80ee82f10d36ce9c9326a060cf8b83d3b45c9a17fdb75e17c8d4",
       "excerpt": "Recovery MUST reconstruct current state from Linear/GitHub, verify local receipts and preserved directories, restore attempt counts, operator intent and unresolved provider-interve",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "partial",
+          "scope": "Protected paired metadata/preparation/resume readers retain exact source/run ancestry and attempt budgets; recovery is distinct from new worker admission."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/paired-recovery-checks.json",
+          "status": "scoped_pass",
+          "source_commit": "8bce8ff5e2511412cbd2adfb95a4f5602a3f257a",
+          "tests": [
+            "control::round_admission::tests::recovery_tests::completed_paired_resume_retains_real_original_metadata_closure_without_phantom_preparation",
+            "control::round_admission::tests::recovery_tests::paired_control_repeated_resume_retains_original_and_actual_previous_bridge"
+          ]
+        },
+        {
+          "class": "real_integration",
+          "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
+          "status": "not_run",
+          "scope": "Genuine resumed repair followed by qualified failed checks, cold current reconstruction and complete provider/host qualification remain incomplete."
+        }
+      ]
     },
     {
       "id": "clause:11.3:10436176a3f6",
@@ -4080,6 +4218,17 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/trial-finalization-checks.json",
+          "status": "scoped_pass",
+          "source_commit": "b295c0fdc5e56cc402c043c391ed9b2710cc8938",
+          "scope": "Actual callback ownership is retained through bounded timeout drain; unknown pending requests remain in final checkpoint. This does not qualify repeated live trials.",
+          "tests": [
+            "evaluation::cancellation_tests::outer_trial_deadline_fences_before_provider_handle_drop",
+            "worker::trial_checkpoint_tests::terminal_trial_requires_exact_checkpoint_and_preserves_pending_request"
+          ]
         }
       ]
     },
@@ -4230,6 +4379,17 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/trial-finalization-checks.json",
+          "status": "scoped_pass",
+          "source_commit": "b295c0fdc5e56cc402c043c391ed9b2710cc8938",
+          "scope": "Execution outcome is independent of rubric outcome; actual failed hook lifecycle is retained and does not create a terminal capability. Report/provider positives remain unrun.",
+          "tests": [
+            "evaluation::terminal_outcome_tests::worker_terminal_outcome_is_independent_of_rubric_outcome",
+            "worker_run::trial_lifecycle_tests::failed_before_hook_still_runs_exact_after_once_without_terminal_capability"
+          ]
         }
       ]
     },
