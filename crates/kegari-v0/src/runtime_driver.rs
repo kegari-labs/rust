@@ -311,6 +311,7 @@ impl RuntimeDriver {
                 !matches!(
                     process.state,
                     crate::process_records::RecoveryState::GroupExitRecordedTreeUnverified
+                        | crate::process_records::RecoveryState::OwnedGroupExitRecorded
                 )
             }) {
                 return Err(Error::new(
@@ -1459,6 +1460,7 @@ mod tests {
             binding: binding.clone(),
             state: RecoveryState::GroupExitRecordedTreeUnverified,
             process: None,
+            owned_group_exited: false,
             all_descendants_exited: false,
         };
         let mut receipt = crate::control::Receipt {

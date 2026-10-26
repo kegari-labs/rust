@@ -1,7 +1,7 @@
 //! Owned Unix process groups. Observe terminal leaders without reaping, finish
 //! their group while the leader PID is still reserved, then let the Child owner
 //! reap. This proves group cleanup, not containment of descendants which escape
-//! into a new session/group; that remains an execution-boundary requirement.
+//! into a new session/group. Such descendants are outside the managed v0 profile.
 use crate::error::{Error, Result};
 
 #[derive(Clone, Copy, Debug)]
@@ -16,6 +16,25 @@ pub enum Termination {
 pub struct OwnedGroup {
     pid: libc::pid_t,
     ready_to_reap: bool,
+    identity: uuid::Uuid,
+    reaped: bool,
+}
+
+/// Evidence from reaping the exact owned child after observing its group clear.
+/// This is neither a live process capability nor arbitrary-descendant closure.
+/// It cannot be deserialized or constructed from a retained PID/exit code.
+pub struct OwnedGroupExit {
+    identity: uuid::Uuid,
+    pid: u32,
+    status: std::process::ExitStatus,
+}
+impl OwnedGroupExit {
+    pub fn status(&self) -> std::process::ExitStatus {
+        self.status
+    }
+    pub(crate) fn binding(&self) -> (uuid::Uuid, u32) {
+        (self.identity, self.pid)
+    }
 }
 impl OwnedGroup {
     #[cfg(unix)]
@@ -58,6 +77,8 @@ impl OwnedGroup {
         Self {
             pid: pid as libc::pid_t,
             ready_to_reap: false,
+            identity: uuid::Uuid::new_v4(),
+            reaped: false,
         }
     }
     fn from_spawn(pid: u32) -> Result<Self> {
@@ -68,12 +89,71 @@ impl OwnedGroup {
         let group = Self {
             pid,
             ready_to_reap: false,
+            identity: uuid::Uuid::new_v4(),
+            reaped: false,
         };
         // Also establish that the unreaped process is our actual child. WNOWAIT
         // does not consume a quick child's status during construction.
         group.terminal_without_reaping()?;
         group.verify_group()?;
         Ok(group)
+    }
+    pub(crate) fn bind_child(&self, pid: u32) -> Result<(uuid::Uuid, u32)> {
+        if self.reaped || pid != self.pid as u32 {
+            return Err(Error::new(
+                "ownership_conflict",
+                "child differs from the original unreaped owned group",
+            ));
+        }
+        Ok((self.identity, pid))
+    }
+    pub fn try_reap_std(
+        &mut self,
+        child: &mut std::process::Child,
+    ) -> Result<Option<OwnedGroupExit>> {
+        self.require_group_exit_observation()?;
+        self.bind_child(child.id())?;
+        if !self.observe_exit_before_reap()? {
+            return Ok(None);
+        }
+        let status = child
+            .try_wait()
+            .map_err(|error| Error::io("reap original owned child", error))?;
+        Ok(status.map(|status| self.record_reap(status)))
+    }
+    pub fn try_reap_tokio(
+        &mut self,
+        child: &mut tokio::process::Child,
+    ) -> Result<Option<OwnedGroupExit>> {
+        self.require_group_exit_observation()?;
+        let pid = child.id().ok_or_else(|| {
+            Error::new("ownership_conflict", "owned async child was already reaped")
+        })?;
+        self.bind_child(pid)?;
+        if !self.observe_exit_before_reap()? {
+            return Ok(None);
+        }
+        let status = child
+            .try_wait()
+            .map_err(|error| Error::io("reap original owned async child", error))?;
+        Ok(status.map(|status| self.record_reap(status)))
+    }
+    fn record_reap(&mut self, status: std::process::ExitStatus) -> OwnedGroupExit {
+        self.reaped = true;
+        OwnedGroupExit {
+            identity: self.identity,
+            pid: self.pid as u32,
+            status,
+        }
+    }
+    fn require_group_exit_observation(&self) -> Result<()> {
+        if !cfg!(target_os = "macos") {
+            return Err(Error::new(
+                "prerequisite",
+                "owned group exit evidence requires the supported macOS group observation",
+            ));
+        }
+        Ok(())
     }
     #[cfg(unix)]
     fn verify_group(&self) -> Result<()> {
@@ -280,8 +360,128 @@ impl OwnedGroup {
 
     #[cfg(target_os = "macos")]
     fn live_group_members(&self) -> Result<bool> {
-        // Read-only PROC_PGRP_ONLY/PROC_PIDTBSDINFO, verified against the installed
-        // Apple SDK sys/proc_info.h. A saturated/denied inventory proves nothing.
+        live_or_changed_members(self.pid, &mut MacGroupInventory(self.pid))
+    }
+    #[cfg(not(unix))]
+    fn signal(&self, _: Termination, _: bool) -> Result<()> {
+        Err(Error::new(
+            "prerequisite",
+            "owned groups require the supported Unix host",
+        ))
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+const MAX_GROUP_MEMBERS: usize = 65_536;
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GroupMember {
+    pid: i32,
+    group: i32,
+    started_seconds: u64,
+    started_microseconds: u64,
+    terminal: bool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+trait GroupInventory {
+    fn members(&mut self) -> Result<Vec<i32>>;
+    fn observe(&mut self, pid: i32) -> Result<Option<GroupMember>>;
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn group_members(
+    leader: i32,
+    inventory: &mut impl GroupInventory,
+) -> Result<std::collections::BTreeSet<i32>> {
+    let members = inventory.members()?;
+    if members.len() > MAX_GROUP_MEMBERS {
+        return Err(Error::new(
+            "ownership_conflict",
+            "owned process group exceeds complete inventory bound",
+        ));
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    for pid in members.into_iter().filter(|pid| *pid > 0 && *pid != leader) {
+        if !unique.insert(pid) {
+            return Err(Error::new(
+                "ownership_conflict",
+                "owned group inventory repeats a member",
+            ));
+        }
+    }
+    Ok(unique)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn observe_member(
+    leader: i32,
+    pid: i32,
+    inventory: &mut impl GroupInventory,
+) -> Result<Option<GroupMember>> {
+    let observed = inventory.observe(pid)?;
+    if observed.is_some_and(|member| member.pid != pid || member.group != leader) {
+        return Err(Error::new(
+            "ownership_conflict",
+            "observed group member changed identity or escaped",
+        ));
+    }
+    Ok(observed)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn live_or_changed_members(leader: i32, inventory: &mut impl GroupInventory) -> Result<bool> {
+    let first = group_members(leader, inventory)?;
+    let mut terminal = std::collections::BTreeMap::new();
+    for pid in &first {
+        let Some(member) = observe_member(leader, *pid, inventory)? else {
+            // Disappearance is not enough: it could follow an unobserved fork.
+            // Let the existing bounded owner loop obtain a fresh complete census.
+            return Ok(true);
+        };
+        if !member.terminal {
+            return Ok(true);
+        }
+        terminal.insert(*pid, member);
+    }
+
+    // A member can fork after the first PID list and become terminal before its
+    // metadata read. Only after every listed member is terminal do we obtain a
+    // second complete list. This is a conservative pair of observations, not an
+    // atomic kernel snapshot or a claim about descendants outside this group.
+    let second = group_members(leader, inventory)?;
+    if second != first {
+        return Ok(true);
+    }
+    for pid in second {
+        let Some(member) = observe_member(leader, pid, inventory)? else {
+            return Ok(true);
+        };
+        let original = &terminal[&pid];
+        if member.started_seconds != original.started_seconds
+            || member.started_microseconds != original.started_microseconds
+        {
+            return Err(Error::new(
+                "ownership_conflict",
+                "owned group member birth identity changed between observations",
+            ));
+        }
+        if !member.terminal {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+struct MacGroupInventory(i32);
+
+#[cfg(target_os = "macos")]
+impl GroupInventory for MacGroupInventory {
+    fn members(&mut self) -> Result<Vec<i32>> {
+        // PROC_PGRP_ONLY/PROC_PIDTBSDINFO and birth fields are declared in the
+        // installed Apple SDK sys/proc_info.h. Saturated/denied data prove nothing.
         for capacity in [256usize, 1024, 4096, 16384, 65536] {
             let mut pids = vec![0i32; capacity];
             let bytes = (capacity * std::mem::size_of::<i32>()) as i32;
@@ -289,7 +489,7 @@ impl OwnedGroup {
                 *libc::__error() = 0;
             }
             let length =
-                unsafe { libc::proc_listpids(2, self.pid as u32, pids.as_mut_ptr().cast(), bytes) };
+                unsafe { libc::proc_listpids(2, self.0 as u32, pids.as_mut_ptr().cast(), bytes) };
             let error = std::io::Error::last_os_error();
             if length < 0 || length == 0 && error.raw_os_error() != Some(0) {
                 return Err(Error::io("enumerate owned process group", error));
@@ -304,54 +504,201 @@ impl OwnedGroup {
                 ));
             }
             pids.truncate(length as usize / std::mem::size_of::<i32>());
-            for pid in pids.into_iter().filter(|pid| *pid > 0 && *pid != self.pid) {
-                let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-                let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
-                let length = unsafe {
-                    libc::proc_pidinfo(
-                        pid,
-                        libc::PROC_PIDTBSDINFO,
-                        0,
-                        info.as_mut_ptr().cast(),
-                        size,
-                    )
-                };
-                if length == 0
-                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-                {
-                    continue;
-                }
-                if length != size {
-                    return Err(Error::new(
-                        "ownership_conflict",
-                        "owned group member identity is unavailable",
-                    ));
-                }
-                let info = unsafe { info.assume_init() };
-                if info.pbi_pid != pid as u32 || info.pbi_pgid != self.pid as u32 {
-                    return Err(Error::new(
-                        "ownership_conflict",
-                        "observed group member changed identity or escaped",
-                    ));
-                }
-                // SZOMB=5 from installed sys/proc.h; terminal members cannot
-                // execute and require their own parent's eventual reap.
-                if info.pbi_status != 5 {
-                    return Ok(true);
-                }
-            }
-            return Ok(false);
+            return Ok(pids);
         }
         Err(Error::new(
             "ownership_conflict",
             "owned process group exceeds complete inventory bound",
         ))
     }
-    #[cfg(not(unix))]
-    fn signal(&self, _: Termination, _: bool) -> Result<()> {
-        Err(Error::new(
-            "prerequisite",
-            "owned groups require the supported Unix host",
-        ))
+    fn observe(&mut self, pid: i32) -> Result<Option<GroupMember>> {
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+        let length = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if length == 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return Ok(None);
+        }
+        if length != size {
+            return Err(Error::new(
+                "ownership_conflict",
+                "owned group member identity is unavailable",
+            ));
+        }
+        let info = unsafe { info.assume_init() };
+        Ok(Some(GroupMember {
+            pid: info.pbi_pid as i32,
+            group: info.pbi_pgid as i32,
+            started_seconds: info.pbi_start_tvsec,
+            started_microseconds: info.pbi_start_tvusec,
+            // SZOMB=5 from installed sys/proc.h; terminal members cannot execute.
+            terminal: info.pbi_status == 5,
+        }))
+    }
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    enum Step {
+        Members(Result<Vec<i32>>),
+        Observe(i32, Result<Option<GroupMember>>),
+    }
+    struct Inventory(VecDeque<Step>);
+    impl Inventory {
+        fn new(steps: Vec<Step>) -> Self {
+            Self(steps.into())
+        }
+        fn assert_consumed(&self) {
+            assert!(self.0.is_empty(), "all prescribed observations must occur");
+        }
+    }
+    impl GroupInventory for Inventory {
+        fn members(&mut self) -> Result<Vec<i32>> {
+            let Some(Step::Members(result)) = self.0.pop_front() else {
+                panic!("unexpected inventory read or observation ordering");
+            };
+            result
+        }
+        fn observe(&mut self, pid: i32) -> Result<Option<GroupMember>> {
+            let Some(Step::Observe(expected, result)) = self.0.pop_front() else {
+                panic!("unexpected member observation or ordering");
+            };
+            assert_eq!(pid, expected);
+            result
+        }
+    }
+    fn terminal(pid: i32) -> GroupMember {
+        GroupMember {
+            pid,
+            group: 10,
+            started_seconds: 100,
+            started_microseconds: 200,
+            terminal: true,
+        }
+    }
+    fn observed(member: GroupMember) -> Step {
+        Step::Observe(member.pid, Ok(Some(member)))
+    }
+    fn members(pids: &[i32]) -> Step {
+        Step::Members(Ok(pids.to_vec()))
+    }
+
+    #[test]
+    fn fork_after_first_inventory_is_not_mistaken_for_group_exit() {
+        // Parent 20 forks 21 after the first list, then becomes terminal before
+        // its metadata read. A second list must follow that terminal observation.
+        let mut inventory = Inventory::new(vec![
+            members(&[10, 20]),
+            observed(terminal(20)),
+            members(&[10, 20, 21]),
+        ]);
+        assert!(live_or_changed_members(10, &mut inventory).unwrap());
+        inventory.assert_consumed();
+
+        // A fresh owner observation still finds the child live. These injected
+        // census tests exercise only the predicate, never mint OwnedGroupExit.
+        let mut inventory = Inventory::new(vec![
+            members(&[10, 21]),
+            observed(GroupMember {
+                terminal: false,
+                ..terminal(21)
+            }),
+        ]);
+        assert!(live_or_changed_members(10, &mut inventory).unwrap());
+        inventory.assert_consumed();
+    }
+
+    #[test]
+    fn stable_terminal_members_require_two_matching_birth_observations() {
+        let mut inventory = Inventory::new(vec![
+            members(&[10, 20, 21]),
+            observed(terminal(20)),
+            observed(terminal(21)),
+            members(&[21, 10, 20]),
+            observed(terminal(20)),
+            observed(terminal(21)),
+        ]);
+        assert!(!live_or_changed_members(10, &mut inventory).unwrap());
+        inventory.assert_consumed();
+    }
+
+    #[test]
+    fn same_pid_with_changed_birth_identity_cannot_complete_the_group() {
+        for replacement in [
+            GroupMember {
+                started_seconds: 101,
+                ..terminal(20)
+            },
+            GroupMember {
+                started_microseconds: 201,
+                ..terminal(20)
+            },
+        ] {
+            let mut inventory = Inventory::new(vec![
+                members(&[10, 20]),
+                observed(terminal(20)),
+                members(&[10, 20]),
+                observed(replacement),
+            ]);
+            let error = live_or_changed_members(10, &mut inventory).unwrap_err();
+            assert_eq!(error.code, "ownership_conflict");
+            assert_eq!(
+                error.message,
+                "owned group member birth identity changed between observations"
+            );
+            inventory.assert_consumed();
+        }
+    }
+
+    #[test]
+    fn disappearing_or_unavailable_second_observation_does_not_prove_exit() {
+        for steps in [
+            vec![members(&[10, 20]), observed(terminal(20)), members(&[10])],
+            vec![
+                members(&[10, 20]),
+                observed(terminal(20)),
+                members(&[10, 20]),
+                Step::Observe(20, Ok(None)),
+            ],
+        ] {
+            let mut inventory = Inventory::new(steps);
+            assert!(live_or_changed_members(10, &mut inventory).unwrap());
+            inventory.assert_consumed();
+        }
+        let mut inventory = Inventory::new(vec![
+            members(&[10]),
+            Step::Members(Err(Error::new("inventory_denied", "second read denied"))),
+        ]);
+        assert_eq!(
+            live_or_changed_members(10, &mut inventory)
+                .unwrap_err()
+                .code,
+            "inventory_denied"
+        );
+        inventory.assert_consumed();
+    }
+
+    #[test]
+    fn excessive_or_duplicate_inventory_refuses_before_member_reads() {
+        for pids in [vec![20; MAX_GROUP_MEMBERS + 1], vec![10, 20, 20]] {
+            let mut inventory = Inventory::new(vec![Step::Members(Ok(pids))]);
+            assert_eq!(
+                live_or_changed_members(10, &mut inventory)
+                    .unwrap_err()
+                    .code,
+                "ownership_conflict"
+            );
+            inventory.assert_consumed();
+        }
     }
 }

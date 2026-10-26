@@ -19,12 +19,14 @@ entrypoint, not remote commands.
 
 ## First install and local status
 
-With no command, `./kegari-v0` means `overview`. Before initial setup alpha.2 reports
-`target_unavailable: no registered local runtime; use explicit local setup`.
+With no command, `./kegari-v0` means `overview`. Before initial setup alpha.3 reports
+`target_unavailable: no local runtime is configured` and directs the operator to
+`kegari-v0 setup --help`. Alpha.2 used the earlier message
+`no registered local runtime; use explicit local setup` for the same condition.
 This is an absent registration, not an invitation to launch a hidden entrypoint.
 `--help`, `--version` and `setup --help` do not require a registered runtime.
 
-Alpha.2 can be inspected as a development artifact, but is not qualified or ready
+Alpha.3 can be inspected as a development artifact, but is not qualified or ready
 for activation. The sequence below describes the intended authorized installation
 after the supported profile and required native/provider prerequisites are
 established; it is not a recommendation to activate this prerelease now.

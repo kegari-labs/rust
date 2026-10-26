@@ -243,11 +243,11 @@ fn stopped_metadata_uses_actual_owned_git_guards_and_refuses_force_and_root_chan
             .observe(operation)
             .unwrap()
             .iter()
-            .all(
-                |p| matches!(p.state, RecoveryState::GroupExitRecordedTreeUnverified)
-                    && p.binding.lease.is_none()
-                    && p.binding.control_owner.is_some()
-            )
+            .all(|p| matches!(p.state, RecoveryState::OwnedGroupExitRecorded)
+                && p.owned_group_exited
+                && !p.all_descendants_exited
+                && p.binding.lease.is_none()
+                && p.binding.control_owner.is_some())
     );
     authority
         .finish(json!({"actual_revision":revision}))

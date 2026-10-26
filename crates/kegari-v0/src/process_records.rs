@@ -56,7 +56,7 @@ impl SpawnBinding {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProcessState {
     Starting,
@@ -66,9 +66,16 @@ pub enum ProcessState {
     GroupExited {
         process: Option<ProcessIdentity>,
         exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owned_group: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        guard_release_verified: bool,
     },
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+fn is_false(value: &bool) -> bool {
+    !value
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessRecord {
     pub schema_version: u32,
@@ -79,6 +86,31 @@ pub struct ProcessRecord {
     pub guard_inode: u64,
     pub state: ProcessState,
 }
+impl ProcessRecord {
+    fn validate_schema(&self) -> Result<()> {
+        if !matches!(self.schema_version, 1 | 2) {
+            return Err(Error::new(
+                "record_corrupt",
+                "unsupported process record schema",
+            ));
+        }
+        if let ProcessState::GroupExited {
+            owned_group,
+            guard_release_verified,
+            ..
+        } = &self.state
+            && ((self.schema_version == 2) != owned_group.is_some()
+                || owned_group.is_some_and(|id| id.is_nil())
+                || (self.schema_version == 1 && *guard_release_verified))
+        {
+            return Err(Error::new(
+                "record_corrupt",
+                "group exit provenance differs from its schema",
+            ));
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RecoveryState {
@@ -87,6 +119,8 @@ pub enum RecoveryState {
     ExactProcessRunning,
     LeaderGoneTreeUnverified,
     GroupExitRecordedTreeUnverified,
+    OwnedGroupExitRecorded,
+    GroupExitGuardUnverified,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ProcessRecovery {
@@ -95,6 +129,10 @@ pub struct ProcessRecovery {
     pub binding: SpawnBinding,
     pub state: RecoveryState,
     pub process: Option<ProcessIdentity>,
+    /// Original owned group exit was recorded by the schema-2 exit capability,
+    /// with guard release verified without observed contrary ownership. This is historical
+    /// group evidence, not authority to adopt a process or retire an operation.
+    pub owned_group_exited: bool,
     /// This journal does not prove containment of detached descendants.
     pub all_descendants_exited: bool,
 }
@@ -225,7 +263,7 @@ impl ProcessJournal {
             ));
         }
         let record = ProcessRecord {
-            schema_version: 1,
+            schema_version: 2,
             host,
             guard: guard_name,
             guard_device,
@@ -244,6 +282,8 @@ impl ProcessJournal {
             lock: Some(lock),
             inherited: Some(inherited),
             configured: AtomicBool::new(false),
+            owned_group: None,
+            guard_conflict: false,
         })
     }
     pub fn observe(&self, operation_id: Uuid) -> Result<Vec<ProcessRecovery>> {
@@ -260,8 +300,8 @@ impl ProcessJournal {
         let mut observed = Vec::new();
         for leaf in bounded_records(&operation)? {
             let record: ProcessRecord = operation.read_bounded(&leaf, 64 * 1024)?;
-            if record.schema_version != 1
-                || record.binding.runtime_id()? != self.runtime
+            record.validate_schema()?;
+            if record.binding.runtime_id()? != self.runtime
                 || record.binding.operation_id != operation_id
                 || leaf != format!("{}.json", record.binding.effect_id)
                 || record.guard != format!("{}.guard", record.binding.effect_id)
@@ -281,7 +321,7 @@ impl ProcessJournal {
                 ProcessState::GroupExited { process, .. } => process.clone(),
                 ProcessState::Starting => None,
             };
-            let state = match operation.lock_existing(
+            let state = match operation.observe_lock_existing(
                 &record.guard,
                 record.guard_device,
                 record.guard_inode,
@@ -296,7 +336,11 @@ impl ProcessJournal {
                             RecoveryState::LeaderGoneTreeUnverified
                         }
                     },
-                    ProcessState::GroupExited { process, .. } => {
+                    ProcessState::GroupExited {
+                        process,
+                        guard_release_verified,
+                        ..
+                    } => {
                         if let Some(process) = process
                             && self.probe.observe(process)? == ProcessObservation::Running
                         {
@@ -305,16 +349,24 @@ impl ProcessJournal {
                                 "recorded group exit conflicts with the exact running process",
                             ));
                         }
-                        RecoveryState::GroupExitRecordedTreeUnverified
+                        if record.schema_version == 2 && *guard_release_verified {
+                            RecoveryState::OwnedGroupExitRecorded
+                        } else if record.schema_version == 2 {
+                            RecoveryState::GroupExitGuardUnverified
+                        } else {
+                            RecoveryState::GroupExitRecordedTreeUnverified
+                        }
                     }
                 },
             };
+            let owned_group_exited = state == RecoveryState::OwnedGroupExitRecorded;
             observed.push(ProcessRecovery {
                 operation_id,
                 effect_id: record.binding.effect_id,
                 binding: record.binding,
                 state,
                 process,
+                owned_group_exited,
                 all_descendants_exited: false,
             });
         }
@@ -332,8 +384,8 @@ impl ProcessJournal {
         let mut result = Vec::new();
         for leaf in bounded_records(&directory)? {
             let record: ProcessRecord = directory.read_bounded(&leaf, 64 * 1024)?;
-            if record.schema_version != 1
-                || record.binding.runtime_id()? != self.runtime
+            record.validate_schema()?;
+            if record.binding.runtime_id()? != self.runtime
                 || record.binding.operation_id != operation_id
                 || leaf != format!("{}.json", record.binding.effect_id)
                 || record.guard != format!("{}.guard", record.binding.effect_id)
@@ -343,8 +395,11 @@ impl ProcessJournal {
                     "retained process identity changed",
                 ));
             }
-            let _guard =
-                directory.lock_existing(&record.guard, record.guard_device, record.guard_inode)?;
+            let _guard = directory.observe_lock_existing(
+                &record.guard,
+                record.guard_device,
+                record.guard_inode,
+            )?;
             result.push(record);
         }
         Ok(result)
@@ -384,6 +439,8 @@ pub struct SpawnGuard {
     lock: Option<ExclusiveLock>,
     inherited: Option<File>,
     configured: AtomicBool,
+    owned_group: Option<(Uuid, u32)>,
+    guard_conflict: bool,
 }
 impl SpawnGuard {
     pub fn binding(&self) -> &SpawnBinding {
@@ -417,23 +474,43 @@ impl SpawnGuard {
     pub fn configure_tokio(&self, command: &mut tokio::process::Command) -> Result<()> {
         self.configure_std(command.as_std_mut())
     }
-    pub fn spawned_std(&mut self, child: &std::process::Child) -> Result<ProcessIdentity> {
-        self.record_spawned(child.id())
+    pub fn spawned_std(
+        &mut self,
+        child: &std::process::Child,
+        group: &crate::process_group::OwnedGroup,
+    ) -> Result<ProcessIdentity> {
+        self.record_spawned(child.id(), group)
     }
-    pub fn spawned_tokio(&mut self, child: &tokio::process::Child) -> Result<ProcessIdentity> {
-        self.record_spawned(child.id().ok_or_else(|| {
-            Error::new("process_exit", "owned child exited before identity capture")
-        })?)
+    pub fn spawned_tokio(
+        &mut self,
+        child: &tokio::process::Child,
+        group: &crate::process_group::OwnedGroup,
+    ) -> Result<ProcessIdentity> {
+        self.record_spawned(
+            child.id().ok_or_else(|| {
+                Error::new("process_exit", "owned child exited before identity capture")
+            })?,
+            group,
+        )
     }
-    fn record_spawned(&mut self, pid: u32) -> Result<ProcessIdentity> {
+    fn record_spawned(
+        &mut self,
+        pid: u32,
+        group: &crate::process_group::OwnedGroup,
+    ) -> Result<ProcessIdentity> {
         if !self.configured.load(Ordering::SeqCst)
             || !matches!(self.record.state, ProcessState::Starting)
+            || self.owned_group.is_some()
         {
             return Err(Error::new(
                 "ownership_conflict",
                 "process identity must follow its one guarded spawn",
             ));
         }
+        // Bind the actual creation capability before fallible OS metadata
+        // capture. A quick child still needs a same-spawn exit token; its PID
+        // alone, even if later reused, never matches another group's token.
+        self.owned_group = Some(group.bind_child(pid)?);
         let mut observed = Vec::new();
         for binary in std::iter::once(&self.record.binding.executable)
             .chain(self.record.binding.observed_executables.iter())
@@ -478,28 +555,112 @@ impl SpawnGuard {
         self.record = next;
         Ok(process)
     }
-    /// Call only after the actual owned Child was reaped and its owned group was
-    /// observed clear. Detached-descendant containment remains explicitly unproven.
-    pub fn group_exited(&mut self, status: std::process::ExitStatus) -> Result<()> {
+    /// Persist only the exit capability from this guard's actual owned spawn.
+    /// Retain the capability on errors so journal/guard checks can be retried.
+    /// Detached-descendant containment remains explicitly unproven.
+    pub fn group_exited(&mut self, exit: &crate::process_group::OwnedGroupExit) -> Result<()> {
+        let (group, pid) = exit.binding();
+        if self.owned_group != Some((group, pid)) {
+            return Err(Error::new(
+                "ownership_conflict",
+                "exit evidence belongs to another owned spawn",
+            ));
+        }
+        if self.guard_conflict {
+            return Err(Error::new(
+                "operation_uncertain",
+                "a holder survived owned group exit; releasing its descriptor does not establish its process exit",
+            ));
+        }
         let process = match &self.record.state {
             ProcessState::Running { process } => Some(process.clone()),
             ProcessState::Starting => None,
-            ProcessState::GroupExited { .. } => {
-                return Err(Error::new(
-                    "ownership_conflict",
-                    "process exit was already recorded",
-                ));
+            ProcessState::GroupExited {
+                process,
+                exit_code,
+                owned_group,
+                ..
+            } => {
+                if *owned_group != Some(group) || *exit_code != exit.status().code() {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "recorded exit differs from owned evidence",
+                    ));
+                }
+                process.clone()
             }
         };
-        let mut next = self.record.clone();
-        next.state = ProcessState::GroupExited {
-            process,
-            exit_code: status.code(),
-        };
-        self.directory.write(&self.record_name, &next)?;
-        self.record = next;
+        if process.as_ref().is_some_and(|process| process.pid != pid) {
+            return Err(Error::new(
+                "ownership_conflict",
+                "captured process differs from owned exit",
+            ));
+        }
+        if !matches!(self.record.state, ProcessState::GroupExited { .. }) {
+            let mut next = self.record.clone();
+            next.state = ProcessState::GroupExited {
+                process,
+                exit_code: exit.status().code(),
+                owned_group: Some(group),
+                guard_release_verified: false,
+            };
+            self.directory.write(&self.record_name, &next)?;
+            self.record = next;
+        } else {
+            let retained: ProcessRecord =
+                self.directory.read_bounded(&self.record_name, 64 * 1024)?;
+            retained.validate_schema()?;
+            if retained != self.record {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "retained owned exit changed before retirement completed",
+                ));
+            }
+        }
         self.inherited.take();
         self.lock.take();
+        // A surviving inherited guard is contrary evidence even after the
+        // owned group closes. Do not erase this known lifecycle uncertainty.
+        let released = self.directory.observe_lock_existing(
+            &self.record.guard,
+            self.record.guard_device,
+            self.record.guard_inode,
+        );
+        let _released = match released {
+            Ok(released) => released,
+            Err(error) if error.code == "ownership_conflict" => {
+                self.guard_conflict = true;
+                // A previously observed holder can close the descriptor and
+                // remain alive. Never infer its exit from a later free lock.
+                let mut next = self.record.clone();
+                if let ProcessState::GroupExited {
+                    guard_release_verified,
+                    ..
+                } = &mut next.state
+                    && *guard_release_verified
+                {
+                    *guard_release_verified = false;
+                    self.directory.write(&self.record_name, &next)?;
+                    self.record = next;
+                }
+                return Err(Error::new(
+                    "operation_uncertain",
+                    "owned group exited but its inherited process guard remains held",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut next = self.record.clone();
+        if let ProcessState::GroupExited {
+            guard_release_verified,
+            ..
+        } = &mut next.state
+            && !*guard_release_verified
+        {
+            *guard_release_verified = true;
+            self.directory.write(&self.record_name, &next)?;
+            self.record = next;
+        }
         Ok(())
     }
     pub fn binding_digest(&self) -> Result<String> {

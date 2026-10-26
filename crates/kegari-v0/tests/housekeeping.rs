@@ -1263,7 +1263,10 @@ struct HandoverFixture {
     qualification_record: RuntimeQualification,
     key: kegari_v0::evidence::AttestationKey,
 }
-fn metadata_binary(path: &Path, info: &HandoverInfo) -> kegari_v0::platform::BinaryIdentity {
+fn metadata_binary(
+    path: &Path,
+    info: &impl serde::Serialize,
+) -> kegari_v0::platform::BinaryIdentity {
     let document = serde_json::to_string(info).unwrap();
     std::fs::write(
         path,
@@ -1483,6 +1486,59 @@ async fn unsupported_replacement_format_preserves_old_state_and_qualification_ca
         .unwrap();
     signed.payload.reviewed_by = "forged reviewer".into();
     assert!(verify_runtime_qualification(&signed, &f.key).is_err());
+}
+
+#[tokio::test]
+async fn replacement_must_explicitly_support_owned_process_journal_records() {
+    let f = HandoverFixture::new();
+    let preserved = [
+        "owner.json",
+        "service.json",
+        "intent.json",
+        "service-shutdown.json",
+    ]
+    .into_iter()
+    .map(|name| (name, f.root.read_bytes(name, 65536).unwrap()))
+    .collect::<Vec<_>>();
+    let store = ReceiptStore::new(f.root.child("receipts").unwrap());
+    let receipts = serde_json::to_value(store.all().unwrap()).unwrap();
+    for fault in [
+        "old_process",
+        "unknown_process",
+        "missing_process",
+        "old_metadata",
+    ] {
+        let mut info = serde_json::to_value(&f.info).unwrap();
+        match fault {
+            "old_process" => info["process_schema"] = 1.into(),
+            "unknown_process" => info["process_schema"] = 99.into(),
+            "missing_process" => {
+                info.as_object_mut().unwrap().remove("process_schema");
+            }
+            _ => info["schema_version"] = 1.into(),
+        }
+        let binary = metadata_binary(&f.host.home.join(fault), &info);
+        assert_eq!(
+            inspect_handover(&f.host, binary, &f.qualification, &f.probe)
+                .await
+                .unwrap_err()
+                .code,
+            "incompatible_version",
+            "{fault}"
+        );
+        for (name, bytes) in &preserved {
+            assert_eq!(
+                &f.root.read_bytes(name, 65536).unwrap(),
+                bytes,
+                "{fault}: {name}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(store.all().unwrap()).unwrap(),
+            receipts,
+            "{fault}"
+        );
+    }
 }
 
 #[tokio::test]

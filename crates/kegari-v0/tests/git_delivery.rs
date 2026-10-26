@@ -143,9 +143,11 @@ fn scoped_git_metadata_is_journaled_registered_and_fenced_before_each_spawn() {
     assert!(executions.active_operations().unwrap().is_empty());
     let observed = records.observe(operation).unwrap();
     assert!(observed.len() >= 3);
-    assert!(observed.iter().all(|record| record.state
-        == RecoveryState::GroupExitRecordedTreeUnverified
-        && !record.all_descendants_exited));
+    assert!(observed.iter().all(
+        |record| record.state == RecoveryState::OwnedGroupExitRecorded
+            && record.owned_group_exited
+            && !record.all_descendants_exited
+    ));
     permitted.store(false, Ordering::SeqCst);
     assert_eq!(
         scoped.revision(&fixture.source, "HEAD").unwrap_err().code,

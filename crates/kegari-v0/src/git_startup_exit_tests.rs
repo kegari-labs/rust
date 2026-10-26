@@ -103,11 +103,9 @@ impl JournalFixture {
     fn assert_closed_without_running_identity(&self) {
         let rows = self.journal.observe(self.binding.operation_id).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(
-            rows[0].state,
-            RecoveryState::GroupExitRecordedTreeUnverified
-        );
+        assert_eq!(rows[0].state, RecoveryState::OwnedGroupExitRecorded);
         assert!(rows[0].process.is_none());
+        assert!(rows[0].owned_group_exited);
         assert!(!rows[0].all_descendants_exited);
         assert_eq!(self.probe.snapshots.load(Ordering::SeqCst), 1);
     }
@@ -144,7 +142,7 @@ impl GatedChild {
                 .guard
                 .as_mut()
                 .unwrap()
-                .spawned_std(owned.child.as_ref().unwrap())
+                .spawned_std(owned.child.as_ref().unwrap(), &owned.group)
                 .unwrap_err()
                 .code,
             "operation_uncertain"
@@ -153,8 +151,13 @@ impl GatedChild {
         owned
     }
     fn reap(&mut self) -> std::process::ExitStatus {
-        let status = self.child.as_mut().unwrap().try_wait().unwrap().unwrap();
-        self.guard.as_mut().unwrap().group_exited(status).unwrap();
+        let exit = self
+            .group
+            .try_reap_std(self.child.as_mut().unwrap())
+            .unwrap()
+            .unwrap();
+        let status = exit.status();
+        self.guard.as_mut().unwrap().group_exited(&exit).unwrap();
         self.guard.take();
         self.child.take();
         status
@@ -180,10 +183,10 @@ impl Drop for GatedChild {
                 .group
                 .await_exit_before_reap(Instant::now() + Duration::from_secs(2), || Ok(()))
                 .unwrap_or(false)
-                && let Ok(Some(status)) = child.try_wait()
+                && let Ok(Some(exit)) = self.group.try_reap_std(child)
                 && let Some(guard) = self.guard.as_mut()
             {
-                let _ = guard.group_exited(status);
+                let _ = guard.group_exited(&exit);
             }
         }
     }
@@ -391,5 +394,167 @@ fn git_deadline_crossed_after_actual_spawn_still_withholds_input_and_closes_owne
     );
     assert!(!marker.exists());
     assert!(state.active.lock().unwrap().is_none());
+    fixture.assert_closed_without_running_identity();
+}
+
+#[test]
+fn failed_git_output_is_drained_before_owned_cleanup_completes() {
+    let state = Arc::new(
+        GitOperationState::new(
+            GitLimits {
+                output_bytes: 1,
+                ..GitLimits::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "printf oversized"]).env_clear();
+    assert_eq!(state.run(command, None).unwrap_err().code, "output_limit");
+    assert!(state.active.lock().unwrap().is_none());
+    assert!(!state.uncertain_streams.load(Ordering::SeqCst));
+    // This unit invokes run directly, so supply only the outer thread's local
+    // closed marker. No worker/native completion capability is constructed.
+    state.closed.store(true, Ordering::SeqCst);
+    assert!(GitCancellation { state }.exited().unwrap());
+}
+
+#[test]
+fn failed_git_stream_uncertainty_survives_local_thread_close() {
+    let state = Arc::new(GitOperationState::new(GitLimits::default(), None).unwrap());
+    let (mut reader, mut writer) = UnixStream::pair().unwrap();
+    reader.set_nonblocking(true).unwrap();
+    writer.write_all(b"retained output").unwrap();
+    {
+        let mut closure = GitPipeClosure {
+            uncertain: &state.uncertain_streams,
+            closed: false,
+        };
+        closure.closed = drain_failed_git_output(&mut reader).unwrap();
+        assert!(!closure.closed); // Real writer remains open; WouldBlock is not EOF.
+    }
+    assert_eq!(state.current().unwrap_err().code, "operation_uncertain");
+    state.closed.store(true, Ordering::SeqCst);
+    let cancellation = GitCancellation {
+        state: state.clone(),
+    };
+    assert!(!cancellation.exited().unwrap());
+    drop(writer);
+    assert!(drain_failed_git_output(&mut reader).unwrap());
+    assert!(!cancellation.exited().unwrap()); // No retroactive invented closure.
+
+    struct ContinuousOutput(usize);
+    impl std::io::Read for ContinuousOutput {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            self.0 += 1;
+            bytes.fill(b'x');
+            Ok(bytes.len())
+        }
+    }
+    let mut continuous = ContinuousOutput(0);
+    assert!(!drain_failed_git_output(&mut continuous).unwrap());
+    assert_eq!(continuous.0, 8); // Cleanup yields to deadline/cancellation checks.
+}
+
+#[test]
+fn git_exit_rechecks_stream_uncertainty_after_observing_thread_close() {
+    let state = Arc::new(GitOperationState::new(GitLimits::default(), None).unwrap());
+    let (initial_read, observed_initial_read) = std::sync::mpsc::sync_channel(1);
+    let (resume, resumed) = std::sync::mpsc::sync_channel(1);
+    *state.before_exit_lock.lock().unwrap() = Some(Box::new(move || {
+        initial_read.send(()).unwrap();
+        resumed.recv_timeout(Duration::from_secs(5)).unwrap();
+    }));
+    let (mut reader, mut writer) = UnixStream::pair().unwrap();
+    reader.set_nonblocking(true).unwrap();
+    writer.write_all(b"unresolved output").unwrap();
+    let cancellation = GitCancellation {
+        state: state.clone(),
+    };
+    std::thread::scope(|scope| {
+        let active = state.active.lock().unwrap();
+        let observer = scope.spawn(move || cancellation.exited());
+        observed_initial_read
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        // The actual observer has already read false. The original pipe guard
+        // now discovers WouldBlock, with a real writer still open, and latches
+        // uncertainty before the component's outer-thread closed publication.
+        {
+            let mut closure = GitPipeClosure {
+                uncertain: &state.uncertain_streams,
+                closed: false,
+            };
+            closure.closed = drain_failed_git_output(&mut reader).unwrap();
+            assert!(!closure.closed);
+        }
+        assert!(state.uncertain_streams.load(Ordering::SeqCst));
+        // As in the neighboring stream test, this is only the local thread's
+        // marker, never a child/group/native completion capability.
+        state.closed.store(true, Ordering::SeqCst);
+        resume.send(()).unwrap();
+        drop(active);
+        assert!(!observer.join().unwrap().unwrap());
+    });
+    drop(writer);
+}
+
+#[test]
+fn git_journal_retry_retains_the_actual_owned_exit_token() {
+    let fixture = JournalFixture::new();
+    let mut guard = fixture.journal.begin(fixture.binding.clone()).unwrap();
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "exit 0"])
+        .env_clear()
+        .current_dir(&fixture.binding.cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    guard.configure_std(&mut command).unwrap();
+    let (child, mut group) = OwnedGroup::spawn_std(&mut command).unwrap();
+    assert_eq!(
+        guard.spawned_std(&child, &group).unwrap_err().code,
+        "operation_uncertain"
+    );
+    assert!(
+        group
+            .await_exit_before_reap(Instant::now() + Duration::from_secs(2), || Ok(()))
+            .unwrap()
+    );
+    let mut active = ActiveGitChild {
+        child,
+        group,
+        terminal: None,
+        guard: Some(guard),
+    };
+    let record = fixture
+        .binding
+        .cwd
+        .join("processes")
+        .join(fixture.binding.operation_id.to_string())
+        .join(format!("{}.json", fixture.binding.effect_id));
+    let backup = record.with_extension("saved");
+    std::fs::rename(&record, &backup).unwrap();
+    std::fs::create_dir(&record).unwrap();
+    struct RestoreRecord {
+        record: PathBuf,
+        backup: PathBuf,
+    }
+    impl Drop for RestoreRecord {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir(&self.record);
+            let _ = std::fs::rename(&self.backup, &self.record);
+        }
+    }
+    let restore = RestoreRecord { record, backup };
+    assert_eq!(active.observe().unwrap_err().code, "unsafe_storage");
+    assert!(active.terminal.as_ref().unwrap().status().success());
+    assert!(active.guard.is_some());
+    drop(restore);
+    assert!(active.observe().unwrap().unwrap().success());
+    assert!(active.guard.is_none());
+    assert!(active.observe().unwrap().unwrap().success());
     fixture.assert_closed_without_running_identity();
 }

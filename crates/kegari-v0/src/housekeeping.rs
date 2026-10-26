@@ -2150,6 +2150,9 @@ pub struct HandoverInfo {
     pub api_version: u32,
     pub config_schema: u32,
     pub receipt_schema: u32,
+    /// Schema-2 metadata explicitly declares process journal compatibility;
+    /// legacy metadata must not implicitly claim it can read owned exit records.
+    pub process_schema: u32,
     pub runtime_version: String,
     pub runtime_build: String,
     pub instruction_schema: u32,
@@ -2158,10 +2161,11 @@ pub struct HandoverInfo {
 }
 pub fn handover_info() -> Result<HandoverInfo> {
     Ok(HandoverInfo {
-        schema_version: 1,
+        schema_version: 2,
         api_version: 1,
         config_schema: 1,
         receipt_schema: 1,
+        process_schema: 2,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
         runtime_build: crate::BUILD_ID.into(),
         instruction_schema: crate::instructions::ASSEMBLY_SCHEMA,
@@ -2388,10 +2392,11 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
     let info =
         observed.map_err(|_| Error::new("timeout", "replacement metadata probe timed out"))??;
     binary.revalidate(true)?;
-    if info.schema_version != 1
+    if info.schema_version != 2
         || info.api_version != 1
         || info.config_schema != 1
         || info.receipt_schema != 1
+        || info.process_schema != 2
         || info.instruction_schema != crate::instructions::ASSEMBLY_SCHEMA
         || info.runtime_build.is_empty()
         || info.runtime_version.is_empty()

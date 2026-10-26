@@ -158,14 +158,24 @@ fn process_history(
     for owner in owners {
         let records = journal.retained_records(owner.operation_id)?;
         for record in &records {
-            if !matches!(
+            let group_exit_recorded = matches!(
                 record.state,
                 crate::process_records::ProcessState::GroupExited { .. }
-            ) || record.binding.lease.as_ref().is_none_or(|lease| {
-                lease.runtime_id != owner.runtime_id
-                    || lease.owner_generation != owner.owner_generation
-                    || owner.actor != format!("owner:{}", lease.owner_id)
-            }) || Some(&record.binding.work_key) != owner.canonical_targets.first()
+            ) && (record.schema_version == 1
+                || matches!(
+                    record.state,
+                    crate::process_records::ProcessState::GroupExited {
+                        guard_release_verified: true,
+                        ..
+                    }
+                ));
+            if !group_exit_recorded
+                || record.binding.lease.as_ref().is_none_or(|lease| {
+                    lease.runtime_id != owner.runtime_id
+                        || lease.owner_generation != owner.owner_generation
+                        || owner.actor != format!("owner:{}", lease.owner_id)
+                })
+                || Some(&record.binding.work_key) != owner.canonical_targets.first()
                 || Some(&record.binding.scope_digest) != owner.expected.get("scope")
                 || record.binding.control_owner.is_some()
             {

@@ -1331,7 +1331,7 @@ pub fn render_human(output: &OutputEnvelope, target: Option<&str>) -> String {
         .map_or_else(|| "none (client-only)".into(), |id| id.to_string());
     let mut text = format!(
         "Target: {}\nRuntime: {}\nRequest: {}\n",
-        printable(target.unwrap_or("registered local")),
+        printable(target.unwrap_or("local")),
         runtime,
         output.request_id
     );

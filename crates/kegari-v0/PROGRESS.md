@@ -1,6 +1,64 @@
 # Kegari v0 build progress
 
-The Goal is active and incomplete. On 2026-10-26 the user explicitly selected
+The Goal is active and incomplete. On 2026-10-26 the user authorized continuation
+and resumed the existing Goal, superseding the earlier instruction to keep it
+paused. The previous pause followed the explicit "Keep the goal paused" /
+"Do not start implementation yet" instruction, rather than an entitlement
+prerequisite. Supervision and existing action restrictions remain in force.
+
+Current verified increment: **0.2.0-alpha.3** binds actual owned-group exit
+evidence to its original spawn, distinguishes schema-2 evidence from legacy rows,
+retains journal/stream/guard uncertainty and improves first-launch guidance.
+The final release suite passed 1,025 tests, with two native tests still ignored;
+all-target clippy, formatting, inventory and five staged-artifact inspections
+passed. Independent final review found no additional material issue. The exact
+binary, earlier failures/interrupted attempts and qualification limits are in
+[owned-group lifecycle evidence](validation/OWNED-GROUP-LIFECYCLE.md).
+No minor milestone is complete. The foreground tool/dependency profile and
+registered-service lifecycle still need integration before the repository-command
+refusal can be removed. Native qualification remains separate.
+
+Process-journal writes and handover metadata now use schema 2; older process rows
+remain readable without promotion, and old/missing handover support is refused.
+Instruction content remains version 3. The staged alpha.2 artifact is unchanged.
+All owned validation processes for this increment have finished; no application
+service/coordinator is running from these checks. Held B drafts remain held.
+
+The user's alpha.2 no-argument invocation correctly reached the CLI's default
+overview and found no registered local runtime. Initial setup does not happen
+implicitly. Inspection found incomplete onboarding: setup requires complete
+operator TOML, without a public host-identity/configuration initializer, and the
+CLI guide still described an obsolete empty entrypoint. The next usability work
+must provide configuration preparation and verify setup/install/control-host
+start versus orchestration start, not merely compile the binary. Documentation
+and the actionable missing-registration diagnostic are corrected; no real
+setup, Keychain initialization, installation or service start is authorized by
+this analysis request.
+
+The first-launch correction was committed as `edef4f5` —
+`fix(kegari-v0): explain explicit first-launch setup`. Alpha.3 additionally uses
+`Target: local` before registration. The intended sequence is explicit setup
+(initial STOPPED intent), service installation, control-host start, readiness
+checks, then separately requested orchestration start after qualification.
+The smallest onboarding increment is a genuine guided initializer within the
+existing `setup` path: derive host/account facts through the existing native
+identity boundary, generate the runtime UUID, collect actual operator identities
+and scope, show reviewable typed TOML and reuse bootstrap validation/persistence.
+Current `config check` is server-only; initial preparation performs provider/Codex
+probes and must not be presented as an offline-only validator. Implement/test the
+guided path with fixtures; actual host discovery/setup still requires its scoped
+approval. Continue the managed foreground/service integration in parallel where
+independent, preserving uncertainty and current action restrictions.
+
+On 2026-10-26 the user reported submitting an application to Apple for the
+Endpoint Security entitlement. Submission is recorded from the user's report;
+approval has not been reported. Revisit Apple's response and the full descendant
+coverage design before the v1 / 1.0.0 production-readiness decision. This follow-up
+does not block managed-workload v0 engineering or authorize signing, installation,
+client activation or other host/live operations. Full coverage remains required
+before untrusted-context qualification, even if that is considered before v1.
+
+On 2026-10-26 the user explicitly selected
 **managed workloads with the detached-process limitation**. SPEC 1.3 and the
 matching GOAL.md/objective now record that decision. Full descendant coverage
 remains desired future work and a prerequisite to qualification for untrusted

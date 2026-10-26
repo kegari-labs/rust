@@ -25,7 +25,7 @@ The two explicitly ignored native tests remain blocked, not passed.
 
 ## Versioned prerelease executable
 
-The application is versioned as `0.2.0-alpha.2`; the package and executable remain
+The application is versioned as `0.2.0-alpha.3`; the package and executable remain
 `kegari-v0`. This prerelease does not complete the 0.2.0 containment milestone.
 Repository command execution still refuses `process_tree_unverified`, and native,
 provider, actual-agent and human qualification remain incomplete.
@@ -54,19 +54,22 @@ checksum or a complete record of compiler settings. Release and debug profiles
 have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
-running coordinator. See [alpha.2 lifecycle and build evidence](validation/LOCAL-SERVICE-SHUTDOWN.md)
+running coordinator. See [alpha.3 lifecycle and build evidence](validation/OWNED-GROUP-LIFECYCLE.md)
 for the exact artifact and checks performed. The
-[alpha.1 report](validation/LOCAL-PRERELEASE.md) remains historical evidence.
+[alpha.2 report](validation/LOCAL-SERVICE-SHUTDOWN.md) and
+[alpha.1 report](validation/LOCAL-PRERELEASE.md) remain historical evidence.
 
 ## First launch
 
 Running `./kegari-v0` without a command requests the local runtime's `overview`;
-it does not open a setup wizard or start a service. On a new alpha.2 installation,
-`target_unavailable: no registered local runtime; use explicit local setup` means
-that no local runtime has been configured yet. Use `./kegari-v0 --help` or
+it does not open a setup wizard or start a service. Before setup, alpha.3 reports
+`target_unavailable: no local runtime is configured` and directs you to
+`kegari-v0 setup --help`. Alpha.2's earlier message was
+`no registered local runtime; use explicit local setup`; both mean that no local
+runtime has been configured yet. Use `./kegari-v0 --help` or
 `./kegari-v0 setup --help` to inspect the available commands without setup.
 
-Alpha.2 is an inspectable development artifact, not a qualified installation ready
+Alpha.3 is an inspectable development artifact, not a qualified installation ready
 for activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
 requires the supported profile and native/provider prerequisites to be established
 first, then a final protected, versioned binary and complete runtime configuration.

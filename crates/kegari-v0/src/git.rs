@@ -3100,37 +3100,67 @@ impl GitLimits {
 }
 struct ActiveGitChild {
     child: std::process::Child,
-    group: Option<crate::process_group::OwnedGroup>,
-    terminal: Option<std::process::ExitStatus>,
+    group: crate::process_group::OwnedGroup,
+    terminal: Option<crate::process_group::OwnedGroupExit>,
     guard: Option<crate::process_records::SpawnGuard>,
 }
 impl ActiveGitChild {
     fn observe(&mut self) -> Result<Option<std::process::ExitStatus>> {
-        if self.terminal.is_none()
-            && self
-                .group
-                .as_mut()
-                .map_or(Ok(true), |group| group.observe_exit_before_reap())?
-        {
-            self.terminal = self
-                .child
-                .try_wait()
-                .map_err(|error| Error::io("reap owned Git after group cleanup", error))?;
+        if self.terminal.is_none() {
+            self.terminal = self.group.try_reap_std(&mut self.child)?;
         }
-        if let Some(status) = self.terminal
+        if let Some(exit) = self.terminal.as_ref()
             && let Some(guard) = self.guard.as_mut()
         {
-            guard.group_exited(status)?;
+            // Keep the original exit token and guard if durable retirement fails.
+            // A cleanup retry never manufactures a second wait or exit proof.
+            guard.group_exited(exit)?;
             self.guard = None;
         }
-        Ok(self.terminal)
+        Ok(self.terminal.as_ref().map(|exit| exit.status()))
     }
+}
+
+struct GitPipeClosure<'a> {
+    uncertain: &'a std::sync::atomic::AtomicBool,
+    closed: bool,
+}
+impl Drop for GitPipeClosure<'_> {
+    fn drop(&mut self) {
+        if !self.closed {
+            self.uncertain
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+// Failed commands still own their streams. Discard only a bounded amount per
+// iteration so a writer cannot prevent cancellation/deadline checks. The caller
+// must establish nonblocking mode before invoking this helper.
+#[cfg(unix)]
+fn drain_failed_git_output(stream: &mut dyn std::io::Read) -> Result<bool> {
+    let mut buffer = [0u8; 8192];
+    for _ in 0..8 {
+        match stream.read(&mut buffer) {
+            Ok(0) => return Ok(true),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Ok(false);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(Error::io("drain failed Git output", error)),
+        }
+    }
+    Ok(false)
 }
 struct GitOperationState {
     cancelled: std::sync::atomic::AtomicBool,
     closed: std::sync::atomic::AtomicBool,
-    uncertain_descendants: std::sync::atomic::AtomicBool,
+    uncertain_streams: std::sync::atomic::AtomicBool,
     active: std::sync::Mutex<Option<ActiveGitChild>>,
+    // One-shot, per-operation synchronization for the stale-latch regression;
+    // this is absent from production and exposes no public observation API.
+    #[cfg(test)]
+    before_exit_lock: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     provided_guard: std::sync::Mutex<Option<crate::process_records::SpawnGuard>>,
     deadline: std::time::Instant,
     limits: GitLimits,
@@ -3146,8 +3176,10 @@ impl GitOperationState {
         Ok(Self {
             cancelled: false.into(),
             closed: false.into(),
-            uncertain_descendants: false.into(),
+            uncertain_streams: false.into(),
             active: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            before_exit_lock: std::sync::Mutex::new(None),
             provided_guard: std::sync::Mutex::new(None),
             deadline: std::time::Instant::now() + limits.operation_timeout,
             limits,
@@ -3159,6 +3191,12 @@ impl GitOperationState {
         use std::sync::atomic::Ordering;
         if self.cancelled.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
             return Err(Error::new("cancelled", "Git operation is fenced or ended"));
+        }
+        if self.uncertain_streams.load(Ordering::SeqCst) {
+            return Err(Error::new(
+                "operation_uncertain",
+                "prior owned Git output streams remain unresolved",
+            ));
         }
         if std::time::Instant::now() >= self.deadline {
             return Err(Error::new(
@@ -3178,16 +3216,9 @@ impl GitOperationState {
         if let Some(process) = active.as_mut()
             && process.observe()?.is_none()
         {
-            if let Some(group) = process.group.as_mut() {
-                group.terminate(crate::process_group::Termination::Kill)?;
-            } else if let Err(error) = process.child.kill()
-                && error.raw_os_error() != Some(libc::ESRCH)
-            {
-                return Err(Error::io(
-                    "terminate owned Git child without group proof",
-                    error,
-                ));
-            }
+            process
+                .group
+                .terminate(crate::process_group::Termination::Kill)?;
         }
 
         Ok(())
@@ -3293,7 +3324,7 @@ impl GitOperationState {
             let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_std(&mut command)?;
             let capture_error = guard
                 .as_mut()
-                .and_then(|guard| guard.spawned_std(&child).err());
+                .and_then(|guard| guard.spawned_std(&child, &group).err());
             let capture_error = match capture_error {
                 Some(error) if error.code == "operation_uncertain" => {
                     // The original identity snapshot may race a short child's exit.
@@ -3325,7 +3356,7 @@ impl GitOperationState {
             ));
             *active = Some(ActiveGitChild {
                 child,
-                group: Some(group),
+                group,
                 terminal: None,
                 guard,
             });
@@ -3354,6 +3385,10 @@ impl GitOperationState {
                 "Git start gate did not launch owned process",
             )
         })?;
+        let mut pipe_closure = GitPipeClosure {
+            uncertain: &self.uncertain_streams,
+            closed: false,
+        };
         let nonblocking = |fd| -> Result<()> {
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
             if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
@@ -3368,6 +3403,7 @@ impl GitOperationState {
         let configured = nonblocking(stdin.as_raw_fd())
             .and_then(|_| nonblocking(stdout.as_raw_fd()))
             .and_then(|_| nonblocking(stderr.as_raw_fd()));
+        let mut can_drain = configured.is_ok();
         let mut failure = gated.err().or_else(|| configured.err());
         let mut stdin = Some(stdin);
         let mut written = 0usize;
@@ -3436,6 +3472,18 @@ impl GitOperationState {
                     }
                 }
             }
+            if failure.is_some() && can_drain {
+                match drain_failed_git_output(&mut stdout).and_then(|done| {
+                    out_eof = done;
+                    drain_failed_git_output(&mut stderr)
+                }) {
+                    Ok(done) => err_eof = done,
+                    // Preserve the original command failure, but never turn an
+                    // unreadable stream into observed EOF during later cleanup.
+                    Err(_) => can_drain = false,
+                }
+            }
+            pipe_closure.closed = out_eof && err_eof;
             if failure.is_some() && cancelled_at.is_none() {
                 self.cancel()?;
                 cancelled_at = Some(std::time::Instant::now());
@@ -3452,10 +3500,7 @@ impl GitOperationState {
             };
             if let Some(status) = terminal {
                 let since = terminal_at.get_or_insert_with(std::time::Instant::now);
-                if failure.is_some()
-                    || out_eof && err_eof
-                    || since.elapsed() >= std::time::Duration::from_secs(1)
-                {
+                if out_eof && err_eof || since.elapsed() >= std::time::Duration::from_secs(1) {
                     self.active
                         .lock()
                         .map_err(|_| {
@@ -3466,8 +3511,6 @@ impl GitOperationState {
                         return Err(error);
                     }
                     if !out_eof || !err_eof {
-                        self.uncertain_descendants
-                            .store(true, std::sync::atomic::Ordering::SeqCst);
                         return Err(Error::new(
                             "operation_uncertain",
                             "Git output pipes remained open after owned child exit",
@@ -3514,10 +3557,22 @@ impl GitCancellation {
     pub fn exited(&self) -> Result<bool> {
         if self
             .state
-            .uncertain_descendants
+            .uncertain_streams
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             return Ok(false);
+        }
+        #[cfg(test)]
+        {
+            let before_lock = self
+                .state
+                .before_exit_lock
+                .lock()
+                .map_err(|_| Error::new("ownership_conflict", "Git exit test hook lock failed"))?
+                .take();
+            if let Some(before_lock) = before_lock {
+                before_lock();
+            }
         }
         let mut active = self
             .state
@@ -3530,7 +3585,14 @@ impl GitCancellation {
             return Ok(false);
         }
 
-        Ok(self.state.closed.load(std::sync::atomic::Ordering::SeqCst))
+        // The thread publishes closed only after its pipe-closure guard drops.
+        // Read the latch again after closed: the initial read may predate both
+        // that guard's uncertainty publication and the active-child removal.
+        Ok(self.state.closed.load(std::sync::atomic::Ordering::SeqCst)
+            && !self
+                .state
+                .uncertain_streams
+                .load(std::sync::atomic::Ordering::SeqCst))
     }
 }
 pub struct RunningGitOperation<T: Send + 'static> {

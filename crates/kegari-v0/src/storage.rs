@@ -464,6 +464,45 @@ impl PrivateDir {
             _file: Arc::new(file),
         })
     }
+
+    /// Check the exact retained guard without excluding other observers.
+    /// An original inherited exclusive owner still prevents this observation;
+    /// missing or replaced guards are never recreated or treated as released.
+    pub fn observe_lock_existing(&self, leaf: &str, device: u64, inode: u64) -> Result<SharedLock> {
+        let file = self.open_file(leaf, libc::O_RDWR)?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| Error::io("inspect retained lock", error))?;
+        if metadata.dev() != device || metadata.ino() != inode {
+            return Err(Error::new(
+                "unsafe_storage",
+                "retained lock inode was replaced",
+            ));
+        }
+        if !try_shared(&file)? {
+            return Err(lock_contended());
+        }
+        Ok(SharedLock { file })
+    }
+}
+
+fn try_shared(file: &File) -> Result<bool> {
+    match fs2::FileExt::try_lock_shared(file) {
+        Ok(()) => Ok(true),
+        Err(error)
+            if error.raw_os_error().is_some()
+                && error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+        {
+            Ok(false)
+        }
+        Err(error) => {
+            let details = serde_json::json!({
+                "os_error": error.raw_os_error(),
+                "os_error_kind": format!("{:?}", error.kind()),
+            });
+            Err(Error::io("observe runtime lock", error).detail(details))
+        }
+    }
 }
 
 fn try_exclusive(file: &File) -> Result<bool> {
@@ -508,6 +547,20 @@ impl Drop for SectionLock {
         // No record operation can outlive this non-cloneable guard. If unlock
         // fails, closing our descriptor still preserves conservative exclusion
         // while any forked duplicate remains; it never authorizes another writer.
+        let _ = fs2::FileExt::unlock(&self.file);
+    }
+}
+
+/// A lexical observation, not a process-ownership or spawn capability.
+/// It cannot be cloned or exported to a child and does not exclude other readers.
+#[must_use = "hold the shared guard until the observation completes"]
+pub struct SharedLock {
+    file: File,
+}
+impl Drop for SharedLock {
+    fn drop(&mut self) {
+        // An unrelated pre-exec fork must not extend this observation lease.
+        // This opens a different description from any original exclusive owner.
         let _ = fs2::FileExt::unlock(&self.file);
     }
 }

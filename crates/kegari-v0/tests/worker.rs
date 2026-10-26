@@ -1196,7 +1196,8 @@ async fn forced_worker_joins_actual_fixture_provider_before_confirming_local_exi
     let records = processes.observe(operation).unwrap();
     assert_eq!(records.len(), 2);
     assert!(records.iter().all(|p| p.state
-        == kegari_v0::process_records::RecoveryState::GroupExitRecordedTreeUnverified
+        == kegari_v0::process_records::RecoveryState::OwnedGroupExitRecorded
+        && p.owned_group_exited
         && !p.all_descendants_exited));
 
     assert!(completion.error.is_some());

@@ -1,5 +1,15 @@
 # Process containment: managed workload and future descendant coverage
 
+Current entitlement status, reported by the user on 2026-10-26: the user has
+submitted an application to Apple for the Endpoint Security entitlement.
+Approval has not been reported. Revisit Apple's response and the full descendant
+coverage approach before the v1 / 1.0.0 production-readiness decision. This is a
+future design/qualification follow-up, not a blocker on the agreed managed v0
+profile or approval for signing, installation, activation or other host/live
+operations. Full coverage remains a prerequisite to untrusted-context
+qualification whenever that is pursued; the pre-v1 revisit does not defer that
+gate for earlier public-PR processing.
+
 On 2026-10-26 the user selected the managed-workload contract recorded in
 [SPEC version 1.3](../SPEC.md#12-deliverable-and-exclusions). The current local
 lifecycle guarantee covers qualified foreground tools whose subprocesses remain
@@ -60,6 +70,34 @@ fixtures can proceed while native qualification is incomplete. Completing those
 checks does not qualify a managed profile or a broader context profile by itself.
 
 ## Contract and implementation boundary
+
+The alpha.3 increment adds an opaque owned-group exit observation, produced by
+reaping the original child after the supported macOS group observation. A
+per-spawn identity binds this observation to its launch guard; an unrelated exit
+status or a reused numeric PID cannot satisfy that binding. Provider, Git and
+command owners retain the same observation across persistence retries.
+
+The group observation compares two bounded member inventories and repeated
+process birth identities after all observed members are terminal. A changed,
+unavailable or saturated inventory does not establish exit. These conservative
+observations are not an atomic kernel snapshot or broader descendant guarantee.
+
+New process journal records use schema 2. Legacy schema-1 group-exit rows remain
+readable without promotion to the newer exit evidence. A remaining inherited
+guard, changed/missing journal record or unresolved output stream preserves
+uncertainty. Once an inherited guard holder is observed after group exit, later
+descriptor release cannot clear that uncertainty. Shared observation locks let
+readers coexist without being mistaken for the original inherited owner.
+These records never claim arbitrary-descendant exit and do not
+recreate a live process capability or retire an unfinished operation on recovery.
+Handover metadata schema 2 explicitly requires process schema 2; older metadata
+is refused rather than assumed compatible. No existing installation is migrated.
+
+This is an implementation increment, not complete managed-profile support. The
+explicit foreground tool/dependency profile, registered-service lifecycle and
+their command/check/hook/cleanup integration remain required. Repository-command
+preflight refusal remains until that integration is ready; native qualification
+is a separate unfinished obligation.
 
 SPEC §§6.1, 7.1, 11.2–11.5 require admission before launch, independent resource
 isolation, verified-owned termination, preserved uncertainty and safe recovery.
@@ -125,7 +163,9 @@ distinct from Apple's restricted
 entitlement approval. Apple identifies non-security helper supervision as an
 intended use case, but that is not approval for Kegari. The public request route
 is [System Extensions and DriverKit](https://developer.apple.com/system-extensions/).
-No request, signing, installation or client activation has been performed.
+At that historical checkpoint, no request, signing, installation or client
+activation had been performed. The user's subsequent application submission is
+recorded above; it does not establish approval or implementation qualification.
 No approval timeline is established; see
 [Apple's request-status clarification](https://developer.apple.com/forums/thread/841639).
 

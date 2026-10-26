@@ -642,14 +642,34 @@ async fn repair_cycle_inner(
             .code,
         "no_retry_target"
     );
-    let target = crate::runtime_workflow::select_retry_target_with_unfinished(
-        runtime,
-        gate.work(),
-        &receipts,
-        &[],
-        std::slice::from_ref(&proof),
-        &limits,
-    );
+    // A still-available continuation first observes the actual one-second
+    // spacing from its retained terminal receipts. Wait only for the declared
+    // instant, using the fixture's existing finite continuation allowance.
+    let target = tokio::time::timeout(std::time::Duration::from_millis(1100), async {
+        loop {
+            let target = crate::runtime_workflow::select_retry_target_with_unfinished(
+                runtime,
+                gate.work(),
+                &receipts,
+                &[],
+                std::slice::from_ref(&proof),
+                &limits,
+            );
+            let Err(wait) = &target else {
+                return target;
+            };
+            if explicit_retry || wait.code != "retry_wait" {
+                return target;
+            }
+            let not_before: chrono::DateTime<Utc> =
+                serde_json::from_value(wait.details["not_before"].clone())
+                    .expect("continuation spacing must declare its actual due instant");
+            let delay = (not_before - Utc::now()).to_std().unwrap_or_default();
+            tokio::time::sleep(delay).await;
+        }
+    })
+    .await
+    .expect("continuation spacing exceeded the fixture's finite wait bound");
     if explicit_retry {
         assert_eq!(target.unwrap().phase, *proof.phase());
     } else {
@@ -852,7 +872,9 @@ async fn repair_cycle_inner(
     proof
         .verify_failure_inventory(&built.runtime.control.operations().unwrap())
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    if retried.is_some() {
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    }
     fs::write(
         repair
             .contract

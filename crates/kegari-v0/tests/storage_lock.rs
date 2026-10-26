@@ -5,7 +5,7 @@ use kegari_v0::storage::PrivateDir;
 use std::{
     io::{self, Read, Write},
     net::Shutdown,
-    os::{fd::AsRawFd, unix::net::UnixStream, unix::process::CommandExt},
+    os::{fd::AsRawFd, unix::fs::MetadataExt, unix::net::UnixStream, unix::process::CommandExt},
     process::{Command, ExitStatus, Stdio},
     sync::Mutex,
     thread::{self, JoinHandle},
@@ -137,6 +137,7 @@ fn exclusive_lock_survives_parent_drop_until_inherited_child_execs() {
     let root = temp.path().canonicalize().unwrap();
     let records = PrivateDir::create(&root.join("state")).unwrap();
     let parent_lock = records.lock("delivery-effects.lock").unwrap();
+    let identity = std::fs::metadata(records.path().join("delivery-effects.lock")).unwrap();
 
     let mut child = PausedSpawn::start().unwrap();
     child.wait_before_exec().unwrap();
@@ -152,8 +153,96 @@ fn exclusive_lock_survives_parent_drop_until_inherited_child_execs() {
     assert_eq!(error.details["os_error"], libc::EWOULDBLOCK, "{error:?}");
     assert_eq!(error.details["os_error_kind"], "WouldBlock", "{error:?}");
 
+    let error = records
+        .observe_lock_existing("delivery-effects.lock", identity.dev(), identity.ino())
+        .err()
+        .expect("a shared observation cannot bypass the actual inherited exclusive owner");
+    assert_eq!(error.code, "ownership_conflict", "{error:?}");
+
     assert!(child.release_and_join().unwrap().success());
+    let observed = records
+        .observe_lock_existing("delivery-effects.lock", identity.dev(), identity.ino())
+        .unwrap();
+    drop(observed);
     let _uncontended = records.lock("delivery-effects.lock").unwrap();
+}
+
+#[test]
+fn shared_guard_observers_coexist_and_preserve_exclusive_ownership() {
+    let _serial = FIXTURE_SERIAL.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let records = PrivateDir::create(&root.join("state")).unwrap();
+    let exclusive = records.lock("process.guard").unwrap();
+    let identity = std::fs::metadata(records.path().join("process.guard")).unwrap();
+    let observe = || records.observe_lock_existing("process.guard", identity.dev(), identity.ino());
+    assert_eq!(observe().err().unwrap().code, "ownership_conflict");
+    drop(exclusive);
+
+    let first = observe().unwrap();
+    let second = observe().unwrap();
+    assert_eq!(
+        records.lock("process.guard").err().unwrap().code,
+        "ownership_conflict"
+    );
+    drop(first);
+    assert_eq!(
+        records.lock("process.guard").err().unwrap().code,
+        "ownership_conflict"
+    );
+    let third = observe().unwrap();
+    drop(second);
+    drop(third);
+    let _exclusive_again = records.lock("process.guard").unwrap();
+}
+
+#[test]
+fn shared_guard_observation_never_recreates_or_accepts_a_substituted_inode() {
+    let _serial = FIXTURE_SERIAL.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let records = PrivateDir::create(&root.join("state")).unwrap();
+    let exclusive = records.lock("process.guard").unwrap();
+    let path = records.path().join("process.guard");
+    let retained = records.path().join("retained.guard");
+    let identity = std::fs::metadata(&path).unwrap();
+    std::fs::rename(&path, &retained).unwrap();
+    assert_eq!(
+        records
+            .observe_lock_existing("process.guard", identity.dev(), identity.ino())
+            .err()
+            .unwrap()
+            .code,
+        "record_missing"
+    );
+    assert!(!path.exists());
+
+    // Keeping the original inode retained prevents accidental inode reuse.
+    let replacement = records.lock("process.guard").unwrap();
+    assert_ne!(std::fs::metadata(&path).unwrap().ino(), identity.ino());
+    assert_eq!(
+        records
+            .observe_lock_existing("process.guard", identity.dev(), identity.ino())
+            .err()
+            .unwrap()
+            .code,
+        "unsafe_storage"
+    );
+    drop(replacement);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::rename(&retained, &path).unwrap();
+    assert_eq!(
+        records
+            .observe_lock_existing("process.guard", identity.dev(), identity.ino())
+            .err()
+            .unwrap()
+            .code,
+        "ownership_conflict"
+    );
+    drop(exclusive);
+    let _original = records
+        .observe_lock_existing("process.guard", identity.dev(), identity.ino())
+        .unwrap();
 }
 
 #[test]

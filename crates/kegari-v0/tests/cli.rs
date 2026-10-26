@@ -924,6 +924,8 @@ async fn no_argument_first_launch_explains_setup_without_registering_or_starting
     let mut human = Vec::new();
     write_output(&response, false, None, &mut human).unwrap();
     let human = String::from_utf8(human).unwrap();
+    assert!(human.starts_with("Target: local\nRuntime: none (client-only)\n"));
+    assert!(!human.contains("registered local"));
     assert!(human.contains("Result: target_unavailable"));
     assert!(human.contains("Next action: Run `kegari-v0 setup --help`"));
     let mut encoded = Vec::new();

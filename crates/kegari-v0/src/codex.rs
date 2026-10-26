@@ -1358,7 +1358,7 @@ impl RpcClient {
         if let Some(guard) = &mut guard {
             // A quick metadata process may exit before inspection. Its actual
             // Child/OwnedGroup must still be joined before bytes qualify a version.
-            let _ = guard.spawned_tokio(&child);
+            let _ = guard.spawned_tokio(&child, &group);
         }
         Ok(VersionProbe {
             identity: executable.clone(),
@@ -1510,7 +1510,7 @@ impl RpcClient {
         // even on capture failure; no protocol is sent and termination still joins it.
         let startup_error = guard
             .as_mut()
-            .and_then(|guard| guard.spawned_tokio(&child).err());
+            .and_then(|guard| guard.spawned_tokio(&child, &group).err());
         let mut rpc = Self::from_transport(stdout, stdin, request_timeout)?;
         rpc.startup_error = startup_error;
         rpc.child = Some(std::sync::Arc::new(OwnedProviderProcess::new(
@@ -2838,6 +2838,7 @@ impl OwnedProviderProcess {
                 child,
                 group,
                 guard,
+                reaped: None,
             }),
             exited: std::sync::atomic::AtomicBool::new(false),
         }
@@ -2884,23 +2885,23 @@ struct ProviderChild {
     child: Child,
     group: crate::process_group::OwnedGroup,
     guard: Option<crate::process_records::SpawnGuard>,
+    reaped: Option<crate::process_group::OwnedGroupExit>,
 }
 impl ProviderChild {
     fn observe_exit(&mut self) -> Result<Option<std::process::ExitStatus>> {
-        if !self.group.observe_exit_before_reap()? {
+        if self.reaped.is_none() {
+            // Retain the original reaping proof before journal persistence. A
+            // failed write must retry with this token, not reconstruct an exit.
+            self.reaped = self.group.try_reap_tokio(&mut self.child)?;
+        }
+        let Some(reaped) = &self.reaped else {
             return Ok(None);
+        };
+        if let Some(guard) = &mut self.guard {
+            guard.group_exited(reaped)?;
         }
-        let status = self
-            .child
-            .try_wait()
-            .map_err(|error| Error::io("reap owned provider", error))?;
-        if let Some(status) = status {
-            if let Some(guard) = &mut self.guard {
-                guard.group_exited(status)?;
-            }
-            self.guard.take();
-        }
-        Ok(status)
+        self.guard.take();
+        Ok(Some(reaped.status()))
     }
 }
 async fn terminate_owned_provider(process: &std::sync::Arc<OwnedProviderProcess>) -> Result<()> {

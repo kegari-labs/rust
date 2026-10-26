@@ -718,7 +718,7 @@ fn start_command_inner(
     // handle and Starting journal until owned cleanup and reap establish exit.
     let capture_error = guard
         .as_mut()
-        .and_then(|guard| guard.spawned_tokio(&child).err());
+        .and_then(|guard| guard.spawned_tokio(&child, &group).err());
     let capture_error = match capture_error {
         Some(error) => match group.observe_exit_before_reap() {
             Ok(true) => None,
@@ -750,6 +750,7 @@ fn start_command_inner(
             child,
             group,
             terminal: None,
+            reaped: None,
             out_eof,
             err_eof,
             guard,
@@ -776,6 +777,7 @@ struct CommandProcess {
     child: tokio::process::Child,
     group: crate::process_group::OwnedGroup,
     terminal: Option<std::process::ExitStatus>,
+    reaped: Option<crate::process_group::OwnedGroupExit>,
     out_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
     err_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
     guard: Option<crate::process_records::SpawnGuard>,
@@ -783,18 +785,16 @@ struct CommandProcess {
 }
 impl CommandProcess {
     fn observe(&mut self) -> Result<Option<std::process::ExitStatus>> {
-        if self.terminal.is_none() && self.group.observe_exit_before_reap()? {
-            self.terminal = self
-                .child
-                .try_wait()
-                .map_err(|e| Error::io("reap owned command after group cleanup", e))?;
+        if self.reaped.is_none() {
+            self.reaped = self.group.try_reap_tokio(&mut self.child)?;
         }
-        if let Some(status) = self.terminal
+        if let Some(exit) = self.reaped.as_ref()
             && let Some(guard) = self.guard.as_mut()
         {
-            guard.group_exited(status)?;
+            guard.group_exited(exit)?;
             self.guard = None;
         }
+        self.terminal = self.reaped.as_ref().map(|exit| exit.status());
         Ok(self.terminal)
     }
 }
@@ -1090,6 +1090,7 @@ mod owned_exit_tests {
                 child,
                 group,
                 terminal: None,
+                reaped: None,
                 out_eof,
                 err_eof,
                 guard: None,
