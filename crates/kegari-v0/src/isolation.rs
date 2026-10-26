@@ -12,6 +12,18 @@ use tokio::process::Command;
 #[path = "managed_execution.rs"]
 mod managed_execution;
 pub use managed_execution::BoundManagedExecution;
+#[path = "managed_resources.rs"]
+mod managed_resources;
+
+/// Observe a bounded canonical SDK/library tree for an explicit managed policy.
+/// This reads content only; it does not execute tools or issue qualification.
+pub fn managed_resource_digest(path: &Path, directory: bool) -> Result<String> {
+    managed_resources::content_digest(
+        path,
+        directory,
+        &mut managed_resources::ResourceBudget::new(),
+    )
+}
 
 #[cfg(all(test, target_os = "macos"))]
 #[path = "isolation_native_tests.rs"]
@@ -322,6 +334,15 @@ impl ValidatedIsolation {
         }
         Ok(())
     }
+    /// Full content observation belongs outside serialized Control callbacks.
+    /// A successful observation binds resources; it does not qualify a workload.
+    pub fn revalidate_resource_contents(&self) -> Result<()> {
+        self.revalidate()?;
+        if let Some(managed) = &self.plan.managed_execution {
+            managed.revalidate()?;
+        }
+        Ok(())
+    }
     /// Bare executables follow the admitted PATH; explicit relative paths stay
     /// anchored at cwd. Arguments and script text are never rewritten.
     pub fn resolve_executable(&self, name: &str) -> Result<PathBuf> {
@@ -449,8 +470,8 @@ impl ValidatedIsolation {
             .plan
             .managed_execution
             .as_ref()
-            .map_or(&[][..], |profile| profile.read_roots());
-        for grant in self.plan.read_roots.iter().chain(managed_reads) {
+            .map_or_else(Vec::new, |profile| profile.read_grants());
+        for grant in self.plan.read_roots.iter().chain(&managed_reads) {
             profile.push_str(&format!(
                 "(allow file-read* ({} {}))\n",
                 if grant.directory {
@@ -491,6 +512,14 @@ impl ValidatedIsolation {
                 quote_path(executable)?,
                 quote_path(executable)?
             ));
+        }
+        if let Some(managed) = &self.plan.managed_execution {
+            for path in managed.executable_mappings() {
+                profile.push_str(&format!(
+                    "(allow file-map-executable (literal {}))\n",
+                    quote_path(path)?
+                ));
+            }
         }
         if let Some(managed) = &self.plan.managed_execution
             && let Some(root) = managed.generated_root(&self.plan)?

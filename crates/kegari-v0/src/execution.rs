@@ -994,6 +994,7 @@ impl LocalExecutor<'_> {
     ) -> Result<PreparedCheck> {
         let original = self.check_ownership_binding(invocation.binding, effective.as_ref())?;
         self.preflight(original)?;
+        self.isolation.revalidate_resource_contents()?;
         let checks = match invocation.kind {
             CheckKind::Local => &invocation.workflow.front_matter.checks.local,
             CheckKind::Integrated => &invocation.workflow.front_matter.checks.integrated,
@@ -1196,6 +1197,7 @@ impl LocalExecutor<'_> {
         let after = match self
             .check_ownership_binding(&binding, effective.as_ref())
             .and_then(|original| self.preflight(original))
+            .and_then(|()| self.isolation.revalidate_resource_contents())
             .and_then(|()| source_snapshot(self.git, self.isolation, &self.limits, &outputs))
         {
             Ok(snapshot) => snapshot,
@@ -1549,6 +1551,7 @@ impl LocalExecutor<'_> {
         mut persist: impl FnMut(&HookLedger) -> Result<()>,
     ) -> Result<PreparedHook> {
         self.preflight(invocation.binding)?;
+        self.isolation.revalidate_resource_contents()?;
         if ledger.binding_digest != canonical_digest(1, invocation.binding)? {
             return Err(Error::new(
                 "execution_identity",
@@ -1737,7 +1740,10 @@ impl LocalExecutor<'_> {
                     }
                 }
             }
-            if let Err(error) = self.preflight(&binding) {
+            if let Err(error) = self
+                .preflight(&binding)
+                .and_then(|()| self.isolation.revalidate_resource_contents())
+            {
                 record.state = HookState::StartedUnknown;
                 record.error_code = Some(error.code);
             }
@@ -1884,7 +1890,7 @@ impl LocalExecutor<'_> {
             .parent()
             .ok_or_else(|| Error::invalid("source parent missing"))?;
         replace_source_at(parent, &path, write.bytes, write.executable, || {
-            self.preflight(binding)?;
+            self.launch_identity(binding)?;
             if isolation::canonical_target(&path)? != path
                 || artifact_stamp(&path, self.limits.source_bytes)?
                     .map(|s| s.digest)

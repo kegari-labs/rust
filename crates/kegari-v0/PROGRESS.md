@@ -6,7 +6,54 @@ paused. The previous pause followed the explicit "Keep the goal paused" /
 "Do not start implementation yet" instruction, rather than an entitlement
 prerequisite. Supervision and existing action restrictions remain in force.
 
-Current verified increment on baseline `db4374f`: **0.2.0-alpha.7** corrects
+Current verified increment on baseline `0a8ab79`: **0.2.0-alpha.8** adds
+bounded SDK/library content identity and explicit executable-library mappings.
+Full content observations run outside serialized Control callbacks during
+preparation, check/hook completion and cleanup; changed inputs cannot become
+successful evidence. The original resource read scope stays explicit. This is
+pre/post observation, not an immutable OS snapshot or workload qualification.
+The public `managed_profile_unqualified` gate remains closed.
+
+The final exact-source release suite passed **1,117 tests, zero failures, three
+native ignores, across 40 groups**. All-target clippy, formatting, inventory and
+five staged-binary inspections pass. Initial fixture and lint failures are
+retained. Independent review corrected two malformed-manifest edge cases and
+confirmed full SDK reads remain outside Control. It also corrected an inherited
+Git probe in the final source-write callback while preserving authority, ownership
+and file-content conflict checks. No native qualification run was performed this increment.
+Final independent evidence audit verified 1,077 referenced hashes, exact source/
+test membership, all 40 test targets and staged metadata/assets without a material mismatch.
+
+The executable is staged at
+`target/prereleases/kegari-v0-0.2.0-alpha.8-aarch64-apple-darwin-7c2ca3de037b/kegari-v0`;
+SHA-256 `7c2ca3de037b098efdd5c22b979237d3b9ae84d8386b260b45bea35d1aea8fae`;
+build identity
+`sha256:bd82ae2e770562550c846b5af5e9e3b343759c4ec80ab488b6fa86c41adc07dc`.
+The final 724-input test snapshot matches current source. Content-bearing managed
+records use schema 3; legacy absent-content records retain schemas 1/2. Handover
+metadata 3 requires managed schema 3 and process schema 3. Instruction assets stay
+version 3. See [resource-binding evidence](validation/MANAGED-RESOURCES.md).
+This is a separately reviewed capability increment after alpha.7's fixed native
+baseline; no commits are consolidated or history rewritten.
+
+The initial full run stopped at two new execution-fixture setup failures after
+858 passes. Its host Git path failed the existing protected-ancestry check; using
+the fixture's existing protected copy corrected setup without relaxing that
+check. Execution then passed 20 tests; the remaining targets passed 257. Initial
+clippy required boxing one private in-memory isolation value and using an
+equivalent schema range. After review and correction, clippy and the full final
+suite passed. Logs, source snapshots and earlier failures are archived beside
+the staged executable. All owned Cargo and artifact-inspection processes finished.
+
+The previous goal turn was progress: alpha.7 was committed as
+`0a8ab79570614ad9d2cb1a4006deb4232935914f` —
+`fix(kegari-v0): allow bounded native loader bootstrap` — and NQ-02C passed once.
+That approval remains consumed. Its exact-source alpha.7 evidence does not
+qualify alpha.8's resource-bearing profile. NQ-01B remains separately pending.
+No setup, Keychain, installation, service/coordinator activation, provider or
+remote operation is included. No minor milestone or overall goal is complete.
+
+Previous verified increment on baseline `db4374f`: **0.2.0-alpha.7** corrects
 native loader bootstrap. The separately approved NQ-02C test ran once and passed
 all three fixed cases: Bash output/redaction and file boundaries, exit 7, and an
 owned sleep timeout with SIGKILL. Every case recorded original group/journal/
@@ -67,6 +114,7 @@ commands, artifacts, failed attempts, reviews, compatibility and remaining limit
 | --- | --- |
 | Foreground supervision and finite check-owned services | Implemented and locally tested; no service native qualification claimed |
 | Native foreground launch | NQ-02C passed three fixed cases on alpha.7; A/B failures retained; all three single-use approvals consumed |
+| SDK/library content and library mappings | Implemented and locally verified; complete offline Rust/Cargo contract and native qualification remain open |
 | Managed-profile admission | Public refusal remains enforced; configuration or hashes do not qualify tools |
 | Supported Rust/Cargo, endpoint services and remaining native checks | Incomplete; additional native runs need separate approval |
 | 0.3 recovery → 0.4 external/visual → 0.5 handover → 0.6 evaluations → 0.7 real qualification | Sequence unchanged; no minor milestone complete |
@@ -80,8 +128,10 @@ informed the alpha.7 correction; the exact denied operation remains unproven.
 The pin predates alpha.6's interlock. See [native recheck evidence](validation/NATIVE-MANAGED-RECHECK.md).
 
 **Next work package:** implement the closed shipped Rust/Cargo support contract:
-content-bound compiler/linker/SDK resources, credential-free offline inputs/private state,
-explicit environment and generated-executable cases. The concrete plan is in
+closed support/case selection, complete vendored dependencies, protected Cargo
+configuration, command-only private state and exact compiler/linker/SDK environment
+bound into launch identity. Use a private prepared launch, truthful result
+artifacts and generated-executable/doctest cases. The concrete plan is in
 [the qualification design](docs/managed-qualification-design.md). A runtime
 per-profile issuer/registry is not required by SPEC and remains deferred.
 Endpoint services need scoped network support and separate native cases.

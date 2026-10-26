@@ -2,13 +2,17 @@
 //! live sandbox or media qualification; no provider/network actions occur.
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
+use kegari_v0::config::{
+    ManagedExecutable, ManagedExecution, ManagedLifecycle, ManagedReadRoot, ManagedResourceContent,
+};
 use kegari_v0::digest::bytes_digest;
 use kegari_v0::error::{Error, Result};
 use kegari_v0::evidence::{CheckKind, Generation, WorkIdentity};
 use kegari_v0::execution::*;
 use kegari_v0::git::{Git, RepositoryId};
 use kegari_v0::isolation::{
-    CommandOutcome, ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation,
+    BoundManagedExecution, CommandOutcome, ExecutionRole, IsolationPlan, PathGrant,
+    ValidatedIsolation, managed_resource_digest,
 };
 use kegari_v0::workflow::Workflow;
 use serde_json::json;
@@ -204,6 +208,61 @@ impl Fixture {
             limits: ExecutionLimits::default(),
             ownership: &self.owner,
         }
+    }
+    fn with_content_resource(role: ExecutionRole) -> (Self, PathBuf) {
+        let mut fixture = Self::new(role);
+        let resource = fixture
+            .boundary
+            .plan()
+            .execution_root
+            .parent()
+            .unwrap()
+            .join("tool-support");
+        fs::create_dir(&resource).unwrap();
+        let library = resource.join("library.dylib");
+        fs::write(&library, b"fixture library; never loaded\n").unwrap();
+        let mut plan = fixture.boundary.plan().clone();
+        // The ordinary boundary fixture permits its host Git path, which need
+        // not have protected ancestry. Managed declarations require the owned
+        // pinned copy already used by this fixture's real Git adapter.
+        let host_git = git_path();
+        for executable in &mut plan.executables {
+            if *executable == host_git {
+                *executable = fixture.git.executable().to_path_buf();
+            }
+        }
+        let policy = ManagedExecution {
+            lifecycle: ManagedLifecycle::ForegroundV1,
+            executables: plan
+                .executables
+                .iter()
+                .map(|path| ManagedExecutable {
+                    path: path.to_str().unwrap().into(),
+                    digest: bytes_digest(&fs::read(path).unwrap()),
+                })
+                .collect(),
+            read_roots: vec![ManagedReadRoot {
+                path: resource.to_str().unwrap().into(),
+                directory: true,
+                content: Some(ManagedResourceContent {
+                    digest: managed_resource_digest(&resource, true).unwrap(),
+                    executable_mappings: vec!["library.dylib".into()],
+                }),
+            }],
+            generated_executables: None,
+        };
+        plan.managed_execution = Some(BoundManagedExecution::resolve(&policy).unwrap());
+        fixture.boundary = plan.validate().unwrap();
+        fixture.binding.isolation_digest = fixture.boundary.digest().into();
+        // Reuse the actual exclusive marker, work and repository identity. Only
+        // the fixture's newly declared isolation binding changes.
+        fixture.owner = OwnedDirectory::reopen(
+            fixture.owner.marker(),
+            fixture.owner.digest(),
+            &fixture.boundary,
+        )
+        .unwrap();
+        (fixture, library)
     }
     fn workflow(&self, hooks: &str) -> Workflow {
         Workflow::parse(&format!("---\nhooks:\n{hooks}\nchecks:\n  local:\n    unit:\n      argv: ['/usr/bin/true']\n      result_artifact: '{}'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{}'\n---\nPerform the scoped work.\n", self.boundary.plan().scratch.join("unit.json").display(), self.boundary.plan().scratch.join("e2e.json").display()), self.source.join("WORKFLOW.md")).unwrap()
@@ -767,6 +826,138 @@ async fn split_hook_persists_unknown_before_start_and_skipped_hooks_have_no_proc
 }
 
 #[tokio::test]
+async fn changed_managed_resource_after_check_prepare_persists_uncertain_evidence() {
+    let (f, library) = Fixture::with_content_resource(ExecutionRole::Validation);
+    let workflow = f.workflow("  timeout_ms: 1000");
+    let output = f.boundary.plan().scratch.join("unit.json");
+    let journal = f.root.join("resource-check.json");
+    let mut runner = FakeBoundary::new(vec![Step {
+        writes: vec![
+            (output.clone(), b"successful command artifact".to_vec()),
+            (library.clone(), b"changed library during command".to_vec()),
+        ],
+        ..Step::success()
+    }]);
+    runner.required_journal = Some(journal.clone());
+    let executor = f.executor(&runner);
+    let invocation = || CheckInvocation {
+        binding: &f.binding,
+        workflow: &workflow,
+        name: "unit",
+        kind: CheckKind::Local,
+        additional_outputs: &[],
+        previous_outputs: &[],
+    };
+    let mut entries = Vec::new();
+    let prepared = executor
+        .prepare_check(invocation(), |entry| {
+            entries.push(serde_json::to_value(entry).unwrap());
+            fs::write(&journal, serde_json::to_vec(&entries).unwrap()).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["state"], "started");
+    assert!(runner.calls.lock().unwrap().is_empty());
+    f.boundary.revalidate_resource_contents().unwrap();
+
+    let running = executor.start_check(prepared).unwrap();
+    assert_eq!(runner.calls.lock().unwrap().len(), 1);
+    assert_eq!(fs::read(&output).unwrap(), b"successful command artifact");
+    let error = executor
+        .complete_check(running, |entry| {
+            entries.push(serde_json::to_value(entry).unwrap());
+            fs::write(&journal, serde_json::to_vec(&entries).unwrap()).unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1]["state"], "uncertain");
+    assert_eq!(entries[1]["operation_id"], json!(f.binding.operation_id));
+    assert_eq!(entries[1]["error_code"], error.code);
+    assert_eq!(
+        error.code,
+        f.boundary.revalidate_resource_contents().unwrap_err().code
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&journal).unwrap()).unwrap(),
+        json!(entries)
+    );
+    assert!(!entries.iter().any(|entry| entry["state"] == "finished"));
+    assert_eq!(
+        fs::read(&library).unwrap(),
+        b"changed library during command"
+    );
+
+    // The same drift also refuses a fresh preparation before another dispatch
+    // or Started record. No new evidence can adopt the changed resource.
+    assert!(
+        executor
+            .prepare_check(invocation(), |_| {
+                panic!("resource drift must be refused before another Started record")
+            })
+            .is_err()
+    );
+    assert_eq!(runner.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn changed_managed_resource_during_hook_retains_started_unknown() {
+    let (f, library) = Fixture::with_content_resource(ExecutionRole::Child);
+    let workflow = f.workflow("  after_create: 'prepare fixture'\n  timeout_ms: 1000");
+    let journal = f.root.join("resource-hook.json");
+    let mut runner = FakeBoundary::new(vec![Step {
+        writes: vec![(library, b"changed hook library contents".to_vec())],
+        ..Step::success()
+    }]);
+    runner.required_journal = Some(journal.clone());
+    let executor = f.executor(&runner);
+    let mut ledger = HookLedger::new(&f.binding).unwrap();
+    let prepared = executor
+        .prepare_hook(
+            &mut ledger,
+            hook(&f, &workflow, HookPhase::AfterCreate, None),
+            |state| {
+                fs::write(&journal, serde_json::to_vec(state).unwrap()).unwrap();
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(prepared.requires_execution());
+    assert!(!ledger.initialized);
+    assert_eq!(
+        ledger.records.values().next().unwrap().state,
+        HookState::StartedUnknown
+    );
+    assert!(runner.calls.lock().unwrap().is_empty());
+    f.boundary.revalidate_resource_contents().unwrap();
+    let running = executor.start_hook(prepared).unwrap();
+    let result = executor
+        .complete_hook(&mut ledger, running, |state| {
+            fs::write(&journal, serde_json::to_vec(state).unwrap()).unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(runner.calls.lock().unwrap().len(), 1);
+    assert_eq!(result.state, HookState::StartedUnknown);
+    assert!(!result.allows_next_phase);
+    assert!(!ledger.initialized);
+    let retained: HookLedger = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+    assert!(!retained.initialized);
+    assert_eq!(retained.records.len(), 1);
+    let record = retained.records.values().next().unwrap();
+    assert_eq!(record.state, HookState::StartedUnknown);
+    assert_eq!(record.exit_code, Some(0));
+    let resource_error = f.boundary.revalidate_resource_contents().unwrap_err();
+    assert_eq!(
+        record.error_code.as_deref(),
+        Some(resource_error.code.as_str())
+    );
+}
+
+#[tokio::test]
 async fn named_checks_capture_fresh_artifacts_and_refuse_stale_unrun_or_changed_source() {
     let f = Fixture::new(ExecutionRole::Validation);
     let w = f.workflow("  timeout_ms: 1000");
@@ -1025,10 +1216,23 @@ async fn noexec_roles_and_unregistered_directory_cannot_run_or_write() {
 }
 
 #[test]
-fn source_tool_preserves_shared_checkout_rejects_conflicts_and_enforces_exact_write_scope() {
+fn source_tool_preserves_scope_and_conflicts_without_invoking_git_inside_mutation() {
     let f = Fixture::new(ExecutionRole::Child);
     let runner = FakeBoundary::default();
-    let executor = f.executor(&runner);
+    // Source mutation holds Control's gate. Git-backed revision observation is
+    // not part of the exact file CAS, and must not launch/wait under that gate.
+    let missing_git = f.root.join("unavailable-git");
+    fs::write(&missing_git, b"fixture bytes; never executed").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&missing_git, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let unavailable = Git::from_pinned_executable(&missing_git).unwrap();
+    fs::remove_file(missing_git).unwrap();
+    let executor = LocalExecutor {
+        git: &unavailable,
+        ..f.executor(&runner)
+    };
     let receipt = executor
         .write_source(
             &f.binding,

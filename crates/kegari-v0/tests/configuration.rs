@@ -1197,6 +1197,7 @@ async fn managed_policy_changes_fence_even_when_another_field_is_invalid() {
                 .push(kegari_v0::config::ManagedReadRoot {
                     path: "/private/tmp/declared-sdk".into(),
                     directory: true,
+                    content: None,
                 }),
             "generated" => {
                 workspace

@@ -156,10 +156,12 @@ fn managed_policy_is_closed_and_validates_explicit_unique_tool_inventory() {
         ManagedReadRoot {
             path: "/private/tmp/sdk".into(),
             directory: true,
+            content: None,
         },
         ManagedReadRoot {
             path: "/private/tmp/sdk".into(),
             directory: false,
+            content: None,
         },
     ];
     assert!(invalid.validate().is_err());
@@ -186,6 +188,7 @@ fn managed_policy_inventory_limits_accept_boundary_and_refuse_overflow() {
         .map(|index| ManagedReadRoot {
             path: format!("/private/tmp/reads/root-{index}"),
             directory: true,
+            content: None,
         })
         .collect();
     policy.generated_executables = Some(ManagedGeneratedExecutables::ScratchBuildV1);
@@ -199,11 +202,253 @@ fn managed_policy_inventory_limits_accept_boundary_and_refuse_overflow() {
     policy.read_roots.push(ManagedReadRoot {
         path: "/private/tmp/reads/overflow".into(),
         directory: true,
+        content: None,
     });
     assert!(policy.validate().is_err());
     policy.read_roots.pop();
     policy.executables.clear();
     assert!(policy.validate().is_err());
+}
+
+#[test]
+fn managed_resource_content_omission_preserves_legacy_bytes_and_revision() {
+    let legacy = json!({"path":"/private/tmp/sdk","directory":true});
+    let read: ManagedReadRoot = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(read.content.is_none());
+    assert_eq!(serde_json::to_value(&read).unwrap(), legacy);
+    assert_eq!(
+        serde_json::to_string(&read).unwrap(),
+        r#"{"path":"/private/tmp/sdk","directory":true}"#
+    );
+    let mut config = configured();
+    let mut policy = managed_policy();
+    policy.read_roots.push(read);
+    config
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .managed_execution = Some(policy);
+    let value = serde_json::to_value(&config).unwrap();
+    assert_eq!(
+        config.revision().unwrap(),
+        canonical_digest(1, &value).unwrap()
+    );
+    let text = toml::to_string(&config).unwrap();
+    assert!(!text.contains("content"));
+    let parsed = Config::parse(&text).unwrap();
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+    assert_eq!(parsed.revision().unwrap(), config.revision().unwrap());
+}
+
+#[test]
+fn managed_resource_content_is_closed_and_validates_digest_and_mapping_scope() {
+    let digest = bytes_digest(b"declared content only; no resource has been observed");
+    let value = json!({"path":"/private/tmp/sdk","directory":true,"content":{"digest":digest}});
+    let read: ManagedReadRoot = serde_json::from_value(value.clone()).unwrap();
+    assert!(
+        read.content
+            .as_ref()
+            .unwrap()
+            .executable_mappings
+            .is_empty()
+    );
+    assert_eq!(serde_json::to_value(&read).unwrap(), value);
+    let mut policy = managed_policy();
+    policy.read_roots.push(read);
+    policy.validate().unwrap();
+    for field in ["qualified", "observed", "writable", "recursive"] {
+        let mut invalid = value.clone();
+        invalid["content"][field] = json!(true);
+        assert!(serde_json::from_value::<ManagedReadRoot>(invalid).is_err());
+    }
+    assert!(
+        serde_json::from_value::<ManagedReadRoot>(json!({
+            "path":"/private/tmp/sdk","directory":true,"content":{}
+        }))
+        .is_err()
+    );
+    for invalid in ["", "latest", "sha256:xyz"] {
+        let mut bad = policy.clone();
+        bad.read_roots[0].content.as_mut().unwrap().digest = invalid.into();
+        assert!(bad.validate().is_err());
+    }
+    policy.read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .executable_mappings = vec!["lib/compiler.dylib".into(), "lib/资源.dylib".into()];
+    policy.validate().unwrap();
+    policy.read_roots[0].directory = false;
+    assert!(policy.validate().is_err());
+    policy.read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .executable_mappings = vec![".".into()];
+    policy.validate().unwrap();
+    policy.read_roots[0].directory = true;
+    assert!(policy.validate().is_err());
+}
+
+#[test]
+fn managed_resource_mappings_reject_aliases_controls_and_excessive_inventory() {
+    let mut policy = managed_policy();
+    policy.read_roots.push(ManagedReadRoot {
+        path: "/private/tmp/sdk".into(),
+        directory: true,
+        content: Some(ManagedResourceContent {
+            digest: bytes_digest(b"fixture resource declaration"),
+            executable_mappings: vec![],
+        }),
+    });
+    for mapping in [
+        "",
+        "/absolute",
+        "//absolute",
+        ".",
+        "..",
+        "../escape",
+        "lib/../escape",
+        "./lib",
+        "lib/./file",
+        "lib//file",
+        "lib/",
+        "lib\\file",
+        "lib\0file",
+        "lib\nfile",
+        "lib\tfile",
+        "lib\u{7f}file",
+        "lib\u{85}file",
+    ] {
+        policy.read_roots[0]
+            .content
+            .as_mut()
+            .unwrap()
+            .executable_mappings = vec![mapping.into()];
+        assert!(policy.validate().is_err(), "accepted {mapping:?}");
+    }
+    let boundary = format!("{}aa", "a/".repeat(2047));
+    assert_eq!(boundary.len(), 4096);
+    policy.read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .executable_mappings = vec![boundary.clone()];
+    policy.validate().unwrap();
+    policy.read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .executable_mappings = vec![format!("{boundary}a")];
+    assert!(policy.validate().is_err());
+    policy.read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .executable_mappings = vec!["lib/file".into(); 2];
+    assert!(policy.validate().is_err());
+    policy.read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .executable_mappings = (0..MAX_MANAGED_EXECUTABLE_MAPPINGS)
+        .map(|i| format!("lib/file-{i}"))
+        .collect();
+    policy.validate().unwrap();
+    policy.read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .executable_mappings
+        .push("lib/overflow".into());
+    assert!(policy.validate().is_err());
+}
+
+#[test]
+fn managed_resource_content_changes_revision_and_keeps_mapping_names_literal() {
+    let mut config = configured();
+    let mut policy = managed_policy();
+    policy.read_roots.push(ManagedReadRoot {
+        path: "$SDK".into(),
+        directory: true,
+        content: None,
+    });
+    config
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .managed_execution = Some(policy);
+    let legacy_revision = config.revision().unwrap();
+    let content = ManagedResourceContent {
+        digest: bytes_digest(b"first declared resource contents"),
+        executable_mappings: vec!["$LITERAL/library.dylib".into()],
+    };
+    config
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .managed_execution
+        .as_mut()
+        .unwrap()
+        .read_roots[0]
+        .content = Some(content.clone());
+    let declared_revision = config.revision().unwrap();
+    assert_ne!(declared_revision, legacy_revision);
+    let mut changed = config.clone();
+    changed
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .managed_execution
+        .as_mut()
+        .unwrap()
+        .read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .digest = bytes_digest(b"changed resource contents");
+    assert_ne!(changed.revision().unwrap(), declared_revision);
+    changed = config.clone();
+    changed
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .managed_execution
+        .as_mut()
+        .unwrap()
+        .read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .executable_mappings
+        .clear();
+    assert_ne!(changed.revision().unwrap(), declared_revision);
+    changed
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .managed_execution
+        .as_mut()
+        .unwrap()
+        .read_roots[0]
+        .content = None;
+    assert_eq!(changed.revision().unwrap(), legacy_revision);
+    config
+        .resolve_paths(Path::new("/private/tmp/home"), |name| {
+            assert_eq!(name, "SDK", "mapping names must not be expanded");
+            Some("/private/tmp/sdk".into())
+        })
+        .unwrap();
+    let read = &config.workspaces["example"]
+        .managed_execution
+        .as_ref()
+        .unwrap()
+        .read_roots[0];
+    assert_eq!(read.path, "/private/tmp/sdk");
+    assert_eq!(read.content.as_ref(), Some(&content));
+    let text = toml::to_string(&config).unwrap();
+    let parsed = Config::parse(&text).unwrap();
+    assert_eq!(parsed.revision().unwrap(), config.revision().unwrap());
 }
 
 #[test]
@@ -214,6 +459,7 @@ fn managed_paths_resolve_atomically_and_reject_colliding_aliases() {
     policy.read_roots.push(ManagedReadRoot {
         path: "$SDK".into(),
         directory: true,
+        content: None,
     });
     config
         .workspaces

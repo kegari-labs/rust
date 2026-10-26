@@ -1461,6 +1461,8 @@ impl CleanupProcesses for NativeCleanupProcesses {
                     "removal hook isolation differs from its retained execution",
                 ));
             }
+            // Observe library/SDK contents before entering the host effect gate.
+            expected.revalidate_resource_contents()?;
             crate::isolation::repository_command_prerequisite(&expected)?;
             let authority = self.scope(request.root, Some(request.proof.clone()))?;
             let git = self.git.clone();
@@ -2176,7 +2178,7 @@ pub fn handover_info() -> Result<HandoverInfo> {
         config_schema: 1,
         receipt_schema: 1,
         process_schema: 3,
-        managed_execution_schema: 2,
+        managed_execution_schema: 3,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
         runtime_build: crate::BUILD_ID.into(),
         instruction_schema: crate::instructions::ASSEMBLY_SCHEMA,
@@ -2414,7 +2416,7 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
         || info.config_schema != 1
         || info.receipt_schema != 1
         || info.process_schema != 3
-        || info.managed_execution_schema != 2
+        || info.managed_execution_schema != 3
         || info.instruction_schema != crate::instructions::ASSEMBLY_SCHEMA
         || info.runtime_build.is_empty()
         || info.runtime_version.is_empty()

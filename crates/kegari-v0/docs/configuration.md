@@ -80,6 +80,37 @@ when the execution boundary binds the declaration; parsing alone does not prove
 those properties. Empty read roots and absent generated-executable policy are
 omitted from the serialized policy.
 
+A read root may additionally declare `content = { digest = "sha256:v1:…",
+executable_mappings = ["lib/compiler.dylib"] }`. This digest is the runtime's
+versioned managed-resource manifest, not a directory-name or concatenated-file
+hash. `isolation::managed_resource_digest` provides the same bounded observation
+for host preparation. A content root must already be canonical. The snapshot
+includes every regular file's byte digest, directory and symlink spelling;
+links must resolve inside the captured tree and must not form cycles. Special,
+missing or redirected entries are refused. Original file identities are retained
+separately, so byte-identical replacement is not silently adopted.
+
+All content roots in one policy share finite capture bounds: 65,536 entries,
+8 GiB of file bytes, 512 MiB per file and a 30-second observation deadline, with
+additional finite path, depth and manifest-text limits. Files are streamed through
+no-follow descriptors; the deadline is checked around reads and cannot preempt
+a blocked synchronous system call. Exceeding a bound is a refusal, not a partial
+successful snapshot. Missing `content` preserves the old encoding and path-only
+read behavior; it does not supply the content identity needed for a supported
+offline toolchain.
+
+Mappings are explicit resource-relative regular-file names. Directory mappings
+cannot name `.`, traverse parents, use absolute paths or resolve through a link;
+a file root may map only `.`. A mapping permits executable library loading but
+does not grant process execution. The original declared read-root boundary stays
+in effect; a content digest does not make the filesystem immutable. Managed work
+cannot write these resources, but concurrent host updates can invalidate an
+observation. Full content checks run outside serialized Control callbacks during
+preparation and before accepting check/hook results or running cleanup hooks.
+Admission checks validate the retained manifest and current path/tool bindings;
+they do not reread SDK bytes or claim a fresh content observation. Changed inputs
+retain uncertainty instead of producing successful check/hook evidence.
+
 The optional `generated_executables = "scratch_build_v1"` declares generated
 programs under the operation's bound private scratch build area. It does not grant
 execution from the repository, home directory or an arbitrary tool directory.
@@ -110,10 +141,11 @@ These are finite check-owned services, not reusable daemons or independently
 installed host services. Supported native service qualification remains incomplete.
 
 Managed foreground records retain schema 1; bound check-bundle policies use
-schema 2. Service-member process rows use schema 3, while ordinary process rows
+schema 2. Policies with content resources use managed schema 3 for either
+lifecycle. Service-member process rows use schema 3, while ordinary process rows
 remain schema 2 and legacy rows remain readable without promotion. Service-bearing
 check records use schema 3; checks without services retain schemas 1/2. Handover
-metadata remains version 3 and now requires process schema 3 and managed schema 2.
+metadata remains version 3 and requires process schema 3 and managed schema 3.
 
 Any policy addition, change or removal creates a workspace authority fence. A
 successful replacement requires PAUSED or STOPPED, drained work and no unresolved

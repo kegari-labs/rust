@@ -1,5 +1,6 @@
 //! Host-owned managed foreground declarations bound to observed tool identities.
 //! A declaration describes the intended boundary; it is not native qualification.
+use super::managed_resources::{BoundManagedResource, ResourceBudget};
 use super::{ExecutionRole, IsolationPlan, PathGrant, canonical_target, overlap, safe_absolute};
 use crate::config::{ManagedExecution, ManagedGeneratedExecutables, ManagedLifecycle};
 use crate::digest::canonical_digest;
@@ -17,11 +18,21 @@ pub struct BoundManagedExecution {
     policy_digest: String,
     tools: Vec<BinaryIdentity>,
     read_roots: Vec<PathGrant>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    resources: Vec<BoundManagedResource>,
 }
 
 impl BoundManagedExecution {
     pub fn resolve(policy: &ManagedExecution) -> Result<Self> {
+        Self::resolve_with_resources(policy, None)
+    }
+    fn resolve_with_resources(
+        policy: &ManagedExecution,
+        retained: Option<&[BoundManagedResource]>,
+    ) -> Result<Self> {
         policy.validate()?;
+        let mut budget = ResourceBudget::new();
+        let mut resources = Vec::new();
         let mut tools = Vec::new();
         let mut paths = BTreeSet::new();
         for tool in &policy.executables {
@@ -63,23 +74,47 @@ impl BoundManagedExecution {
                 path,
                 directory: input.directory,
             });
+            if input.content.is_some() {
+                let resource = if let Some(retained) = retained {
+                    let bound = retained.get(resources.len()).ok_or_else(|| {
+                        Error::new("identity_mismatch", "managed resource binding is missing")
+                    })?;
+                    bound.validate_binding_with_budget(input, &mut budget)?;
+                    bound.clone()
+                } else {
+                    BoundManagedResource::capture(input, &mut budget)?
+                };
+                resources.push(resource);
+            }
+        }
+        if retained.is_some_and(|retained| retained.len() != resources.len()) {
+            return Err(Error::new(
+                "identity_mismatch",
+                "managed resource bindings differ",
+            ));
         }
         Ok(Self {
-            schema_version: match policy.lifecycle {
-                ManagedLifecycle::ForegroundV1 => 1,
-                ManagedLifecycle::CheckBundleV1 => 2,
+            schema_version: if !resources.is_empty() {
+                3
+            } else {
+                match policy.lifecycle {
+                    ManagedLifecycle::ForegroundV1 => 1,
+                    ManagedLifecycle::CheckBundleV1 => 2,
+                }
             },
             policy: policy.clone(),
             policy_digest: canonical_digest(1, policy)?,
             tools,
             read_roots,
+            resources,
         })
     }
     pub fn policy_digest(&self) -> &str {
         &self.policy_digest
     }
     pub fn supports_check_bundles(&self) -> bool {
-        self.schema_version == 2 && self.policy.lifecycle == ManagedLifecycle::CheckBundleV1
+        matches!(self.schema_version, 2 | 3)
+            && self.policy.lifecycle == ManagedLifecycle::CheckBundleV1
     }
     pub fn tools(&self) -> &[BinaryIdentity] {
         &self.tools
@@ -90,11 +125,49 @@ impl BoundManagedExecution {
     pub fn read_roots(&self) -> &[PathGrant] {
         &self.read_roots
     }
+    pub(super) fn read_grants(&self) -> Vec<PathGrant> {
+        let mut grants = self
+            .read_roots
+            .iter()
+            .filter(|grant| {
+                !self
+                    .resources
+                    .iter()
+                    .any(|resource| resource.root() == grant.path)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        grants.extend(
+            self.resources
+                .iter()
+                .flat_map(|resource| resource.read_grants()),
+        );
+        grants
+    }
+    pub(super) fn executable_mappings(&self) -> impl Iterator<Item = &std::path::PathBuf> {
+        self.resources
+            .iter()
+            .flat_map(|resource| resource.executable_mappings())
+    }
     pub fn revalidate(&self) -> Result<()> {
-        if !matches!(self.schema_version, 1 | 2) || Self::resolve(&self.policy)? != *self {
+        self.revalidate_binding()?;
+        let mut budget = ResourceBudget::new();
+        for resource in &self.resources {
+            resource.revalidate(&mut budget)?;
+        }
+        Ok(())
+    }
+    /// Verify the retained content manifest and current path/tool bindings without
+    /// re-reading SDK/library bytes in a serialized admission callback. Full
+    /// content checks are explicit at preparation/cleanup; qualification stays
+    /// closed until the complete prepared workload contract is implemented.
+    pub(crate) fn revalidate_binding(&self) -> Result<()> {
+        if !matches!(self.schema_version, 1..=3)
+            || Self::resolve_with_resources(&self.policy, Some(&self.resources))? != *self
+        {
             return Err(Error::new(
                 "identity_mismatch",
-                "managed execution inventory changed after preparation",
+                "managed inventory binding changed",
             ));
         }
         Ok(())
@@ -126,7 +199,7 @@ impl BoundManagedExecution {
         }
     }
     pub(super) fn validate_plan(&self, plan: &IsolationPlan) -> Result<()> {
-        self.revalidate()?;
+        self.revalidate_binding()?;
         if matches!(
             plan.role,
             ExecutionRole::Coordination | ExecutionRole::IndependentReview
@@ -178,6 +251,18 @@ impl BoundManagedExecution {
                 ));
             }
         }
+        for resource in &self.resources {
+            if plan
+                .read_roots
+                .iter()
+                .any(|grant| overlap(resource.root(), &grant.path))
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "ordinary read grants overlap a closed managed content resource",
+                ));
+            }
+        }
         self.generated_root(plan)?;
         Ok(())
     }
@@ -224,6 +309,7 @@ mod tests {
                 read_roots: vec![ManagedReadRoot {
                     path: sdk.to_str().unwrap().into(),
                     directory: true,
+                    content: None,
                 }],
                 generated_executables: None,
             };
@@ -306,6 +392,86 @@ mod tests {
             "(allow file-map-executable (subpath \"{}\"))",
             f.plan.scratch.join("build").display()
         )));
+    }
+    #[test]
+    fn content_bound_resources_preserve_read_scope_and_separate_mappings() {
+        let mut f = Fixture::new();
+        let library = f.sdk.join("compiler.dylib");
+        let header = f.sdk.join("header.h");
+        fs::write(&library, b"library fixture; never executed").unwrap();
+        fs::write(&header, b"header fixture").unwrap();
+        f.policy.read_roots[0].content = Some(crate::config::ManagedResourceContent {
+            digest: crate::isolation::managed_resource_digest(&f.sdk, true).unwrap(),
+            executable_mappings: vec!["compiler.dylib".into()],
+        });
+        let bound = BoundManagedExecution::resolve(&f.policy).unwrap();
+        assert_eq!(serde_json::to_value(&bound).unwrap()["schema_version"], 3);
+        assert!(!bound.supports_check_bundles());
+        f.plan.managed_execution = Some(bound);
+        let isolation = f.plan.validate().unwrap();
+        isolation.revalidate_resource_contents().unwrap();
+        let profile = isolation.seatbelt_profile().unwrap();
+        assert!(profile.contains(&format!(
+            "(allow file-read* (subpath \"{}\"))",
+            f.sdk.display()
+        )));
+        for path in [&f.sdk, &library, &header] {
+            assert!(!profile.contains(&format!(
+                "(allow process-exec (literal \"{}\"))",
+                path.display()
+            )));
+        }
+        assert!(profile.contains(&format!(
+            "(allow file-map-executable (literal \"{}\"))",
+            library.display()
+        )));
+        assert!(!profile.contains(&format!(
+            "(allow file-map-executable (literal \"{}\"))",
+            header.display()
+        )));
+        assert_eq!(
+            repository_command_prerequisite(&isolation)
+                .unwrap_err()
+                .code,
+            "managed_profile_unqualified"
+        );
+        fs::write(&library, b"substituted library fixture").unwrap();
+        // Structural admission checks do not pretend to observe resource bytes.
+        isolation.revalidate().unwrap();
+        assert!(isolation.revalidate_resource_contents().is_err());
+        assert_eq!(
+            repository_command_prerequisite(&isolation)
+                .unwrap_err()
+                .code,
+            "managed_profile_unqualified"
+        );
+    }
+    #[test]
+    fn content_resources_reject_broader_grants_and_preserve_bundle_capability() {
+        let mut f = Fixture::new();
+        fs::write(f.sdk.join("file"), b"resource fixture").unwrap();
+        f.policy.lifecycle = ManagedLifecycle::CheckBundleV1;
+        f.policy.read_roots[0].content = Some(crate::config::ManagedResourceContent {
+            digest: crate::isolation::managed_resource_digest(&f.sdk, true).unwrap(),
+            executable_mappings: vec![],
+        });
+        let bound = BoundManagedExecution::resolve(&f.policy).unwrap();
+        assert!(bound.supports_check_bundles());
+        f.plan.managed_execution = Some(bound.clone());
+        f.plan.validate().unwrap();
+        f.plan.read_roots.push(PathGrant {
+            path: f.sdk.clone(),
+            directory: true,
+        });
+        assert_eq!(f.plan.validate().unwrap_err().code, "scope_violation");
+        let mut serialized = serde_json::to_value(&bound).unwrap();
+        serialized["schema_version"] = 2.into();
+        let forged: BoundManagedExecution = serde_json::from_value(serialized).unwrap();
+        assert!(forged.revalidate_binding().is_err());
+        let mut serialized = serde_json::to_value(&bound).unwrap();
+        serialized["resources"] = serde_json::json!([]);
+        let forged: BoundManagedExecution = serde_json::from_value(serialized).unwrap();
+        assert!(forged.revalidate_binding().is_err());
     }
     #[test]
     fn loader_bootstrap_reads_only_fixed_grafts_and_literal_ancestors() {

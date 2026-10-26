@@ -1519,6 +1519,7 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
         "alpha3_metadata",
         "missing_managed_policy",
         "foreground_only_managed_policy",
+        "pre_resource_managed_policy",
         "unknown_managed_policy",
     ] {
         let mut info = serde_json::to_value(&f.info).unwrap();
@@ -1537,6 +1538,7 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
             }
             "unknown_managed_policy" => info["managed_execution_schema"] = 99.into(),
             "foreground_only_managed_policy" => info["managed_execution_schema"] = 1.into(),
+            "pre_resource_managed_policy" => info["managed_execution_schema"] = 2.into(),
             _ => info["schema_version"] = 1.into(),
         }
         let binary = metadata_binary(&f.host.home.join(fault), &info);

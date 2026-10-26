@@ -7,7 +7,7 @@ use crate::{instructions::AgentRole, isolation::ValidatedIsolation, worker::Work
 enum SourceOwnership {
     Child {
         execution: Arc<WorkerExecution>,
-        isolation: ValidatedIsolation,
+        isolation: Box<ValidatedIsolation>,
     },
     Candidate(crate::git::VerifiedHostReadRoot),
 }
@@ -601,7 +601,7 @@ pub(super) fn child_source(
         },
         ownership: SourceOwnership::Child {
             execution,
-            isolation,
+            isolation: Box::new(isolation),
         },
     })
 }

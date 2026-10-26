@@ -2,7 +2,7 @@
 use super::*;
 use crate::config::{
     ManagedExecutable, ManagedExecution, ManagedGeneratedExecutables, ManagedLifecycle,
-    ManagedReadRoot,
+    ManagedReadRoot, ManagedResourceContent,
 };
 use crate::isolation::{BoundManagedExecution, IsolationPlan, PathGrant};
 use std::os::unix::fs::PermissionsExt;
@@ -31,6 +31,7 @@ fn bound_fixture() -> (tempfile::TempDir, ManagedExecution, ValidatedIsolation) 
         read_roots: vec![ManagedReadRoot {
             path: tool_reads.to_str().unwrap().into(),
             directory: true,
+            content: None,
         }],
         generated_executables: None,
     };
@@ -110,4 +111,68 @@ fn configured_profile_revalidates_original_tool_bytes() {
             .code,
         "identity_mismatch"
     );
+}
+
+#[test]
+fn configured_resource_content_survives_isolation_binding_and_rejects_changes() {
+    let (_temp, mut policy, legacy_isolation) = bound_fixture();
+    let resource = Path::new(&policy.read_roots[0].path);
+    let library = resource.join("library.dylib");
+    std::fs::write(&library, b"fixture library contents; never loaded\n").unwrap();
+    let digest = crate::isolation::managed_resource_digest(resource, true).unwrap();
+    policy.read_roots[0].content = Some(ManagedResourceContent {
+        digest: digest.clone(),
+        executable_mappings: vec!["library.dylib".into()],
+    });
+    let mut plan = legacy_isolation.plan().clone();
+    plan.managed_execution = Some(BoundManagedExecution::resolve(&policy).unwrap());
+    let isolation = plan.validate().unwrap();
+    verify_managed_policy(&isolation, Some(&policy)).unwrap();
+    isolation.revalidate_resource_contents().unwrap();
+    assert_ne!(isolation.digest(), legacy_isolation.digest());
+    assert_eq!(
+        serde_json::to_value(isolation.plan()).unwrap()["managed_execution"]["policy"]["read_roots"]
+            [0]["content"]["digest"],
+        digest
+    );
+    assert_eq!(
+        isolation.plan().read_roots,
+        legacy_isolation.plan().read_roots
+    );
+    assert_eq!(
+        isolation.plan().executables,
+        legacy_isolation.plan().executables
+    );
+    assert_eq!(isolation.plan().role, legacy_isolation.plan().role);
+    let sandbox = isolation.seatbelt_profile().unwrap();
+    assert!(sandbox.contains(&format!(
+        "(allow file-map-executable (literal \"{}\"))",
+        library.display()
+    )));
+    assert!(!sandbox.contains(&format!(
+        "(allow process-exec (literal \"{}\"))",
+        library.display()
+    )));
+    assert_eq!(
+        crate::isolation::repository_command_prerequisite(&isolation)
+            .unwrap_err()
+            .code,
+        "managed_profile_unqualified"
+    );
+
+    let mut changed_policy = policy.clone();
+    changed_policy.read_roots[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .digest = bytes_digest(b"different declared resource content");
+    assert_eq!(
+        verify_managed_policy(&isolation, Some(&changed_policy))
+            .unwrap_err()
+            .code,
+        "worker_binding"
+    );
+    std::fs::write(&library, b"substituted fixture library contents\n").unwrap();
+    assert!(isolation.revalidate_resource_contents().is_err());
+    assert!(verify_managed_policy(&isolation, Some(&policy)).is_err());
 }

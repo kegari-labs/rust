@@ -600,7 +600,9 @@ async fn prepare_admitted_inner(
         },
     };
     let prep_gate = |snapshot: &crate::control::ControlSnapshot| {
-        plan.revalidate_managed_execution()?;
+        if let Some(managed) = &plan.managed_execution {
+            managed.revalidate_binding()?;
+        }
         if plan.role.permits_repository_execution() && plan.repository_id.is_some() {
             let current = runtime.configuration.snapshot()?;
             let workspace = current
@@ -1039,7 +1041,9 @@ fn require_preparation_schedule(
 impl Plan {
     fn revalidate_managed_execution(&self) -> Result<()> {
         if let Some(managed) = &self.managed_execution {
-            managed.revalidate()?;
+            // Called by fresh preparation predicates under Control. Full
+            // resource reads occur in Plan::read and boundary preparation.
+            managed.revalidate_binding()?;
         }
         Ok(())
     }

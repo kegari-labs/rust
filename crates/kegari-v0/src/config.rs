@@ -149,6 +149,7 @@ pub struct Workspace {
 
 pub const MAX_MANAGED_EXECUTABLES: usize = 256;
 pub const MAX_MANAGED_READ_ROOTS: usize = 64;
+pub const MAX_MANAGED_EXECUTABLE_MAPPINGS: usize = 65_536;
 const MAX_MANAGED_PATH_BYTES: usize = 4096;
 
 /// Host-owned declaration only. Actual filesystem binding and native
@@ -182,6 +183,17 @@ pub struct ManagedExecutable {
 pub struct ManagedReadRoot {
     pub path: String,
     pub directory: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<ManagedResourceContent>,
+}
+/// Expected resource content and selected executable mappings, not a claim of
+/// observed content or supported-profile qualification.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedResourceContent {
+    pub digest: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executable_mappings: Vec<String>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -211,6 +223,32 @@ impl ManagedExecution {
             managed_path_syntax(&read.path)?;
             if !reads.insert(&read.path) {
                 return Err(Error::invalid("managed read paths must be unique"));
+            }
+            if let Some(content) = &read.content {
+                crate::evidence::validate_digest(&content.digest)?;
+                if content.executable_mappings.len() > MAX_MANAGED_EXECUTABLE_MAPPINGS {
+                    return Err(Error::invalid(
+                        "managed executable mappings exceed their bound",
+                    ));
+                }
+                let mut mappings = BTreeSet::new();
+                for mapping in &content.executable_mappings {
+                    if mapping.is_empty()
+                        || mapping.len() > MAX_MANAGED_PATH_BYTES
+                        || mapping.contains('\\')
+                        || mapping.chars().any(char::is_control)
+                        || (read.directory
+                            && mapping
+                                .split('/')
+                                .any(|part| matches!(part, "" | "." | "..")))
+                        || (!read.directory && mapping != ".")
+                        || !mappings.insert(mapping)
+                    {
+                        return Err(Error::invalid(
+                            "managed executable mappings must be unique normalized resource-relative file names",
+                        ));
+                    }
+                }
             }
         }
         Ok(())

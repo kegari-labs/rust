@@ -67,6 +67,15 @@ adopted numeric PID. Full source hashing and process waiting do not hold the
 control mutex. `run_check_complete` also returns a private failed capability so
 failed result bytes can be retained before a corrected rerun.
 
+Optional managed resource content is observed before preparation and after
+command completion outside that mutex. A changed SDK/library cannot turn a
+successful command into accepted evidence: checks persist uncertainty and hooks
+retain their started/unknown state. Admission reconstructs the retained binding
+without reading SDK bytes. The original explicit resource read root remains the
+read boundary, with separately enumerated library mappings and no added process
+execution grant. This is pre/post observation, not an immutable filesystem view;
+host updates can invalidate it. Public workload qualification remains separate.
+
 Source snapshots bind HEAD, tree, regular-file bytes, executable modes and symlink
 targets. The pinned Git adapter rejects tracked/index changes and undeclared
 untracked files, so dirty source cannot claim a clean commit. Source and revision

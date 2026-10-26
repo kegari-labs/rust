@@ -29,7 +29,7 @@ NQ-01B check, Rust/Cargo, services and remaining native qualification are pendin
 
 ## Versioned prerelease executable
 
-The application is versioned as `0.2.0-alpha.7`; the package and executable remain
+The application is versioned as `0.2.0-alpha.8`; the package and executable remain
 `kegari-v0`. This prerelease does not complete the 0.2.0 containment milestone.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or
 unqualified declared profiles (`managed_profile_unqualified`), and native,
@@ -59,7 +59,11 @@ checksum or a complete record of compiler settings. Release and debug profiles
 have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
-running coordinator. The [alpha.7 loader correction](validation/LOADER-BOOTSTRAP.md)
+running coordinator. The [alpha.8 resource binding](validation/MANAGED-RESOURCES.md)
+adds bounded SDK/library content observations and explicit mappings, with 1,117
+passing final-source local tests. It keeps qualification closed while the offline
+Rust/Cargo contract and actual native evidence remain incomplete.
+The [alpha.7 loader correction](validation/LOADER-BOOTSTRAP.md)
 records the exact staged executable, 97 passing affected local tests and three
 passing native foreground cases. The qualification prerequisite remains enforced.
 The [alpha.6 managed check increment](validation/MANAGED-CHECK-BUNDLES.md)
@@ -81,7 +85,7 @@ it does not open a setup wizard or start a service. Before setup, alpha.4 and la
 runtime has been configured yet. Use `./kegari-v0 --help` or
 `./kegari-v0 setup --help` to inspect the available commands without setup.
 
-Alpha.7 is an inspectable development artifact, not a qualified installation ready
+Alpha.8 is an inspectable development artifact, not a qualified installation ready
 for activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
 requires the supported profile and native/provider prerequisites to be established
 first, then a final protected, versioned binary and explicit runtime configuration.

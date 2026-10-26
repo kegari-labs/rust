@@ -50,7 +50,7 @@ network, credential and role isolation remain unchanged.
 
 Deterministic component tests prove only their exercised behavior. Separately
 approved native cases must exercise the actual production launcher, sandbox,
-owned child/group, collectors and schema-2 journal: allowed foreground and
+owned child/group, collectors and current process journal: allowed foreground and
 transitive execution, unsuccessful exit, timeout/cancellation, inherited-handle
 uncertainty, denied resources/executables and generated-scratch rules as selected.
 Bind results to the exact runtime binary/build, host/OS, support and case
@@ -87,9 +87,45 @@ is one closed macOS Rust/Cargo contract, not a general operator-profile issuer:
 | Runtime matching | Match the configured inventory to the shipped contract during managed-policy resolution, retain the contract/resource digest through preparation and the worker contract, and revalidate at command preflight and cleanup. Unknown tools or changed resources remain blockers. |
 | Actual cases | Offline build/test, C dependency compilation/linking, build scripts/proc macros, generated tests and rustdoc; missing inputs, denied network/credentials/sibling paths, resource substitution, nonzero exit, timeout/cancellation, output limits and uncertain cleanup. Include an actual scoped Kegari build/test compatibility case. |
 
-Current implementation binds executable bytes but read roots only by path/type.
-Its command environment supplies PATH, HOME, TMPDIR, LANG and CARGO_TARGET_DIR;
-that is not yet a complete offline Rust toolchain environment. The repository's
+Alpha.8 adds optional bounded content manifests to managed read roots and keeps
+executable mappings separately enumerated. Full SDK/library observations occur
+outside serialized Control callbacks; admission verifies retained bindings. This
+is a prerequisite, not the complete offline profile: a concurrent host update
+can still invalidate a pre/post observation, and no immutable filesystem snapshot
+is claimed. Legacy read roots still bind only path/type and cannot substitute for
+the required toolchain content contract.
+
+For the first offline profile, use a complete vendored dependency snapshot and
+host-generated protected Cargo configuration, with writable cache/temp/build
+state kept separate. Reject additional repository/ancestor Cargo configuration
+and unsupported invocation overrides; a private Cargo home does not suppress
+those inputs ([Cargo configuration](https://doc.rust-lang.org/stable/cargo/reference/config.html)).
+Bind the complete rendered environment into launch identity. Route
+doctest temporary output beneath the generated build root. Exact compiler,
+linker, archive, SDK and toolchain identities remain required, and native cases
+must establish their actual transitive compatibility.
+
+Use a private prepared-launch object for that next package. It must bind the
+original operation, selected profile, source/lock/vendor identities, protected
+configuration, rendered argv/environment and original deadline. Both identity
+hashing and spawn must consume the same rendered launch. Command-only input and
+cache grants must stay separate from ordinary read/resource roots, because the
+latter also enter Codex model permissions. Keep generated configuration outside
+all writable scratch/cache parents; select the finite cache layout for the exact
+Cargo version rather than assuming a stable universal Cargo-home layout.
+
+The initial invocation grammar should cover built-in build/test/doc only, with
+mandatory frozen operation and bounded jobs, rejecting external subcommands,
+toolchain selectors, arbitrary configuration/compiler arguments, runners and
+output relocation. Existing named checks also require a fresh result artifact.
+The Cargo adapter must retain a truthful host-written invocation result derived
+from the actual joined command outcome and prepared launch digest before result
+acceptance; successful exit alone cannot manufacture per-test facts or counts.
+Neither preparation nor missing vendor inputs may trigger automatic downloads
+or native qualification in the running application.
+
+The current command environment supplies PATH, HOME, TMPDIR, LANG and optional
+CARGO_TARGET_DIR; that is not yet a complete offline Rust toolchain environment. The repository's
 locked dependencies include `ring` and `cc`, so shell-only execution cannot
 establish compatibility. Do not grant executable mapping to every read root as a
 shortcut for supporting toolchain libraries.
@@ -97,7 +133,8 @@ shortcut for supporting toolchain libraries.
 Implement the parser/matcher, resource binding, private offline preparation,
 environment/profile rendering and deterministic refusal cases first. Author the
 native cases against that production path, then request separate bounded approval.
-Neither these declarations nor the failed NQ-02A shell run establish a Rust pass.
+Neither these declarations nor NQ-02C's three passing foreground cases establish
+a Rust pass; NQ-02A/B failures remain historical evidence.
 Preserve the existing managed-profile prerequisite until its actual evidence
 supports enabling the closed profile.
 

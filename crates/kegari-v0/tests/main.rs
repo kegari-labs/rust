@@ -43,7 +43,7 @@ fn exact_identity_entrypoints_report_the_bound_build_and_assets() {
     let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(actual["schema_version"], 3);
     assert_eq!(actual["process_schema"], 3);
-    assert_eq!(actual["managed_execution_schema"], 2);
+    assert_eq!(actual["managed_execution_schema"], 3);
     assert_eq!(
         actual,
         serde_json::to_value(kegari_v0::housekeeping::handover_info().unwrap()).unwrap()
