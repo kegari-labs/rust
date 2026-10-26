@@ -8,9 +8,9 @@ const CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 const RECORD_BYTES: usize = 128 * 1024;
 
 #[derive(Default)]
-pub(super) struct CaptureBudget(Mutex<usize>);
+pub(crate) struct CaptureBudget(Mutex<usize>);
 impl CaptureBudget {
-    pub(super) fn reserve(&self, bytes: usize) -> Result<()> {
+    pub(crate) fn reserve(&self, bytes: usize) -> Result<()> {
         let mut used = self
             .0
             .lock()

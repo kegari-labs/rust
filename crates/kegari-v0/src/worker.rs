@@ -7,7 +7,8 @@ pub(crate) use retirement::{ParentJournalHistory, capture_parent_journal};
 mod boundary;
 #[path = "worker_broker_observation.rs"]
 mod broker_observation;
-use broker_observation::{BrokerCapture, BrokerJournalReference, BrokerSemantic, CaptureBudget};
+pub(crate) use broker_observation::CaptureBudget;
+use broker_observation::{BrokerCapture, BrokerJournalReference, BrokerSemantic};
 pub use broker_observation::{BrokerControlBatch, BrokerInventory, IndependentBrokerObservation};
 
 use crate::codex::{SessionState, ToolBroker, ToolCall};
@@ -1068,6 +1069,15 @@ impl ScopedWorker {
             WorkerAuthority::Authorized(_) => None,
         }
     }
+    pub(crate) fn verify_canary_owner(
+        &self,
+        owner: &crate::evaluation::CanaryMaterialization,
+    ) -> Result<Arc<CaptureBudget>> {
+        let identity =
+            self.host
+                .observe_independent_boundary(&self.control, &self.permit, &self.contract)?;
+        owner.verify_registered(&self.permit, &self.contract, &identity)
+    }
     pub(crate) fn bound_context(&self) -> &Value {
         &self.contract.context
     }
@@ -1998,7 +2008,9 @@ impl ToolBroker for ScopedWorker {
             && matches!(self.contract.authority, WorkerAuthority::Independent(_))
             && declaration.trial_digest().is_some()
         {
-            let budget = Arc::new(CaptureBudget::default());
+            let budget = declaration
+                .capture_budget()
+                .unwrap_or_else(|| Arc::new(CaptureBudget::default()));
             self.broker_capture =
                 BrokerCapture::new(&self.permit, &self.contract, declaration, budget.clone());
             self.capture_budget = Some(budget);
@@ -2309,6 +2321,7 @@ impl TrialHost for ScopedWorker {
             review_claim,
             independent_boundary,
             independent_broker: self.broker_observation(),
+            canary_diagnostic: None,
             declared_protocol: self.protocol_capture.as_ref().map(|capture| {
                 capture.finish(self.session.as_ref(), self.pending.as_deref(), &|leaf| {
                     self.journal.dir.read_bounded(leaf, 256 * 1024)

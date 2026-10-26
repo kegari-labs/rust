@@ -276,5 +276,191 @@ class ActualLocalGitTests(unittest.TestCase):
         self.assertFalse(output.exists())
 
 
+class RecipeDispatchTests(unittest.TestCase):
+    def test_default_dispatch_is_original_e05_and_unknown_recipe_never_reads(self):
+        with mock.patch.object(module, "prepare", return_value="original") as e05:
+            with mock.patch.object(module, "prepare_e07", return_value="explicit") as e07:
+                self.assertEqual(module.prepare_selected("suite", "output"), "original")
+                e05.assert_called_once_with("suite", "output")
+                e07.assert_not_called()
+                self.assertEqual(module.prepare_selected("suite", "output", module.E07_RECIPE), "explicit")
+                e07.assert_called_once_with("suite", "output")
+                with self.assertRaisesRegex(module.PreparationError, "unsupported explicit"):
+                    module.prepare_selected("suite", "output", "arbitrary-recipe")
+                self.assertEqual(e05.call_count, 1)
+                self.assertEqual(e07.call_count, 1)
+
+
+@unittest.skipUnless(os.environ.get("KEGARI_TEST_E07_SUITE"),
+                     "root must select the actual legacy E07 suite with reviewed recipe data")
+class E07RecipeTests(unittest.TestCase):
+    def setUp(self):
+        self.suite = Path(os.environ["KEGARI_TEST_E07_SUITE"]).resolve(strict=True)
+        self.captured = module.capture(self.suite)
+
+    def test_e07_recipe_plans_only_its_exact_source_without_any_object_ids(self):
+        recipe, manifest, seed = module.plan_e07(self.captured)
+        original = module.load_json(self.captured.files["manifest.json"][0])
+        self.assertEqual(manifest, original)
+        self.assertNotIn("base_sha", recipe["context_without_base"]["issue"]["pull_request"])
+        self.assertNotIn("base", recipe["context_without_base"]["scope"])
+        self.assertEqual(recipe["context_without_base"]["evidence"],
+                         {"forbidden_canary_path": {"$kegari": "forbidden_canary_path"}})
+        self.assertEqual(recipe["binding"]["schema_version"], 3)
+        self.assertEqual(len(recipe["binding"]["slots"]), 10)
+        before = self.captured.subtree(module.E07_FIXTURE + "/repository")
+        self.assertEqual(set(seed.files), set(before.files))
+        self.assertEqual(seed.directories, before.directories)
+        for path, value in before.files.items():
+            self.assertEqual(seed.files[path][1], value[1])
+            if path != "WORKFLOW.md":
+                self.assertEqual(seed.files[path], value)
+        self.assertNotIn(b"@KegariScratch@", seed.files["WORKFLOW.md"][0])
+        self.assertIn(b"  local: {}", seed.files["WORKFLOW.md"][0])
+        self.assertIn(b"ROOT_V1", seed.files["AGENTS.md"][0])
+        self.assertIn(b"NESTED_V1", seed.files["src/AGENTS.md"][0])
+        self.assertEqual(seed.files["src/limit.py"][0], recipe["head_limit"].encode())
+        self.assertEqual(module.capture(self.suite).files, self.captured.files)
+
+    def test_e07_changed_recipe_variant_assets_or_policy_destination_refuse(self):
+        changes = []
+        files = dict(self.captured.files)
+        raw, mode = files[module.E07_RECIPE_PATH]
+        files[module.E07_RECIPE_PATH] = (raw + b"\n", mode)
+        changes.append((files, "recipe bytes"))
+        files = dict(self.captured.files)
+        path = module.E07_FIXTURE + "/repository/src/limit.py"
+        files[path] = (b"different input\n", files[path][1])
+        changes.append((files, "fixture digest"))
+        files = dict(self.captured.files)
+        files[path] = (files[path][0], files[path][1] ^ stat.S_IXUSR)
+        changes.append((files, "fixture digest"))
+        files = dict(self.captured.files)
+        manifest = module.load_json(files["manifest.json"][0])
+        next(v for v in manifest["variants"] if v["id"] == "pr_attack")["phase"] = "independent_review"
+        files["manifest.json"] = (module.json_bytes(manifest), files["manifest.json"][1])
+        changes.append((files, "input variant"))
+        files = dict(self.captured.files)
+        files[module.E07_POLICY_PATH] = (b"do not overwrite", 0o600)
+        changes.append((files, "existing binding or policy"))
+        for files, message in changes:
+            with self.subTest(message=message):
+                with mock.patch.object(module.LocalGit, "run", side_effect=AssertionError("no Git")):
+                    with self.assertRaisesRegex(module.PreparationError, message):
+                        module.plan_e07(module.Captured(files, dict(self.captured.directories)))
+
+
+@unittest.skipUnless(os.environ.get("KEGARI_TEST_E07_SUITE"),
+                     "root must select actual legacy E07 inputs and invoke local Git explicitly")
+class E07ActualLocalGitTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="kegari-e07-source-actual-git-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.suite = Path(os.environ["KEGARI_TEST_E07_SUITE"]).resolve(strict=True)
+
+    def test_actual_e07_edge_preserves_other_cases_and_discloses_missing_runtime(self):
+        before = module.capture(self.suite)
+        recipe, original, seed = module.plan_e07(before)
+        output = self.root / "e07"
+        result = module.prepare_selected(self.suite, output, module.E07_RECIPE)
+        actual = module.capture(output / "suite")
+        after, variant = module.verify_e07_output(before, actual, recipe, original, result["base_commit"])
+        self.assertEqual(after["profiles"], original["profiles"])
+        self.assertEqual(len(after["variants"]), 28)
+        self.assertEqual(sum(v["bounds"]["repetitions"] for v in after["variants"]), 56)
+        self.assertEqual([v for v in original["variants"] if v["id"] != "pr_attack"],
+                         [v for v in after["variants"] if v["id"] != "pr_attack"])
+        for v in original["variants"]:
+            self.assertEqual(actual.files[v["scorer"]], before.files[v["scorer"]])
+        self.assertEqual(module.capture(self.suite).files, before.files)
+        context = module.load_json(actual.files[module.E07_FIXTURE + "/context.json"][0])
+        self.assertEqual(context["scope"]["base"], result["base_commit"])
+        self.assertEqual(context["issue"]["pull_request"]["base_sha"], result["base_commit"])
+        self.assertNotEqual(result["base_commit"], result["head_commit"])
+        self.assertNotEqual(result["base_tree"], result["head_tree"])
+        old_e05 = module.load_json(before.files[module.FIXTURE + "/context.json"][0])
+        self.assertNotEqual(result["base_commit"], old_e05["scope"]["base"])
+        self.assertEqual(context["issue"]["pull_request"]["body"], variant["initial_state"])
+        self.assertNotIn("../scorer", variant["initial_state"])
+        self.assertEqual(context["evidence"], {"forbidden_canary_path": {"$kegari": "forbidden_canary_path"}})
+        self.assertFalse(result["runtime_supported"])
+        self.assertFalse(result["dispatch_authorized"])
+        self.assertFalse(result["canary_materialized"])
+        self.assertEqual(len(result["missing_runtime_prerequisites"]), 2)
+        self.assertNotIn("runtime_supported", context)
+        self.assertNotIn("runtime_supported", after)
+        self.assertEqual(module.canonical(after), result["suite_digest"])
+        self.assertEqual(json.loads((output / "SOURCE-EVIDENCE.json").read_text()), result)
+        actual_source = module.capture(output / "source", allow_generated_git=True)
+        working = {k: v for k, v in actual_source.files.items() if k.split("/")[0] != ".git"}
+        self.assertEqual(working, seed.files)
+        commands = result["commands"]
+        self.assertTrue(all(c["exit_code"] == 0 for c in commands))
+        commits = [c for c in commands if c["argv"][1] == "commit"]
+        self.assertEqual(len(commits), 2)
+        self.assertTrue(all("--signoff" in c["argv"] and "Assisted-by: Codex" in c["argv"] for c in commits))
+        blobs = [c for c in commands if c["argv"][1:3] == ["cat-file", "blob"]]
+        self.assertEqual([c["stdout"] for c in blobs], [recipe["base_limit"], recipe["head_limit"]])
+        self.assertFalse(list((output / "empty-git-hooks").iterdir()))
+        self.assertFalse(list((output / "empty-git-template").iterdir()))
+        second = module.prepare_selected(self.suite, self.root / "second", module.E07_RECIPE)
+        self.assertEqual((result["base_commit"], result["head_commit"], result["suite_digest"]),
+                         (second["base_commit"], second["head_commit"], second["suite_digest"]))
+        # Use only these actual generated identities for output-corruption checks.
+        for path in ("scorer/pr_attack.json", module.FIXTURE + "/context.json"):
+            changed = dict(actual.files)
+            changed[path] = (changed[path][0] + b"\n", changed[path][1])
+            with self.assertRaisesRegex(module.PreparationError, "allowed delta"):
+                module.verify_e07_output(before, module.Captured(changed, actual.directories),
+                                         recipe, original, result["base_commit"])
+        changed = dict(actual.files)
+        path = module.E07_FIXTURE + "/repository/src/limit.py"
+        changed[path] = (changed[path][0], changed[path][1] ^ stat.S_IXUSR)
+        with self.assertRaisesRegex(module.PreparationError, "allowed delta"):
+            module.verify_e07_output(before, module.Captured(changed, actual.directories),
+                                     recipe, original, result["base_commit"])
+
+    def test_e07_existing_nested_and_stale_inputs_refuse_without_git(self):
+        existing = self.root / "existing"
+        existing.mkdir()
+        with mock.patch.object(module.LocalGit, "run", side_effect=AssertionError("no Git")):
+            with self.assertRaisesRegex(module.PreparationError, "absent"):
+                module.prepare_selected(self.suite, existing, module.E07_RECIPE)
+            with self.assertRaisesRegex(module.PreparationError, "disjoint"):
+                module.prepare_selected(self.suite, self.suite / "never-created", module.E07_RECIPE)
+            copied = self.root / "copy"
+            copied.mkdir()
+            module.materialize(copied, module.capture(self.suite))
+            path = copied / module.E07_FIXTURE / "repository/src/limit.py"
+            path.write_bytes(b"changed input\n")
+            with self.assertRaisesRegex(module.PreparationError, "fixture digest"):
+                module.prepare_selected(copied, self.root / "refused", module.E07_RECIPE)
+        self.assertFalse((self.root / "refused").exists())
+        self.assertFalse((self.suite / "never-created").exists())
+        self.assertEqual(list(existing.iterdir()), [])
+
+    def test_e07_missing_identity_refuses_before_output(self):
+        output = self.root / "missing-identity"
+        with mock.patch.object(module.LocalGit, "run", return_value=""):
+            with self.assertRaisesRegex(module.PreparationError, "committer"):
+                module.prepare_selected(self.suite, output, module.E07_RECIPE)
+        self.assertFalse(output.exists())
+
+    def test_e07_failed_actual_commit_never_writes_placeholder_context(self):
+        actual_run = module.LocalGit.run
+        output = self.root / "failed-commit"
+        def refuse_commit(git, cwd, args, env):
+            if args[0] == "commit":
+                raise module.PreparationError("explicit component failure before first commit")
+            return actual_run(git, cwd, args, env)
+        # Real invoking identity, actual local init/add; no fabricated positive OIDs.
+        with mock.patch.object(module.LocalGit, "run", new=refuse_commit):
+            with self.assertRaisesRegex(module.PreparationError, "before first commit"):
+                module.prepare_selected(self.suite, output, module.E07_RECIPE)
+        self.assertEqual(list((output / "suite").iterdir()), [])
+        self.assertFalse((output / "SOURCE-EVIDENCE.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

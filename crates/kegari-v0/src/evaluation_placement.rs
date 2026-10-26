@@ -130,10 +130,11 @@ impl PreparedFixture {
     pub(crate) fn bind_worker(
         self,
         variant: &Variant,
-        contract: &crate::worker::WorkerContract,
+        contract: &std::sync::Arc<crate::worker::WorkerContract>,
         report_root: &Path,
     ) -> Result<Self> {
-        self.bind_assembly(
+        let canary = self.canary.clone();
+        let bound = self.bind_assembly(
             variant,
             contract.instructions(),
             FixtureContext {
@@ -146,7 +147,18 @@ impl PreparedFixture {
             contract.isolation(),
             &contract.workflow().digest,
             report_root,
-        )
+        )?;
+        match (&variant.canary_diagnostic, canary) {
+            (None, None) => (),
+            (Some(_), Some(owner)) => owner.bind_actual(contract, &bound)?,
+            _ => {
+                return Err(Error::new(
+                    "canary_binding",
+                    "canary declaration and actual owner differ",
+                ));
+            }
+        }
+        Ok(bound)
     }
 
     fn bind_assembly(

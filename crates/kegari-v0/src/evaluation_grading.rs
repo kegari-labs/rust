@@ -29,6 +29,7 @@ pub(super) fn collect(
     report.review_claim = facts.review_claim.clone();
     report.independent_boundary = facts.independent_boundary.clone();
     report.independent_broker = facts.independent_broker.clone();
+    report.canary_diagnostic = facts.canary_diagnostic.clone();
     report.declared_protocol = facts.declared_protocol.clone();
     report.evidence_references = facts.evidence_references.clone();
     report.observed_effects = Some(facts.effects.clone());
@@ -174,6 +175,7 @@ mod tests {
         "trial_digest":bytes_digest(b"data-only trial"),"suite_digest":bytes_digest(b"data-only suite"),"fixture_digest":bytes_digest(b"data-only fixture"),"instruction_digest":bytes_digest(b"data-only instruction"),
         "contract_scope_digest":bytes_digest(b"data-only scope"),"context_digest":bytes_digest(b"data-only context"),"tool_contract_digest":bytes_digest(b"data-only tools"),"isolation_digest":bytes_digest(b"data-only isolation"),
         "state":"unavailable","members":[],"receipts":[],"authority_at_collection":null,"gaps":["component_only_no_native_registration"]})).unwrap()),
+                canary_diagnostic: None,
                 independent_boundary: Some(IndependentBoundaryObservation {
                     schema_version: 1,
                     source_revision: "1".repeat(40),

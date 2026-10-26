@@ -49,6 +49,7 @@ struct VerifiedEvaluationRequest {
     report_started: AtomicBool,
     failure_recorded: Mutex<bool>,
     cleanup: Mutex<CleanupState>,
+    canary: Mutex<Option<Arc<crate::evaluation::CanaryMaterialization>>>,
 }
 struct PreparedEvaluation {
     source: Arc<VerifiedEvaluationSource>,
@@ -407,6 +408,7 @@ impl RuntimeCoordinator {
             source: Mutex::new(None),
             preparation_started: AtomicBool::new(false),
             report_started: AtomicBool::new(false),
+            canary: Mutex::new(None),
             failure_recorded: Mutex::new(false),
             cleanup: Mutex::new(CleanupState::Empty),
         });
@@ -426,7 +428,15 @@ impl RuntimeCoordinator {
             .await;
         match settled.result {
             Ok(pending) => self.publish_settled_evaluation(&proof, pending, settled.deadline),
-            Err(error) => Err(settled.deadline.unwrap_or(error)),
+            Err(error) => {
+                let error = settled.deadline.unwrap_or(error);
+                if let Ok(owner) = proof.canary.lock()
+                    && let Some(owner) = owner.as_ref()
+                {
+                    owner.note_failure(&error);
+                }
+                Err(error)
+            }
         }
     }
 
@@ -477,8 +487,31 @@ impl RuntimeCoordinator {
             &PrivateDir::open(&report_root)?,
             proof.request.request_id,
         )?;
+        let canary =
+            if proof.variant.canary_diagnostic.is_some() {
+                let owner = crate::evaluation::CanaryMaterialization::pending(
+                    crate::evaluation::CanaryStageInput {
+                        runtime: self.runtime_id,
+                        workspace: proof.workspace,
+                        command: proof.command.operation_id,
+                        operation: proof.request.request_id,
+                        suite: &proof.suite,
+                        variant: &proof.variant,
+                        trial: &proof.trial,
+                        deadline: proof.deadline.instant(),
+                    },
+                )?;
+                // Retain before any fallible policy/randomness/private-file work.
+                *proof.canary.lock().map_err(|_| {
+                    Error::new("runtime_unavailable", "canary retention lock failed")
+                })? = Some(owner.clone());
+                owner.stage(suite_root, &grader)?;
+                Some(owner)
+            } else {
+                None
+            };
         proof.deadline.remaining()?;
-        let fixture = crate::evaluation::prepare_worker_fixture(
+        let mut fixture = crate::evaluation::prepare_worker_fixture(
             suite_root,
             &proof.variant,
             &destination,
@@ -486,6 +519,9 @@ impl RuntimeCoordinator {
             Path::new(&proof.configuration.runtime.execution_root),
             proof.request.request_id,
         )?;
+        if let Some(owner) = canary {
+            fixture.attach_canary(owner)?;
+        }
         proof.deadline.remaining()?;
         let source = Arc::new(source::observe(self.clone(), proof.clone(), &fixture).await?);
         let providers = self.services.inputs.evaluation_providers().ok_or_else(|| {
@@ -626,18 +662,31 @@ impl RuntimeCoordinator {
             .await),
             Err(error) => Err(error),
         };
-        let mut observed = match observed {
-            Ok(observed) => observed,
-            Err(error) => {
-                proof.retain_cleanup(CleanupOwner::Trial(Box::new(admitted)))?;
-                return Err(error);
+        // The operation borrow has ended. Retain the real owner before any
+        // additional fallible diagnostic lock, readback, or report work.
+        proof.retain_cleanup(CleanupOwner::Trial(Box::new(admitted)))?;
+        let mut observed = observed?;
+        // Early live-path returns still retain actual diagnostic files. This
+        // readback remains inside work settlement, before native finalization
+        // and immutable publication; no extra deadline is created.
+        let canary = proof
+            .canary
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "canary retention lock failed"))?
+            .clone();
+        if let Some(owner) = canary {
+            match &mut observed {
+                Ok(report) => report.canary_diagnostic = Some(owner.finalize()),
+                Err(error) => {
+                    owner.note_failure(error);
+                    let _ = owner.finalize();
+                }
             }
-        };
+        }
         if let Ok(report) = &mut observed {
             report.omissions.push(format!("GitHub and Linear observations/feedback used the explicitly declared isolated synthetic namespace for workspace {}; no real-provider qualification is claimed. Codex, account, process and sandbox execution remain native.",proof.workspace));
         }
         // Grading/report errors never skip actual native finalization.
-        proof.retain_cleanup(CleanupOwner::Trial(Box::new(admitted)))?;
         let terminal = self.settle_evaluation_owner(&proof).and_then(|closed| {
             closed.ok_or_else(|| {
                 Error::new(
@@ -1038,13 +1087,21 @@ impl RuntimeCoordinator {
                 error.code.as_str(),
                 "evaluation_deadline" | "timeout" | "operation_uncertain" | "interrupted"
             );
-        crate::evaluation::ReportStore::finish_owned_failure(
+        let canary_diagnostic = proof
+            .canary
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "canary retention lock failed"))?
+            .as_ref()
+            .map(|owner| owner.diagnostic())
+            .transpose()?;
+        crate::evaluation::ReportStore::finish_owned_failure_with_canary(
             &root,
             &proof.suite,
             &proof.variant,
             &proof.trial,
             error,
             interrupted,
+            canary_diagnostic,
         )?;
         let linkage = json!({"schema_version":1,"runtime":self.runtime_id,"command":proof.command.operation_id,"command_digest":canonical_digest(1,&proof.command)?,"worker":proof.request.request_id,"suite":proof.binding.suite_digest,"trial":proof.trial,"report_root":root,"error":error,"task_joined":true,"model_result_inferred":false,"synthetic_provider_namespace":proof.workspace});
         let records = self.registration.root().child("evaluation-trials")?;

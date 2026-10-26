@@ -5346,6 +5346,20 @@
           "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
           "status": "not_run",
           "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CANARY-DIAGNOSTIC.md",
+          "status": "partial",
+          "scope": "Actual exclusive private marker/policy/input creation retains original descriptor identity before writing and refuses identical replacement, partial/incomplete creation, missing bytes and changed directory. Component checks preserve the original one-shot marker and protected failure evidence; they do not exercise an agent sandbox.",
+          "limits": "Local deterministic components and source-data preparation only. No actual-agent or native registered positive, sandbox read/write denial, universal non-disclosure, output completeness, provider input inventory, scorer behavior or human qualification. Named host absence covers only declared inputs; provider inventory stays unavailable and output coverage not_qualified. E07 schema3/owned-path runtime support remains incomplete at this source. All prior row statuses and evidence remain unchanged.",
+          "tests": [
+            "storage::retained::tests::retained_exclusive_creation_refuses_identical_replacement_on_first_read",
+            "storage::retained::tests::retained_creation_preserves_actual_partial_write_identity_without_read_adoption",
+            "evaluation::canary::tests::protected_canary_initial_policy_marker_and_input_refuse_identical_replacement"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010"
         }
       ]
     },
@@ -5638,6 +5652,20 @@
           ],
           "verification": "verified_local_components_final_source",
           "source_digest": "sha256:897b56c30c0a32c2ce82724c500e1897a44b09dfe7cbc85486d3b053ac5ea6a5"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CANARY-DIAGNOSTIC.md",
+          "status": "partial",
+          "scope": "Optional canary report fields preserve absent legacy encoding, reject contradictory policy/enrollment/final-readback claims, and retain materialization facts through real scorer-load errors. Original failed compile and corrections remain recorded; no success follows from descriptive report shape.",
+          "limits": "Local deterministic components and source-data preparation only. No actual-agent or native registered positive, sandbox read/write denial, universal non-disclosure, output completeness, provider input inventory, scorer behavior or human qualification. Named host absence covers only declared inputs; provider inventory stays unavailable and output coverage not_qualified. E07 schema3/owned-path runtime support remains incomplete at this source. All prior row statuses and evidence remain unchanged.",
+          "tests": [
+            "evaluation::canary::tests::absent_canary_preserves_actual_shipped_manifest_canonical_bytes_and_plan",
+            "evaluation::canary::tests::actual_scorer_load_failure_keeps_materialization_diagnostic_without_native_claim",
+            "evaluation::canary::tests::descriptive_canary_report_cannot_contradict_policy_or_claim_final_without_enrollment"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010"
         }
       ]
     },
@@ -5772,6 +5800,21 @@
           ],
           "verification": "verified_local_components_final_source",
           "source_digest": "sha256:897b56c30c0a32c2ce82724c500e1897a44b09dfe7cbc85486d3b053ac5ea6a5"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CANARY-DIAGNOSTIC.md",
+          "status": "partial",
+          "scope": "Versioned sidecar policy is bound to exact bounded bytes. Named host inputs and marker forms reserve the original shared allowance and scan across chunk boundaries. Component tests exercise an injected current-check callback and the original deadline; source inspection covers production ownership wiring. Collision/failure evidence is retained without raw marker disclosure in public reports. The source-data preparer records actual E07 local Git object identities and an exact copied suite.",
+          "limits": "Local deterministic components and source-data preparation only. No actual-agent or native registered positive, sandbox read/write denial, universal non-disclosure, output completeness, provider input inventory, scorer behavior or human qualification. Named host absence covers only declared inputs; provider inventory stays unavailable and output coverage not_qualified. E07 schema3/owned-path runtime support remains incomplete at this source. All prior row statuses and evidence remain unchanged.",
+          "tests": [
+            "evaluation::canary::tests::policy_loader_uses_actual_bounded_declared_bytes_and_refuses_unknown_fields",
+            "evaluation::canary::tests::shared_budget_refuses_guarded_capture_before_actual_read_and_preserves_files",
+            "evaluation::canary::tests::each_real_marker_form_matches_across_chunk_boundary_with_original_precedence",
+            "evaluation::canary::tests::actual_scan_checks_current_between_chunks_and_never_records_absence_on_failure"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010"
         }
       ]
     },
@@ -7609,6 +7652,20 @@
           ],
           "verification": "verified_local_components_final_source",
           "source_digest": "sha256:e908c28aada5577ce254bcf2a78e2eb5e5c5c9b8e1950b4d01bccd20ce7e9c65"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CANARY-DIAGNOSTIC.md",
+          "status": "partial",
+          "scope": "Canary diagnostic prerequisites and explicit E07 source-data preparation only. All 17 canary and four retained-storage components pass. Twenty Python source-preparation tests pass; the retained copied E07 suite uses its own actual base/head objects and leaves the other 27 variants and all scorers unchanged. Actual adversarial behavior remains unexecuted.",
+          "limits": "Local deterministic components and source-data preparation only. No actual-agent or native registered positive, sandbox read/write denial, universal non-disclosure, output completeness, provider input inventory, scorer behavior or human qualification. Named host absence covers only declared inputs; provider inventory stays unavailable and output coverage not_qualified. E07 schema3/owned-path runtime support remains incomplete at this source. All prior row statuses and evidence remain unchanged.",
+          "tests": [
+            "evaluation::canary::tests::retained_source_bytes_and_collision_records_use_same_capture_without_native_authority",
+            "evaluation::canary::tests::protected_marker_is_single_generation_and_deletion_or_substitution_never_remints",
+            "evaluation::canary::tests::actual_native_fixture_empty_corrections_is_eligible_but_other_shapes_refuse"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010"
         }
       ]
     },

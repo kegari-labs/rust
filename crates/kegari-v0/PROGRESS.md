@@ -3,14 +3,125 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
-Current worktree: the reviewed five-path broker component test layer passed
+Current implementation: the reviewed canary v1/v2 composition, external defaults,
+operator documentation and E07 source-data preparer are installed in 20 paths.
+The 701 tested inputs are frozen at
+`sha256:485e6d0b61c3e1f452b019ec89b23e9c92e72cb887838c141c1648e27be7b010`;
+snapshot: `/private/tmp/kegari-v0-canary-source2.json`. All-target check passed
+in 19.720s, strict Clippy in 26.822s, retained-storage 4 tests in 44.012s,
+evaluation 61 in 2.549s, runtime 33 in 1.751s, broker 8 in 1.806s,
+protocol 23 in 0.155s, seven compatibility targets 149 in 70.425s and
+formatting in 1.575s. These focused counts overlap and are not a full-suite
+result. All 17 new canary tests and four new retained-storage tests passed;
+source and toolchain observations stayed unchanged. Full-suite validation passed:
+978 tests passed, zero failed, two required native checks ignored across 39 groups
+in 789.129s. Raw log SHA-256:
+`1dd894a6df79ec8e4797e18532dc4e9cfd9541f1d869f1d6798190217a8511a8`.
+Read-only Plan passed in 32.616s, preserving 28 variants/56 slots and disabled
+dispatch; raw log SHA-256:
+`cc8266400c586b49f3dcb4ea8c3a6cc646448024a2d5c2efd275bd4780e7d77d`.
+Session75331 is closed (exit0). The first evidence-collector execution passed
+in 0.171s; all 13 command records, exact 39 targets, 21 new and 35 retained
+regression memberships, actual 20 Python cases and 349 copied/installed input
+files were checked. Inventory passed in 0.046s and diff check in 0.020s.
+Reports are installed: [local canary validation](validation/LOCAL-CANARY-DIAGNOSTIC.md)
+and [machine evidence](validation/canary-diagnostic-checks.json), SHA-256
+`832c08fd1251209b8c5707df9eec77acefa42933718ec78e6d4936f78c9e7dc9`
+and `1862663796fa350b47e39aaf0284fe914d2eca58046a766487c7ed09e21655e9`.
+Exactly four evidence entries were appended to partial coverage rows, preserving
+all statuses and prior evidence; ledger SHA-256
+`98a7dfb4604d601323641c3663ee67aa518f4958af2ad87d9fef9ad88cd27f77`.
+No native/live/human qualification is claimed. The independent actual-output
+audit found no material mismatch; root read it and verified its files:
+`/private/tmp/kegari-canary-evidence-output-independent-audit-v1/REVIEW.md`,
+SHA-256 `d627bbb962700e6da676f70e8bd51a1f221f2bbbff15f0f363741763c28aeea3`.
+Root installed exactly the audited report bytes. All validation processes are
+closed. This policy/private-storage/source-preparation increment is kept separate
+from f565b42's broker-observation increment because it has a distinct behavior
+and rollback boundary; no earlier commit is being consolidated.
+
+Independent collector preflight found missing exact invocation/log bindings,
+full-target/unique-case checks, source1/Python identity checks and auxiliary
+inventory-tool/ledger pins. These were corrected before its first execution;
+an introduced undefined Path name was also fixed before execution. The v4
+collector is pinned at `2659a8b16964b796340119fbb73a4dba8c53b243c3c0187dd7ded62c4081e78d`.
+Root read the final no-additional-finding preflight review:
+`/private/tmp/kegari-canary-evidence-preflight-independent-review-v1/REVIEW.md`,
+SHA-256 `cec4501a12db2be8be4e42802e39ef91fd46a9cfa8ee8680bfeed55c031bb3c8`.
+The installed optional fields preserve omitted JSON. Rust consumers constructing
+Variant, ObservedFacts or TrialReport with struct literals must add
+`canary_diagnostic: None` when unused; this source migration will be identified
+in the local commit's breaking-change footer.
+The focused broker regression retained its owned synthetic uncertainty records
+at `/var/folders/s3/gnkb4nw50msf40dxc1jrpsyh0000gn/T/.tmpENdHWq`.
+The same full-run case also preserves its uncertainty by design, but the successful
+captured test output does not expose its path. No cleanup claim is made for it.
+All originals and exact source hashes are retained at
+`/private/tmp/kegari-v0-canary-source-preparation-installed-1/INSTALL.json`.
+
+The first all-target check failed (18.292s, exit101) because two existing
+PreparedFixture unit-test initializers omitted the new optional canary field.
+Root added only `canary: None` in those two initializers, preserving behavior
+and assertions. The failing source1 snapshot, raw log and result are retained;
+raw SHA-256 `c021786e8a1efdb5cd2ca71db4adeff4be3b30b3fca16ceaf0dcf0c337b57a8a`.
+Correction originals/diff are at
+`/private/tmp/kegari-v0-canary-source1-default-correction`; the actual failed
+log hash in `/private/tmp/kegari-v0-canary-check-1-result.json` is authoritative.
+No tests or Clippy ran on source1. Source2 check's raw log SHA-256 is
+`0455b149f530497d8b813a341c01c3dcfa3cb26345ecbf20716fcd30cd7edf2f`.
+The prior broker test layer is unchanged. The canary v2 independent rereview
+found no additional material issue after C1–C4 corrections:
+`/private/tmp/kegari-canary-diagnostic-implementation-independent-review-v2/REVIEW.md`,
+SHA-256 `f65ac49249ac684619cc68e63d1dcebf25c9768171964483b570969af85c2fde`.
+Root read the full correction and review, verified 33 members and all original
+bases, and compared the operator documentation with actual policy/DTO behavior.
+
+The E07 source-data tool passed all 20 Python tests without skips on an exact
+TEMP copy in 1.739s. All 349 input files remained unchanged and now match the
+installed evaluation tree byte-for-byte and mode-for-mode. Session80675 is closed.
+Raw log SHA-256:
+`f7f2be937f7e4e45acfbe050e614367931ce74848860b061906d71d72d63bbad`.
+The separate retained CLI preparation passed in 0.301s with 20 recorded commands;
+actual E07 base is `21bc1e88cef10799c0eed6fd8ecf841aba3eb91d`, head
+`4a9fd6935fd53fcf16156aed23bb274d78b66e96`. Evidence and output:
+`/private/tmp/kegari-e07-source-data-validation-1/retained-e07`.
+SOURCE-EVIDENCE SHA-256:
+`0f0a9dfca94b48cfff2e2477828f6dae87c91fbfedac719dcfa2ccff20ba0b50`.
+Root's initial post-run inspection wrongly compared the compact CLI summary to
+the entire evidence document and failed after the CLI's successful exit. That
+inspection error is retained in `inspection-failure.json`; the original output
+was inspected with the correct five-field projection, without rerunning it.
+Runtime schema3/owner-path support remains missing; the output explicitly has
+runtime_supported=false, dispatch_authorized=false and canary_materialized=false.
+No fixture program or live model was run. The author output/evidence audit
+found no material discrepancy; root read its full report:
+`/private/tmp/kegari-e07-source-data-author-validation-audit-v1/REVIEW.md`,
+SHA-256 `3f5e827bd5d6d21bef0bbe32eda7cd37dda872dd829240a232d2e3897afba7bc`.
+It verified the actual local Git objects, modes, parentage, clean checkout,
+absence of remotes/alternates and exact allowed 351-file derived suite.
+This author audit is distinct from the preceding independent implementation
+review. The test result record did not archive the environment map: all 20
+non-skipped tests prove both conditional families were enabled, while the exact
+copied-suite environment paths are recorded only in root's executed tool call.
+The independent installed integration review found no material issue; root read
+it and verified its files: `/private/tmp/kegari-canary-installed-source2-independent-review-v1/REVIEW.md`,
+SHA-256 `5add59169250fa10fdb6c9891361d3fa5937de26412e6b8208e1794b7678253c`.
+It verifies all 701 inputs, all 19 installation entries, the two test-only
+source2 defaults, preservation of C1–C4, and all 344 shipped fixture/scorer/
+manifest files against the preceding source. Separate TEMP work on schema3/
+owned-path runtime support and an output-matcher/scorer design remains in
+progress; neither changes this frozen validation source.
+
+The following broker component checkpoint is committed and predates this source.
+
+At that broker checkpoint, the reviewed five-path component test layer passed
 all-target compilation (16.462s), strict Clippy (17.345s), all eight broker
 component tests (36.012s), 95 integration tests (30.773s) and formatting (1.544s).
 The integration targets contain 24 control-storage, 30 provider and 41 worker
 tests. All three new regressions passed; all 696 source inputs and toolchain
 observations stayed unchanged at
 `sha256:f26dfec202ba3840ab7c81dda8c6979ee0abb94aeef11c67d7b0195dc258105c`.
-Sessions8702/24399 are closed. No canary implementation is installed. Originals
+Sessions8702/24399 are closed. Canary code was not yet installed then. Originals
 and installation record remain in
 `/private/tmp/kegari-v0-broker-components-installed-source1`; the exact evidence
 bundle is `/private/tmp/kegari-v0-broker-components-verified-evidence-1`.
@@ -26,9 +137,15 @@ The independent installed/evidence audit found no material discrepancy:
 `/private/tmp/kegari-broker-components-installed-evidence-audit-v1/REVIEW.md`,
 SHA-256 `9b126f4a8194bcb3802e6c3cd885fbd54921be062588065e0fbb813857842061`.
 Root read it and corrected the older checkpoint's time-qualified wording.
-These are directly related broker regressions, so the current unpublished broker
-commit will be amended after creating a local recovery reference. No other
-history will be consolidated, and no remote write is authorized.
+These directly related broker regressions are consolidated into
+`f565b42d29c456189bd0525a0b0a505441879aff` —
+`feat(kegari-v0): retain independent broker observations`. It amends only the
+unpublished `316c362d86799ae066f48a772d0aa1c4d2256d5a`, preserved beforehand at
+`refs/recovery/kegari-v0/316c362-broker-call-tests`. Parent998677a is unchanged.
+All eight intended changed files and all 696 tested source inputs match the
+resulting commit; every other path matches the recovery commit. The tree was clean
+after verification. No other history was consolidated and nothing was pushed.
+Verification: `/private/tmp/kegari-v0-broker-components-commit-verification.json`.
 The committed broker results below remain evidence for their exact older source.
 
 The broker-observation increment is locally verified: 954 tests passed, zero
@@ -219,6 +336,21 @@ Seven new Python tests are authored, not run; original E05 helpers/tests remain
 unchanged. Runtime schema3 and original-owner path support remain missing, and
 the proposed tool output says so explicitly. No tool code is installed, no source
 objects have been created and no fixture program has been executed.
+Its independent static review found no material defect:
+`/private/tmp/kegari-e07-source-data-preparation-independent-review-v1/REVIEW.md`,
+SHA-256 `42b74b73ef0ac360f6c9d59fe66f5bb3df44b691f103cbada57a45460f12d487`.
+Root read that review and verified all 13 held artifact members and actual bases.
+Root is now running all original/new Python cases on a separate exact suite copy
+with the four reviewed files overlaid in TEMP, both explicit suite inputs set,
+and bytecode disabled. Session80675; records/input copy are at
+`/private/tmp/kegari-e07-source-data-validation-1`. No repository source is changed.
+
+Canary v2 is held at `/private/tmp/kegari-canary-diagnostic-implementation-v2`
+(FILES SHA-256
+`6c57af620933def0e9c03a0fc105bcbd9629da62b6d24e38b8fee72240ab3771`),
+with a six-path correction and thirteen-path full composition. It reports 21
+authored unrun components (17 canary/four storage). Independent rereview and root
+inspection are in progress; no canary/storage changes are installed or executed.
 
 Initial resume inspection confirmed the approved SPEC hash, `main`, an empty
 index and then only this progress record changed since the broker commit. A read-only `ps`

@@ -94,6 +94,14 @@ fn unchanged(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
 }
 
 pub(super) fn read_file(path: &Path, limit: usize) -> Result<CapturedFile> {
+    read_file_guarded(path, limit, &mut |_| Ok(()))
+}
+
+pub(super) fn read_file_guarded(
+    path: &Path,
+    limit: usize,
+    before_read: &mut dyn FnMut(usize) -> Result<()>,
+) -> Result<CapturedFile> {
     let limit = limit.min(MAX_EVIDENCE_BYTES);
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -115,15 +123,35 @@ pub(super) fn read_file(path: &Path, limit: usize) -> Result<CapturedFile> {
     let mut file = options
         .open(path)
         .map_err(|e| Error::io("open evaluation input", e))?;
+    read_open_file(&mut file, limit, before_read)
+}
+
+/// Captures the same descriptor bytes while the caller reserves bounded work.
+pub(super) fn read_open_file(
+    file: &mut std::fs::File,
+    limit: usize,
+    before_read: &mut dyn FnMut(usize) -> Result<()>,
+) -> Result<CapturedFile> {
+    let limit = limit.min(MAX_EVIDENCE_BYTES);
     let before = file
         .metadata()
         .map_err(|e| Error::io("inspect evaluation input", e))?;
     validate_file(&before, limit)?;
-    let mut bytes = Vec::with_capacity(before.len() as usize);
-    (&mut file)
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| Error::io("read evaluation input", e))?;
+    let mut bytes = Vec::new();
+    // Reserve before each actual read; an attempted read is never refunded.
+    // The extra byte detects growth and is charged even on a short/empty read.
+    while bytes.len() <= limit {
+        let amount = (before.len() as usize + 1 - bytes.len()).min(64 * 1024);
+        before_read(amount)?;
+        let mut chunk = vec![0; amount];
+        let read = file
+            .read(&mut chunk)
+            .map_err(|e| Error::io("read evaluation input", e))?;
+        bytes.extend_from_slice(&chunk[..read]);
+        if read == 0 || bytes.len() > before.len() as usize {
+            break;
+        }
+    }
     let after = file
         .metadata()
         .map_err(|e| Error::io("reinspect evaluation input", e))?;
@@ -156,6 +184,26 @@ impl CapturedTree {
     }
 
     fn capture_with_limits(root: &Path, entry_limit: usize, depth_limit: usize) -> Result<Self> {
+        Self::capture_guarded(root, entry_limit, depth_limit, &mut |_| Ok(()))
+    }
+
+    pub(super) fn capture_observed(
+        root: &Path,
+        before_read: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Self> {
+        Self::capture_guarded(root, MAX_TREE_ENTRIES, MAX_TREE_DEPTH, before_read)
+    }
+
+    pub(super) fn entries(&self) -> impl Iterator<Item = (&str, &CapturedFile)> {
+        self.files.iter().map(|(path, file)| (path.as_str(), file))
+    }
+
+    fn capture_guarded(
+        root: &Path,
+        entry_limit: usize,
+        depth_limit: usize,
+        before_read: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Self> {
         struct Budget {
             bytes: usize,
             entries: usize,
@@ -168,6 +216,7 @@ impl CapturedTree {
             files: &mut BTreeMap<String, CapturedFile>,
             budget: &mut Budget,
             depth: usize,
+            before_read: &mut dyn FnMut(usize) -> Result<()>,
         ) -> Result<()> {
             // Empty directories do not affect the legacy digest, but still
             // consume traversal work and recursion depth when grading a tree.
@@ -178,6 +227,8 @@ impl CapturedTree {
                 ));
             }
             budget.entries += 1;
+            // Also check the caller's original deadline on directory-only work.
+            before_read(0)?;
             let metadata = std::fs::symlink_metadata(path)
                 .map_err(|e| Error::io("inspect fixture tree", e))?;
             if metadata.is_dir() {
@@ -190,13 +241,13 @@ impl CapturedTree {
                     if path == root && entry.file_name() == ".git" {
                         continue;
                     }
-                    visit(root, &entry.path(), files, budget, depth + 1)?;
+                    visit(root, &entry.path(), files, budget, depth + 1, before_read)?;
                 }
             } else {
                 if files.len() >= MAX_FILES {
                     return Err(Error::new("evidence_limit", "fixture tree exceeds bound"));
                 }
-                let data = read_file(path, MAX_EVIDENCE_BYTES - budget.bytes)?;
+                let data = read_file_guarded(path, MAX_EVIDENCE_BYTES - budget.bytes, before_read)?;
                 budget.bytes += data.bytes.len();
                 let key = path
                     .strip_prefix(root)
@@ -220,7 +271,7 @@ impl CapturedTree {
             entry_limit,
             depth_limit,
         };
-        visit(root, root, &mut files, &mut budget, 0)?;
+        visit(root, root, &mut files, &mut budget, 0, before_read)?;
         Ok(Self { files })
     }
 
@@ -308,6 +359,7 @@ mod tests {
             fixture_digest: canonical_digest(1, &capture.snapshot()).unwrap(),
             scorer: "scorer.json".into(),
             scorer_digest: bytes_digest(b"scorer"),
+            canary_diagnostic: None,
             initial_state: "fixture".into(),
             seed: Seed::DeclaredPrior {
                 artifact: "prior.json".into(),

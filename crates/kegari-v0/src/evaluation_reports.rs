@@ -117,6 +117,9 @@ impl ReportArchive {
                         "result provenance, bound or declared grade is inconsistent",
                     ));
                 }
+                if let Some(canary) = &report.canary_diagnostic {
+                    canary.validate_report(&report, variant, profile)?;
+                }
                 if report.evidence_class == EvidenceClass::ActualAgent {
                     validate_actual_report(&report, variant, started_at.as_ref().unwrap())?;
                 }
@@ -195,7 +198,7 @@ impl ReportArchive {
             "elapsed_ms":(!self.reconstructed.contains(&r.trial.name()?)).then_some(r.elapsed_ms),"turns_started":r.turns_started,"usage_tokens":r.usage_tokens,
             "earlier_usage_unknown":r.earlier_usage_unknown,"unresolved_remote_effects":r.unresolved_remote_effects,
             "grading_error":r.grading_error,"observed_effects":r.observed_effects,
-            "runtime_build":r.runtime_build,"review_claim":r.review_claim,"independent_boundary":r.independent_boundary,"independent_broker":r.independent_broker,"declared_protocol":r.declared_protocol,"instruction_digest":r.instruction_manifest.as_ref().map(|m|canonical_digest(1,m)).transpose()?
+            "runtime_build":r.runtime_build,"review_claim":r.review_claim,"independent_boundary":r.independent_boundary,"independent_broker":r.independent_broker,"canary_diagnostic":r.canary_diagnostic,"declared_protocol":r.declared_protocol,"instruction_digest":r.instruction_manifest.as_ref().map(|m|canonical_digest(1,m)).transpose()?
         }))).collect::<Result<Vec<_>>>()?;
         Ok(
             json!({"schema_version":1,"report_root":self.root,"suite_digest":self.suite.digest()?,

@@ -318,6 +318,7 @@ fn good(fixture: &PreparedFixture, trace: &Value) -> ObservedFacts {
         review_claim,
         independent_boundary: None,
         independent_broker: None,
+        canary_diagnostic: None,
         declared_protocol: None,
         evidence_references: vec!["deterministic:known-good-trace".into()],
     }

@@ -20,6 +20,14 @@ use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+#[path = "evaluation_canary.rs"]
+mod canary;
+pub use canary::{
+    CanaryBinding, CanaryDiagnostic, CanaryHostInputs, CanaryIdentity, CanaryPolicyReference,
+    CanaryRecordReference,
+};
+pub(crate) use canary::{CanaryMaterialization, CanaryStageInput};
+
 #[path = "evaluation_context.rs"]
 mod context_binding;
 use context_binding::{HostContext, NativeContextBinding};
@@ -101,6 +109,8 @@ pub struct Variant {
     pub fixture_digest: String,
     pub scorer: String,
     pub scorer_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_diagnostic: Option<CanaryPolicyReference>,
     pub initial_state: String,
     pub seed: Seed,
     pub expected_outcomes: Vec<String>,
@@ -156,6 +166,9 @@ impl SuiteManifest {
             .parent()
             .ok_or_else(|| Error::invalid("suite lacks root"))?;
         for variant in &result.variants {
+            if let Some(reference) = &variant.canary_diagnostic {
+                canary::load_policy(root, reference, &mut |_| Ok(()))?;
+            }
             if tree_digest(&root.join(relative(&variant.fixture)?))? != variant.fixture_digest {
                 return Err(Error::new(
                     "fixture_changed",
@@ -222,6 +235,7 @@ impl SuiteManifest {
         let mut seen = BTreeSet::new();
         let mut trials = 0u32;
         for variant in &self.variants {
+            canary::validate_variant(variant)?;
             if !identifier(&variant.id)
                 || !seen.insert((variant.case_id.as_str(), variant.id.as_str()))
                 || !profiles.contains(&variant.profile)
@@ -430,8 +444,22 @@ pub struct PreparedFixture {
     context_binding: Option<NativeContextBinding>,
     worker_placement: Option<WorkerPlacement>,
     worker_manifest: Option<String>,
+    canary: Option<std::sync::Arc<CanaryMaterialization>>,
 }
 impl PreparedFixture {
+    pub(crate) fn attach_canary(
+        &mut self,
+        owner: std::sync::Arc<CanaryMaterialization>,
+    ) -> Result<()> {
+        if self.canary.is_some() || self.worker_manifest.is_some() {
+            return Err(Error::new(
+                "canary_conflict",
+                "canary must attach once before actual worker binding",
+            ));
+        }
+        self.canary = Some(owner);
+        Ok(())
+    }
     fn preparation_digest(&self) -> Result<String> {
         canonical_digest(
             1,
@@ -659,6 +687,7 @@ fn prepare_captured_fixture_at(
         context_binding,
         worker_placement: placement,
         worker_manifest: None,
+        canary: None,
     };
     if prepared.worker_placement.is_some() && prepared.context_binding.is_none() {
         return Err(Error::new(
@@ -1208,6 +1237,9 @@ pub struct ObservedFacts {
     /// Same-owner broker subset only; absence/pending is unknown, never acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub independent_broker: Option<crate::worker::IndependentBrokerObservation>,
+    /// Finite host-input diagnostic only; absence is unknown and never qualifies output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_diagnostic: Option<CanaryDiagnostic>,
     /// Only explicitly enabled declared protocol channels; missing legacy data
     /// is unknown, never an empty successful capture. No scoring authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1536,6 +1568,9 @@ pub struct TrialReport {
     /// Same-owner broker subset only; absence/pending is unknown, never acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub independent_broker: Option<crate::worker::IndependentBrokerObservation>,
+    /// Finite host-input diagnostic only; absence is unknown and never qualifies output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_diagnostic: Option<CanaryDiagnostic>,
     /// Only explicitly enabled declared protocol channels; missing legacy data
     /// is unknown, never an empty successful capture. No scoring authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1595,6 +1630,7 @@ impl TrialReport {
             review_claim: None,
             independent_boundary: None,
             independent_broker: None,
+            canary_diagnostic: None,
             declared_protocol: None,
             evidence_references: vec![],
             omissions: vec!["No actual-agent observation is available".into()],
@@ -1611,8 +1647,12 @@ pub struct DeclaredProtocolTrial {
     trial_digest: Option<String>,
     suite_digest: String,
     fixture_digest: String,
+    capture_budget: Option<std::sync::Arc<crate::worker::CaptureBudget>>,
 }
 impl DeclaredProtocolTrial {
+    pub(crate) fn capture_budget(&self) -> Option<std::sync::Arc<crate::worker::CaptureBudget>> {
+        self.capture_budget.clone()
+    }
     pub(crate) fn operation(&self) -> uuid::Uuid {
         self.operation
     }
@@ -2134,6 +2174,29 @@ pub(crate) async fn run_live_trial_until(
     let mut cancellation = CancelTrialOnDrop::new(|| {
         let _ = operation.provider.cancel();
     });
+    let capture_budget = match (&variant.canary_diagnostic, &operation.fixture.canary) {
+        (None, None) => None,
+        (Some(_), Some(owner)) => {
+            owner.verify_trial(suite, variant, &report.trial, profile)?;
+            let checked = || lease.check();
+            owner.preflight(
+                operation.fixture,
+                operation.assembled,
+                operation.host.bound_context(),
+                operation.tools,
+                &checked,
+            )?;
+            let budget = operation.host.verify_canary_owner(owner)?;
+            lease.check()?;
+            Some(budget)
+        }
+        _ => {
+            return Err(Error::new(
+                "canary_binding",
+                "declared canary requires its original runtime-owned materialization",
+            ));
+        }
+    };
     // Explicit trial-only opt-in; ordinary ScopedWorker creation records no
     // raw tool arguments or agent-message text through this observer.
     operation
@@ -2144,6 +2207,7 @@ pub(crate) async fn run_live_trial_until(
             trial_digest: canonical_digest(1, &report.trial).ok(),
             suite_digest: report.suite_digest.clone(),
             fixture_digest: report.fixture_digest.clone(),
+            capture_budget,
         });
     let mut audited = AuditedHost {
         host: operation.host,
@@ -2526,8 +2590,15 @@ pub(crate) async fn run_live_trial_until(
                 .as_ref()
                 .map(|client| client.observed_server_request_count()),
         });
+    let canary_diagnostic = operation
+        .fixture
+        .canary
+        .as_ref()
+        .map(|owner| owner.finalize());
+    report.canary_diagnostic = canary_diagnostic.clone();
     let observed = audited.host.observe();
-    if let Ok(facts) = observed {
+    if let Ok(mut facts) = observed {
+        facts.canary_diagnostic = canary_diagnostic;
         grading::collect(
             &mut report,
             operation.fixture,
@@ -2587,6 +2658,7 @@ impl ReportStore {
     pub fn finish(&self, report: &TrialReport) -> Result<()> {
         self.write(&format!("{}.result.json", report.trial.name()?), report)
     }
+    #[cfg(test)]
     pub(crate) fn finish_owned_failure(
         root: &Path,
         suite: &SuiteManifest,
@@ -2594,6 +2666,25 @@ impl ReportStore {
         trial: &TrialKey,
         error: &Error,
         interrupted: bool,
+    ) -> Result<()> {
+        Self::finish_owned_failure_with_canary(
+            root,
+            suite,
+            variant,
+            trial,
+            error,
+            interrupted,
+            None,
+        )
+    }
+    pub(crate) fn finish_owned_failure_with_canary(
+        root: &Path,
+        suite: &SuiteManifest,
+        variant: &Variant,
+        trial: &TrialKey,
+        error: &Error,
+        interrupted: bool,
+        canary_diagnostic: Option<CanaryDiagnostic>,
     ) -> Result<()> {
         let store = Self {
             directory: crate::storage::PrivateDir::open(root)?,
@@ -2668,6 +2759,7 @@ impl ReportStore {
             },
             &format!("{}: {}", error.code, error.message),
         )?;
+        report.canary_diagnostic = canary_diagnostic;
         report.started_at = started["started_at"]
             .as_str()
             .expect("checked timestamp")

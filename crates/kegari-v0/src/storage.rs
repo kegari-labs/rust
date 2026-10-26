@@ -17,6 +17,10 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "storage_retained.rs"]
+mod retained;
+pub(crate) use retained::RetainedPrivateFile;
+
 const MAX_RECORD: u64 = 256 * 1024;
 
 #[derive(Debug)]

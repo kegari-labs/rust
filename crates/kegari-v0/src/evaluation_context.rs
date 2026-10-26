@@ -325,6 +325,7 @@ mod tests {
             context_binding: Some(binding),
             worker_placement: None,
             worker_manifest: None,
+            canary: None,
         };
         fixture.preparation_digest = fixture.preparation_digest().unwrap();
         verify_fixture_context(&expected, &fixture, &host).unwrap();
@@ -524,6 +525,7 @@ mod tests {
             context_binding: Some(binding.clone()),
             worker_placement: None,
             worker_manifest: None,
+            canary: None,
         };
         fixture.preparation_digest = fixture.preparation_digest().unwrap();
         verify_fixture_context(&expected, &fixture, &host).unwrap();
