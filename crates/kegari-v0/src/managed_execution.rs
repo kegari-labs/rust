@@ -289,11 +289,11 @@ mod tests {
         }
         assert!(
             profile.contains(
-                "(allow file-read* file-map-executable (subpath \"/System/Cryptexes/OS\"))"
+                "(allow file-read* file-test-existence file-map-executable (subpath \"/System/Cryptexes/OS\"))"
             )
         );
         assert!(profile.contains(&format!(
-            "(deny file-read* file-write* file-map-executable process-exec (subpath \"{}\"))",
+            "(deny file-read* file-test-existence file-write* file-map-executable process-exec (subpath \"{}\"))",
             f.plan.forbidden_roots[0].display()
         )));
         assert!(!profile.contains("(import"));
@@ -306,6 +306,73 @@ mod tests {
             "(allow file-map-executable (subpath \"{}\"))",
             f.plan.scratch.join("build").display()
         )));
+    }
+    #[test]
+    fn loader_bootstrap_reads_only_fixed_grafts_and_literal_ancestors() {
+        use std::collections::BTreeSet;
+        let f = Fixture::new();
+        let boundary = f.plan.validate().unwrap();
+        let profile = boundary.seatbelt_profile().unwrap();
+        let ancestors = [
+            "/",
+            "/System",
+            "/System/Volumes",
+            "/System/Volumes/Preboot",
+            "/System/Volumes/Preboot/Cryptexes",
+            "/System/Volumes/Preboot/Cryptexes/App",
+            "/System/Volumes/Preboot/Cryptexes/Incoming",
+            "/System/Cryptexes",
+        ];
+        let mut expected: BTreeSet<String> = ancestors
+            .iter()
+            .map(|path| format!("(allow file-read* file-test-existence (literal \"{path}\"))"))
+            .collect();
+        for path in [
+            "/System/Volumes/Preboot/Cryptexes/App/System",
+            "/System/Volumes/Preboot/Cryptexes/Incoming/OS",
+            "/System/Volumes/Preboot/Cryptexes/OS",
+            "/System/Volumes/Preboot/Cryptexes/Rosetta",
+            "/System/Cryptexes/App",
+            "/System/Cryptexes/OS",
+            "/System/Cryptexes/Rosetta",
+        ] {
+            expected.insert(format!(
+                "(allow file-read* file-test-existence file-map-executable (subpath \"{path}\"))"
+            ));
+        }
+        let actual: BTreeSet<String> = profile
+            .lines()
+            .filter(|line| line.starts_with("(allow") && line.contains("file-test-existence"))
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(actual, expected);
+        for ancestor in ancestors {
+            assert!(!profile.contains(&format!("(subpath \"{ancestor}\")")));
+            for line in profile.lines().filter(|line| {
+                line.starts_with("(allow") && line.contains(&format!("(literal \"{ancestor}\")"))
+            }) {
+                assert!(!line.contains("file-write"));
+                assert!(!line.contains("file-map-executable"));
+                assert!(!line.contains("process-exec"));
+            }
+        }
+        assert!(profile.starts_with("(version 1)\n(deny default)\n"));
+        for forbidden in [
+            "(import",
+            "(allow network",
+            "(allow mach",
+            "(allow sysctl-write",
+        ] {
+            assert!(!profile.contains(forbidden));
+        }
+        assert!(profile.contains(&format!(
+            "(deny file-read* file-test-existence file-write* file-map-executable process-exec (subpath \"{}\"))",
+            f.plan.forbidden_roots[0].display()
+        )));
+        assert_eq!(
+            repository_command_prerequisite(&boundary).unwrap_err().code,
+            "managed_profile_unqualified"
+        );
     }
     #[test]
     fn managed_inventory_rejects_changed_bytes_aliases_and_substituted_records() {

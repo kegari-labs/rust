@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-10-26T20:21:19.062032+00:00",
+  "status": "passed_fixed_foreground_component_cases",
+  "approval": "Explicit one-use NQ-02C approval; executed once and consumed.",
+  "request": {
+    "id": "NQ-02C",
+    "sha256": "d2179900672c79ebcd3217ce556ec0b1c2d4de57a240cf09fe703fb4be105c54",
+    "argv": [
+      "--ignored",
+      "--exact",
+      "isolation::native_tests::managed_foreground_native_exit_output_and_timeout_are_journaled",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "timeout_seconds": 30,
+    "attempts": 1,
+    "binary": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02c-d2179900672c/managed-command-test",
+    "application_version": "0.2.0-alpha.7",
+    "actions": "One native foreground component test with the corrected fixed OS loader directory read/existence grants: direct pinned Bash output/redaction and disposable allowed/denied-file checks, Bash exit 7, then owned /bin/sleep 5 timed out after 100ms. Uses native identity, actual owned groups, journals and joined output. The fixture lease is synthetic; no authenticated runtime admission or qualification is issued.",
+    "cleanup": "Signals only its original owned processes. Each case has a 9-second independent observation bound; on expiry it requests owned cancellation and observes the same retained waiter for at most 2 seconds, recording unknown closure if not settled. The test still fails on that expiry. The wrapper limits the single test process to 30 seconds; wrapper timeout is not proof of descendant closure. All bounded fixture/profile/launch/outcome/journal evidence is retained on success or failure and hashed (64 files, 128KiB each, 512KiB total). No fixture root is deleted.",
+    "not_authorized": "No NQ-01B or previous NQ-02 repeat, setup, Keychain, service start/install, launchctl, provider/network operation, existing-process action, signing, installation or other test.",
+    "source_validation": "21 isolation component tests passed with one native ignore; 76 affected integration tests passed; final native fixture compiled; clippy and formatting passed. Alpha.6 full regression remains the unaffected baseline, not a new alpha.7 full-suite claim.",
+    "source_manifest": "source-inputs.json",
+    "status": "prepared_not_executed_requires_explicit_user_approval"
+  },
+  "result": {
+    "exit_code": 0,
+    "timed_out": false,
+    "request": "NQ-02C",
+    "elapsed_seconds": 0.9227295839809813,
+    "binary_sha256": "d2179900672c79ebcd3217ce556ec0b1c2d4de57a240cf09fe703fb4be105c54",
+    "argv": [
+      "--ignored",
+      "--exact",
+      "isolation::native_tests::managed_foreground_native_exit_output_and_timeout_are_journaled",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "stdout_sha256": "65b1bc523b8053ee24535bb77b49572f9abf0add022fad656c1bb1a76287b0c7",
+    "stderr_sha256": "1a8d0058440c71d98bc72e681afaac078cba7fc3b6a7a092d09bded3e6263170",
+    "retained_cwd": "/private/tmp/kegari-nq02c-959z2ztz",
+    "residual_cwd_entries": [
+      ".tmpnjzxmt"
+    ],
+    "retained_files": [
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-0-launch.json",
+        "bytes": 1114,
+        "sha256": "7e8fe3067dd00babd62dcbd25d56a80517f8fdff6a2ee014599cb95be806c7f3"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-0-registration.json",
+        "bytes": 24,
+        "sha256": "fbc531c75ecd7a571efc6a0c7df84b498f054651b1f202fe5778a8a12f5c3b6e"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-0-start.json",
+        "bytes": 21,
+        "sha256": "66ed2ef29245414c6382641722b8313249e5b50521240e27a1f0c56f3ed15000"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-0-wait.json",
+        "bytes": 2828,
+        "sha256": "e5b4b1ee091a64d862ff8b1e0f79daea4085bfe003f0499c0158d53fa2efe329"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-1-launch.json",
+        "bytes": 810,
+        "sha256": "4f3330d15f9fbeb5e9fa2b1c323592c9d48417f01e79599af7e0ddfe713953c1"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-1-registration.json",
+        "bytes": 24,
+        "sha256": "fbc531c75ecd7a571efc6a0c7df84b498f054651b1f202fe5778a8a12f5c3b6e"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-1-start.json",
+        "bytes": 21,
+        "sha256": "66ed2ef29245414c6382641722b8313249e5b50521240e27a1f0c56f3ed15000"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-1-wait.json",
+        "bytes": 2480,
+        "sha256": "92091f1d050b6bd30f4dc032c8ca5dc587d96e2b4c2770f2c94616c7ab23156b"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-2-launch.json",
+        "bytes": 748,
+        "sha256": "83579d0eff8a459c91a390d5295c1af8dd178d54f44cb6d9b45e67db371ba325"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-2-registration.json",
+        "bytes": 24,
+        "sha256": "fbc531c75ecd7a571efc6a0c7df84b498f054651b1f202fe5778a8a12f5c3b6e"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-2-start.json",
+        "bytes": 21,
+        "sha256": "66ed2ef29245414c6382641722b8313249e5b50521240e27a1f0c56f3ed15000"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-2-wait.json",
+        "bytes": 2430,
+        "sha256": "21126d6a046ef1649fdc8f80d974bc561aaef8903d482d2093657c3474e5d983"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/completed.json",
+        "bytes": 119,
+        "sha256": "ff4176d155b7e3d5409c2d71aa05137f74f084baae66575fa6441ecc0cce5f68"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/processes/19644136-a89c-4547-b822-9858e1815a39/70d48eb4-3de0-4c75-bf84-ae38990df1ae.guard",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/processes/19644136-a89c-4547-b822-9858e1815a39/70d48eb4-3de0-4c75-bf84-ae38990df1ae.json",
+        "bytes": 1753,
+        "sha256": "ea60b795cb52f26ddcd644e650056d0d08c217f12215946ab96512eea5d49c8b"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/processes/73ae2cfb-acfc-4c69-9669-afc8020a18ff/760e27e8-d211-4ed3-9adc-cbe20ea233d8.guard",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/processes/73ae2cfb-acfc-4c69-9669-afc8020a18ff/760e27e8-d211-4ed3-9adc-cbe20ea233d8.json",
+        "bytes": 1756,
+        "sha256": "845ee32ffbdd83df68a74481a6cf8220324292f48fe2cc75841b041e4f8454c7"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/processes/d6d260a7-89fa-4a08-a53c-70fec09aa6f2/7c5fa42f-a62a-4374-ba6b-29e41e771d50.guard",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/processes/d6d260a7-89fa-4a08-a53c-70fec09aa6f2/7c5fa42f-a62a-4374-ba6b-29e41e771d50.json",
+        "bytes": 1753,
+        "sha256": "d51e79b02374f751702897a5efe9aaa5af1ddc2d12ddea7ba40c05c6a42110c6"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/protected/sentinel",
+        "bytes": 24,
+        "sha256": "a79862ad0ea28c8e79da2a454be46ef3b9e13b9be14749e7e8a47c680ce6b93a"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/runs/scratch/result",
+        "bytes": 7,
+        "sha256": "eabc01f12ec3e7cb6db0ada0f8f37323b0cfe6d08a2a73479e7d5b62d7e63529"
+      },
+      {
+        "path": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/seatbelt.sb",
+        "bytes": 3920,
+        "sha256": "9a6b785ceec08850d6775e359c41cfe50aa7c90941db6c14eb53fc1b61b63aea"
+      }
+    ],
+    "evidence_error": null,
+    "three_case_evidence_complete": true,
+    "closure_note": "Outer timeout or interrupted test means closure unknown; only retained per-case owned observations can establish closure."
+  },
+  "test_result": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 544
+  },
+  "cases": [
+    {
+      "case": 0,
+      "exit_code": 0,
+      "termination_signal": null,
+      "timed_out": false,
+      "elapsed_ms": 57,
+      "output_truncated": false,
+      "owned_group_journal_and_output_closed": true,
+      "all_descendants_exited": false,
+      "launch_record": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-0-launch.json",
+      "wait_record": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-0-wait.json"
+    },
+    {
+      "case": 1,
+      "exit_code": 7,
+      "termination_signal": null,
+      "timed_out": false,
+      "elapsed_ms": 50,
+      "output_truncated": false,
+      "owned_group_journal_and_output_closed": true,
+      "all_descendants_exited": false,
+      "launch_record": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-1-launch.json",
+      "wait_record": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-1-wait.json"
+    },
+    {
+      "case": 2,
+      "exit_code": null,
+      "termination_signal": 9,
+      "timed_out": true,
+      "elapsed_ms": 141,
+      "output_truncated": false,
+      "owned_group_journal_and_output_closed": true,
+      "all_descendants_exited": false,
+      "launch_record": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-2-launch.json",
+      "wait_record": "/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt/case-2-wait.json"
+    }
+  ],
+  "file_access_and_redaction": {
+    "allowed_write_preserved": true,
+    "protected_sentinel_unchanged": true,
+    "protected_read_and_write_denied_by_actual_case_assertions": true,
+    "redacted_stdout_and_diagnostic_stderr_match_actual_case_assertions": true
+  },
+  "artifact_files": {
+    "request.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02c-d2179900672c/request.json",
+      "sha256": "27c43701c17192854bcc5fc540f35ebc21a88913caafcdd484ffcf85a7916d3a"
+    },
+    "run-once.py": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02c-d2179900672c/run-once.py",
+      "sha256": "ff91399fb6cc4635e18681e7a4936f397263b44e8b63dc93ba38b06b34cea4f1"
+    },
+    "source-inputs.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02c-d2179900672c/source-inputs.json",
+      "sha256": "1d902bf9378bb761273e7d32d0a517767bbaf78df613fdc35671619ebc78a244"
+    },
+    "attempt-started.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02c-d2179900672c/attempt-started.json",
+      "sha256": "e285ee32fbd5385041aec9948f8b24cee46047ff64b856815cb081d08beb71be"
+    },
+    "result.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02c-d2179900672c/result.json",
+      "sha256": "327bc92e78c80fc00af24999499b28a4d355d31374906d0a601692cf5bf7846b"
+    },
+    "native-managed-command.stdout": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02c-d2179900672c/native-managed-command.stdout",
+      "sha256": "65b1bc523b8053ee24535bb77b49572f9abf0add022fad656c1bb1a76287b0c7"
+    },
+    "native-managed-command.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02c-d2179900672c/native-managed-command.stderr",
+      "sha256": "1a8d0058440c71d98bc72e681afaac078cba7fc3b6a7a092d09bded3e6263170"
+    }
+  },
+  "limits": [
+    "Synthetic disposable lease, not authenticated runtime admission or a qualification grant.",
+    "Proves these three fixed foreground cases for the exact alpha.7 source; no service, Rust/Cargo, general network, provider or setup qualification.",
+    "Managed group closure excludes escaped unregistered descendants. Full descendant coverage remains required before untrusted-context qualification.",
+    "NQ-01B remains unexecuted; NQ-02A/B remain separate historical failures. No earlier permission was reused.",
+    "Passing the corrected profile does not identify the exact denied operation in either historical abort."
+  ]
+}

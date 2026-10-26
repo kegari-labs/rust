@@ -22,14 +22,14 @@ that exact toolchain and an isolated Cargo cache; those local environment values
 are recorded in [PROGRESS.md](PROGRESS.md). A successful build or fixture test
 does not establish native isolation, live provider compatibility or human review.
 Native tests remain explicitly ignored in ordinary suite runs. The separately
-approved [NQ-01A identity check](validation/NATIVE-IDENTITY.md) passed once;
-[NQ-02B foreground recheck](validation/NATIVE-MANAGED-RECHECK.md) failed in loader
-bootstrap. Owned-child signalling and the remaining native qualification are still
-pending.
+approved [NQ-01A identity check](validation/NATIVE-IDENTITY.md) passed once.
+[NQ-02C](validation/LOADER-BOOTSTRAP.md) passed three fixed foreground cases after
+the loader correction; the earlier NQ-02A/B failures remain recorded. The separate
+NQ-01B check, Rust/Cargo, services and remaining native qualification are pending.
 
 ## Versioned prerelease executable
 
-The application is versioned as `0.2.0-alpha.6`; the package and executable remain
+The application is versioned as `0.2.0-alpha.7`; the package and executable remain
 `kegari-v0`. This prerelease does not complete the 0.2.0 containment milestone.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or
 unqualified declared profiles (`managed_profile_unqualified`), and native,
@@ -59,9 +59,11 @@ checksum or a complete record of compiler settings. Release and debug profiles
 have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
-running coordinator. The [alpha.6 managed check increment](validation/MANAGED-CHECK-BUNDLES.md)
-adds finite registered services, records the exact staged executable and its
-1,097 passing local tests, and retains the qualification prerequisite. The earlier
+running coordinator. The [alpha.7 loader correction](validation/LOADER-BOOTSTRAP.md)
+records the exact staged executable, 97 passing affected local tests and three
+passing native foreground cases. The qualification prerequisite remains enforced.
+The [alpha.6 managed check increment](validation/MANAGED-CHECK-BUNDLES.md)
+records finite registered services and the historical 1,097-test full suite. The earlier
 [alpha.5 command supervision evidence](validation/MANAGED-COMMAND-SUPERVISION.md)
 remains historical. The
 [alpha.4 setup/profile report](validation/MANAGED-SETUP.md),
@@ -79,7 +81,7 @@ it does not open a setup wizard or start a service. Before setup, alpha.4 and la
 runtime has been configured yet. Use `./kegari-v0 --help` or
 `./kegari-v0 setup --help` to inspect the available commands without setup.
 
-Alpha.6 is an inspectable development artifact, not a qualified installation ready
+Alpha.7 is an inspectable development artifact, not a qualified installation ready
 for activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
 requires the supported profile and native/provider prerequisites to be established
 first, then a final protected, versioned binary and explicit runtime configuration.
@@ -145,4 +147,5 @@ The [evaluation guide](docs/evaluations.md) describes the versioned V0-E01–08
 fixtures, finite trial bounds, protected graders, provenance and human-review
 requirements. Actual-agent trials, real provider integrations, native service and
 isolation checks, and required human calibration are separate evidence classes.
-The current unattended build has not run or authorized those live steps.
+Supervised, bounded native component results are recorded above. Other live steps
+still require separate authorization and evidence.

@@ -6,7 +6,43 @@ paused. The previous pause followed the explicit "Keep the goal paused" /
 "Do not start implementation yet" instruction, rather than an entitlement
 prerequisite. Supervision and existing action restrictions remain in force.
 
-Current verified increment after `5b7078d`: **0.2.0-alpha.6** implements finite
+Current verified increment on baseline `db4374f`: **0.2.0-alpha.7** corrects
+native loader bootstrap. The separately approved NQ-02C test ran once and passed
+all three fixed cases: Bash output/redaction and file boundaries, exit 7, and an
+owned sleep timeout with SIGKILL. Every case recorded original group/journal/
+output closure, without claiming escaped-descendant closure. All 22 fixture files
+are retained and hash-verified. The one-use NQ-02C approval is consumed.
+
+The profile adds read/existence access to eight fixed literal ancestors, including
+`/`, and existence access to seven existing fixed Cryptex grafts, plus explicit
+forbidden-root existence denial. Literal directory reads permit inspecting their
+entries; no recursive root, ancestor map/exec/write, network or Mach grant is
+added. The fixture retains its original waiter through bounded timeout cleanup
+and defers diagnostic-write assertions until that observation finishes.
+
+Affected local checks passed **97 tests, zero failures, one native ignore**;
+all-target clippy, formatting, inventory, final native-fixture compilation and
+five staged-executable inspections pass. Alpha.6's full suite remains historical
+evidence for unchanged areas; no alpha.7 full-suite run is claimed. Independent
+source/package review found no remaining material finding in the reviewed scope.
+Final independent audit matched 48 referenced hashes, 325 build inputs and 723
+test inputs, recomputed the build identity and reconciled the case observations.
+No supported-profile qualification is issued and public admission stays closed.
+
+The exact executable is staged at
+`target/prereleases/kegari-v0-0.2.0-alpha.7-aarch64-apple-darwin-be94ce252874/kegari-v0`;
+SHA-256 `be94ce25287486f2fc147c0901fce5946a0ee041c91ccc68074f3dafbc18980e`;
+build identity
+`sha256:76b7b0d07c6c4dd047733a6b6cba94053493631362ac2997e7c34d2efa8c5c38`.
+This is a development executable; it is not installed or operationally qualified.
+See [loader correction and native evidence](validation/LOADER-BOOTSTRAP.md) for
+source, commands, retained observations and limits. Alpha.7 is a separately
+diagnosed correction to the immutable alpha.6 evidence baseline; no commits are
+consolidated or history rewritten.
+
+Previous verified increment `db4374f` —
+`feat(kegari-v0): supervise finite service-backed checks` — delivered
+**0.2.0-alpha.6** after `5b7078d`. It implements finite
 check-owned services under the original admitted effect: ordered start/readiness/
 check/stop, retained aggregate ownership, shared deadlines/output limits, writer
 closure before snapshots, and strict warm/cold membership checks. It also fixes
@@ -15,9 +51,10 @@ The exact final release suite passed **1,097 tests, zero failures, three native
 tests ignored, across 40 groups**. Focused regressions, all-target clippy,
 formatting, inventory and five staged-executable inspections pass. Independent
 review found no remaining material finding in the reviewed bundle/interlock
-increment. Native loader bootstrap remains an explicitly unresolved gap.
+increment. Loader bootstrap was unresolved at that historical checkpoint;
+alpha.7 establishes only the three fixed foreground cases described above.
 
-The exact executable is staged at
+The historical alpha.6 executable remains staged at
 `target/prereleases/kegari-v0-0.2.0-alpha.6-aarch64-apple-darwin-f273893778f2/kegari-v0`;
 SHA-256 `f273893778f2d48f50f737da6e0a1e553a1c067c6f1d07f82a8410b066f88af7`;
 build identity
@@ -29,9 +66,9 @@ commands, artifacts, failed attempts, reviews, compatibility and remaining limit
 | Current scope | State |
 | --- | --- |
 | Foreground supervision and finite check-owned services | Implemented and locally tested; no service native qualification claimed |
-| Native foreground launch | NQ-02A and NQ-02B each approved/executed once and failed; both approvals consumed |
+| Native foreground launch | NQ-02C passed three fixed cases on alpha.7; A/B failures retained; all three single-use approvals consumed |
 | Managed-profile admission | Public refusal remains enforced; configuration or hashes do not qualify tools |
-| Final-source native checks, supported Rust/Cargo and endpoint services | Incomplete; native runs need separate approval |
+| Supported Rust/Cargo, endpoint services and remaining native checks | Incomplete; additional native runs need separate approval |
 | 0.3 recovery → 0.4 external/visual → 0.5 handover → 0.6 evaluations → 0.7 real qualification | Sequence unchanged; no minor milestone complete |
 
 NQ-02B's retained outcome shows SIGABRT in the first Bash case, empty output,
@@ -39,22 +76,20 @@ no timeout, and closed original group/journal/collectors. The other two cases
 were not reached. The matching existing OS crash report places the abort in
 libignition/dyld bootstrap. Apple's installed profile documents literal-root and
 fixed-Cryptex-ancestor read/existence access absent from our tested policy. This
-is the strongest next correction; the exact denied operation remains unproven.
+informed the alpha.7 correction; the exact denied operation remains unproven.
 The pin predates alpha.6's interlock. See [native recheck evidence](validation/NATIVE-MANAGED-RECHECK.md).
 
-**Next work package:** correct only those bounded bootstrap grants, add static
-scope regressions, review/build a new pin and request a fresh bounded native run.
-Do not rerun either consumed NQ-02 request. NQ-01B remains separately pending.
-Then implement the closed shipped Rust/Cargo support contract: content-bound
-compiler/linker/SDK resources, credential-free offline inputs/private state,
+**Next work package:** implement the closed shipped Rust/Cargo support contract:
+content-bound compiler/linker/SDK resources, credential-free offline inputs/private state,
 explicit environment and generated-executable cases. The concrete plan is in
 [the qualification design](docs/managed-qualification-design.md). A runtime
 per-profile issuer/registry is not required by SPEC and remains deferred.
 Endpoint services need scoped network support and separate native cases.
+Do not rerun consumed NQ-02A/B/C requests. NQ-01B remains separately pending.
 
 All owned Cargo, native-test and artifact-inspection commands have finished.
-NQ-02A/B failed roots and diagnostics are retained; no stale PID has been adopted
-or signalled. No setup, Keychain, installation, service/coordinator activation,
+NQ-02A/B failed roots and NQ-02C passing evidence are retained; no stale PID has
+been adopted or signalled. No setup, Keychain, installation, service/coordinator activation,
 provider action or push occurred. The full suite's deliberately injected
 uncertainty fixtures remain diagnostic evidence. Source/input manifests and
 failed compile/test/lint history are archived beside the staged artifact.
@@ -114,9 +149,9 @@ See [native managed-command failure](validation/NATIVE-MANAGED-COMMAND.md).
 Read-only diagnosis found absent executable-mapping grants and an undeclared
 transitive shell: this host's `/bin/sh` selects `/bin/bash` through
 `/private/var/select/sh`. These are supported launch incompatibilities, not proof
-of the particular denied operation. Correct the scoped profile and fixture
-observability, run deterministic checks, then prepare a new pinned request before
-any separately approved native repeat. Preserve the original failed root at
+of the particular denied operation. Alpha.6 corrected the mappings and direct
+Bash fixture; alpha.7 added the bounded bootstrap correction and passed NQ-02C.
+The original failed root remains preserved at
 `/private/tmp/kegari-nq02a-n_3qkjgx/.tmphqx7PS` and request/result beside
 `target/native-qualification/nq-02a-a989ca4d2520/managed-command-test`.
 NQ-01B remains unapproved/unexecuted. No native test is currently running.
@@ -133,6 +168,19 @@ reached. The request, one-attempt marker, result and failed evidence root
 `/private/tmp/kegari-nq02b-8944rt1y/.tmpOxKZ33` are preserved. This pin predates
 final host-launch synchronization and does not qualify alpha.6. Approval is
 consumed; NQ-01B was not included and remains unexecuted. No native test is running.
+
+NQ-02C was explicitly approved and executed **once** after all local checks.
+Pinned binary:
+`target/native-qualification/nq-02c-d2179900672c/managed-command-test`, SHA-256
+`d2179900672c79ebcd3217ce556ec0b1c2d4de57a240cf09fe703fb4be105c54`.
+Its final 723-input source manifest matches alpha.7. Test and wrapper exited 0;
+one test passed, zero failed, 544 filtered; no outer timeout, 0.923 seconds.
+All three cases passed with group/journal/output closure and no truncation.
+The retained fixture at `/private/tmp/kegari-nq02c-959z2ztz/.tmpnjzxmt` includes
+22 hashed files and an explicit no-qualification completion marker. This proves
+those fixed component cases only, using a synthetic lease; it does not qualify
+runtime admission, Rust/Cargo, services, networking, providers or setup. Approval
+is consumed, and no native process remains owned by this completed check.
 
 
 Alpha.6 validation retained the initial compile/lint failures, invalid new-worker

@@ -411,7 +411,10 @@ impl ValidatedIsolation {
         }
         // Current macOS dyld also loads OS libraries from Cryptex grafts.
         // Keep these fixed OS resources separate from arbitrary configured read
-        // roots. Do not import Apple's general system profile (IPC/network etc.).
+        // roots. libignition opens the literal root/ancestor directories for
+        // openat-based bootstrap: metadata alone cannot open them for reading.
+        // These fixed directory reads do not grant descendant access. Do not
+        // import Apple's general system profile (IPC/network etc.).
         for path in [
             "/System/Volumes/Preboot/Cryptexes/App/System",
             "/System/Volumes/Preboot/Cryptexes/Incoming/OS",
@@ -422,12 +425,12 @@ impl ValidatedIsolation {
             "/System/Cryptexes/Rosetta",
         ] {
             profile.push_str(&format!(
-                "(allow file-read* file-map-executable (subpath {}))\n",
+                "(allow file-read* file-test-existence file-map-executable (subpath {}))\n",
                 quote(path)
             ));
             for parent in Path::new(path).ancestors().skip(1) {
                 profile.push_str(&format!(
-                    "(allow file-read-metadata (literal {}))\n",
+                    "(allow file-read* file-test-existence (literal {}))\n",
                     quote_path(parent)?
                 ));
             }
@@ -500,7 +503,7 @@ impl ValidatedIsolation {
         }
         for forbidden in &self.plan.forbidden_roots {
             profile.push_str(&format!(
-                "(deny file-read* file-write* file-map-executable process-exec (subpath {}))\n",
+                "(deny file-read* file-test-existence file-write* file-map-executable process-exec (subpath {}))\n",
                 quote_path(forbidden)?
             ));
         }

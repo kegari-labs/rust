@@ -16,8 +16,8 @@ use uuid::Uuid;
 #[ignore = "requires separately authorized native Seatbelt/owned-command qualification"]
 async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
     let temporary = tempfile::tempdir().unwrap();
-    // Keep native failure evidence and any uncertain ownership on panic/timeout.
-    // Delete only after every actual group, journal and collector has closed.
+    // Retain bounded evidence on success as well as failure. The test harness's
+    // one-line result is not a substitute for the actual per-case observations.
     let root = temporary.keep().canonicalize().unwrap();
     eprintln!("native managed fixture evidence root: {}", root.display());
     let runs = root.join("runs");
@@ -120,10 +120,12 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
     ];
     for (index, (argv, timeout, expected_exit, timed_out)) in cases.into_iter().enumerate() {
         let operation_id = Uuid::new_v4();
+        let effect_id = Uuid::new_v4();
         let launch = command_launch_identity(&isolation, &argv).unwrap();
         std::fs::write(
             root.join(format!("case-{index}-launch.json")),
             serde_json::to_vec_pretty(&serde_json::json!({
+                "operation_id": operation_id, "effect_id": effect_id,
                 "argv": argv, "cwd": launch.cwd, "launcher": launch.launcher,
                 "target": launch.target, "argv_digest": launch.argv_digest,
                 "isolation_digest": isolation.digest,
@@ -131,43 +133,72 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
             .unwrap(),
         )
         .unwrap();
-        let guard = journal
-            .begin(SpawnBinding {
-                operation_id,
-                effect_id: Uuid::new_v4(),
-                lease: Some(lease.clone()),
-                control_owner: None,
-                check_bundle: None,
-                work_key: format!("native-managed-fixture-{index}"),
-                scope_digest: isolation.digest.clone(),
-                cwd: launch.cwd,
-                executable: launch.launcher,
-                observed_executables: vec![launch.target],
-                argv_digest: launch.argv_digest,
-                kind: "repository_command".into(),
-            })
-            .unwrap();
-        let command = spawn_command_inner(
+        let guarded = journal.begin(SpawnBinding {
+            operation_id,
+            effect_id,
+            lease: Some(lease.clone()),
+            control_owner: None,
+            check_bundle: None,
+            work_key: format!("native-managed-fixture-{index}"),
+            scope_digest: isolation.digest.clone(),
+            cwd: launch.cwd,
+            executable: launch.launcher,
+            observed_executables: vec![launch.target],
+            argv_digest: launch.argv_digest,
+            kind: "repository_command".into(),
+        });
+        std::fs::write(
+            root.join(format!("case-{index}-registration.json")),
+            serde_json::to_vec_pretty(&guarded.as_ref().map(|_| "registered")).unwrap(),
+        )
+        .unwrap();
+        let guard = guarded.unwrap();
+        let started = spawn_command_inner(
             &isolation,
             &argv,
             timeout,
             1024,
             &["fixture-secret".into()],
             Some(CommandJournal::Guard(Box::new(guard))),
-        )
-        .unwrap();
+        );
+        // A diagnostic failure must not panic while the returned command is
+        // still live. Defer its assertion until the original waiter settles or
+        // the explicitly bounded cleanup observation has completed.
+        let start_record = serde_json::to_vec_pretty(&started.as_ref().map(|_| "started"))
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                std::fs::write(root.join(format!("case-{index}-start.json")), bytes)
+                    .map_err(|error| error.to_string())
+            });
+        let command = started.unwrap();
         let cancellation = command.cancellation();
-        let waited = tokio::time::timeout(Duration::from_secs(9), command.wait()).await;
+        let mut waiter = Box::pin(command.wait());
+        let waited = tokio::time::timeout(Duration::from_secs(9), &mut waiter).await;
+        // A case observation timeout is always a failure. Keep its original
+        // waiter alive for bounded cancellation/join observation before runtime
+        // teardown; an expired cleanup observation still means unknown closure.
+        let cleanup = if waited.is_err() {
+            let requested = cancellation.cancel();
+            let settled = tokio::time::timeout(Duration::from_secs(2), &mut waiter).await;
+            Some(serde_json::json!({
+                "cancellation_request": requested,
+                "original_waiter": settled.as_ref().map_err(|_| "cleanup closure unknown"),
+            }))
+        } else {
+            None
+        };
         std::fs::write(
             root.join(format!("case-{index}-wait.json")),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "wait": waited.as_ref().map_err(|_| "independent case timeout"),
+                "timeout_cleanup": cleanup,
                 "cancellation_exited": cancellation.exited(),
                 "processes": journal.observe(operation_id),
             }))
             .unwrap(),
         )
         .unwrap();
+        start_record.unwrap();
         let outcome = waited
             .expect("native component case exceeded its independent bound")
             .unwrap();
@@ -194,5 +225,14 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
         assert!(observed[0].owned_group_exited);
         assert!(!observed[0].all_descendants_exited);
     }
-    std::fs::remove_dir_all(root).unwrap();
+    std::fs::write(
+        root.join("completed.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "cases_passed": 3,
+            "qualification_issued": false,
+            "scope": "fixed disposable foreground component cases only",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
