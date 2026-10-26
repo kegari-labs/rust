@@ -568,6 +568,13 @@ pub(crate) fn validate_metadata_argv(argv: &[String]) -> Result<bool> {
         ["rev-parse", "--verify", value] | ["rev-parse", "--verify", "--end-of-options", value] => {
             revision(value)
         }
+        [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            value,
+        ] => value.strip_suffix("^{object}").is_some_and(oid),
         ["merge-base", "--is-ancestor", base, head] => oid(base) && oid(head),
         ["rev-list", "--parents", "-n", "1", head] => oid(head),
         ["rev-list", "--objects", "--no-object-names", roots @ ..] => {
@@ -794,9 +801,17 @@ mod tests {
             validate_metadata_argv(&argv)
         };
         let oid = "a".repeat(40);
+        let exact_object = format!("{oid}^{{object}}");
         assert!(validate_metadata_argv(&["--version".into()]).unwrap());
         for args in [
             vec!["rev-parse", "--verify", "HEAD^{tree}"],
+            vec![
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &exact_object,
+            ],
             vec!["cat-file", "blob", &oid],
             vec!["fsck", "--full", "--strict", "--no-reflogs"],
             vec![
@@ -814,6 +829,36 @@ mod tests {
         }
         for args in [
             vec!["checkout", "HEAD"],
+            vec![
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                "HEAD^{object}",
+            ],
+            vec![
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                "refs/heads/main^{object}",
+            ],
+            vec![
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                "aaaa^{object}",
+            ],
+            vec![
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                "--git-dir=/tmp",
+            ],
+            vec!["rev-parse", "--verify", "--quiet", &exact_object],
+            vec!["rev-parse", "--verify", "--quiet", "--end-of-options", &oid],
             vec!["update-ref", "refs/heads/main", &oid],
             vec!["cat-file", "--filters", &oid],
             vec!["diff", "--no-index", "/etc/passwd", "/tmp/output"],

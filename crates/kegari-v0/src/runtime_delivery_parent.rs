@@ -40,6 +40,10 @@ struct ParentReference {
     review: Option<Uuid>,
     publication: Option<String>,
     error: Option<Error>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reassembly: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    carry_imports: Vec<carry_objects::CarryImportReference>,
 }
 struct ParentPipeline {
     reference: ParentReference,
@@ -54,6 +58,8 @@ struct ParentPipeline {
     assignment: Option<ParentReviewAssignment>,
     published: Option<PublishedParent>,
     phase: Option<ActivePhase>,
+    reassembly: Option<reassembly::Reassembly>,
+    carry_import: Option<carry_objects::PendingCarryImport>,
 }
 type ParentKey = (Uuid, Uuid, String);
 type RetainedParents = BTreeMap<ParentKey, Arc<tokio::sync::Mutex<ParentPipeline>>>;
@@ -85,6 +91,7 @@ pub(super) struct Parents {
     pipelines: Mutex<RetainedParents>,
     advancing: tokio::sync::Mutex<()>,
     integrated: Mutex<BTreeMap<ParentKey, (ParentCandidateVector, IntegratedEvidence)>>,
+    pub(super) carries: Mutex<BTreeMap<ParentKey, PublishedCarry>>,
 }
 /// Actual retained preparation capabilities, never reconstructed from a public
 /// result digest. The release adapter reobserves providers before every use.
@@ -95,6 +102,7 @@ pub struct ParentSources {
     pub(super) baselines: Vec<Arc<VerifiedProductionBaseline>>,
     pub(super) vector_digest: String,
     pub(super) integrations: Vec<crate::git::VerifiedProductionIntegration>,
+    pub(super) reassembled: Option<ReassembledParent>,
 }
 impl ParentSources {
     pub fn parent(&self) -> &VerifiedParent {
@@ -222,6 +230,10 @@ impl RuntimeDelivery {
                 .digest()
                 .into(),
             integrations: pipeline.integrations.clone(),
+            reassembled: pipeline
+                .reassembly
+                .as_ref()
+                .and_then(|r| r.completed.clone()),
         }))
     }
     pub(super) async fn integrated_responsibility_ready(
@@ -533,6 +545,8 @@ impl RuntimeDelivery {
                     review: None,
                     publication: None,
                     error: None,
+                    reassembly: None,
+                    carry_imports: vec![],
                 },
                 children,
                 child_authorities: BTreeMap::new(),
@@ -545,6 +559,8 @@ impl RuntimeDelivery {
                 assignment: None,
                 published: None,
                 phase: None,
+                reassembly: None,
+                carry_import: None,
             };
             let record = canonical_digest(1, &key)?;
             if self
@@ -660,10 +676,17 @@ impl RuntimeDelivery {
         gate: &FreshGate,
         parent: &mut ParentPipeline,
     ) -> Result<()> {
-        if matches!(
-            parent.reference.stage,
-            ParentStage::Complete | ParentStage::Blocked
-        ) {
+        if parent.carry_import.is_some() {
+            return self
+                .advance_carry_import(lease, workspace, gate, parent)
+                .await;
+        }
+        if parent.reference.stage == ParentStage::Complete {
+            self.begin_parent_reassembly(workspace, projection, gate, parent)
+                .await?;
+            return Ok(());
+        }
+        if parent.reference.stage == ParentStage::Blocked {
             return Ok(());
         }
         let predecessor = if let Some(phase) = &parent.phase {
@@ -729,6 +752,12 @@ impl RuntimeDelivery {
                 "integrated responsibility has no current authority",
             )
         })?;
+        if self
+            .retry_parent_reassembly_worker(lease, workspace, parent)
+            .await?
+        {
+            return Ok(());
+        }
         if matches!(
             parent.reference.stage,
             ParentStage::Integrated | ParentStage::Publish
@@ -895,7 +924,31 @@ impl RuntimeDelivery {
                         .await?,
                 );
                 parent.reference.vector = Some(parent.vector.as_ref().unwrap().digest().into());
-                self.finish_parent_phase(parent, ParentStage::LaunchIntegrated)?;
+                if let Some(reassembly) = &parent.reassembly {
+                    let vector = required_parent(&parent.vector, "reassembly vector")?;
+                    let phase = required_parent(&parent.phase, "actual vector assembly")?;
+                    let admission = phase.admission.clone();
+                    self.retire_delivery_phase(phase,json!({"parent_reassembly_vector":vector.digest(),"parent_reassembly_baseline":reassembly.transition.digest(),"original_reviewed_token":reassembly.original.parent().token()}))?;
+                    let source = workspace.coordinator.seal_parent_reassembly_source(
+                        &contract,
+                        &admission,
+                        ParentReassemblySourceOrigin {
+                            original: reassembly.original.clone(),
+                            previous_parent: &reassembly.previous_parent,
+                            transition: reassembly.transition.clone(),
+                        },
+                        vector,
+                        &workspace.configuration,
+                        workspace.observer.clone(),
+                    )?;
+                    parent.reassembly.as_mut().unwrap().source = Some(Arc::new(source));
+                    parent.phase = None;
+                    parent.reference.phase_operation = None;
+                    parent.reference.stage = ParentStage::LaunchIntegrated;
+                    self.persist_parent(parent)?;
+                } else {
+                    self.finish_parent_phase(parent, ParentStage::LaunchIntegrated)?;
+                }
             }
             ParentStage::LaunchIntegrated => {
                 let assignment=coordinator.integrated_worker_assignment(&contract,e2e,required_parent(&parent.vector,"candidate vector")?,observer,&parent.slices.iter().map(Arc::as_ref).collect::<Vec<_>>(),json!({"purpose":"execute every configured integrated check against this complete isolated parent vector","parent":projection.issue})).await?;
@@ -903,6 +956,9 @@ impl RuntimeDelivery {
                 let operation = parent.reference.integrated.unwrap_or_else(Uuid::new_v4);
                 parent.reference.integrated = Some(operation);
                 self.persist_parent(parent)?;
+                let assignment = self
+                    .bind_parent_reassembly_assignment(workspace, parent, operation, assignment)
+                    .await?;
                 self.launch_assignment(lease, operation, assignment).await?;
                 parent.reference.stage = ParentStage::Integrated;
                 self.persist_parent(parent)?;
@@ -913,6 +969,7 @@ impl RuntimeDelivery {
                     .ok_or_else(|| {
                         Error::new("operation_pending", "integrated worker remains owned")
                     })?;
+                self.verify_reassembled_parent_result(parent, &completion, true)?;
                 parent.integrated = Some(
                     coordinator
                         .verify_integrated_checks(
@@ -952,6 +1009,9 @@ impl RuntimeDelivery {
                 let operation = parent.reference.review.unwrap_or_else(Uuid::new_v4);
                 parent.reference.review = Some(operation);
                 self.persist_parent(parent)?;
+                let assignment = self
+                    .bind_parent_reassembly_assignment(workspace, parent, operation, assignment)
+                    .await?;
                 self.launch_assignment(lease, operation, assignment).await?;
                 parent.reference.stage = ParentStage::Publish;
                 self.persist_parent(parent)?;
@@ -962,24 +1022,30 @@ impl RuntimeDelivery {
                     .ok_or_else(|| {
                         Error::new("operation_pending", "parent review remains owned")
                     })?;
-                let published = coordinator
-                    .publish_parent_result(
-                        &admission,
-                        ParentPublicationInputs {
-                            contract: &contract,
-                            observer,
-                            assignment: required_parent(
-                                &parent.assignment,
-                                "parent review assignment",
-                            )?,
-                            child_gates: &child_gates,
-                            workflow: &workspace.workflow,
-                            outcome: &outcome,
-                            completion: &completion,
-                            video: None,
-                        },
-                    )
-                    .await?;
+                self.verify_reassembled_parent_result(parent, &completion, false)?;
+                let input = ParentPublicationInputs {
+                    contract: &contract,
+                    observer,
+                    assignment: required_parent(&parent.assignment, "parent review assignment")?,
+                    child_gates: &child_gates,
+                    workflow: &workspace.workflow,
+                    outcome: &outcome,
+                    completion: &completion,
+                    video: None,
+                };
+                let published = if let Some(reassembly) = &parent.reassembly {
+                    coordinator
+                        .publish_reassembled_parent_result(
+                            &admission,
+                            input,
+                            required_parent(&reassembly.source, "parent reassembly source")?,
+                            &workspace.configuration,
+                        )
+                        .await?
+                } else {
+                    coordinator.publish_parent_result(&admission, input).await?
+                };
+                self.seal_completed_parent_reassembly(workspace, parent, &published)?;
                 parent.reference.publication = Some(published.publication().record_id.clone());
                 parent.published = Some(published);
                 self.finish_parent_phase(parent, ParentStage::Complete)?;
@@ -1026,6 +1092,8 @@ mod lifecycle_tests {
             review: None,
             publication: None,
             error: None,
+            reassembly: None,
+            carry_imports: vec![],
         }
     }
     fn pipeline(reference: ParentReference) -> ParentPipeline {
@@ -1042,6 +1110,8 @@ mod lifecycle_tests {
             assignment: None,
             published: None,
             phase: None,
+            reassembly: None,
+            carry_import: None,
         }
     }
     #[tokio::test]
@@ -1582,3 +1652,33 @@ mod lifecycle_tests {
         assert!(complete_inventory(&required, &required, 3));
     }
 }
+
+#[path = "runtime_delivery_parent_reassembly.rs"]
+mod reassembly;
+
+#[cfg(test)]
+mod reassembly_serialization_tests {
+    use super::*;
+    #[test]
+    fn absent_reassembly_preserves_existing_signed_parent_pipeline_bytes() {
+        let digest = canonical_digest(1, &"component").unwrap();
+        let raw = json!({
+            "schema_version":1,"runtime":Uuid::new_v4(),"workspace":Uuid::new_v4(),
+            "work":{"linear_endpoint":"https://linear.invalid/graphql","linear_workspace":Uuid::new_v4(),"parent":Uuid::new_v4(),"child":null,
+                "generation":{"authorization":digest,"definition":digest,"correction":digest,"scope":digest}},
+            "contract_digest":digest,"stage":"complete","phase_operation":null,"slices":[],"vector":null,"integrated":null,"review":null,"publication":null,"error":null,
+        });
+        let key = crate::evidence::AttestationKey::new("legacy component key".into(), vec![91; 32])
+            .unwrap();
+        let signed = key.sign("runtime_parent_pipeline", &raw).unwrap();
+        let typed: crate::evidence::Signed<ParentReference> =
+            serde_json::from_value(serde_json::to_value(&signed).unwrap()).unwrap();
+        assert!(typed.payload.reassembly.is_none());
+        key.verify("runtime_parent_pipeline", &typed).unwrap();
+        assert_eq!(typed.digest().unwrap(), signed.digest().unwrap());
+        assert_eq!(serde_json::to_value(&typed.payload).unwrap(), raw);
+    }
+}
+
+#[path = "runtime_delivery_carry_objects.rs"]
+mod carry_objects;

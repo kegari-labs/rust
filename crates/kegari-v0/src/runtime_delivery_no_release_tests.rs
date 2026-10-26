@@ -1138,6 +1138,25 @@ async fn stale_unadmitted_intent_replans_without_resetting_budget_or_losing_hist
         .delivery
         .publication_refs(&workspace.configuration, current, &h.parent, &h.acceptance)
         .unwrap();
+    let direct_compatibility = evidence::prepare_no_release_required_with_acceptance(
+        record.payload.clone(),
+        &h.parent,
+        evidence::NoReleaseAcceptance {
+            acceptance: &h.acceptance,
+            carry: None,
+        },
+        NoReleaseRequirements {
+            current_work: gate.work(),
+            pending_correction: false,
+            targets: &BTreeMap::new(),
+        },
+        &h.built.runtime.services.key,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&record).unwrap(),
+        serde_json::to_vec(&direct_compatibility).unwrap()
+    );
     let mut prior_budget = plan.reference.clone();
     assert!(prior_budget.max_attempts > 1);
     prior_budget.max_attempts -= 1;
@@ -1150,9 +1169,80 @@ async fn stale_unadmitted_intent_replans_without_resetting_budget_or_losing_hist
         workflow_digest: gate.workflow_digest().into(),
         parent_publication,
         acceptance_publication,
+        carried: None,
         contracts: selected_contracts(&workspace, &h.parent).unwrap(),
         record,
     };
+    // Actual journal admission refusal, not a constructed PublishedCarry.
+    // Legacy direct bytes omit the new optional field exactly.
+    let bytes = serde_json::to_vec(&original).unwrap();
+    assert!(
+        !serde_json::from_slice::<Value>(&bytes)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("carried")
+    );
+    let restored: NoReleaseIntent = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(bytes, serde_json::to_vec(&restored).unwrap());
+    let mut missing_cap = original.clone();
+    missing_cap.config_revision = gate.config_revision().into();
+    missing_cap.carried = Some(NoReleaseCarryBinding {
+        record: evidence::CarriedAcceptance {
+            schema_version: 1,
+            original_reviewed_token: h.parent.token().into(),
+            original_acceptance_digest: h.acceptance.digest().into(),
+            current_evidence_token: h.parent.token().into(),
+            unchanged_patch_proof: bytes_digest(b"data-only rejected carry claim"),
+            production_validation_digest: bytes_digest(b"data-only claimed validation"),
+            created_at: Utc::now(),
+        },
+        publication: original.parent_publication.clone(),
+    });
+    let receipts_before =
+        canonical_digest(1, &h.built.runtime.control.operations().unwrap()).unwrap();
+    let error = h
+        .built
+        .runtime
+        .control
+        .admit_metadata(
+            &h.lease,
+            crate::control::MetadataAdmission {
+                request_id: plan.admission,
+                work_key: gate.work_key().unwrap(),
+                scope_digest: missing_cap.scope().unwrap(),
+                reference: missing_cap.attempt.clone(),
+            },
+            || {
+                RuntimeDelivery::check_no_release_intent(
+                    &h.built.runtime,
+                    &missing_cap,
+                    &gate,
+                    &h.parent,
+                    &h.acceptance,
+                    None,
+                )
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "stale_result");
+    assert_eq!(
+        error.message,
+        "already-production carry is missing or differs from its actual current publication"
+    );
+    assert_eq!(
+        h.built
+            .runtime
+            .control
+            .operation(plan.admission)
+            .unwrap_err()
+            .code,
+        "record_missing"
+    );
+    assert_eq!(
+        receipts_before,
+        canonical_digest(1, &h.built.runtime.control.operations().unwrap()).unwrap()
+    );
     let original_scope = original.scope().unwrap();
     h.delivery
         .records

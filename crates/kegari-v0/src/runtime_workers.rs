@@ -266,6 +266,26 @@ impl LaunchRequest {
                 "worker request must bind canonical work, exact generation and finite bounds",
             ));
         }
+        if let Some(assignment) = self.delivery.as_ref()
+            && let Some(proof) = assignment.parent_reassembly()
+        {
+            if self.review_round.is_some()
+                || self.unfinished.is_some()
+                || self.source_advanced.is_some()
+                || self.retried_unfinished.is_some()
+                || self.review_retry.is_some()
+                || self.validation_retry.is_some()
+                || proof.reference().operation != self.operation_id
+                || proof.phase() != &self.phase
+            {
+                return Err(Error::new(
+                    "worker_binding",
+                    "parent reassembly cannot replace or mix dispatch causes",
+                ));
+            }
+            proof.verify_assignment(assignment)?;
+            WorkerAuthority::Authorized(proof.authority().clone()).compare(&self.authority)?;
+        }
         if let Some(source) = &self.source {
             source.revision.validate()?;
         }
@@ -489,6 +509,16 @@ pub async fn prepare_admitted(
     request: LaunchRequest,
 ) -> Result<AdmittedWorker> {
     let mut plan = Plan::read(&runtime, request)?;
+    if let Some(proof) = plan
+        .request
+        .delivery
+        .as_ref()
+        .and_then(|a| a.parent_reassembly())
+    {
+        proof
+            .refresh_current(&runtime.configuration.snapshot()?)
+            .await?;
+    }
     let initial_schedule = plan.schedule(&runtime)?;
     runtime.check_worker_capacity(
         plan.workspace.id,
@@ -536,7 +566,21 @@ pub async fn prepare_admitted(
         )?;
         require_preparation_schedule(&initial_schedule, &current, plan.request.max_turns)
     };
-    let prep_permit = if let Some(round) = &plan.request.review_round {
+    let prep_permit = if let Some(proof) = plan
+        .request
+        .delivery
+        .as_ref()
+        .and_then(|a| a.parent_reassembly())
+    {
+        runtime
+            .control
+            .admit_parent_reassembly_preparation_observed(
+                &plan.request.lease,
+                prep_admission,
+                proof.reference().clone(),
+                prep_gate,
+            )?
+    } else if let Some(round) = &plan.request.review_round {
         runtime.control.admit_round_preparation_observed(
             &plan.request.lease,
             prep_admission,
@@ -580,6 +624,16 @@ pub async fn prepare_admitted(
         },
     )?;
     let mut prepared = prepared?;
+    if let Some(proof) = plan
+        .request
+        .delivery
+        .as_ref()
+        .and_then(|a| a.parent_reassembly())
+    {
+        proof
+            .refresh_current(&runtime.configuration.snapshot()?)
+            .await?;
+    }
     let schedule = plan.schedule(&runtime)?;
     if plan.request.max_turns > schedule.max_turns {
         return Err(Error::new(
@@ -605,7 +659,15 @@ pub async fn prepare_admitted(
             attempt: schedule.attempt,
         },
     };
-    let permit = if plan.request.review_round.is_some() {
+    let permit = if plan
+        .request
+        .delivery
+        .as_ref()
+        .is_some_and(|a| a.parent_reassembly().is_some())
+    {
+        let preparation = runtime.control.operation(prep_id)?;
+        runtime.admit_parent_reassembly_worker(admission, &contract, &plan.request, &preparation)?
+    } else if plan.request.review_round.is_some() {
         // Read the actual closed canonical preparation; Control checks its whole
         // digest again atomically with the model admission and current proof.
         let preparation = runtime.control.operation(prep_id)?;
@@ -871,6 +933,14 @@ impl Plan {
         &self,
         runtime: &RuntimeCoordinator,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
+        if self
+            .request
+            .delivery
+            .as_ref()
+            .is_some_and(|a| a.parent_reassembly().is_some())
+        {
+            return runtime.next_attempt_for_parent_reassembly(&self.request);
+        }
         if self.request.review_round.is_some() {
             return runtime.next_attempt_for_review_round(&self.request);
         }

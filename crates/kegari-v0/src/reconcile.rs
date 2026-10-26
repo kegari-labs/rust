@@ -2124,6 +2124,7 @@ pub struct ParentDelivery {
     children: BTreeMap<Uuid, VerifiedChild>,
     parent: Option<VerifiedParent>,
     acceptance: Option<VerifiedAcceptance>,
+    carried: Option<crate::delivery::PublishedCarry>,
     release: Option<crate::release::VerifiedReleaseEligibility>,
     no_release: Option<crate::evidence::VerifiedNoReleaseRequired>,
 }
@@ -2133,6 +2134,42 @@ impl ParentDelivery {
     }
     pub fn verified_acceptance(&self) -> Option<&VerifiedAcceptance> {
         self.acceptance.as_ref()
+    }
+    pub(crate) fn published_carry(&self) -> Option<&crate::delivery::PublishedCarry> {
+        self.carried.as_ref()
+    }
+    pub fn carried_acceptance_record(&self) -> Option<&crate::evidence::CarriedAcceptance> {
+        self.carried.as_ref().map(|c| c.verified().record())
+    }
+    pub(crate) fn carried_acceptance(
+        &mut self,
+        carry: crate::delivery::PublishedCarry,
+    ) -> Result<()> {
+        if self.parent.as_ref().is_none_or(|p| {
+            p.token() != carry.parent().verified().token()
+                || p.manifest().work != carry.acceptance().acceptance().work
+        }) {
+            return Err(Error::new(
+                "stale_result",
+                "published carry names another current parent",
+            ));
+        }
+        self.acceptance = Some(carry.acceptance().clone());
+        self.carried = Some(carry);
+        self.release = None;
+        self.no_release = None;
+        Ok(())
+    }
+    fn accepts_current(&self, token: &str) -> bool {
+        self.acceptance.as_ref().is_some_and(|a| {
+            a.acceptance().reviewed_token == token
+                || self.carried.as_ref().is_some_and(|c| {
+                    c.acceptance().digest() == a.digest()
+                        && c.verified().record().current_evidence_token == token
+                        && c.verified().record().original_reviewed_token
+                            == a.acceptance().reviewed_token
+                })
+        })
     }
     pub fn verified_children(&self) -> &BTreeMap<Uuid, VerifiedChild> {
         &self.children
@@ -2178,6 +2215,7 @@ impl ParentDelivery {
     pub fn parent(&mut self, parent: VerifiedParent) {
         self.parent = Some(parent);
         self.acceptance = None;
+        self.carried = None;
         self.release = None;
         self.no_release = None;
     }
@@ -2197,6 +2235,7 @@ impl ParentDelivery {
             ));
         }
         self.acceptance = Some(acceptance);
+        self.carried = None;
         self.release = None;
         self.no_release = None;
         Ok(())
@@ -2214,7 +2253,7 @@ impl ParentDelivery {
             || self.acceptance.as_ref().is_none_or(|acceptance| {
                 acceptance.digest() != acceptance_digest
                     || acceptance.acceptance().accepted_at != accepted_at
-                    || acceptance.acceptance().reviewed_token != parent_token
+                    || !self.accepts_current(parent_token)
             })
         {
             return Err(Error::new(
@@ -2231,7 +2270,7 @@ impl ParentDelivery {
             .is_none_or(|p| p.token() != proof.evidence_token())
             || self.acceptance.as_ref().is_none_or(|a| {
                 a.digest() != proof.acceptance_digest()
-                    || a.acceptance().reviewed_token != proof.evidence_token()
+                    || !self.accepts_current(proof.evidence_token())
                     || self
                         .parent
                         .as_ref()

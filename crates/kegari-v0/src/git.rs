@@ -1912,6 +1912,43 @@ impl Git {
         Ok(revision)
     }
 
+    /// Distinguish an absent full object from a failed Git operation. This uses
+    /// the caller's existing owned read/process scope and never fetches objects.
+    pub(crate) fn contains_exact_revision(
+        &self,
+        repository: &Path,
+        expected: &Revision,
+    ) -> Result<bool> {
+        expected.validate()?;
+        let expression = format!("{}^{{object}}", expected.commit);
+        let output = self.output(
+            repository,
+            &[
+                OsStr::new("rev-parse"),
+                OsStr::new("--verify"),
+                OsStr::new("--quiet"),
+                OsStr::new("--end-of-options"),
+                OsStr::new(&expression),
+            ],
+            None,
+        )?;
+        if !exact_object_presence(
+            output.status.code(),
+            &output.stdout,
+            &output.stderr,
+            &expected.commit,
+        )? {
+            return Ok(false);
+        }
+        if self.exact_revision(repository, &expected.commit)? != *expected {
+            return Err(Error::new(
+                "provenance_mismatch",
+                "existing Git object differs from exact required commit and tree",
+            ));
+        }
+        Ok(true)
+    }
+
     pub fn is_ancestor(&self, repository: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
         self.exact_revision(repository, ancestor)?;
         self.exact_revision(repository, descendant)?;
@@ -4118,5 +4155,51 @@ impl Git {
             entries,
             blobs,
         })
+    }
+}
+
+// The only absent result is Git's exact quiet unresolved-object status. A
+// process failure, stderr, extra stdout or signal never starts an import.
+fn exact_object_presence(
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+    commit: &str,
+) -> Result<bool> {
+    if code == Some(1) && stdout.is_empty() && stderr.is_empty() {
+        return Ok(false);
+    }
+    if code == Some(0) && stdout == format!("{commit}\n").as_bytes() && stderr.is_empty() {
+        return Ok(true);
+    }
+    Err(Error::new(
+        "git_operation_failed",
+        "exact Git object presence query failed or returned unexpected output",
+    ))
+}
+#[cfg(test)]
+mod exact_object_presence_tests {
+    use super::*;
+    #[test]
+    fn absence_requires_exact_quiet_exit_and_present_requires_exact_full_sha() {
+        let oid = "a".repeat(40);
+        let line = format!("{oid}\n");
+        assert!(!exact_object_presence(Some(1), b"", b"", &oid).unwrap());
+        assert!(exact_object_presence(Some(0), line.as_bytes(), b"", &oid).unwrap());
+        for (code, out, err) in [
+            (Some(1), b"".as_slice(), b"fatal".as_slice()),
+            (Some(128), b"".as_slice(), b"".as_slice()),
+            (None, b"".as_slice(), b"".as_slice()),
+            (Some(1), line.as_bytes(), b"".as_slice()),
+            (Some(0), b"HEAD\n".as_slice(), b"".as_slice()),
+            (Some(0), line.as_bytes(), b"warning".as_slice()),
+        ] {
+            assert_eq!(
+                exact_object_presence(code, out, err, &oid)
+                    .unwrap_err()
+                    .code,
+                "git_operation_failed"
+            );
+        }
     }
 }

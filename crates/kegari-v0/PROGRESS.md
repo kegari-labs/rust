@@ -3,6 +3,45 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
+Carried-acceptance source6 passed **819 tests, zero failures and
+2 required native ignores across 39 groups** in
+771.633s. All-target check, strict Clippy,
+formatting, dispatch-disabled Plan, contract inventory and diff checks passed.
+The affected release-origin test also passed separately. All 648
+build inputs remained unchanged at
+`sha256:741b805e1a0209cb2994bf66190e7a1aca4648978bd5e0f527abbe1ab4e4184b`.
+Session36561 is closed. All 22 invocation artifacts, including earlier
+compile/lint and regression failures, were checked against exact source/log/tool
+identities. See [the carried-acceptance report](validation/LOCAL-CARRIED-ACCEPTANCE.md)
+and [machine evidence](validation/carried-acceptance-checks.json).
+
+The 50-file root composition and narrow integration corrections implement known
+baseline reassembly, owned finite object acquisition, explicit/same-grant retries,
+carried empty-slice no-release and actual active owner/E2E child gate retention.
+The granted inventory JSON digest defect was fixed while preserving legacy bytes.
+Two stale test assumptions now assert the actual gate/namespace boundary and
+unchanged protected effects. All failures and review corrections remain in the
+report. Current native carry and release qualification remains incomplete.
+
+Root owns all repository changes, checks and commits. Next useful work is the
+independently reviewed completed-current carry recovery draft, then the concrete
+native evaluator caller and remaining native fixture migration. The caller's
+scorer/deadline, active lifecycle and actual-retirement corrections are composed
+into 23 independently reviewed TEMP files at
+`/private/tmp/kegari-native-evaluation-caller-composed-v4`, manifest
+`231a86032d1c7fb376074b6cd05d5736e89781bef557458b067a98a353fe92be`.
+They remain uninstalled/uncompiled. Independent review found repeated
+trial identities also need distinct legitimate scheduling authority. Native
+preparation failure closure and richer failed-trial observations remain under
+review. Production integration history hydration and cold worker reassembly
+are separate bounded follow-ups. No serialized history creates native authority.
+
+The evidence ledger checkpoint is `0599cebb67ae3ab80340fa71fb95d7b7314f3d3d` —
+`docs(kegari-v0): map verified recovery and trial evidence`. Both committed files
+match and all 629 runtime inputs remained unchanged; tree was clean afterward.
+No commits were consolidated, rewritten or pushed. Verification is retained at
+`/private/tmp/kegari-v0-recovery-evidence-commit-verification.json`.
+
 Evaluation terminal-finalization source1 passed **100 focused tests across six
 groups**, all-target check, strict Clippy, formatting, inventory, diff and a
 nonexecuting Plan. All 629 inputs stayed unchanged at

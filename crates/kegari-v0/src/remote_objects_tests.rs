@@ -1421,3 +1421,104 @@ async fn delta_recovery_selects_exact_retained_roots_instead_of_latest_source() 
     );
     assert_eq!(fixture.wire.fetches.load(Ordering::SeqCst), 2);
 }
+
+/// Actual local Git and actual owned Control/process journal; fixture provider
+/// bytes only. This exercises source acquisition/absence mechanics, not a
+/// carried acceptance or a complete native parent workflow.
+#[tokio::test]
+async fn exact_missing_object_probe_uses_owned_scope_and_never_fetches_on_query() {
+    let fixture = fixture().await;
+    let source = fixture
+        .acquisition
+        .acquire(fixture.request.clone())
+        .await
+        .unwrap();
+    let control = fixture.runtime.control.clone();
+    let held = fixture.request.permit.clone();
+    let current = fixture.acquisition.services.current.clone();
+    let request = fixture.request.clone();
+    let scope = crate::git::GitExecutionScope {
+        limits: GitLimits::default(),
+        start_gate: Arc::new(move |spawn| {
+            control.validate_permit(&held, || {
+                current(&request)?;
+                spawn()
+            })
+        }),
+        processes: fixture.acquisition.services.processes.clone(),
+        permit: fixture.request.permit.clone(),
+        executions: fixture.runtime.executions.clone(),
+    };
+    let base = fixture.acquisition.services.git.clone();
+    let git = tokio::task::spawn_blocking(move || base.with_execution_scope(scope))
+        .await
+        .unwrap()
+        .unwrap();
+    let fetches = fixture.wire.fetches.load(Ordering::SeqCst);
+    let before = fixture
+        .acquisition
+        .services
+        .processes
+        .observe(fixture.request.permit.operation_id)
+        .unwrap()
+        .len();
+    let expected = fixture.wire.fixture.revision.clone();
+    assert!(
+        git.contains_exact_revision(source.root(), &expected)
+            .unwrap()
+    );
+    let absent = Revision {
+        commit: "f".repeat(40),
+        tree: expected.tree.clone(),
+    };
+    assert!(!git.contains_exact_revision(source.root(), &absent).unwrap());
+    let wrong_tree = Revision {
+        commit: expected.commit.clone(),
+        tree: "f".repeat(40),
+    };
+    assert_eq!(
+        git.contains_exact_revision(source.root(), &wrong_tree)
+            .unwrap_err()
+            .code,
+        "provenance_mismatch"
+    );
+    let blob = Revision {
+        commit: expected.tree.clone(),
+        tree: expected.tree.clone(),
+    };
+    assert_eq!(
+        git.contains_exact_revision(source.root(), &blob)
+            .unwrap_err()
+            .code,
+        "git_operation_failed"
+    );
+    let invalid = Revision {
+        commit: "HEAD".into(),
+        tree: expected.tree,
+    };
+    assert!(
+        git.contains_exact_revision(source.root(), &invalid)
+            .is_err()
+    );
+    assert_eq!(fixture.wire.fetches.load(Ordering::SeqCst), fetches);
+    let after = fixture
+        .acquisition
+        .services
+        .processes
+        .observe(fixture.request.permit.operation_id)
+        .unwrap();
+    assert!(after.len() > before);
+    assert!(after.iter().all(|r| matches!(
+        r.state,
+        crate::process_records::RecoveryState::GroupExitRecordedTreeUnverified
+    )));
+    assert!(
+        fixture
+            .runtime
+            .executions
+            .active_operations()
+            .unwrap()
+            .is_empty()
+    );
+    source.revalidate_filesystem().unwrap();
+}

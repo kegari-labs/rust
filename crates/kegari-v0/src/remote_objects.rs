@@ -49,6 +49,15 @@ enum Origin {
         receipt_digest: String,
         current_main: Revision,
     },
+    CompletedCarryMerge {
+        number: u64,
+        parent: String,
+        receipt: Uuid,
+        receipt_digest: String,
+        current_main: Revision,
+        accepted_head: Revision,
+        completed_origin: String,
+    },
     Candidate {
         reference: String,
         staged: Vec<(u64, crate::git::DeltaManifest)>,
@@ -277,6 +286,44 @@ impl AuthorizedObjectRequest {
         insert_revision(&mut request.required_revisions, &current_main)?;
         Ok(request)
     }
+    /// Exact already-completed, different-parent merge objects for a current
+    /// parent assembly. The sealed origin authorizes reads only; the actual
+    /// current assembly permit owns the local import and its process journal.
+    pub(crate) fn for_completed_carry(
+        contract: &RepositoryContract,
+        permit: &Permit,
+        admission: &DeliveryAdmission,
+        proof: &crate::delivery::CompletedCarryObjects,
+    ) -> Result<Self> {
+        proof.verify_admission(admission, contract)?;
+        let mut request = Self::for_release_merge(contract, permit, admission, proof.observed())?;
+        let Origin::Merge {
+            number,
+            parent,
+            receipt,
+        } = request.origin
+        else {
+            unreachable!()
+        };
+        request.origin = Origin::CompletedCarryMerge {
+            number,
+            parent,
+            receipt,
+            receipt_digest: canonical_digest(
+                1,
+                proof.observed().receipt().ok_or_else(|| {
+                    Error::new("missing_evidence", "completed carry merge receipt missing")
+                })?,
+            )?,
+            current_main: proof.current_main().clone(),
+            accepted_head: proof.accepted_head().clone(),
+            completed_origin: proof.digest()?,
+        };
+        for revision in proof.required_revisions()? {
+            insert_revision(&mut request.required_revisions, &revision)?;
+        }
+        Ok(request)
+    }
     /// The squash and the reviewed head are distinct roots after squash merge.
     /// Both must be retained so the original patch can be verified unchanged.
     pub fn for_staging_merge(
@@ -434,7 +481,7 @@ impl AuthorizedObjectRequest {
             &json!({"purpose":"exact_git_objects","contract":self.contract.digest()?,"revision":self.revision,"required_revisions":self.required_revisions,"origin":self.origin,"runtime":self.permit.lease.runtime_id,"operation":self.permit.operation_id,"scope":self.permit.scope_digest,"authority":self.authority_digest}),
         )
     }
-    fn effect_id(&self) -> Result<Uuid> {
+    pub(crate) fn effect_id(&self) -> Result<Uuid> {
         let digest = self.digest()?;
         let hex = digest
             .rsplit(':')
@@ -645,10 +692,18 @@ impl ObjectAcquisition {
                 receipt_digest,
                 current_main,
                 ..
+            }
+            | Origin::CompletedCarryMerge {
+                number,
+                receipt,
+                receipt_digest,
+                current_main,
+                ..
             } => {
                 let retained = self.services.control.operation(*receipt)?;
                 let current = github.pull_request(repo, *number).await?;
-                if canonical_digest(1, &retained)? != *receipt_digest
+                if matches!(&request.origin, Origin::CompletedCarryMerge { accepted_head, .. } if current.head_sha != accepted_head.commit)
+                    || canonical_digest(1, &retained)? != *receipt_digest
                     || !matches!(
                         retained.phase,
                         ReceiptPhase::Acknowledged | ReceiptPhase::Reconciled
@@ -770,7 +825,8 @@ impl ObjectAcquisition {
         }
         if let Origin::Merge { parent, .. }
         | Origin::StagingMerge { parent, .. }
-        | Origin::LineageMerge { parent, .. } = &request.origin
+        | Origin::LineageMerge { parent, .. }
+        | Origin::CompletedCarryMerge { parent, .. } = &request.origin
         {
             let parents = commit
                 .get("parents")

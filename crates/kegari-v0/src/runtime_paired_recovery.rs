@@ -264,6 +264,7 @@ impl RuntimeCoordinator {
                 },
                 session_resume: Some((proof, directory)),
                 paired_resume: Some(candidate),
+                parent_reassembly: None,
                 preparation: None,
             },
         )

@@ -27,8 +27,41 @@ struct NoReleaseIntent {
     workflow_digest: String,
     parent_publication: PublicationRef,
     acceptance_publication: PublicationRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    carried: Option<NoReleaseCarryBinding>,
     contracts: Vec<(RepositoryId, String)>,
     record: Signed<NoReleaseRequired>,
+}
+/// Protected linkage only. This record cannot recreate PublishedCarry.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoReleaseCarryBinding {
+    record: evidence::CarriedAcceptance,
+    publication: PublicationRef,
+}
+impl NoReleaseCarryBinding {
+    fn from_current(carry: &crate::delivery::PublishedCarry) -> Result<Self> {
+        let (id, body_digest, writer) = carry.publication_reference()?;
+        Ok(Self {
+            record: carry.verified().record().clone(),
+            publication: PublicationRef {
+                id,
+                body_digest,
+                writer,
+            },
+        })
+    }
+    fn matches_current(&self, carry: &crate::delivery::PublishedCarry) -> Result<bool> {
+        Ok(canonical_digest(1, self)? == canonical_digest(1, &Self::from_current(carry)?)?)
+    }
+    fn matches_origin(&self, origin: &crate::delivery::CarriedNoReleaseOrigin) -> bool {
+        self.record == *origin.carry()
+            && (
+                self.publication.id,
+                self.publication.body_digest.clone(),
+                self.publication.writer,
+            ) == *origin.publication()
+    }
 }
 impl NoReleaseIntent {
     fn scope(&self) -> Result<String> {
@@ -307,6 +340,7 @@ impl RuntimeDelivery {
         gate: &FreshGate,
         parent: &VerifiedParent,
         acceptance: &VerifiedAcceptance,
+        carry: Option<&crate::delivery::PublishedCarry>,
     ) -> Result<()> {
         let config = runtime.configuration.snapshot()?;
         runtime
@@ -353,6 +387,23 @@ impl RuntimeDelivery {
             Duration::seconds(30),
         )?;
         gate.compare_current(&fresh, Utc::now(), Duration::seconds(30))?;
+        match (&intent.carried, carry) {
+            (None, None) if acceptance.acceptance().reviewed_token == parent.token() => (),
+            (Some(binding), Some(carry))
+                if binding.matches_current(carry)?
+                    && carry.acceptance().digest() == acceptance.digest()
+                    && carry.parent().verified().token() == parent.token()
+                    && carry.workspace_id() == intent.workspace =>
+            {
+                carry.verify_current_projection(&config, current)?;
+            }
+            _ => {
+                return Err(Error::new(
+                    "stale_result",
+                    "already-production carry is missing or differs from its actual current publication",
+                ));
+            }
+        }
         let comments = &current
             .observations
             .get(&gate.work().parent)
@@ -360,7 +411,10 @@ impl RuntimeDelivery {
                 Error::new("incompletely_observed", "already-production parent missing")
             })?
             .comments;
-        for reference in [&intent.parent_publication, &intent.acceptance_publication] {
+        for reference in [&intent.parent_publication, &intent.acceptance_publication]
+            .into_iter()
+            .chain(intent.carried.as_ref().map(|carry| &carry.publication))
+        {
             if comments
                 .iter()
                 .filter(|c| {
@@ -515,6 +569,7 @@ impl RuntimeDelivery {
         if !eligible_shape(parent) {
             return Ok(());
         }
+        let carry = snapshot.parent_delivery().published_carry().cloned();
         let comments = &projection
             .observations
             .get(&projection.key.issue)
@@ -587,6 +642,7 @@ impl RuntimeDelivery {
             snapshot.authority(),
             parent,
             acceptance,
+            carry.as_ref(),
         )?;
         if intent.contracts != selected_contracts(workspace, parent)? {
             return Err(Error::new(
@@ -609,10 +665,13 @@ impl RuntimeDelivery {
             &self.runtime.control.operation(intent.effect()?)?,
         )?;
         let inventory = target_inventory(workspace, parent)?;
-        let proof = evidence::verify_no_release_required(
+        let proof = evidence::verify_no_release_required_with_acceptance(
             &record,
             parent,
-            acceptance,
+            evidence::NoReleaseAcceptance {
+                acceptance,
+                carry: carry.as_ref().map(|carry| carry.verified()),
+            },
             NoReleaseRequirements {
                 current_work: snapshot.work(),
                 pending_correction: false,
@@ -628,6 +687,7 @@ impl RuntimeDelivery {
             snapshot.authority(),
             parent,
             acceptance,
+            carry.as_ref(),
         )?;
         // Historical sealing is independent of current no-release readiness.
         // A target provenance prerequisite remains visible without changing
@@ -637,6 +697,7 @@ impl RuntimeDelivery {
             gate: snapshot.authority(),
             parent,
             acceptance,
+            carry: carry.as_ref(),
             intent: &intent,
             proof: &proof,
             observed: &current.baselines,
@@ -657,6 +718,7 @@ impl RuntimeDelivery {
                 &checked_gate,
                 &checked_parent,
                 &checked_acceptance,
+                carry.as_ref(),
             )?;
             let work = checked_gate.work_key()?;
             let runtime = intent.record.payload.runtime_id.to_string();
@@ -701,6 +763,11 @@ impl RuntimeDelivery {
         if !eligible_shape(parent) {
             return Ok(false);
         }
+        let carry = delivery.published_carry().cloned();
+        let carry_binding = carry
+            .as_ref()
+            .map(NoReleaseCarryBinding::from_current)
+            .transpose()?;
         if delivery.no_release_required().is_some() {
             return Ok(true);
         }
@@ -774,12 +841,13 @@ impl RuntimeDelivery {
                 && intent.workflow_digest == gate.workflow_digest()
                 && intent.parent_publication == parent_publication
                 && intent.acceptance_publication == acceptance_publication
+                && canonical_digest(1, &intent.carried) == canonical_digest(1, &carry_binding)
                 && canonical_digest(1, &intent.attempt) == canonical_digest(1, &plan.reference)
         });
         let intent = if let Some(intent) = reusable {
             intent.clone()
         } else {
-            let record = evidence::prepare_no_release_required(
+            let record = evidence::prepare_no_release_required_with_acceptance(
                 NoReleaseRequired {
                     schema_version: 1,
                     runtime_id: lease.runtime_id,
@@ -792,7 +860,10 @@ impl RuntimeDelivery {
                     recorded_at: Utc::now(),
                 },
                 parent,
-                acceptance,
+                evidence::NoReleaseAcceptance {
+                    acceptance,
+                    carry: carry.as_ref().map(|carry| carry.verified()),
+                },
                 NoReleaseRequirements {
                     current_work: gate.work(),
                     pending_correction: false,
@@ -809,11 +880,19 @@ impl RuntimeDelivery {
                 workflow_digest: gate.workflow_digest().into(),
                 parent_publication,
                 acceptance_publication,
+                carried: carry_binding,
                 contracts: selected_contracts(&workspace, parent)?,
                 record,
             }
         };
-        Self::check_no_release_intent(&self.runtime, &intent, &gate, parent, acceptance)?;
+        Self::check_no_release_intent(
+            &self.runtime,
+            &intent,
+            &gate,
+            parent,
+            acceptance,
+            carry.as_ref(),
+        )?;
         if intent.contracts != selected_contracts(&workspace, parent)? {
             return Err(Error::new(
                 "stale_config",
@@ -850,7 +929,14 @@ impl RuntimeDelivery {
             },
             || {
                 self.runtime.registration.verify_active_owner(lease)?;
-                Self::check_no_release_intent(&self.runtime, &intent, &gate, parent, acceptance)?;
+                Self::check_no_release_intent(
+                    &self.runtime,
+                    &intent,
+                    &gate,
+                    parent,
+                    acceptance,
+                    carry.as_ref(),
+                )?;
                 self.releases
                     .state
                     .lock()
@@ -866,6 +952,7 @@ impl RuntimeDelivery {
         let checked_gate = gate.clone();
         let checked_parent = parent.clone();
         let checked_acceptance = acceptance.clone();
+        let checked_carry = carry.clone();
         let checked_lease = lease.clone();
         let request = MutationRequest {
             request_id: effect,
@@ -914,6 +1001,7 @@ impl RuntimeDelivery {
                             &checked_gate,
                             &checked_parent,
                             &checked_acceptance,
+                            checked_carry.as_ref(),
                         )?;
                         state
                             .lock()

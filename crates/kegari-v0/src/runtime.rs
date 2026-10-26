@@ -30,6 +30,8 @@ use uuid::Uuid;
 mod correction_transitions;
 #[path = "runtime_paired_recovery.rs"]
 mod paired_recovery;
+#[path = "runtime_parent_reassembly.rs"]
+mod parent_reassembly;
 #[path = "runtime_released.rs"]
 mod released;
 #[path = "runtime_recovery.rs"]
@@ -451,6 +453,13 @@ impl RuntimeCoordinator {
                     "preparation budget was superseded by an explicit retry grant",
                 ));
             }
+        }
+        if let Some(proof) = request
+            .delivery
+            .as_ref()
+            .and_then(|a| a.parent_reassembly())
+        {
+            return self.schedule_parent_reassembly(proof, workspace, account, Some(snapshot));
         }
         let cause = request_readmission(request)?;
         self.plan_attempt_context(
@@ -1055,6 +1064,54 @@ impl RuntimeCoordinator {
         drop(state);
         self.services.wake.notify_one();
         Ok(())
+    }
+    pub(crate) fn retain_carried_acceptance(
+        &self,
+        parent: &IssueKey,
+        carry: crate::delivery::PublishedCarry,
+    ) -> Result<()> {
+        self.control.serialize_observation(|_| {
+            let projection = self.observations.admission_snapshot()?;
+            let config = self.configuration.snapshot()?;
+            // Local runtime workspace and provider workspace are distinct.
+            let workspace = carry.workspace_id();
+            let current = projection.parent(workspace, parent.issue)?;
+            if current.key != *parent {
+                return Err(Error::new(
+                    "identity_mismatch",
+                    "carry parent identity differs",
+                ));
+            }
+            carry.verify_current_projection(&config, current)?;
+            let fences = self.configuration.authority_fences()?;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| Error::new("runtime_unavailable", "carry cache lock failed"))?;
+            let snapshot = state.delivery_snapshots.get_mut(parent).ok_or_else(|| {
+                Error::new(
+                    "evidence_missing",
+                    "carry needs actual freshly hydrated parent evidence",
+                )
+            })?;
+            if !evidence_projection_current(
+                snapshot.authority(),
+                snapshot.observed_at(),
+                &projection,
+                &config.revision()?,
+                &fences,
+                Utc::now(),
+            ) {
+                return Err(Error::new(
+                    "stale_result",
+                    "carry cannot refresh stale current evidence",
+                ));
+            }
+            snapshot.carried_acceptance(carry)?;
+            let delivery = snapshot.parent_delivery().clone();
+            state.delivery.insert(parent.clone(), delivery);
+            Ok(())
+        })
     }
     /// Attach freshly verified read-only release readiness to the same current
     /// parent snapshot. This grants no dispatch authority and cannot renew the
@@ -1664,6 +1721,7 @@ impl RuntimeCoordinator {
                 session_resume,
                 paired_resume: None,
                 preparation: None,
+                parent_reassembly: None,
             },
         )
     }
@@ -1699,6 +1757,7 @@ impl RuntimeCoordinator {
                 },
                 session_resume: None,
                 paired_resume: None,
+                parent_reassembly: None,
                 preparation: Some(crate::control::ReviewReceiptReference {
                     operation: preparation.operation_id,
                     receipt_digest: canonical_digest(1, preparation)?,
@@ -1718,8 +1777,21 @@ impl RuntimeCoordinator {
             session_resume,
             paired_resume,
             preparation,
+            parent_reassembly,
         } = context;
         let WorkerPlanning { readmission, round } = planning;
+        if parent_reassembly.is_some()
+            && (readmission.is_some()
+                || round.is_some()
+                || session_resume.is_some()
+                || preparation.is_none())
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "parent reassembly has conflicting cause or lacks exact preparation",
+            ));
+        }
+
         if round.is_some() && matches!(readmission, Some(WorkerReadmission::ValidationRetry(_))) {
             return Err(Error::new(
                 "worker_binding",
@@ -1781,6 +1853,26 @@ impl RuntimeCoordinator {
             .capture_active(workspace, revision, workflow)?;
         let final_gate = |snapshot: &crate::control::ControlSnapshot| {
             self.registration.verify_active_owner(lease)?;
+            if let Some(proof) = parent_reassembly {
+                proof.verify_contract(contract)?;
+                let schedule = self.schedule_parent_reassembly(
+                    proof,
+                    reference.workspace,
+                    &reference.account,
+                    Some(snapshot),
+                )?;
+                if reference.phase != *proof.phase()
+                    || reference.attempt != schedule.attempt
+                    || reference.max_attempts > schedule.max_attempts
+                    || reference.max_turns > schedule.max_turns
+                    || reference.max_review_rounds > schedule.max_review_rounds
+                {
+                    return Err(Error::new(
+                        "admission_budget",
+                        "parent reassembly exceeds original exact phase bounds",
+                    ));
+                }
+            }
             if let Some(round) = round {
                 round.verify_contract(contract)?;
                 if round.subject_phase() != &reference.phase {
@@ -1841,7 +1933,7 @@ impl RuntimeCoordinator {
                     ));
                 }
             }
-            if readmission.is_none() && session_resume.is_none() {
+            if readmission.is_none() && session_resume.is_none() && parent_reassembly.is_none() {
                 let schedule = self.plan_attempt_context(
                     &reference.phase,
                     reference.workspace,
@@ -1989,6 +2081,15 @@ impl RuntimeCoordinator {
                     paired_recovery::paired_error("paired resume reference disappeared")
                 })?,
                 provenance,
+                final_gate,
+            )?
+        } else if let Some(proof) = parent_reassembly {
+            self.control.admit_parent_reassembly_run_observed(
+                lease,
+                input,
+                proof.reference().clone(),
+                preparation
+                    .ok_or_else(|| Error::new("worker_binding", "parent preparation missing"))?,
                 final_gate,
             )?
         } else if let Some(round) = round {
@@ -2943,6 +3044,14 @@ fn effective_evidence(
                 continue;
             }
         }
+        if let Some(carry) = proof.parent_delivery().published_carry()
+            && projection
+                .parent(proof.authority().workspace_id(), proof.work().parent)
+                .and_then(|parent| carry.verify_current_projection(config, parent))
+                .is_err()
+        {
+            continue;
+        }
         if evidence_projection_current(
             proof.authority(),
             proof.observed_at(),
@@ -3134,6 +3243,7 @@ struct WorkerAdmissionContext<'a> {
     )>,
     paired_resume: Option<&'a crate::delivery::VerifiedPairedRecoveryCandidate>,
     preparation: Option<crate::control::ReviewReceiptReference>,
+    parent_reassembly: Option<&'a crate::delivery::ParentReassemblyWork>,
 }
 fn request_readmission(
     request: &crate::runtime_workers::LaunchRequest,

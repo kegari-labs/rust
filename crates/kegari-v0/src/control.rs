@@ -14,6 +14,14 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "control_parent_reassembly.rs"]
+mod parent_reassembly;
+pub(crate) use parent_reassembly::{
+    ParentGrantReference, ParentReassemblyReference, parent_reassembly_inventory,
+    parent_transient_failure, reject_unmarked_parent_phase, require_successful_parent_preparation,
+    verify_parent_reassembly_reference,
+};
+
 #[path = "control_continuation.rs"]
 mod continuation;
 pub use continuation::{RunContinuationReference, SourceAdvancedReference};
@@ -301,6 +309,12 @@ pub struct MetadataAdmission {
 }
 enum AdmissionReference {
     Preparation(PreparationReference),
+    ParentPreparation(PreparationReference, Box<ParentReassemblyReference>),
+    ParentRun(
+        RunReference,
+        Box<ParentReassemblyReference>,
+        ReviewReceiptReference,
+    ),
     RoundPreparation(PreparationReference, Box<ReviewRoundReference>),
     SessionRecovery(SessionRecoveryPreparationReference),
     RoundSessionRecovery(
@@ -1077,6 +1091,7 @@ impl ControlHost {
         };
         if let Some(
             AdmissionReference::Run(run)
+            | AdmissionReference::ParentRun(run, _, _)
             | AdmissionReference::RoundRun(run, _)
             | AdmissionReference::ContinuedRun(run, _)
             | AdmissionReference::SourceAdvancedRun(run, _)
@@ -1090,6 +1105,9 @@ impl ControlHost {
                 Some(receipts) => receipts.clone(),
                 None => self.receipts.all()?,
             };
+            if !matches!(&reference, Some(AdmissionReference::ParentRun(..))) {
+                reject_unmarked_parent_phase(&run.phase, &observed)?;
+            }
             for receipt in observed {
                 if let Some(old) = RunReference::from_receipt(&receipt)?
                     && old.phase == run.phase
@@ -1129,6 +1147,9 @@ impl ControlHost {
                     "admission cannot drop retained round provenance",
                 ));
             }
+            if let Some(AdmissionReference::ParentRun(_, proof, preparation)) = &reference {
+                self.verify_parent_reassembly_run(&s.snapshot(), lease, proof, preparation)?;
+            }
             if let Some(AdmissionReference::RoundRun(_, provenance)) = &reference {
                 self.verify_round_run(RoundRunCheck {
                     snapshot: &s.snapshot(),
@@ -1165,8 +1186,13 @@ impl ControlHost {
                 })?;
             }
         }
+        if let Some(AdmissionReference::ParentPreparation(_, proof)) = &reference {
+            self.verify_parent_reassembly_preparation(&s.snapshot(), proof)?;
+        }
         if let Some(AdmissionReference::Preparation(prep)) = &reference {
-            for receipt in self.review_round_receipts()? {
+            let receipts = self.review_round_receipts()?;
+            reject_unmarked_parent_phase(&prep.phase, &receipts)?;
+            for receipt in receipts {
                 if let Some(run) = RunReference::from_receipt(&receipt)?
                     && run.phase == prep.phase
                     && receipt.expected.contains_key("review_round")
@@ -1253,6 +1279,7 @@ impl ControlHost {
         ]);
         if let Some(
             AdmissionReference::Run(reference)
+            | AdmissionReference::ParentRun(reference, _, _)
             | AdmissionReference::RoundRun(reference, _)
             | AdmissionReference::ContinuedRun(reference, _)
             | AdmissionReference::SourceAdvancedRun(reference, _)
@@ -1293,6 +1320,7 @@ impl ControlHost {
         }
         if let Some(
             AdmissionReference::Preparation(reference)
+            | AdmissionReference::ParentPreparation(reference, _)
             | AdmissionReference::RoundPreparation(reference, _),
         ) = &reference
         {
@@ -1314,6 +1342,25 @@ impl ControlHost {
             );
         }
         match &reference {
+            Some(AdmissionReference::ParentPreparation(_, proof)) => {
+                expected.insert(
+                    "parent_reassembly".into(),
+                    serde_json::to_string(proof.as_ref())
+                        .map_err(|_| Error::invalid("parent reassembly encoding"))?,
+                );
+            }
+            Some(AdmissionReference::ParentRun(_, proof, preparation)) => {
+                expected.insert(
+                    "parent_reassembly".into(),
+                    serde_json::to_string(proof.as_ref())
+                        .map_err(|_| Error::invalid("parent reassembly encoding"))?,
+                );
+                expected.insert(
+                    "parent_reassembly_preparation".into(),
+                    serde_json::to_string(preparation)
+                        .map_err(|_| Error::invalid("parent reassembly preparation encoding"))?,
+                );
+            }
             Some(AdmissionReference::RoundPreparation(_, round)) => {
                 expected.insert(
                     "review_round".into(),

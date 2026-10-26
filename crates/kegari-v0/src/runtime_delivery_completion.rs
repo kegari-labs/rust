@@ -19,6 +19,8 @@ struct ProofFile {
 struct OriginReference {
     receipts: BTreeSet<Uuid>,
     vector: ProofFile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    carried: Option<crate::delivery::CarriedOriginRef>,
 }
 use super::super::completion_binding::DependencyBinding;
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -510,6 +512,19 @@ impl VerifiedReleaseCompletion {
             {
                 return Err(invalid("completed publication inventory differs"));
             }
+            match (
+                &stored.payload.attempt.plan.carried_acceptance,
+                &origin.carried,
+            ) {
+                (Some(_), Some(carried)) => carried.validate_retained(
+                    &self.records,
+                    &self.control,
+                    &self.key,
+                    &stored.payload.attempt.plan,
+                )?,
+                (None, None) => (),
+                _ => return Err(invalid("completion lost exact carried acceptance history")),
+            }
             let vector: Signed<Value> = workspace.read(&origin.vector.leaf).map_err(|error| {
                 completion_context(error, *id, "origin_reference", "parent_candidate_vector")
             })?;
@@ -626,6 +641,103 @@ impl VerifiedReleaseCompletion {
         };
         result.queue_scope()?;
         Ok(result)
+    }
+    /// Flatten only a fully verified completed release's actual immutable
+    /// closure. This data is historical provenance, never a success constructor.
+    pub(crate) fn carry_references(&self) -> Result<crate::delivery::CarryReferences> {
+        self.validate()?;
+        use crate::delivery::{CarryNamespace, CarryReferences};
+        let mut refs = CarryReferences::default();
+        refs.retain_file(
+            CarryNamespace::Root,
+            &self.records,
+            &leaf(self.record.terminal),
+            PURPOSE,
+            &self.key,
+        )?;
+        let workspace = crate::storage::PrivateDir::open(
+            &self.records.path().join(self.record.workspace.to_string()),
+        )?;
+        for (operation, _) in &self.record.attempts {
+            refs.retain_file(
+                CarryNamespace::Root,
+                &self.records,
+                &attempt_leaf(*operation),
+                "runtime_release_attempt",
+                &self.key,
+            )?;
+        }
+        for operation in self.record.intents.keys() {
+            refs.retain_file(
+                CarryNamespace::Root,
+                &self.records,
+                &format!("release-successor-{operation}.json"),
+                "release_successor_intent",
+                &self.key,
+            )?;
+        }
+        for reference in self
+            .record
+            .effects
+            .iter()
+            .chain(self.record.origins.values().map(|o| &o.vector))
+        {
+            refs.retain_file(
+                CarryNamespace::Workspace {
+                    workspace: self.record.workspace,
+                },
+                &workspace,
+                &reference.leaf,
+                &reference.purpose,
+                &self.key,
+            )?;
+        }
+        if !self.record.target_proofs.is_empty() {
+            let deployment =
+                crate::storage::PrivateDir::open(&workspace.path().join("deployment"))?;
+            for reference in &self.record.target_proofs {
+                refs.retain_file(
+                    CarryNamespace::Deployment {
+                        workspace: self.record.workspace,
+                    },
+                    &deployment,
+                    &reference.leaf,
+                    &reference.purpose,
+                    &self.key,
+                )?;
+            }
+        }
+        for origin in self.record.origins.values() {
+            if let Some(carried) = &origin.carried {
+                refs.extend(carried.references())?;
+            }
+        }
+        for operation in self.record.receipts.keys() {
+            refs.retain_receipt(&self.control.operation(*operation)?)?;
+        }
+        refs.validate(&self.records, &self.control, &self.key)?;
+        Ok(refs)
+    }
+    pub(crate) fn inventory_limit() -> usize {
+        MAX_REFERENCES
+    }
+    pub(crate) fn carry_publications(&self, configuration: &Config) -> Result<(Uuid, Uuid)> {
+        self.validate_for_configuration(configuration)?;
+        let signed: Signed<AttemptRecord> =
+            self.records.read(&attempt_leaf(self.record.terminal))?;
+        self.key.verify("runtime_release_attempt", &signed)?;
+        if self.record.attempts.last()
+            != Some(&(self.record.terminal, canonical_digest(1, &signed.payload)?))
+            || signed.payload.attempt.plan != self.terminal.plan
+        {
+            return Err(invalid(
+                "carry origin is not the exact completed terminal attempt",
+            ));
+        }
+        Ok((
+            signed.payload.parent_publication.id,
+            signed.payload.acceptance_publication.id,
+        ))
     }
     pub(crate) fn terminal(&self) -> &ReleaseAttempt {
         &self.terminal
@@ -1229,6 +1341,7 @@ impl RuntimeDelivery {
                 link.record.attempt.plan.operation_id,
                 OriginReference {
                     receipts: publications.iter().map(|r| r.operation_id).collect(),
+                    carried: link.origin.carried_reference().cloned(),
                     vector: ProofFile {
                         leaf: vector.0.clone(),
                         purpose: vector.1.clone(),
@@ -1837,6 +1950,23 @@ impl RuntimeDelivery {
                 .map_err(|_| invalid("fixture commit observer disconnected"))?;
         }
         Ok(())
+    }
+}
+
+impl RuntimeDelivery {
+    pub(crate) fn retained_carry_completions(
+        &self,
+        workspace: Uuid,
+    ) -> Result<Vec<VerifiedReleaseCompletion>> {
+        let state = self.releases.state.lock().map_err(|_| unavailable())?;
+        // Clone only; caller validates each immutable proof and current native
+        // origin outside Control/release locks before any baseline use.
+        Ok(state
+            .completions
+            .values()
+            .filter(|p| p.workspace_id() == workspace)
+            .cloned()
+            .collect())
     }
 }
 

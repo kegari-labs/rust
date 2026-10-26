@@ -309,6 +309,16 @@ impl RuntimeDelivery {
         gate: &FreshGate,
         predecessor: Option<&KnownPredecessorBaseline>,
     ) -> Result<(Arc<DeliveryCoordinator>, Arc<LocalProcessPermit>)> {
+        self.readonly_coordinator_with_sources(workspace, gate, predecessor, Vec::new())
+            .await
+    }
+    async fn readonly_coordinator_with_sources(
+        &self,
+        workspace: &WorkspaceDelivery,
+        gate: &FreshGate,
+        predecessor: Option<&KnownPredecessorBaseline>,
+        extra: Vec<crate::git::VerifiedHostReadRoot>,
+    ) -> Result<(Arc<DeliveryCoordinator>, Arc<LocalProcessPermit>)> {
         let mut roots = BTreeMap::new();
         for contract in &workspace.contracts {
             let root = crate::git::configured_host_read_root(
@@ -362,6 +372,18 @@ impl RuntimeDelivery {
                     "ownership_conflict",
                     "retained object roots overlap another granted source",
                 ));
+            }
+        }
+        for root in extra {
+            if let Some(prior) = roots.get(root.root()) {
+                if prior.digest()? != root.digest()? {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "carry root overlaps a different existing read source",
+                    ));
+                }
+            } else {
+                roots.insert(root.root().to_owned(), root);
             }
         }
         let registry = self.provider_broker(&workspace.configuration, gate.workspace_id())?;
@@ -617,6 +639,13 @@ impl RuntimeDelivery {
                 match result {
                     Ok(mut snapshot) => {
                         if let Ok(workspace) = &workspace
+                            && let Err(error) =
+                                self.retain_current_carry(workspace, parent, &mut snapshot)
+                        {
+                            self.runtime.invalidate_delivery(&parent.key, error)?;
+                            continue;
+                        }
+                        if let Ok(workspace) = &workspace
                             && let Err(error) = self
                                 .hydrate_no_release(workspace, parent, &mut snapshot)
                                 .await
@@ -740,7 +769,10 @@ impl RuntimeDelivery {
             )
         })?;
         if decision.token() != Some(parent.token())
-            || acceptance.acceptance().reviewed_token != parent.token()
+            || (acceptance.acceptance().reviewed_token != parent.token()
+                && evidence.published_carry().is_none_or(|carry| {
+                    carry.verified().record().current_evidence_token != parent.token()
+                }))
             || parent.manifest().work != *decision.work()
         {
             return Err(Error::new(
@@ -973,6 +1005,9 @@ impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
 #[path = "runtime_delivery_parent.rs"]
 mod parent;
 pub(crate) use parent::ActiveParentContractInput;
+#[path = "runtime_delivery_active_grants.rs"]
+mod active_grants;
+pub(crate) use active_grants::ActiveParentGrantObserver;
 pub use parent::ParentSources;
 
 #[path = "runtime_delivery_release.rs"]
@@ -989,3 +1024,7 @@ mod completion_binding;
 #[cfg(test)]
 #[path = "runtime_delivery_worker_fixture.rs"]
 pub(crate) mod worker_fixture;
+
+#[path = "runtime_delivery_carry_baseline.rs"]
+mod carry_baseline;
+pub(crate) use carry_baseline::{ReleasedCarryLink, VerifiedBaselineTransition};

@@ -166,6 +166,7 @@ impl RuntimeDelivery {
                     baselines: current_baseline,
                     vector_digest: parts.vector_digest,
                     integrations,
+                    reassembled: None,
                 }),
                 baselines: parts.baselines,
             })

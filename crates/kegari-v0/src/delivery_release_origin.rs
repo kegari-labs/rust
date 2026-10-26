@@ -10,8 +10,12 @@ pub struct VerifiedReleaseOrigin {
     observed_at: DateTime<Utc>,
     publication_receipts: Vec<Receipt>,
     vector_reference: (String, String, String),
+    carried: Option<CarriedOriginRef>,
 }
 impl VerifiedReleaseOrigin {
+    pub(crate) fn carried_reference(&self) -> Option<&CarriedOriginRef> {
+        self.carried.as_ref()
+    }
     pub(crate) fn retained_references(&self) -> (&[Receipt], &(String, String, String)) {
         (&self.publication_receipts, &self.vector_reference)
     }
@@ -142,16 +146,22 @@ impl DeliveryCoordinator {
             || accepted.digest()? != plan.acceptance_digest
             || accepted.payload.runtime_id != plan.runtime_id
             || accepted.payload.work != manifest.work
-            || accepted.payload.reviewed_token != plan.evidence_token
+            || (plan.carried_acceptance.is_none()
+                && accepted.payload.reviewed_token != plan.evidence_token)
             || accepted.payload.provider_writer != writer.to_string()
-            || accepted.payload.accepted_at < manifest.created_at
-            || plan.carried_acceptance.is_some()
+            || (plan.carried_acceptance.is_none()
+                && accepted.payload.accepted_at < manifest.created_at)
         {
             return Err(Error::new(
                 "candidate_provenance",
                 "original parent and acceptance do not bind the admitted plan",
             ));
         }
+        let carried = if plan.carried_acceptance.is_some() {
+            Some(self.carried_release_origin(plan, &signed, &accepted, &comments)?)
+        } else {
+            None
+        };
         let receipts = self.host.operations()?;
         let mut publication_receipts = Vec::new();
         for comment in [parent, acceptance] {
@@ -299,6 +309,7 @@ impl DeliveryCoordinator {
             plan: plan.clone(),
             manifest: manifest.clone(),
             publication_receipts,
+            carried,
             vector_reference: (
                 vector_leaf,
                 "parent_candidate_vector".into(),
@@ -391,6 +402,13 @@ impl DeliveryCoordinator {
         (self.current_gate)(gate)?;
         predecessor.require_historical_gate(gate)?;
         predecessor.require_origin(origin)?;
+        self.retained_origin_slice_record(repository, origin)
+    }
+    pub(in crate::delivery) fn retained_origin_slice_record(
+        &self,
+        repository: &RepositoryId,
+        origin: &VerifiedReleaseOrigin,
+    ) -> Result<Signed<SliceRecord>> {
         let operation = origin.slice_operation(repository)?;
         let contract = self.contracts.get(repository).ok_or_else(|| {
             Error::new(

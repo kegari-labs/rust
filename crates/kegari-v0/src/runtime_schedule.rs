@@ -192,6 +192,7 @@ pub fn plan(
     receipts: &[Receipt],
     now: DateTime<Utc>,
 ) -> Result<RunSchedule> {
+    crate::control::reject_unmarked_parent_phase(phase, receipts)?;
     plan_inner(
         runtime,
         phase,
@@ -1042,4 +1043,100 @@ pub(crate) fn check_capacity(
         ));
     }
     Ok(())
+}
+
+/// A completed parent may be reassembled only through the distinct opaque
+/// baseline-change producer and Control reference; this preserves its finite
+/// phase history without classifying completed work as a transport retry.
+pub(crate) fn plan_parent_reassembly(
+    runtime: &RuntimeConfig,
+    proof: &crate::control::ParentReassemblyReference,
+    receipts: &[Receipt],
+    now: DateTime<Utc>,
+) -> Result<RunSchedule> {
+    proof.validate()?;
+    if crate::control::parent_reassembly_inventory(receipts, proof)? != proof.inventory_digest {
+        return Err(Error::new(
+            "stale_result",
+            "parent phase inventory changed before scheduling",
+        ));
+    }
+    let max_attempts = runtime.max_attempts_per_phase.min(proof.max_attempts);
+    let max_turns = runtime.max_turns.min(proof.max_turns);
+    let max_review_rounds = runtime.max_review_rounds.min(proof.max_review_rounds);
+    if proof.attempt > max_attempts || [max_attempts, max_turns, max_review_rounds].contains(&0) {
+        return Err(Error::new(
+            "attempts_exhausted",
+            "parent reassembly exhausted the original finite phase budget",
+        ));
+    }
+    let retired = receipts
+        .iter()
+        .filter(|r| {
+            r.operation_id == proof.predecessor.operation
+                || r.operation_id == proof.source.operation
+        })
+        .collect::<Vec<_>>();
+    if retired.len() != 2 {
+        return Err(Error::new(
+            "reconciliation_required",
+            "parent source or predecessor receipt is unavailable",
+        ));
+    }
+    let mut not_before =
+        retired.iter().map(|r| r.updated_at).max().unwrap() + chrono::Duration::seconds(1);
+    if proof.transient_of.is_some() {
+        let failed = retired
+            .iter()
+            .find(|r| r.operation_id == proof.predecessor.operation)
+            .unwrap();
+        let retry_after = crate::control::parent_transient_failure(failed)?;
+        let mut attempts = std::collections::BTreeMap::new();
+        for receipt in receipts {
+            if let Some(run) = RunReference::from_receipt(receipt)?
+                && run.phase == proof.phase
+            {
+                attempts.insert(run.attempt, receipt);
+            }
+        }
+        let mut failure_index = 0_u32;
+        for receipt in attempts.values().rev() {
+            if receipt
+                .observed_result
+                .as_ref()
+                .and_then(|r| r.pointer("/observation/outcome"))
+                .and_then(Value::as_str)
+                != Some("failed")
+            {
+                break;
+            }
+            failure_index = failure_index
+                .checked_add(1)
+                .ok_or_else(|| Error::new("attempts_exhausted", "parent failure index overflow"))?;
+        }
+        not_before = not_before.max(retry_at(
+            failed.updated_at,
+            failure_index,
+            runtime.retry_cap_ms,
+            retry_after,
+        )?);
+    }
+    if now < not_before {
+        return Err(Error::new(
+            "continuation_wait",
+            "parent reassembly awaits its bounded retirement/retry delay",
+        ));
+    }
+    Ok(RunSchedule {
+        attempt: proof.attempt,
+        max_attempts,
+        max_turns,
+        max_review_rounds,
+        trigger: if proof.transient_of.is_some() {
+            Trigger::ScheduledRetry
+        } else {
+            Trigger::VerifiedParentReassembly
+        },
+        not_before,
+    })
 }

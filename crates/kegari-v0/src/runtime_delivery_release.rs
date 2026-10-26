@@ -61,6 +61,8 @@ struct AttemptRecord {
     workflow_digest: String,
     parent_publication: PublicationRef,
     acceptance_publication: PublicationRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    carry_publication: Option<PublicationRef>,
     manual_intent: Option<Uuid>,
     manual_actor: Option<crate::control::Actor>,
     manual_role: Option<ManualRole>,
@@ -144,6 +146,8 @@ struct RepoPreparation {
     production: Option<VerifiedProduction>,
 }
 struct Preparation {
+    carry_phase: Option<ActivePhase>,
+    carry: Option<PublishedCarry>,
     reference: PreparationRef,
     sources: ParentSources,
     repositories: BTreeMap<RepositoryId, RepoPreparation>,
@@ -154,6 +158,7 @@ struct LiveRelease {
     gate: FreshGate,
     parent: VerifiedParent,
     acceptance: VerifiedAcceptance,
+    carried: Option<PublishedCarry>,
     eligibility: domain::VerifiedReleaseEligibility,
     preparation: Arc<tokio::sync::Mutex<Preparation>>,
     admissions: BTreeMap<String, DeliveryAdmission>,
@@ -1242,7 +1247,16 @@ impl RuntimeDelivery {
             .get(&parent.key.issue)
             .ok_or_else(|| Error::new("incompletely_observed", "release parent is unavailable"))?
             .comments;
-        for reference in [&record.parent_publication, &record.acceptance_publication] {
+        if record.attempt.plan.carried_acceptance.is_some() != record.carry_publication.is_some() {
+            return Err(Error::new(
+                "stale_result",
+                "release lost exact carried publication identity",
+            ));
+        }
+        for reference in [&record.parent_publication, &record.acceptance_publication]
+            .into_iter()
+            .chain(record.carry_publication.as_ref())
+        {
             if comments
                 .iter()
                 .filter(|c| {
@@ -1261,6 +1275,17 @@ impl RuntimeDelivery {
                     "accepted release publication was removed, edited or replaced",
                 ));
             }
+        }
+        if let Some(reference) = &record.carry_publication {
+            let comment = comments
+                .iter()
+                .find(|c| c.id == reference.id)
+                .ok_or_else(|| Error::new("stale_result", "carry publication disappeared"))?;
+            DeliveryCoordinator::verify_carried_publication_for_plan(
+                &comment.body,
+                &runtime.services.key,
+                &record.attempt.plan,
+            )?;
         }
         for comment in comments {
             if comment.id == record.acceptance_publication.id
@@ -1540,6 +1565,8 @@ impl RuntimeDelivery {
                 })
                 .collect();
             let pipeline = Arc::new(tokio::sync::Mutex::new(Preparation {
+                carry_phase: None,
+                carry: None,
                 reference,
                 sources,
                 repositories,
@@ -1570,6 +1597,13 @@ impl RuntimeDelivery {
         {
             let mut prepared = pipeline.lock().await;
             prepared.error = Some(error.clone());
+            if let Some(phase) = &prepared.carry_phase {
+                self.retire_delivery_phase(
+                    phase,
+                    json!({"carried_acceptance":"terminal_failure","error":error.code}),
+                )?;
+                prepared.carry_phase = None;
+            }
             for repo in prepared.repositories.values_mut() {
                 if let Some(phase) = &repo.phase {
                     self.retire_delivery_phase(
@@ -1589,6 +1623,11 @@ impl RuntimeDelivery {
         pipeline: Arc<tokio::sync::Mutex<Preparation>>,
     ) -> Result<()> {
         let mut prepared = pipeline.lock().await;
+        if prepared.carry_phase.is_some() || prepared.carry.is_some() {
+            return self
+                .progress_prepared_carry(lease, projection, &mut prepared)
+                .await;
+        }
         if prepared
             .repositories
             .values()
@@ -1844,7 +1883,8 @@ impl RuntimeDelivery {
             break; // One finite repository phase per fair driver cycle.
         }
         prepared.error = None;
-        Ok(())
+        self.progress_prepared_carry(lease, projection, &mut prepared)
+            .await
     }
     fn release_requirements(
         &self,
@@ -1976,6 +2016,7 @@ impl RuntimeDelivery {
         let Some(acceptance) = current.verified_acceptance().cloned() else {
             return Ok(());
         };
+        let carried = current.published_carry().cloned();
         let (selected_digest, selected_at) = sorted
             .acceptance_digest
             .as_deref()
@@ -2062,7 +2103,7 @@ impl RuntimeDelivery {
             workspace: selected,
             parent: &preparation.sources.parent,
             acceptance: &acceptance,
-            carried: None,
+            carried: carried.as_ref().map(PublishedCarry::verified),
             repositories: &repository_evidence,
             dependencies: self.release_requirements(parent)?,
         })?;
@@ -2116,7 +2157,7 @@ impl RuntimeDelivery {
         let evidence = || DeliveryEvidence {
             parent: &preparation.sources.parent,
             acceptance: &acceptance,
-            carried: None,
+            carried: carried.as_ref().map(PublishedCarry::verified),
             production: &production,
         };
         let facts = |snapshot: &ControlSnapshot| AdmissionFacts {
@@ -2207,6 +2248,13 @@ impl RuntimeDelivery {
                         selected_digest,
                         selected_at,
                     )?;
+                if let Some(carried) = &carried {
+                    let projection = self.runtime.observations.admission_snapshot()?;
+                    carried.verify_current_projection(
+                        &current_config,
+                        projection.parent(selected.id, gate.work().parent)?,
+                    )?;
+                }
                 if successor.is_some()
                     && self
                         .successor_intent(&plan, gate.work(), &acceptance)?
@@ -2241,6 +2289,18 @@ impl RuntimeDelivery {
                     workflow_digest: gate.workflow_digest().into(),
                     parent_publication: parent_publication.clone(),
                     acceptance_publication: acceptance_publication.clone(),
+                    carry_publication: carried
+                        .as_ref()
+                        .map(|proof| {
+                            proof
+                                .publication_reference()
+                                .map(|(id, body_digest, writer)| PublicationRef {
+                                    id,
+                                    body_digest,
+                                    writer,
+                                })
+                        })
+                        .transpose()?,
                     manual_intent: successor
                         .as_ref()
                         .map(|s| s.command())
@@ -2311,6 +2371,7 @@ impl RuntimeDelivery {
             gate,
             parent: preparation.sources.parent.clone(),
             acceptance,
+            carried,
             eligibility,
             preparation: prepared.clone(),
             admissions: BTreeMap::new(),
@@ -2394,6 +2455,8 @@ impl RuntimeDelivery {
         operation: Uuid,
         gate: FreshGate,
         permit: Permit,
+        carry: Option<PublishedCarry>,
+        admitted_configuration: Config,
     ) -> ReleaseStepCheck {
         let state = self.releases.state.clone();
         let runtime = self.runtime.clone();
@@ -2401,6 +2464,23 @@ impl RuntimeDelivery {
         Arc::new(move |plan, step| {
             runtime.registration.verify_active_owner(&permit.lease)?;
             authority(&gate)?;
+            if let Some(carry) = &carry {
+                // This is the actual LiveRelease workspace captured at admission,
+                // not a current configuration snapshot or an inferred revision.
+                if admitted_configuration.revision()? != gate.config_revision() {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "carried release lost its actual pinned admission configuration",
+                    ));
+                }
+                let active = ActiveParentGrantObserver::new(
+                    runtime.clone(),
+                    permit.clone(),
+                    gate.clone(),
+                    admitted_configuration.clone(),
+                )?;
+                carry.verify_active_projection(&active)?;
+            }
             let state = state.lock().map_err(|_| unavailable())?;
             let record = state
                 .attempts
@@ -2681,7 +2761,7 @@ impl RuntimeDelivery {
                 plan,
                 parent: &live.parent,
                 acceptance: &live.acceptance,
-                carried: None,
+                carried: live.carried.as_ref().map(PublishedCarry::verified),
                 evidence: repository.evidence,
                 observer: &workspace.observer,
                 verifier: &verifier,
@@ -2689,6 +2769,8 @@ impl RuntimeDelivery {
                     operation,
                     live.gate.clone(),
                     live.permit.clone(),
+                    live.carried.clone(),
+                    live.workspace.configuration.clone(),
                 ),
             })
             .await?;
@@ -3122,35 +3204,7 @@ fn reject_superseding_parent(
     comments: &[crate::providers::Comment],
     selected: &crate::providers::Comment,
 ) -> Result<()> {
-    let (_, expected) = DeliveryCoordinator::decode_parent_publication(&selected.body, key)?;
-    let selected_time = selected.created_at.ok_or_else(|| {
-        Error::new(
-            "incompletely_observed",
-            "parent publication timestamp is unavailable",
-        )
-    })?;
-    for other in comments {
-        if other.id == selected.id
-            || other.bot
-            || other.delegated
-            || other.user_id != selected.user_id
-            || other.issue_id != selected.issue_id
-        {
-            continue;
-        }
-        if let Ok((observed_runtime, evidence)) =
-            DeliveryCoordinator::decode_parent_publication(&other.body, key)
-            && observed_runtime == runtime
-            && evidence.work == expected.work
-            && other.created_at.is_none_or(|time| time >= selected_time)
-        {
-            return Err(Error::new(
-                "stale_result",
-                "a newer or ambiguous parent result supersedes the selected publication",
-            ));
-        }
-    }
-    Ok(())
+    DeliveryCoordinator::reject_superseding_parent_publication(key, runtime, comments, selected)
 }
 
 #[cfg(test)]
@@ -3205,6 +3259,7 @@ mod tests {
             workflow_digest: canonical_digest(1, &json!("fixture workflow")).unwrap(),
             parent_publication: reference.clone(),
             acceptance_publication: reference,
+            carry_publication: None,
             manual_intent: None,
             manual_actor: None,
             manual_role: None,
@@ -3652,3 +3707,6 @@ pub(crate) use lineage::{
 #[cfg(test)]
 #[path = "runtime_delivery_successor_fixture.rs"]
 mod successor_fixture;
+
+#[path = "runtime_delivery_carry.rs"]
+mod carry;

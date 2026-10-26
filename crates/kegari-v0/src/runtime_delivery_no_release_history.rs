@@ -33,6 +33,7 @@ pub(super) struct NoReleaseSealInput<'a> {
     pub gate: &'a FreshGate,
     pub parent: &'a VerifiedParent,
     pub acceptance: &'a VerifiedAcceptance,
+    pub carry: Option<&'a crate::delivery::PublishedCarry>,
     pub intent: &'a NoReleaseIntent,
     pub proof: &'a VerifiedNoReleaseRequired,
     pub observed: &'a [VerifiedProductionBaseline],
@@ -354,6 +355,8 @@ struct NoReleaseCompletionRecord {
     metadata: Vec<MetadataAttemptRef>,
     publication: PublicationIdentity,
     origin: AcceptedOriginRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    carried: Option<crate::delivery::CarriedNoReleaseOrigin>,
     binding: DependencyBinding,
     sources: Vec<ObservedSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -730,18 +733,35 @@ impl VerifiedNoReleaseCompletion {
         self.validate_metadata(intent)?;
         // The opaque helper validates exact native publication receipt and
         // workspace-vector refs. It opens existing namespaces; no provider read.
-        record.origin.validate_retained(
-            &self.services.records,
-            &self.services.control,
-            &self.services.key,
-            AcceptedOriginIdentity {
-                runtime: record.runtime,
-                workspace: record.workspace,
-                work: &record.work,
-                token: &record.evidence_token,
-                acceptance_digest: &record.acceptance_digest,
-            },
-        )?;
+        match (&record.carried, &intent.carried) {
+            (None, None) => record.origin.validate_retained(
+                &self.services.records,
+                &self.services.control,
+                &self.services.key,
+                AcceptedOriginIdentity {
+                    runtime: record.runtime,
+                    workspace: record.workspace,
+                    work: &record.work,
+                    token: &record.evidence_token,
+                    acceptance_digest: &record.acceptance_digest,
+                },
+            )?,
+            (Some(carried), Some(binding)) if binding.matches_origin(carried) => {
+                carried.validate_retained(
+                    &self.services.records,
+                    &self.services.control,
+                    &self.services.key,
+                    outcome,
+                    record.workspace,
+                    &record.origin,
+                )?;
+            }
+            _ => {
+                return Err(invalid(
+                    "no-release completion lost exact carried acceptance origin",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -1184,18 +1204,31 @@ impl RuntimeDelivery {
             input.gate,
             input.parent,
             input.acceptance,
+            input.carry,
         )?;
-        let origin = input
-            .workspace
-            .coordinator
-            .accepted_origin_references(
-                input.gate,
-                input.parent,
-                input.acceptance,
-                input.intent.parent_publication.id,
-                input.intent.acceptance_publication.id,
-            )
-            .await?;
+        let (origin, carried, origin_observed_at) = match input.carry {
+            Some(carry) => {
+                let (origin, carried) = carry.no_release_origin(
+                    &input.workspace.configuration,
+                    &input.intent.record.payload,
+                )?;
+                (origin, Some(carried), None)
+            }
+            None => {
+                let origin = input
+                    .workspace
+                    .coordinator
+                    .accepted_origin_references(
+                        input.gate,
+                        input.parent,
+                        input.acceptance,
+                        input.intent.parent_publication.id,
+                        input.intent.acceptance_publication.id,
+                    )
+                    .await?;
+                (origin.reference().clone(), None, Some(origin.observed_at()))
+            }
+        };
         let broker =
             self.provider_broker(&input.workspace.configuration, input.gate.workspace_id())?;
         let linear = broker.linear.as_ref().ok_or_else(|| {
@@ -1267,7 +1300,8 @@ impl RuntimeDelivery {
                 body_digest: comment.body_digest.clone(),
                 url: (!comment.url.is_empty()).then(|| comment.url.clone()),
             },
-            origin: origin.reference().clone(),
+            origin,
+            carried,
             binding,
             sources: observation.sources,
             owned_targets: observation.owned_targets,
@@ -1288,7 +1322,7 @@ impl RuntimeDelivery {
             let now = Utc::now();
             if self.runtime.configuration.snapshot()?.revision()? != prepared.config_revision
                 || now - observation.observed_at > Duration::seconds(30)
-                || now - origin.observed_at() > Duration::seconds(30)
+                || origin_observed_at.is_some_and(|observed| now - observed > Duration::seconds(30))
                 || now - prepared.sealed_at > Duration::seconds(30)
             {
                 return Err(invalid(
@@ -1305,6 +1339,7 @@ impl RuntimeDelivery {
                 input.gate,
                 input.parent,
                 input.acceptance,
+                input.carry,
             )?;
             let work = input.gate.work_key()?;
             if snapshot.unresolved_operations.values().any(|targets| {

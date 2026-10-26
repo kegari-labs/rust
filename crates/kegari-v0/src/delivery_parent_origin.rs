@@ -60,9 +60,66 @@ impl VerifiedAcceptedOriginRefs {
 }
 
 impl AcceptedOriginRef {
+    pub(super) fn retain_carry_references(
+        &self,
+        records: &PrivateDir,
+        control: &ControlHost,
+        key: &AttestationKey,
+    ) -> Result<super::CarryReferences> {
+        let mut result = super::CarryReferences::default();
+        result.retain_file(
+            super::CarryNamespace::Workspace {
+                workspace: self.workspace,
+            },
+            records,
+            &self.vector_leaf,
+            "parent_candidate_vector",
+            key,
+        )?;
+        result.retain_receipt(&control.operation(self.parent.receipt)?)?;
+        result.retain_receipt(&control.operation(self.acceptance.receipt)?)?;
+        Ok(result)
+    }
+    pub(crate) fn publication_receipts(&self) -> [crate::control::ReviewReceiptReference; 2] {
+        [&self.parent, &self.acceptance].map(|r| crate::control::ReviewReceiptReference {
+            operation: r.receipt,
+            receipt_digest: r.receipt_digest.clone(),
+        })
+    }
+    pub(crate) fn publication_ids(&self) -> (Uuid, Uuid) {
+        (self.parent.comment, self.acceptance.comment)
+    }
     pub(crate) fn validate_retained(
         &self,
         root: &PrivateDir,
+        control: &ControlHost,
+        key: &AttestationKey,
+        identity: AcceptedOriginIdentity<'_>,
+    ) -> Result<()> {
+        let AcceptedOriginIdentity {
+            runtime,
+            workspace,
+            work,
+            token,
+            acceptance_digest,
+        } = identity;
+        let records = PrivateDir::open(&root.path().join(workspace.to_string()))?;
+        self.validate_retained_workspace(
+            &records,
+            control,
+            key,
+            AcceptedOriginIdentity {
+                runtime,
+                workspace,
+                work,
+                token,
+                acceptance_digest,
+            },
+        )
+    }
+    pub(crate) fn validate_retained_workspace(
+        &self,
+        records: &PrivateDir,
         control: &ControlHost,
         key: &AttestationKey,
         identity: AcceptedOriginIdentity<'_>,
@@ -124,7 +181,6 @@ impl AcceptedOriginRef {
             ));
         }
         // Read existing namespace only. A root shadow cannot replace this file.
-        let records = PrivateDir::open(&root.path().join(workspace.to_string()))?;
         let vector: Signed<VectorRecord> = records.read(&self.vector_leaf)?;
         key.verify("parent_candidate_vector", &vector)?;
         let value = &vector.payload;
@@ -167,6 +223,43 @@ impl DeliveryCoordinator {
         parent_comment: Uuid,
         acceptance_comment: Uuid,
     ) -> Result<VerifiedAcceptedOriginRefs> {
+        self.accepted_origin_references_inner(
+            gate,
+            parent,
+            acceptance,
+            parent_comment,
+            acceptance_comment,
+            true,
+        )
+        .await
+    }
+    pub(crate) async fn accepted_carry_origin_references(
+        &self,
+        gate: &FreshGate,
+        parent: &VerifiedParent,
+        acceptance: &VerifiedAcceptance,
+        parent_comment: Uuid,
+        acceptance_comment: Uuid,
+    ) -> Result<VerifiedAcceptedOriginRefs> {
+        self.accepted_origin_references_inner(
+            gate,
+            parent,
+            acceptance,
+            parent_comment,
+            acceptance_comment,
+            false,
+        )
+        .await
+    }
+    async fn accepted_origin_references_inner(
+        &self,
+        gate: &FreshGate,
+        parent: &VerifiedParent,
+        acceptance: &VerifiedAcceptance,
+        parent_comment: Uuid,
+        acceptance_comment: Uuid,
+        require_unchanged_production: bool,
+    ) -> Result<VerifiedAcceptedOriginRefs> {
         (self.current_gate)(gate)?;
         let manifest = parent.manifest();
         let accepted = acceptance.acceptance();
@@ -179,9 +272,10 @@ impl DeliveryCoordinator {
                 .baselines
                 .iter()
                 .any(|b| b.successor_recovery_operation.is_some())
-            || manifest.candidates.iter().any(|c| {
-                !c.ordered_delta_digests.is_empty() || c.result.as_ref() != Some(&c.production)
-            })
+            || (require_unchanged_production
+                && manifest.candidates.iter().any(|c| {
+                    !c.ordered_delta_digests.is_empty() || c.result.as_ref() != Some(&c.production)
+                }))
         {
             return Err(origin_error(
                 "accepted origin is not exact unchanged ordinary production work",

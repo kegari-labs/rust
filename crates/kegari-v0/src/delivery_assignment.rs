@@ -88,6 +88,7 @@ pub struct DeliveryWorkerAssignment {
     read_sources: Vec<DeliverySource>,
     candidate_vector_digest: Option<String>,
     contract_digest: String,
+    parent_reassembly: Option<Arc<ParentReassemblyWork>>,
 }
 impl DeliveryWorkerAssignment {
     pub fn authority(&self) -> &FreshGate {
@@ -114,7 +115,34 @@ impl DeliveryWorkerAssignment {
     pub fn contract_digest(&self) -> &str {
         &self.contract_digest
     }
+    pub(crate) fn parent_reassembly(&self) -> Option<&ParentReassemblyWork> {
+        self.parent_reassembly.as_deref()
+    }
+    pub(crate) fn with_parent_reassembly(
+        mut self,
+        proof: Arc<ParentReassemblyWork>,
+    ) -> Result<Self> {
+        if self.parent_reassembly.is_some() {
+            return Err(Error::new(
+                "worker_binding",
+                "parent assignment already has a cause",
+            ));
+        }
+        proof.verify_assignment(&self)?;
+        self.parent_reassembly = Some(proof);
+        Ok(self)
+    }
     pub fn digest(&self) -> Result<String> {
+        let base = self.base_digest()?;
+        match &self.parent_reassembly {
+            Some(proof) => canonical_digest(
+                1,
+                &json!({"assignment":base,"parent_reassembly":proof.reference().digest()?}),
+            ),
+            None => Ok(base),
+        }
+    }
+    pub(crate) fn base_digest(&self) -> Result<String> {
         canonical_digest(
             1,
             &json!({"authority":self.authority.digest()?,"phase":self.phase,"role":self.role,"context":self.context,
@@ -298,6 +326,7 @@ pub fn repair_worker_assignment(
         read_sources: vec![],
         candidate_vector_digest: None,
         contract_digest: unfinished.contract_digest().into(),
+        parent_reassembly: None,
     })
 }
 pub fn retried_repair_worker_assignment(
@@ -341,6 +370,7 @@ impl DeliveryCoordinator {
             read_sources: vec![],
             candidate_vector_digest: None,
             contract_digest: admission.scope.contract_digest.clone(),
+            parent_reassembly: None,
         })
     }
     pub fn child_review_worker_assignment(
@@ -365,6 +395,7 @@ impl DeliveryCoordinator {
             read_sources: vec![],
             candidate_vector_digest: None,
             contract_digest: admission.scope.contract_digest.clone(),
+            parent_reassembly: None,
         })
     }
     pub fn parent_review_worker_assignment(
@@ -383,6 +414,7 @@ impl DeliveryCoordinator {
             read_sources: vec![],
             candidate_vector_digest: Some(assignment.vector_digest().into()),
             contract_digest: contract.digest()?,
+            parent_reassembly: None,
         })
     }
     pub async fn integrated_worker_assignment(
@@ -474,6 +506,7 @@ impl DeliveryCoordinator {
             read_sources: sources.into_values().collect(),
             candidate_vector_digest: Some(vector.digest().into()),
             contract_digest: contract.digest()?,
+            parent_reassembly: None,
         })
     }
 }

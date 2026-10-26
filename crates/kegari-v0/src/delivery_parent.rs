@@ -2,6 +2,7 @@
 //! This is a child module of delivery; no public JSON value can construct these
 //! capabilities. Provider baselines and execution results are independently sealed.
 use super::*;
+use crate::config::Config;
 use crate::deployment::{ProductionObserver, VerifiedProductionBaseline};
 use crate::evidence::{IntegratedRun, ProductionBaseline, ProductionTargetBaseline};
 use crate::execution::{ArtifactProof, CheckExecutionRecord};
@@ -1030,6 +1031,38 @@ impl DeliveryCoordinator {
         admission: &DeliveryAdmission,
         input: ParentPublicationInputs<'_>,
     ) -> Result<PublishedParent> {
+        self.publish_parent_result_inner(admission, input, None)
+            .await
+    }
+    pub(crate) async fn publish_reassembled_parent_result(
+        &self,
+        admission: &DeliveryAdmission,
+        input: ParentPublicationInputs<'_>,
+        source: &ParentReassemblySource,
+        configuration: &Config,
+    ) -> Result<PublishedParent> {
+        source.refresh_current(configuration).await?;
+        if source.vector().digest() != input.assignment.vector.digest()
+            || source.original().parent().manifest().work != *input.contract.work()
+        {
+            return Err(Error::new(
+                "acceptance_carry",
+                "reassembled publication differs from original exact parent source",
+            ));
+        }
+        self.publish_parent_result_inner(
+            admission,
+            input,
+            Some(source.previous_parent().verified().token().to_owned()),
+        )
+        .await
+    }
+    async fn publish_parent_result_inner(
+        &self,
+        admission: &DeliveryAdmission,
+        input: ParentPublicationInputs<'_>,
+        supersedes: Option<String>,
+    ) -> Result<PublishedParent> {
         let contract = input.contract;
         let assignment = input.assignment;
         self.current(admission, &[DeliveryPhase::ParentEvidence])?;
@@ -1167,7 +1200,7 @@ impl DeliveryCoordinator {
             video: input.video.map(|v| v.evidence.clone()),
             publication_operation: admission.operation_id(),
             created_at: self.operation_time(admission, "parent-result")?,
-            supersedes: None,
+            supersedes,
         };
         let signed = self.key.sign(
             "parent_result",
@@ -1405,6 +1438,11 @@ impl VerifiedDeliverySnapshot {
         eligibility: crate::release::VerifiedReleaseEligibility,
     ) -> Result<()> {
         self.delivery.release(eligibility)
+    }
+    pub(crate) fn carried_acceptance(&mut self, carry: PublishedCarry) -> Result<()> {
+        self.delivery.carried_acceptance(carry)?;
+        self.no_release_link = None;
+        Ok(())
     }
     pub fn acceptance(&mut self, acceptance: evidence::VerifiedAcceptance) -> Result<()> {
         self.delivery.acceptance(acceptance)?;
@@ -1848,3 +1886,64 @@ pub use history::{HistoricalReleaseParent, RecoveredReleaseParent, VerifiedRelea
 #[path = "delivery_parent_origin.rs"]
 mod accepted_origin;
 pub(crate) use accepted_origin::{AcceptedOriginIdentity, AcceptedOriginRef};
+
+#[path = "delivery_parent_reassembly.rs"]
+mod reassembly;
+pub(crate) use reassembly::{
+    AcceptedParentOrigin, ParentReassemblyPredecessor, ParentReassemblySource,
+    ParentReassemblySourceOrigin, ParentReassemblyWork,
+};
+
+#[path = "delivery_completed_carry.rs"]
+mod completed_carry;
+pub(crate) use completed_carry::CompletedCarryObjects;
+
+#[path = "delivery_carry_history.rs"]
+mod carry_history;
+pub(crate) use carry_history::{CarryNamespace, CarryReferences};
+
+#[path = "delivery_carried_acceptance.rs"]
+mod carried_acceptance;
+pub(crate) use carried_acceptance::{
+    CarriedNoReleaseOrigin, CarriedOriginRef, CompletedParentReassemblyPhases, PublishedCarry,
+    ReassembledParent,
+};
+
+impl DeliveryCoordinator {
+    pub(crate) fn reject_superseding_parent_publication(
+        key: &evidence::AttestationKey,
+        runtime: Uuid,
+        comments: &[crate::providers::Comment],
+        selected: &crate::providers::Comment,
+    ) -> Result<()> {
+        let (_, expected) = DeliveryCoordinator::decode_parent_publication(&selected.body, key)?;
+        let selected_time = selected.created_at.ok_or_else(|| {
+            Error::new(
+                "incompletely_observed",
+                "parent publication timestamp is unavailable",
+            )
+        })?;
+        for other in comments {
+            if other.id == selected.id
+                || other.bot
+                || other.delegated
+                || other.user_id != selected.user_id
+                || other.issue_id != selected.issue_id
+            {
+                continue;
+            }
+            if let Ok((observed_runtime, evidence)) =
+                DeliveryCoordinator::decode_parent_publication(&other.body, key)
+                && observed_runtime == runtime
+                && evidence.work == expected.work
+                && other.created_at.is_none_or(|time| time >= selected_time)
+            {
+                return Err(Error::new(
+                    "stale_result",
+                    "a newer or ambiguous parent result supersedes the selected publication",
+                ));
+            }
+        }
+        Ok(())
+    }
+}

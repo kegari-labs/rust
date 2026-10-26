@@ -429,7 +429,7 @@ impl HostDispatcher {
                         })
                         .unwrap_or_default();
                     json!({"parent":parent,"inspection_identity":{"workspace":selected.workspace,"parent":key,"parent_reference":selected.reference()},"children_evidence":children,"evidence_manifest":evidence.map(|p|p.manifest()),
-                        "evidence_token":evidence.map(|p|p.token()),"acceptance":proof.and_then(ParentDelivery::verified_acceptance).map(|a|a.acceptance()),
+                        "evidence_token":evidence.map(|p|p.token()),"acceptance":proof.and_then(ParentDelivery::verified_acceptance).map(|a|a.acceptance()),"carried_acceptance":proof.and_then(ParentDelivery::carried_acceptance_record),
                         "release":view.release_details.get(&(selected.workspace,key.clone())),"release_history":releases,"no_release_history":no_release,"history":crate::inspection::history_for_parent(&view.history,selected.workspace,key)})
                 };
                 self.result(

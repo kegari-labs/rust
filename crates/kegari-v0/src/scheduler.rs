@@ -15,6 +15,7 @@ pub enum Trigger {
     ScheduledRetry,
     VerifiedUnfinished,
     VerifiedSourceAdvanced,
+    VerifiedParentReassembly,
     OperatorRetry,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -600,7 +600,7 @@ impl RuntimeDelivery {
         self.admit_delivery_phase_checked(workspace, gate, lease, request, None)
             .await
     }
-    async fn admit_delivery_phase_checked(
+    pub(super) async fn admit_delivery_phase_checked(
         &self,
         workspace: &WorkspaceDelivery,
         gate: &FreshGate,
@@ -1268,6 +1268,8 @@ impl RuntimeDelivery {
             round.subject_phase().clone()
         } else if let Some(proof) = &source_advanced {
             proof.phase().clone()
+        } else if let Some(proof) = assignment.parent_reassembly() {
+            proof.phase().clone()
         } else {
             PhaseKey {
                 work: assignment.authority().work_key()?,
@@ -1298,7 +1300,13 @@ impl RuntimeDelivery {
             max_seconds: 3600,
             max_turns: config.runtime.max_turns,
         };
-        let schedule = if request.review_round.is_some() {
+        let schedule = if request
+            .delivery
+            .as_ref()
+            .is_some_and(|assignment| assignment.parent_reassembly().is_some())
+        {
+            self.runtime.next_attempt_for_parent_reassembly(&request)?
+        } else if request.review_round.is_some() {
             self.runtime.next_attempt_for_review_round(&request)?
         } else if let Some(proof) = &request.source_advanced {
             proof.verify_assignment(request.delivery.as_ref().unwrap())?;

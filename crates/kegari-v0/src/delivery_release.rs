@@ -3369,3 +3369,7 @@ pub(super) mod tests;
 #[path = "delivery_release_history.rs"]
 mod history;
 pub use history::MergedProductionRecovery;
+
+#[path = "delivery_production_carry.rs"]
+mod carry_production;
+pub(crate) use carry_production::CarryProduction;

@@ -3285,14 +3285,35 @@ async fn original_release_reader_requires_actual_native_publications_and_immutab
             || Ok(()),
         )
         .unwrap();
+    let receipts_before = canonical_digest(1, &f.host.operations().unwrap()).unwrap();
+    let records_before = crate::evaluation::tree_digest(f.coordinator.records.path()).unwrap();
+    let requests_before = f.wire.lock().unwrap().requests.len();
+    let error = f
+        .coordinator
+        .release_origin(&plan, ids[0], ids[1])
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "acceptance_carry");
     assert_eq!(
-        f.coordinator
-            .release_origin(&plan, ids[0], ids[1])
-            .await
-            .unwrap_err()
-            .code,
-        "candidate_provenance",
-        "carried-acceptance history remains an explicit unsupported prerequisite, never silently direct acceptance"
+        error.message, "carry history namespace is not its actual workspace",
+        "a synthetic carried plan cannot substitute an actual workspace-bound saved carry"
+    );
+    assert_eq!(
+        canonical_digest(1, &f.host.operations().unwrap()).unwrap(),
+        receipts_before
+    );
+    assert_eq!(
+        crate::evaluation::tree_digest(f.coordinator.records.path()).unwrap(),
+        records_before
+    );
+    assert!(
+        f.wire.lock().unwrap().requests[requests_before..]
+            .iter()
+            .all(|(_, body)| body.is_null()
+                || body["query"]
+                    .as_str()
+                    .is_some_and(|query| query.starts_with("query "))),
+        "historical refusal may read native facts but must not send a mutation"
     );
 }
 

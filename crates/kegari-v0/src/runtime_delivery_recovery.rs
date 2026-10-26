@@ -248,6 +248,18 @@ impl RuntimeDelivery {
                 acceptance.acceptance().accepted_at,
             )?;
         }
+        let carried = current.published_carry().cloned();
+        if original.attempt.plan.carried_acceptance.as_ref()
+            != carried.as_ref().map(|c| c.verified().record())
+        {
+            return Err(Error::new(
+                "acceptance_carry_recovery",
+                "carried release continuation requires its actual retained current carry; historical records do not mint current acceptance",
+            ));
+        }
+        if let Some(carry) = &carried {
+            carry.verify_current_projection(&workspace.configuration, parent)?;
+        }
         let prepared = self
             .recover_resume_preparation(
                 &original,
@@ -271,7 +283,7 @@ impl RuntimeDelivery {
             workspace: selected,
             parent: &verified_parent,
             acceptance: &acceptance,
-            carried: None,
+            carried: carried.as_ref().map(PublishedCarry::verified),
             repositories: &repositories,
             dependencies: self.release_requirements(parent)?,
         })?;
@@ -301,7 +313,7 @@ impl RuntimeDelivery {
         let evidence = || DeliveryEvidence {
             parent: &verified_parent,
             acceptance: &acceptance,
-            carried: None,
+            carried: carried.as_ref().map(PublishedCarry::verified),
             production: &production,
         };
         let facts = |snapshot: &ControlSnapshot| AdmissionFacts {
@@ -446,6 +458,7 @@ impl RuntimeDelivery {
                     gate,
                     parent: verified_parent,
                     acceptance,
+                    carried,
                     eligibility,
                     preparation: prepared,
                     admissions: BTreeMap::new(),
@@ -530,6 +543,8 @@ impl RuntimeDelivery {
                 })
                 .collect();
             let prepared = Arc::new(tokio::sync::Mutex::new(Preparation {
+                carry_phase: None,
+                carry: None,
                 reference,
                 sources,
                 repositories,

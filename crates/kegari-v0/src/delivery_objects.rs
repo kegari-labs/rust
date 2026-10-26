@@ -60,6 +60,18 @@ impl DeliveryCoordinator {
         executions: Arc<crate::worker::ExecutionRegistry>,
         predecessor: Option<Arc<crate::runtime_delivery::KnownPredecessorBaseline>>,
     ) -> Result<ObjectAcquisition> {
+        let extra: Option<GateCheck> = predecessor.map(|predecessor| {
+            Arc::new(move |gate: &FreshGate| predecessor.require_historical_gate(gate)) as GateCheck
+        });
+        self.object_acquisition_with_gate(admission, processes, executions, extra)
+    }
+    pub(super) fn object_acquisition_with_gate(
+        &self,
+        admission: &DeliveryAdmission,
+        processes: Arc<crate::process_records::ProcessJournal>,
+        executions: Arc<crate::worker::ExecutionRegistry>,
+        extra: Option<GateCheck>,
+    ) -> Result<ObjectAcquisition> {
         self.current(admission, &[admission.scope.phase])?;
         let expected = admission.clone();
         let gate = self.current_gate.clone();
@@ -85,11 +97,8 @@ impl DeliveryCoordinator {
                     ));
                 }
                 gate(&expected.gate)?;
-                if let Some(predecessor) = &predecessor {
-                    // Historical lineage remains immutable during this finite
-                    // read. `gate` above checks actual current authority; the
-                    // importer rereads exact PR/main identities around Git I/O.
-                    predecessor.require_historical_gate(&expected.gate)?;
+                if let Some(extra) = &extra {
+                    extra(&expected.gate)?;
                 }
                 Ok(())
             }),

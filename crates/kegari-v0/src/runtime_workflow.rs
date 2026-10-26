@@ -285,6 +285,64 @@ pub(crate) fn current_retry_grants(
         key,
     )
 }
+/// Observe exact native grants for a retained parent/worker identity. This is
+/// a data reader, not an admission gate: the active adapter must first verify
+/// its actual owner/permit, pinned configuration and registered active snapshot.
+/// In particular, this never substitutes a current projection for retained work.
+pub(crate) fn retained_parent_retry_grants(
+    config: &crate::config::Config,
+    parent: &crate::reconcile::ParentProjection,
+    work: &WorkIdentity,
+    receipts: &[Receipt],
+    key: &AttestationKey,
+) -> Result<Vec<VerifiedRetryGrant>> {
+    let configured = config
+        .workspaces
+        .values()
+        .find(|workspace| workspace.id == parent.workspace_id)
+        .ok_or_else(|| Error::new("stale_config", "retained retry workspace is absent"))?;
+    let connection = config
+        .connections
+        .get(&configured.linear_connection)
+        .ok_or_else(|| Error::new("stale_config", "retained retry connection is absent"))?;
+    let endpoint = connection
+        .endpoint
+        .as_deref()
+        .ok_or_else(|| Error::new("identity_mismatch", "retained retry endpoint is absent"))?;
+    let key_parent = IssueKey::new(endpoint, configured.linear_workspace_id, work.parent)?;
+    let selected = match work.child {
+        Some(child) => parent
+            .children
+            .get(&child)
+            .and_then(|child| child.work.as_ref()),
+        None => parent.work.as_ref(),
+    };
+    if connection.kind != crate::config::ProviderKind::Linear
+        || parent.key != key_parent
+        || work.linear_endpoint != key_parent.endpoint
+        || work.linear_workspace != key_parent.workspace
+        || selected != Some(work)
+    {
+        return Err(Error::new(
+            "identity_mismatch",
+            "retained retry observation does not bind the exact admitted work",
+        ));
+    }
+    let observed = parent
+        .observations
+        .get(&work.child.unwrap_or(work.parent))
+        .ok_or_else(|| Error::new("incomplete_snapshot", "retained retry comments are absent"))?;
+    recover_retry_comments(
+        config.runtime.id,
+        parent.workspace_id,
+        &connection.account_id,
+        work,
+        &observed.comments,
+        receipts,
+        key,
+    )
+}
+
 fn recover_retry_comments(
     runtime: Uuid,
     workspace: Uuid,

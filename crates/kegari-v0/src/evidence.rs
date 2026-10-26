@@ -1996,6 +1996,57 @@ pub fn carry_acceptance(
     production_validation: &[VerifiedProduction],
     now: DateTime<Utc>,
 ) -> Result<VerifiedCarry> {
+    known_released_baseline_proof.validate()?;
+    // Preserve semantic diagnostics, but a public artifact URL/hash is not an
+    // authenticated released-baseline chain and can never mint this capability.
+    let _ = validate_carry_acceptance(
+        original,
+        newer,
+        acceptance,
+        &known_released_baseline_proof.digest,
+        production_validation,
+        now,
+    )?;
+    Err(Error::new(
+        "acceptance_carry_baseline",
+        "carry requires an actual authenticated released-baseline transition",
+    ))
+}
+
+pub(crate) fn carry_verified_acceptance(
+    original: &VerifiedParent,
+    newer: &VerifiedParent,
+    acceptance: &VerifiedAcceptance,
+    baseline: &crate::runtime_delivery::VerifiedBaselineTransition,
+    configuration: &crate::config::Config,
+    production_validation: &[VerifiedProduction],
+    now: DateTime<Utc>,
+) -> Result<VerifiedCarry> {
+    baseline.revalidate(configuration)?;
+    if !baseline.binds_current_parent(original, newer) {
+        return Err(Error::new(
+            "acceptance_carry_baseline",
+            "carry transition does not bind original and current complete evidence",
+        ));
+    }
+    validate_carry_acceptance(
+        original,
+        newer,
+        acceptance,
+        baseline.digest(),
+        production_validation,
+        now,
+    )
+}
+
+fn validate_carry_acceptance(
+    original: &VerifiedParent,
+    newer: &VerifiedParent,
+    acceptance: &VerifiedAcceptance,
+    known_released_baseline_proof: &str,
+    production_validation: &[VerifiedProduction],
+    now: DateTime<Utc>,
+) -> Result<VerifiedCarry> {
     if acceptance.acceptance.reviewed_token != original.token
         || acceptance.acceptance.work != original.manifest.work
         || original.manifest.work != newer.manifest.work
@@ -2013,7 +2064,7 @@ pub fn carry_acceptance(
             "changed intent/scope/children/dependencies need fresh human acceptance",
         ));
     }
-    known_released_baseline_proof.validate()?;
+    validate_digest(known_released_baseline_proof)?;
     let old: Vec<_> = original
         .manifest
         .candidates
@@ -2044,10 +2095,24 @@ pub fn carry_acceptance(
             "ordered exact selected patches changed or are absent",
         ));
     }
+    if production_validation.len() != newer.manifest.candidates.len()
+        || production_validation
+            .iter()
+            .map(|proof| &proof.revision.repository)
+            .collect::<BTreeSet<_>>()
+            != newer
+                .manifest
+                .candidates
+                .iter()
+                .map(|candidate| &candidate.repository)
+                .collect::<BTreeSet<_>>()
+    {
+        return Err(Error::new(
+            "production_validation",
+            "carry requires exactly one full production proof per selected repository",
+        ));
+    }
     for candidate in &newer.manifest.candidates {
-        if candidate.ordered_delta_digests.is_empty() {
-            continue;
-        }
         let result = candidate.result.as_ref().ok_or_else(|| {
             Error::new(
                 "candidate_provenance",
@@ -2060,9 +2125,11 @@ pub fn carry_acceptance(
                 && r.revision.head == result.commit
                 && r.revision.base == candidate.production.commit
                 && r.revision.tested_tree == result.tree
-                && r.checks
-                    .iter()
-                    .all(|run| run.completed_at.is_some_and(|t| t <= now))
+                && !r.checks.is_empty()
+                && r.checks.iter().all(|run| {
+                    run.completed_at
+                        .is_some_and(|t| t >= newer.manifest.created_at && t <= now)
+                })
         }) {
             return Err(Error::new(
                 "production_validation",
@@ -2138,13 +2205,39 @@ impl VerifiedNoReleaseRequired {
     }
 }
 
+/// Current semantic authority; the runtime additionally requires the actual
+/// published carry capability and its current native/owned reference checks.
+pub(crate) struct NoReleaseAcceptance<'a> {
+    pub acceptance: &'a VerifiedAcceptance,
+    pub carry: Option<&'a VerifiedCarry>,
+}
+
+fn no_release_acceptance_matches(
+    current_token: &str,
+    reviewed_token: &str,
+    acceptance_digest: &str,
+    carry: Option<&CarriedAcceptance>,
+) -> bool {
+    match carry {
+        None => reviewed_token == current_token,
+        Some(carry) => {
+            carry.schema_version == 1
+                && reviewed_token != current_token
+                && carry.original_reviewed_token == reviewed_token
+                && carry.original_acceptance_digest == acceptance_digest
+                && carry.current_evidence_token == current_token
+        }
+    }
+}
+
 fn validate_no_release_required(
     record: &NoReleaseRequired,
     parent: &VerifiedParent,
-    acceptance: &VerifiedAcceptance,
+    authority: NoReleaseAcceptance<'_>,
     requirements: NoReleaseRequirements<'_>,
 ) -> Result<()> {
     let p = parent.manifest();
+    let acceptance = authority.acceptance;
     if record.schema_version != 1
         || record.runtime_id.is_nil()
         || record.operation_id.is_nil()
@@ -2153,10 +2246,18 @@ fn validate_no_release_required(
         || requirements.pending_correction
         || record.evidence_token != parent.token()
         || record.acceptance_digest != acceptance.digest()
-        || acceptance.acceptance().reviewed_token != parent.token()
+        || !no_release_acceptance_matches(
+            parent.token(),
+            &acceptance.acceptance().reviewed_token,
+            acceptance.digest(),
+            authority.carry.map(VerifiedCarry::record),
+        )
         || acceptance.acceptance().work != p.work
         || record.baselines != p.baselines
         || record.recorded_at < p.created_at
+        || authority
+            .carry
+            .is_some_and(|carry| record.recorded_at < carry.record().created_at)
         || p.candidates.iter().any(|c| {
             !c.ordered_delta_digests.is_empty() || c.result.as_ref() != Some(&c.production)
         })
@@ -2169,7 +2270,7 @@ fn validate_no_release_required(
     {
         return Err(Error::new(
             "no_release_gate",
-            "no-release-required needs the current integrated outcome and its exact human acceptance with no selected change",
+            "no-release-required needs the current integrated outcome and its exact human acceptance or published carry with no selected change",
         ));
     }
     let mut seen = BTreeSet::new();
@@ -2230,7 +2331,25 @@ pub fn prepare_no_release_required(
     requirements: NoReleaseRequirements<'_>,
     key: &AttestationKey,
 ) -> Result<Signed<NoReleaseRequired>> {
-    validate_no_release_required(&record, parent, acceptance, requirements)?;
+    prepare_no_release_required_with_acceptance(
+        record,
+        parent,
+        NoReleaseAcceptance {
+            acceptance,
+            carry: None,
+        },
+        requirements,
+        key,
+    )
+}
+pub(crate) fn prepare_no_release_required_with_acceptance(
+    record: NoReleaseRequired,
+    parent: &VerifiedParent,
+    authority: NoReleaseAcceptance<'_>,
+    requirements: NoReleaseRequirements<'_>,
+    key: &AttestationKey,
+) -> Result<Signed<NoReleaseRequired>> {
+    validate_no_release_required(&record, parent, authority, requirements)?;
     key.sign("no_release_required", &record)
 }
 
@@ -2243,8 +2362,30 @@ pub fn verify_no_release_required(
     writer: &str,
     key: &AttestationKey,
 ) -> Result<VerifiedNoReleaseRequired> {
+    verify_no_release_required_with_acceptance(
+        signed,
+        parent,
+        NoReleaseAcceptance {
+            acceptance,
+            carry: None,
+        },
+        requirements,
+        publication,
+        writer,
+        key,
+    )
+}
+pub(crate) fn verify_no_release_required_with_acceptance(
+    signed: &Signed<NoReleaseRequired>,
+    parent: &VerifiedParent,
+    authority: NoReleaseAcceptance<'_>,
+    requirements: NoReleaseRequirements<'_>,
+    publication: &Publication,
+    writer: &str,
+    key: &AttestationKey,
+) -> Result<VerifiedNoReleaseRequired> {
     key.verify("no_release_required", signed)?;
-    validate_no_release_required(&signed.payload, parent, acceptance, requirements)?;
+    validate_no_release_required(&signed.payload, parent, authority, requirements)?;
     publication.verify(signed, "linear", writer)?;
     Ok(VerifiedNoReleaseRequired {
         record: signed.payload.clone(),
@@ -2401,3 +2542,7 @@ mod baseline_revision_tests {
         assert!(baseline.validate().is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "evidence_no_release_carry_tests.rs"]
+mod no_release_carry_tests;
