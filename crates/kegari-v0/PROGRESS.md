@@ -3,6 +3,91 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
+Current Control source3 is locally verified:917 passed, zero failed and two
+required native ignores across39 groups in814.456s. All38 new names passed once in
+the full --no-fail-fast log. All-target check, strict Clippy,42 focused results,
+37 compatibility tests, formatting and the56-slot dispatch-disabled Plan passed.
+All683 source inputs remained unchanged at
+`sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f`.
+Session59032 is closed. The independently reviewed v4 finalizer completed:
+inventory passed0.033s, diff passed0.014s, and the collector verified all16
+invocations and retained both earlier failures. Seven reviewed coverage rows gained
+eight partial entries; exactly four not_assessed statuses became partial. No row
+became passed. Reports are [local validation](validation/LOCAL-CONTROL-EFFECT-INDEX.md)
+and [machine evidence](validation/control-index-checks.json). The original collector
+bundle is preserved; the machine report adds five separately hashed later reviews
+without changing observed results. The authorized local commit remains pending.
+The Control reservation/reconciliation mechanism and paired-history schema form a
+separate coherent change from the prior retirement producer; preserve its own
+validation checkpoint in a distinct commit rather than consolidating the two.
+Native/live/human qualification is incomplete.
+
+The unexecuted finalizers retained three independent findings: partial writes could
+escape rollback; one cleanup error could prevent other cleanup; and a late stdout
+error could leave COMPLETE despite rollback. V4 uses flushed atomic ledger
+replacement, complete exclusive report publication, independent owned cleanup and
+a publication boundary before final checkpoint/stdout. All findings were rereviewed
+as resolved before execution. No multi-file crash atomicity is claimed. Finalizer:
+`/private/tmp/kegari-v0-control-index-finalize-3-v4.py` (SHA-256
+`06de93bb6ed8d7b6aa61966daa478f5ddf518a2b8b98b833047883549231ae17`).
+
+The initial reviewed Control owner-effect index v5 and paired parent history
+consumer v1 installation changed eight files (four new), after the verified
+parent-retirement commit. Its683 source/test/asset inputs were frozen at
+`sha256:81bce073afb21f17c3cb6b9ca6961714bbe89e9629838a7b3b6432fa47f40ea5`.
+All exact original and layered draft hashes matched before installation; originals
+and manifest are at `/private/tmp/kegari-v0-control-index-installed-source1`.
+The serial pipeline `/private/tmp/kegari-v0-control-index-checks-1.py` is starting
+all-target check, strict Clippy, the three focused filters, four Control/runtime
+compatibility targets, formatting, full `--no-fail-fast` suite and the disabled Plan.
+Source1 all-target check passed23.498s; strict Clippy failed16.631s on the
+240-byte ParentEffectHistory variant. Session42887 closed without running tests.
+Source2 boxes only that payload and adjusts its constructor/comparison uses;
+serialized fields and test assertions remain unchanged. Exact original bytes and
+five-line correction are at `/private/tmp/kegari-v0-control-index-source1-lint-correction`.
+Its683 frozen inputs hash to
+`sha256:6bc3de92d1c0477b07896748ee0b98a8bd38a91e367c7e094df039e89a1c94bb`.
+Source2 check passed14.330s and strict Clippy24.230s. Its index filter passed34
+and failed one in46.427s: the new deletion/substitution fixture restored a receipt
+whose callback result was Null; ordinary Option<Value> readback makes that None,
+so the unchanged reader correctly refuses its missing terminal observation.
+Session17882 closed; no later source2 checks ran. Independent review confirmed
+the diagnosis. Source3 changes only that callback to explicit component result
+JSON; all assertions and production guards are unchanged. Formatting made no
+additional changes. Exact originals/diff are at
+`/private/tmp/kegari-v0-control-index-source2-fixture-correction`.
+Its683 inputs hash to
+`sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f`.
+Source3 check passed14.354s and strict Clippy15.279s. The index filter passed35
+in16.851s, identity passed1 in0.097s and parent passed6 in0.145s. All38 exact new
+qualified names passed once across the42 focused results (four are existing tests).
+All snapshots/toolchains are unchanged. The four compatibility targets passed37
+tests with no failures/ignores/filtering in42.948s; formatting passed1.473s.
+The full source3 suite passed917/0failed/2required native ignored across39 groups
+in814.456s. Plan passed32.197s with56 slots and dispatch false. All38 exact new
+names passed once in the full log; source/toolchain stayed unchanged. Session59032
+is closed. Source1/2 failures remain retained. Native qualification is incomplete.
+The boundary/protocol observation work remains separate, uninstalled TEMP work.
+Its explicit declared-evaluation opt-in is off for ordinary workers; the private
+trial declaration binds suite/fixture/trial/operation identities. Raw bounded
+arguments/messages stay in protected evidence; reports contain references/digests.
+Static review found bootstrap DenyTools and unread trailing-frame boundaries, so
+capture must remain incomplete without actual full channel drain/EOF evidence.
+Processed callback counts cannot prove absence. No scorer, fixture or qualification
+is changed by that draft; independent review is pending its immutable handoff.
+
+The parent-retirement increment is committed as
+`cf6b93474835710be4fba7691c6f43934a7f9a7f` —
+`feat(kegari-v0): retain authenticated parent-run retirement history`.
+All25 intended files and679 tested inputs matched HEAD, with a clean tree before
+the next increment. No commits were consolidated, rewritten or pushed.
+Verification: `/private/tmp/kegari-v0-parent-retirement-commit-verification.json`.
+A final independent artifact audit confirmed the raw totals, exact source and
+partial coverage without material inconsistency. Its review is at
+`/private/tmp/kegari-parent-retirement-final-artifact-independent-review-v1/REVIEW.md`
+(SHA-256 `dc80aae70a282bef62b16c6974412d555350b31b93292c4dd339dc15c89558b0`). Historical checkpoint follows;
+its uninstalled/pending statements describe the state before the new increment.
+
 Current parent-retirement source8 is locally verified: 879 passed, zero failed,
 two required native checks ignored across 39 groups (716.047s). All-target check,
 strict Clippy, formatting, all 21 delivery tests, inventory, diff and the
@@ -12,7 +97,7 @@ and installed only eight reviewed partial coverage rows with eleven added entrie
 Reports: [local validation](validation/LOCAL-PARENT-RETIREMENT.md) and
 [machine evidence](validation/parent-retirement-checks.json).
 Session75488 is closed; no validation process remains running. This increment
-awaits the authorized local commit. Native/live/human qualification is incomplete.
+is committed as recorded above. Native/live/human qualification is incomplete.
 The reviewed Control membership index/consumer and authority-boundary observer
 remain uninstalled TEMP work; they contribute no evidence to this checkpoint.
 
@@ -1066,7 +1151,7 @@ retained in the detailed report; they have not been replaced by later passes.
 - Installed: Rust/Cargo 1.99.1 (under existing `stable` alias), Git 2.56.0, Codex `0.164.0-alpha.11.1`, macOS sandbox-exec/Keychain/launchctl. `tailscale`, `ffmpeg`, `ffprobe` not found on PATH. `rust-toolchain.toml` now pins 1.99.1; development uses `RUSTUP_TOOLCHAIN=stable` only because this alias was verified to contain that exact version. No toolchain installation is authorized or needed on this host. This is availability evidence only, not compatibility qualification.
 - Builder model/speed settings are inherited unchanged. The runtime profiles will remain explicitly configured and separate. Assistance attribution will omit a model identifier unless independently verified.
 
-## Implementation plan and current checkpoint
+## Implementation plan and historical foundation checkpoint
 
 1. Establish strict typed identities/configuration, canonical evidence, durable records, and runtime-owned instruction assembly.
 2. Implement the pinned app-server and enforced execution boundary; implement Git provenance, candidate isolation and all separate evidence gates.
@@ -1075,15 +1160,43 @@ retained in the detailed report; they have not been replaced by later passes.
 5. Run build/fmt/clippy, observable deterministic integration/failure tests; independently review and correct. Commit coherent verified increments on `main`.
 6. Prepare exact bounded live plans and human review material. Qualification stays incomplete until separately authorized live checks and human calibration pass.
 
-Current checkpoint: strict configuration/workflow, embedded instruction assets, canonical digests, private durable storage, serialized intent/admission/mutations, authorization/correction/scheduling primitives, immutable paged snapshots, pinned app-server/isolation adapter, and deterministic Git/evidence/release primitives are implemented and have focused tests. Real Git fixtures preserve the source checkout/index, exclude staged B from A's candidate, and preserve failed candidates. Provider schemas/config parsing are verified locally; actual sandbox enforcement is not.
+Historical foundation checkpoint: strict configuration/workflow, embedded instruction assets, canonical digests, private durable storage, serialized intent/admission/mutations, authorization/correction/scheduling primitives, immutable paged snapshots, pinned app-server/isolation adapter, and deterministic Git/evidence/release primitives are implemented and have focused tests. Real Git fixtures preserve the source checkout/index, exclude staged B from A's candidate, and preserve failed candidates. Provider schemas/config parsing are verified locally; actual sandbox enforcement is not.
 
-Root owns shared admission/application integration, directory families, this record and commits. Completed local checkpoints are recorded below. Current ownership: root owns Control/runtime/native resume consumption; the configuration agent owns chained release recovery and baseline/queue provenance; the Codex agent owns protocol/worker recovery and token accounting; the delivery agent owns unchanged-source proofs and family component tests, now frozen for review. The native `main.rs`/factory is now wired to the concrete delivery decisions and shared worker runtime. CLI-only executable checks pass; no service was activated. Component and focused fixtures do not establish all complete delivery/recovery scenarios.
+Root owns repository integration, validation, this record and commits. Current agents work only in TEMP: configuration handles declared protocol observation, Codex independently reviews gaps/observations, and delivery prepares evidence. The earlier foundation work split Control/runtime, release history and worker recovery across these agents; that ownership snapshot is superseded. The native `main.rs`/factory is now wired to the concrete delivery decisions and shared worker runtime. CLI-only executable checks pass; no service was activated. Component and focused fixtures do not establish all complete delivery/recovery scenarios.
 
 The detailed local integration report records the checkpoint's full-suite counts.
 Later focused results below identify the tested increment and do not establish a
 complete SC/V0-T scenario or real-provider qualification.
 
-## Remaining engineering slices
+## Current remaining engineering
+
+A bounded independent caller audit reconciled the old checklist with current source:
+`/private/tmp/kegari-remaining-engineering-reconciliation-v1/REVIEW.md`, SHA-256
+`291cdaccc27dc62b086ddd2d140b0fbb2c389056c7dc4154add83439144f6e1b`.
+Root read the complete report. It is static evidence for the listed slices, not an
+exhaustive SPEC audit or a new native qualification.
+
+| Scope | Current remaining work |
+| --- | --- |
+| Control membership and parent history | Source3 full suite passed917 with two required native ignores; all38 new names passed. Exact evidence and narrow partial coverage are finalized; the local commit is next. |
+| Native evaluation and E07 | Finish declared authority/protocol observations, then a concrete canary/output rubric and versioned pr_attack migration. Only independent_malicious currently has native context;27 contexts and other role/prior-state lanes still need genuine producers. All56 slots remain unqualified. |
+| Coordination and continuation observations | Derive assertions from actual scoped publications, receipts and predecessor lineage. Repository-free coordination needs its own substrate; fixture JSON cannot create prior execution authority. |
+| Cold recovery and native containment | Historical parent seals do not recreate worker/source/completion capabilities. Implement a distinct supported cold obligation with fresh evidence. Actual descendant containment remains a code gap in addition to the denied native host prerequisites; group/leader exit is insufficient. |
+| External targets and visual cold readback | Add explicitly supported serving-artifact/source and authenticated video retrieval producers. Existing deployment-free/owned-target paths remain valid within their local evidence limits. |
+
+The prior no-release/owned-target history, structured review claims, exact paired
+round/retry consumers, carried acceptance, released dependency cache and typed
+historical Overview/Show now have concrete callers and separate local reports.
+Do not reimplement them from the obsolete proposals below. Narrow same-process
+provider-thread reuse refusals do not by themselves imply missing required behavior
+when a reconciled fresh bounded admission already exists. Live/provider/account,
+host compatibility and human calibration remain separate recorded prerequisites.
+
+## Historical engineering slices (superseded checkpoints)
+
+The following original observations/proposals are retained for chronology. Their
+present-tense statements describe earlier source; the current reconciliation above
+and the top checkpoint take precedence.
 
 The deployment-free no-release history drafts are integrated into the working
 source, with source authority/refusal and missing-reference facade corrections

@@ -135,3 +135,76 @@ fn retained_receipt_scan_never_decodes_as_complete_emitted_effect_history() {
     );
     assert!(serde_json::from_value::<ParentEffectHistory>(json!({"complete":true})).is_err());
 }
+
+// Pure versioned comparison data, never a Control observation or worker seal.
+fn indexed_binding_data() -> ParentEffectHistoryBinding {
+    let owner = |label: &str| {
+        json!({"frozen_control_index_v1":{
+            "owner":Uuid::new_v4(), "owner_request":bytes_digest(label.as_bytes()),
+            "root":bytes_digest(b"root data"), "count":0,
+            "tip":bytes_digest(b"root data"), "frozen":bytes_digest(b"cursor data")
+        }})
+    };
+    serde_json::from_value(json!({"preparation":owner("prep"),"model":owner("model")})).unwrap()
+}
+#[test]
+fn schema_one_provenance_stays_byte_identical_even_with_new_index_comparison_data() {
+    let binding = indexed_binding_data();
+    let legacy = ParentEffectHistory::RetainedReceiptScanWithoutEmittedIndex;
+    let key =
+        crate::evidence::AttestationKey::new("schema-component".into(), vec![37; 32]).unwrap();
+    let before = key
+        .sign("parent-history-schema-component", &(1u32, &legacy))
+        .unwrap();
+    let (schema, kept) =
+        ParentEffectHistory::retain_or_observe(Some((1, &legacy)), &binding).unwrap();
+    assert_eq!(schema, 1);
+    let after = key
+        .sign("parent-history-schema-component", &(schema, &kept))
+        .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&after).unwrap(),
+        serde_json::to_vec(&before).unwrap()
+    );
+    key.verify("parent-history-schema-component", &after)
+        .unwrap();
+    let (schema, current) = ParentEffectHistory::retain_or_observe(None, &binding).unwrap();
+    assert_eq!(schema, 2);
+    current.validate_binding(schema, &binding).unwrap();
+    assert_ne!(
+        serde_json::to_value(&current).unwrap(),
+        serde_json::to_value(legacy).unwrap()
+    );
+}
+#[test]
+fn schema_two_requires_exact_both_owner_fields_and_never_upgrades_legacy_data() {
+    let binding = indexed_binding_data();
+    let current = ParentEffectHistory::ControlMembershipV1(Box::new(binding.clone()));
+    assert!(current.validate_binding(1, &binding).is_err());
+    assert!(current.validate_binding(3, &binding).is_err());
+    let mut changed = serde_json::to_value(&binding).unwrap();
+    changed["model"]["frozen_control_index_v1"]["tip"] = json!(bytes_digest(b"changed tip"));
+    let changed: ParentEffectHistoryBinding = serde_json::from_value(changed).unwrap();
+    assert!(current.validate_binding(2, &changed).is_err());
+    let legacy: ParentEffectHistoryBinding = serde_json::from_value(
+        json!({"preparation":"legacy_retained_scan","model":"legacy_retained_scan"}),
+    )
+    .unwrap();
+    assert!(
+        ParentEffectHistory::ControlMembershipV1(Box::new(legacy.clone()))
+            .validate_binding(2, &legacy)
+            .is_err()
+    );
+    assert_eq!(
+        ParentEffectHistory::retain_or_observe(None, &legacy)
+            .unwrap()
+            .0,
+        1
+    );
+    let mut missing = serde_json::to_value(&binding).unwrap();
+    missing.as_object_mut().unwrap().remove("preparation");
+    assert!(serde_json::from_value::<ParentEffectHistoryBinding>(missing).is_err());
+    let mut unknown = serde_json::to_value(&binding).unwrap();
+    unknown["model"]["frozen_control_index_v1"]["complete_process_exit"] = json!(true);
+    assert!(serde_json::from_value::<ParentEffectHistoryBinding>(unknown).is_err());
+}

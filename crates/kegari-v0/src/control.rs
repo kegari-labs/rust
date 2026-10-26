@@ -14,6 +14,10 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "control_effect_index.rs"]
+mod effect_index;
+pub(crate) use effect_index::{ParentEffectHistoryBinding, ParentEffectHistoryObservation};
+
 #[path = "control_admission_identity.rs"]
 mod admission_identity;
 pub(crate) use admission_identity::{
@@ -350,6 +354,7 @@ pub(crate) struct PreparedRemote {
     permit: Option<Permit>,
     role: Option<String>,
     digest: String,
+    identity: String,
 }
 impl PreparedRemote {
     pub(crate) fn operation_id(&self) -> Uuid {
@@ -359,12 +364,15 @@ impl PreparedRemote {
 pub(crate) struct InFlightRemote {
     operation: Uuid,
     digest: String,
+    identity: String,
+    owner: Option<Uuid>,
 }
 
 pub struct InFlightEffect {
     request_id: Uuid,
     permit: Permit,
     payload_digest: String,
+    identity: String,
 }
 impl InFlightEffect {
     pub fn operation_id(&self) -> Uuid {
@@ -547,6 +555,10 @@ struct State {
     alive: bool,
     lease: Option<Lease>,
     permits: BTreeMap<Uuid, Permit>,
+    effect_indexes: BTreeMap<Uuid, effect_index::LiveIndex>,
+    effect_history: effect_index::History,
+    #[cfg(test)]
+    effect_index_fault: Option<crate::storage::WriteBoundary>,
     fenced: BTreeSet<Uuid>,
     error: Option<String>,
     holds: BTreeMap<Uuid, Vec<String>>,
@@ -685,6 +697,10 @@ impl ControlHost {
                 alive: false,
                 lease: None,
                 permits: BTreeMap::new(),
+                effect_indexes: BTreeMap::new(),
+                effect_history: effect_index::History::default(),
+                #[cfg(test)]
+                effect_index_fault: None,
                 fenced: BTreeSet::new(),
                 error: None,
                 holds: BTreeMap::new(),
@@ -715,6 +731,7 @@ impl ControlHost {
             ));
         }
         let receipts = ReceiptStore::new(root.child("receipts")?);
+        let effect_history = effect_index::recover(&root, &receipts)?;
         // Parse every receipt before permitting any work. A corrupt record cannot vanish.
         let mut holds = BTreeMap::new();
         let mut local_processes = BTreeSet::new();
@@ -750,6 +767,10 @@ impl ControlHost {
                 alive: false,
                 lease: None,
                 permits: BTreeMap::new(),
+                effect_indexes: BTreeMap::new(),
+                effect_history,
+                #[cfg(test)]
+                effect_index_fault: None,
                 fenced: BTreeSet::new(),
                 error: None,
                 holds,
@@ -874,6 +895,7 @@ impl ControlHost {
         request.kind = "lifecycle".into();
         request.payload = serde_json::json!({"command":command,"expected_control_generation":expected_generation});
         let owner_generation = s.lease.as_ref().map_or(0, |l| l.owner_generation);
+        self.guard_indexed_request_id(&mut s, request.request_id)?;
         let (mut receipt, fresh) = self.receipts.prepare(&request, owner_generation)?;
         if !fresh {
             if let Some(error) = receipt
@@ -1065,6 +1087,7 @@ impl ControlHost {
                 "intent, recovery or orchestration lease prohibits new work",
             ));
         }
+        self.guard_indexed_request_id(&mut s, request_id)?;
         if s.holds.values().any(|targets| {
             targets.contains(&work_key) || targets.contains(&s.intent.runtime_id.to_string())
         }) {
@@ -1276,13 +1299,24 @@ impl ControlHost {
             registered_at: Utc::now(),
         };
         let request = admission_identity::request(&permit, reference)?;
-        let (_, fresh) = self.receipts.prepare(&request, lease.owner_generation)?;
+        let (admission, fresh) = match self.receipts.prepare(&request, lease.owner_generation) {
+            Ok(value) => value,
+            Err(error) => {
+                // Even a failed write may have renamed the Prepared admission.
+                // No index or live permit can be inferred from that uncertainty.
+                s.open = false;
+                s.error = Some(error.code.clone());
+                s.holds.insert(request_id, vec![permit.work_key.clone()]);
+                return Err(error);
+            }
+        };
         if !fresh {
             return Err(Error::new(
                 "operation_uncertain",
                 "existing operation must be reconciled before admitting another",
             ));
         }
+        self.create_effect_index(&mut s, &admission)?;
         s.permits.insert(request_id, permit.clone());
         Ok(permit)
     }
@@ -1349,7 +1383,7 @@ impl ControlHost {
         }
         let mut receipt = self.receipts.get(operation_id)?;
         receipt.phase = ReceiptPhase::Reconciled;
-        receipt.observed_result = Some(observed_result);
+        receipt.observed_result = Some(observed_result.clone());
         receipt.updated_at = Utc::now();
         let work = &s.permits[&operation_id].work_key;
         if s.holds.contains_key(&operation_id)
@@ -1360,7 +1394,13 @@ impl ControlHost {
                 "recovered operation needs verified recovery, not a worker completion",
             ));
         }
-        self.receipts.save(&receipt)?;
+        self.freeze_effect_index(&mut s, &mut receipt, "finish", &observed_result)?;
+        if let Err(error) = self.save_indexed_owner(&mut s, &receipt) {
+            s.open = false;
+            s.fenced.insert(operation_id);
+            s.error = Some(error.code.clone());
+            return Err(error);
+        }
         s.permits.remove(&operation_id);
         Ok(())
     }
@@ -1395,11 +1435,13 @@ impl ControlHost {
         }
         receipt.phase = ReceiptPhase::Reconciled;
         receipt.observed_result = Some(
-            serde_json::json!({"local_execution":"exited","unresolved_effects":unresolved,"observation":observation}),
+            serde_json::json!({"local_execution":"exited","unresolved_effects":unresolved,"observation":&observation}),
         );
         receipt.updated_at = Utc::now();
-        if let Err(error) = self.receipts.save(&receipt) {
+        self.freeze_effect_index(&mut s, &mut receipt, "retire_local", &observation)?;
+        if let Err(error) = self.save_indexed_owner(&mut s, &receipt) {
             s.open = false;
+            s.fenced.insert(operation_id);
             s.error = Some(error.code.clone());
             return Err(error);
         }
@@ -1475,6 +1517,7 @@ impl ControlHost {
             payload: serde_json::json!({"lease":lease,"reason":reason}),
         };
         let record = (|| -> Result<Receipt> {
+            self.guard_indexed_request_id(&mut state, request.request_id)?;
             let (mut receipt, _) = self.receipts.prepare(&request, lease.owner_generation)?;
             self.receipts.mark_sent(&mut receipt)?;
             receipt.observed_result = Some(
@@ -1542,6 +1585,7 @@ impl ControlHost {
                 "recovery observation differs from immutable receipt",
             ));
         }
+        let observation = self.indexed_reconciliation(&mut s, &current, observation)?;
         current_owner()?;
         let receipt = self
             .receipts
@@ -1578,6 +1622,7 @@ impl ControlHost {
         {
             return Err(Error::new("capacity", "too many active control commands"));
         }
+        self.guard_indexed_request_id(&mut state, request.request_id)?;
         let (receipt, fresh) = self.receipts.prepare(
             &request,
             state.lease.as_ref().map_or(0, |l| l.owner_generation),
@@ -1697,9 +1742,13 @@ impl ControlHost {
         request
             .expected
             .insert("admitted_scope".into(), permit.scope_digest.clone());
-        let (mut receipt, fresh) = self
-            .receipts
-            .prepare(&request, permit.lease.owner_generation)?;
+        let (mut receipt, fresh) = self.prepare_indexed_effect(
+            &mut s,
+            &request,
+            Some(permit),
+            permit.lease.owner_generation,
+        )?;
+        self.register_indexed_effect(&mut s, Some(permit), &receipt, fresh)?;
         if !fresh {
             return Err(Error::new(
                 "operation_uncertain",
@@ -1727,10 +1776,10 @@ impl ControlHost {
             receipt.phase = ReceiptPhase::Reconciled;
             receipt.observed_result =
                 Some(serde_json::json!({"effect":"not_started","error":error}));
-            self.receipts.save(&receipt)?;
+            self.save_indexed_receipt(&mut s, &receipt)?;
             return Err(error);
         }
-        self.receipts.mark_sent(&mut receipt)?;
+        self.send_indexed_receipt(&mut s, &mut receipt)?;
         let mut targets = receipt.canonical_targets.clone();
         if !protocol {
             targets.push(permit.work_key.clone());
@@ -1747,6 +1796,7 @@ impl ControlHost {
             InFlightEffect {
                 request_id: request.request_id,
                 permit: permit.clone(),
+                identity: receipt_request_digest(&receipt)?,
                 payload_digest: receipt.payload_digest,
             },
             owned,
@@ -1778,6 +1828,13 @@ impl ControlHost {
                 "local completion differs from its launched effect",
             ));
         }
+        self.verify_effect_identity(
+            &mut s,
+            &receipt,
+            effect.request_id,
+            &effect.identity,
+            Some(effect.permit.operation_id),
+        )?;
         let current = validate_live_permit(&s, permit).and_then(|()| fresh_gate());
         let result = match &current {
             Ok(()) => observed,
@@ -1785,9 +1842,8 @@ impl ControlHost {
                 serde_json::json!({"effect":"exited_evidence_rejected","error":error,"observed":observed})
             }
         };
-        if let Err(error) = self
-            .receipts
-            .acknowledge(&mut receipt, BTreeMap::new(), result)
+        if let Err(error) =
+            self.acknowledge_indexed_receipt(&mut s, &mut receipt, BTreeMap::new(), result)
         {
             s.open = false;
             s.error = Some(error.code.clone());
@@ -1829,7 +1885,9 @@ impl ControlHost {
             .lease
             .as_ref()
             .map_or(0, |lease| lease.owner_generation);
-        let (mut receipt, fresh) = self.receipts.prepare(&request, generation)?;
+        let (mut receipt, fresh) =
+            self.prepare_indexed_effect(&mut state, &request, permit.as_ref(), generation)?;
+        self.register_indexed_effect(&mut state, permit.as_ref(), &receipt, fresh)?;
         if !fresh {
             if let Some(error) = receipt
                 .observed_result
@@ -1851,13 +1909,13 @@ impl ControlHost {
             );
             receipt.phase = ReceiptPhase::Reconciled;
             receipt.observed_result = Some(serde_json::json!({"effect":"not_sent","error":error}));
-            self.receipts.save(&receipt)?;
+            self.save_indexed_receipt(&mut state, &receipt)?;
             return Err(error);
         }
         if let Err(error) = fresh_gate(&state.snapshot()) {
             receipt.phase = ReceiptPhase::Reconciled;
             receipt.observed_result = Some(serde_json::json!({"effect":"not_sent","error":error}));
-            self.receipts.save(&receipt)?;
+            self.save_indexed_receipt(&mut state, &receipt)?;
             return Err(error);
         }
         let mut targets = request.canonical_targets.clone();
@@ -1870,6 +1928,7 @@ impl ControlHost {
             request,
             permit,
             role,
+            identity: receipt_request_digest(&receipt)?,
             digest: receipt.payload_digest,
         }))
     }
@@ -1899,6 +1958,13 @@ impl ControlHost {
                 "remote preflight reservation changed",
             ));
         }
+        self.verify_effect_identity(
+            &mut state,
+            &receipt,
+            reservation.request.request_id,
+            &reservation.identity,
+            reservation.permit.as_ref().map(|p| p.operation_id),
+        )?;
         let gate = preflight
             .and_then(|()| {
                 remote_authority(
@@ -1921,12 +1987,12 @@ impl ControlHost {
         if let Err(error) = gate {
             receipt.phase = ReceiptPhase::Reconciled;
             receipt.observed_result = Some(serde_json::json!({"effect":"not_sent","error":error}));
-            self.receipts.save(&receipt)?;
+            self.save_indexed_receipt(&mut state, &receipt)?;
             state.holds.remove(&receipt.operation_id);
             state.pending_external_effects.remove(&receipt.operation_id);
             return Err(error);
         }
-        if let Err(error) = self.receipts.mark_sent(&mut receipt) {
+        if let Err(error) = self.send_indexed_receipt(&mut state, &mut receipt) {
             state.open = false;
             state.error = Some(error.code.clone());
             return Err(error);
@@ -1936,6 +2002,8 @@ impl ControlHost {
             InFlightRemote {
                 operation: receipt.operation_id,
                 digest: receipt.payload_digest,
+                identity: reservation.identity,
+                owner: reservation.permit.as_ref().map(|p| p.operation_id),
             },
             task,
         ))
@@ -1962,9 +2030,17 @@ impl ControlHost {
                 "remote completion differs from its owned dispatch",
             ));
         }
+        self.verify_effect_identity(
+            &mut state,
+            &receipt,
+            effect.operation,
+            &effect.identity,
+            effect.owner,
+        )?;
         state.pending_external_effects.remove(&effect.operation);
         let (ids,result)=observed.map_err(|error| Error::new("operation_uncertain", "provider mutation outcome requires reconciliation").detail(serde_json::json!({"operation_id":effect.operation,"request_id":effect.operation,"cause":error.code})))?;
-        if let Err(error) = self.receipts.acknowledge(&mut receipt, ids, result) {
+        if let Err(error) = self.acknowledge_indexed_receipt(&mut state, &mut receipt, ids, result)
+        {
             state.open = false;
             state.error = Some(error.code.clone());
             return Err(error);
@@ -2102,7 +2178,9 @@ impl ControlHost {
                 .insert("admitted_scope".into(), permit.scope_digest.clone());
         }
         let generation = s.lease.as_ref().map_or(0, |lease| lease.owner_generation);
-        let (mut receipt, fresh) = self.receipts.prepare(&request, generation)?;
+        let (mut receipt, fresh) =
+            self.prepare_indexed_effect(&mut s, &request, permit, generation)?;
+        self.register_indexed_effect(&mut s, permit, &receipt, fresh)?;
         if !fresh {
             if let Some(error) = receipt
                 .observed_result
@@ -2134,10 +2212,10 @@ impl ControlHost {
         if let Err(error) = gate {
             receipt.phase = ReceiptPhase::Reconciled;
             receipt.observed_result = Some(serde_json::json!({"effect":"not_sent","error":error}));
-            self.receipts.save(&receipt)?;
+            self.save_indexed_receipt(&mut s, &receipt)?;
             return Err(error);
         }
-        self.receipts.mark_sent(&mut receipt)?;
+        self.send_indexed_receipt(&mut s, &mut receipt)?;
         let mut held_targets = receipt.canonical_targets.clone();
         if let Some(permit) = permit {
             held_targets.push(permit.work_key.clone());
@@ -2151,7 +2229,8 @@ impl ControlHost {
                 return Err(Error::new("operation_uncertain","provider mutation outcome requires reconciliation").detail(serde_json::json!({"operation_id":receipt.operation_id,"request_id":receipt.request_id,"cause":error.code})));
             }
         };
-        if let Err(error) = self.receipts.acknowledge(&mut receipt, ids, result) {
+        self.verify_indexed_receipt(&mut s, &receipt)?;
+        if let Err(error) = self.acknowledge_indexed_receipt(&mut s, &mut receipt, ids, result) {
             s.open = false;
             s.error = Some(error.code.clone());
             return Err(error);
@@ -2179,6 +2258,7 @@ impl ControlHost {
         request.kind = "service_stop".into();
         request.canonical_targets = vec![s.intent.runtime_id.to_string()];
         request.payload = serde_json::json!({"service":"stop"});
+        self.guard_indexed_request_id(&mut s, request.request_id)?;
         let (mut receipt, fresh) = self.receipts.prepare(&request, 0)?;
         if !fresh {
             if let Some(error) = receipt
@@ -2329,6 +2409,7 @@ impl ControlHost {
         }
         let receipt = self.receipts.get(id)?;
         let observation = observe(&receipt, &s.snapshot())?;
+        let observation = self.indexed_reconciliation(&mut s, &receipt, observation)?;
         let reconciled = self.receipts.reconcile(id, observation)?;
         s.holds.remove(&id);
         Ok(reconciled)
@@ -2370,6 +2451,7 @@ impl ControlHost {
             ));
         }
         current(&state.snapshot())?;
+        self.guard_indexed_request_id(&mut state, request.request_id)?;
         let (mut receipt, fresh) = self.receipts.prepare(&request, state.intent.generation)?;
         if !fresh {
             return Err(Error::new(
@@ -2420,6 +2502,7 @@ impl ControlHost {
             ));
         }
         current(&state.snapshot())?;
+        self.guard_indexed_request_id(&mut state, request.request_id)?;
         let (mut receipt, fresh) = self.receipts.prepare(&request, owner_generation)?;
         if !fresh {
             return Err(Error::new(

@@ -6,11 +6,24 @@ pub(super) fn request(
     permit: &Permit,
     reference: Option<AdmissionReference>,
 ) -> Result<MutationRequest> {
+    request_versioned(permit, reference, true)
+}
+
+// Legacy byte identity is retained for explicit historical comparison only.
+// New admission and exact owned-return identity always use the current encoder.
+fn request_versioned(
+    permit: &Permit,
+    reference: Option<AdmissionReference>,
+    indexed: bool,
+) -> Result<MutationRequest> {
     // A durable reference allows conservative recovery without persisting a shadow issue store.
     let mut expected = BTreeMap::from([
         ("scope".into(), permit.scope_digest.clone()),
         ("control".into(), permit.control_generation.to_string()),
     ]);
+    if indexed && effect_index::eligible(reference.as_ref()) {
+        expected.insert(effect_index::KEY.into(), "1".into());
+    }
     if let Some(
         AdmissionReference::Run(reference)
         | AdmissionReference::ParentRun(reference, _, _)
@@ -223,4 +236,84 @@ pub(crate) fn ordinary_run_request_digest(
         ));
     }
     expected_digest(permit, AdmissionReference::Run(reference.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn indexed_parent_request_is_additive_and_legacy_encoding_stays_exact() {
+        let digest = |v: &str| canonical_digest(1, &v).unwrap();
+        let permit = Permit {
+            operation_id: Uuid::from_u128(1),
+            lease: Lease {
+                runtime_id: Uuid::from_u128(2),
+                owner_generation: 3,
+                owner_id: Uuid::from_u128(4),
+            },
+            control_generation: 5,
+            work_key: "parent".into(),
+            scope_digest: digest("scope"),
+            registered_at: "2026-10-26T00:00:00Z".parse().unwrap(),
+        };
+        let mut run = RunReference {
+            workspace: Uuid::from_u128(6),
+            account: "component".into(),
+            normalized_state: None,
+            phase: crate::scheduler::PhaseKey {
+                work: "parent".into(),
+                generation: digest("generation"),
+                phase: "parent_evidence_review".into(),
+                retry_grant: None,
+            },
+            profile_digest: digest("profile"),
+            instruction_digest: digest("instruction"),
+            max_attempts: 2,
+            max_turns: 3,
+            max_review_rounds: 4,
+            attempt: 1,
+        };
+        let current = request(&permit, Some(AdmissionReference::Run(run.clone()))).unwrap();
+        let legacy =
+            request_versioned(&permit, Some(AdmissionReference::Run(run.clone())), false).unwrap();
+        let exact_old = MutationRequest {
+            request_id: permit.operation_id,
+            runtime_id: permit.lease.runtime_id,
+            actor: Actor {
+                identity: format!("owner:{}", permit.lease.owner_id),
+                roles: BTreeSet::new(),
+                principal: None,
+            },
+            kind: "admission".into(),
+            canonical_targets: vec![permit.work_key.clone()],
+            expected: BTreeMap::from([
+                ("scope".into(), permit.scope_digest.clone()),
+                ("control".into(), permit.control_generation.to_string()),
+                ("run".into(), serde_json::to_string(&run).unwrap()),
+            ]),
+            payload: serde_json::to_value(&permit).unwrap(),
+        };
+        assert_eq!(
+            payload_digest(&legacy).unwrap(),
+            payload_digest(&exact_old).unwrap()
+        );
+        assert_eq!(legacy.expected, exact_old.expected);
+        assert_eq!(legacy.payload, exact_old.payload);
+        let mut only_new = current.expected.clone();
+        assert_eq!(only_new.remove(effect_index::KEY), Some("1".into()));
+        assert_eq!(only_new, legacy.expected);
+        assert_ne!(
+            payload_digest(&current).unwrap(),
+            payload_digest(&legacy).unwrap()
+        );
+        run.phase.phase = "implementation".into();
+        assert_eq!(
+            payload_digest(&request(&permit, Some(AdmissionReference::Run(run.clone()))).unwrap())
+                .unwrap(),
+            payload_digest(
+                &request_versioned(&permit, Some(AdmissionReference::Run(run)), false).unwrap()
+            )
+            .unwrap()
+        );
+    }
 }

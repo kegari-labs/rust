@@ -1,7 +1,9 @@
 //! Same-process historical producer. Only a successful owned-task join can
 //! install a candidate. The authenticated reader never constructs worker state.
 use super::*;
-use crate::control::{Receipt, ReceiptPhase};
+use crate::control::{
+    ParentEffectHistoryBinding, ParentEffectHistoryObservation, Receipt, ReceiptPhase,
+};
 use crate::delivery::PreparedParentRunOrigin;
 use crate::evidence::Signed;
 use serde::{Deserialize, Serialize};
@@ -22,13 +24,44 @@ pub(super) struct JoinedParentRetirementCandidate {
     permit: Permit,
     budget: RunReference,
 }
-/// Explicitly incomplete for cold reuse: Control has no durable per-owner
-/// emitted effect-ID index. This authenticates the retained scan, not absence
-/// of a receipt deleted before first capture. No other/qualified variant exists.
+/// Control membership provenance only. Even both indexed owners do not prove
+/// process-record completeness, a fresh OS join, product success or cold authority.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum ParentEffectHistory {
     RetainedReceiptScanWithoutEmittedIndex,
+    ControlMembershipV1(Box<ParentEffectHistoryBinding>),
+}
+impl ParentEffectHistory {
+    fn retain_or_observe(
+        prior: Option<(u32, &Self)>,
+        binding: &ParentEffectHistoryBinding,
+    ) -> Result<(u32, Self)> {
+        if let Some((schema, history)) = prior {
+            history.validate_binding(schema, binding)?;
+            return Ok((schema, history.clone()));
+        }
+        Ok(if binding.has_indexed_owner() {
+            (2, Self::ControlMembershipV1(Box::new(binding.clone())))
+        } else {
+            (1, Self::RetainedReceiptScanWithoutEmittedIndex)
+        })
+    }
+    fn validate_binding(&self, schema: u32, binding: &ParentEffectHistoryBinding) -> Result<()> {
+        match (schema, self) {
+            // Original signed schema-1 data stays explicitly scan-only, even
+            // if this fresh batch independently validates a declared index.
+            (1, Self::RetainedReceiptScanWithoutEmittedIndex) => Ok(()),
+            (2, Self::ControlMembershipV1(expected))
+                if expected.has_indexed_owner() && expected.as_ref() == binding =>
+            {
+                Ok(())
+            }
+            _ => Err(invalid(
+                "parent effect history schema or exact owner provenance changed",
+            )),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -176,7 +209,12 @@ fn worker_files(records: &PrivateDir) -> Result<BTreeMap<String, String>> {
     Ok(result)
 }
 impl AuthenticatedParentRunRetirement {
-    fn read(runtime: &RuntimeCoordinator, directory: &PrivateDir, operation: Uuid) -> Result<Self> {
+    fn read_in_gate(
+        runtime: &RuntimeCoordinator,
+        directory: &PrivateDir,
+        operation: Uuid,
+        history: &ParentEffectHistoryObservation,
+    ) -> Result<Self> {
         let signed: Signed<ParentRunRetirementRecord> =
             serde_json::from_slice(&directory.read_bytes(&leaf(operation), LIMIT)?)
                 .map_err(|_| invalid("retired parent seal is malformed"))?;
@@ -187,10 +225,14 @@ impl AuthenticatedParentRunRetirement {
             ));
         }
         let value = Self { signed };
-        value.validate(runtime)?;
+        value.validate_in_gate(runtime, history)?;
         Ok(value)
     }
-    fn validate(&self, runtime: &RuntimeCoordinator) -> Result<()> {
+    fn validate_in_gate(
+        &self,
+        runtime: &RuntimeCoordinator,
+        history: &ParentEffectHistoryObservation,
+    ) -> Result<()> {
         let record = &self.signed.payload;
         let records = PrivateDir::open(
             &runtime
@@ -206,17 +248,26 @@ impl AuthenticatedParentRunRetirement {
                 &runtime.control,
                 &runtime.services.key,
             )?;
-        let model = runtime.control.operation(record.operation)?;
-        let preparation = runtime.control.operation(record.preparation)?;
-        closed(&model)?;
-        closed(&preparation)?;
-        origin.payload.verify_run_cause(&model)?;
+        let model = history.model();
+        let preparation = history.preparation();
+        if model.operation_id != record.operation || preparation.operation_id != record.preparation
+        {
+            return Err(invalid(
+                "parent seal differs from its actual Control observation pair",
+            ));
+        }
+        record
+            .effect_history
+            .validate_binding(record.schema_version, history.binding())?;
+        closed(model)?;
+        closed(preparation)?;
+        origin.payload.verify_run_cause(model)?;
         if origin.payload.grant_commands(&runtime.control)? != record.grant_commands {
             return Err(invalid("retired parent grant command closure changed"));
         }
-        let actual_run = RunReference::from_receipt(&model)?
+        let actual_run = RunReference::from_receipt(model)?
             .ok_or_else(|| invalid("retired parent run reference missing"))?;
-        let prep = crate::control::PreparationReference::from_receipt(&preparation)?
+        let prep = crate::control::PreparationReference::from_receipt(preparation)?
             .ok_or_else(|| invalid("retired parent preparation reference missing"))?;
         if prep.worker_operation != record.operation
             || prep.phase != actual_run.phase
@@ -231,13 +282,12 @@ impl AuthenticatedParentRunRetirement {
                 "retired parent did not consume its exact successful preparation",
             ));
         }
-        if record.schema_version != 1
-            || record.runtime != runtime.runtime_id
+        if record.runtime != runtime.runtime_id
             || record.operation != origin.payload.operation
             || origin.digest()? != record.origin
             || origin.payload.runtime != runtime.runtime_id
             || origin.payload.preparation.operation != record.preparation
-            || canonical_digest(1, &model)? != record.model
+            || canonical_digest(1, model)? != record.model
             || canonical_digest(1, &actual_run)? != canonical_digest(1, &record.run)?
             || model
                 .observed_result
@@ -255,13 +305,13 @@ impl AuthenticatedParentRunRetirement {
                 "retired parent seal differs from immutable registered source/run",
             ));
         }
-        if effects(&runtime.control.operations()?, &[&model, &preparation])? != record.effects
-            || process_history(runtime, [&preparation, &model])? != record.processes
+        if effects(history.effects(), &[model, preparation])? != record.effects
+            || process_history(runtime, [preparation, model])? != record.processes
             || worker_files(&records)? != record.files
         {
             return Err(invalid("retired parent exact closure changed"));
         }
-        record.journal.validate(&records, &model)?;
+        record.journal.validate(&records, model)?;
         Ok(())
     }
 }
@@ -437,156 +487,171 @@ impl RuntimeCoordinator {
                 "parent retains actual registered execution handles",
             ));
         }
-        self.control.serialize_observation(|snapshot| {
-            if snapshot
-                .active_operations
-                .iter()
-                .any(|p| [operation, preparation_id].contains(&p.operation_id))
-                || snapshot
-                    .unresolved_operations
-                    .keys()
-                    .any(|id| [operation, preparation_id].contains(id))
-            {
-                return Err(invalid(
-                    "parent still has actual active/unresolved ownership",
-                ));
-            }
-            let known = {
-                let state = self
-                    .state
-                    .lock()
-                    .map_err(|_| invalid("parent final identity lock failed"))?;
-                let run = state
-                    .runs
-                    .get(&operation)
-                    .ok_or_else(|| invalid("parent registration disappeared"))?;
-                if !run.joined
-                    || run
-                        .parent_joined
-                        .as_ref()
-                        .is_none_or(|c| !Arc::ptr_eq(&c.completion, &candidate.completion))
-                    || state
-                        .completions
-                        .get(&operation)
-                        .is_none_or(|c| !Arc::ptr_eq(c, &candidate.completion))
-                    || candidate
-                        .completion
-                        .contract
-                        .as_ref()
-                        .is_none_or(|c| !Arc::ptr_eq(c, &run.contract))
-                    || run.last_observation.as_ref() != Some(&candidate.observation)
+        self.control
+            .with_parent_effect_history(preparation_id, operation, |snapshot, history| {
+                if snapshot
+                    .active_operations
+                    .iter()
+                    .any(|p| [operation, preparation_id].contains(&p.operation_id))
+                    || snapshot
+                        .unresolved_operations
+                        .keys()
+                        .any(|id| [operation, preparation_id].contains(id))
                 {
-                    return Err(invalid("parent original joined registration changed"));
+                    return Err(invalid(
+                        "parent still has actual active/unresolved ownership",
+                    ));
                 }
-                state.parent_retirement_seals.get(&operation).cloned()
-            };
-            candidate
-                .origin
-                .validate(&self.control, &self.services.key)?;
-            let records = PrivateDir::open(
-                &self
-                    .registration
-                    .root()
-                    .path()
-                    .join("worker-records")
-                    .join(operation.to_string()),
-            )?;
-            let model = self.control.operation(operation)?;
-            let preparation = self.control.operation(preparation_id)?;
-            closed(&model)?;
-            closed(&preparation)?;
-            if model.runtime_id != candidate.permit.lease.runtime_id
-                || model.owner_generation != candidate.permit.lease.owner_generation
-                || model.expected.get("scope") != Some(&candidate.permit.scope_digest)
-                || model.canonical_targets != [candidate.permit.work_key.clone()]
-                || RunReference::from_receipt(&model)?
-                    .as_ref()
-                    .map(|r| canonical_digest(1, r))
-                    .transpose()?
-                    != Some(canonical_digest(1, &candidate.budget)?)
-            {
-                return Err(invalid(
-                    "retired parent run changed original registered budget/owner/scope",
-                ));
-            }
+                let known = {
+                    let state = self
+                        .state
+                        .lock()
+                        .map_err(|_| invalid("parent final identity lock failed"))?;
+                    let run = state
+                        .runs
+                        .get(&operation)
+                        .ok_or_else(|| invalid("parent registration disappeared"))?;
+                    if !run.joined
+                        || run
+                            .parent_joined
+                            .as_ref()
+                            .is_none_or(|c| !Arc::ptr_eq(&c.completion, &candidate.completion))
+                        || state
+                            .completions
+                            .get(&operation)
+                            .is_none_or(|c| !Arc::ptr_eq(c, &candidate.completion))
+                        || candidate
+                            .completion
+                            .contract
+                            .as_ref()
+                            .is_none_or(|c| !Arc::ptr_eq(c, &run.contract))
+                        || run.last_observation.as_ref() != Some(&candidate.observation)
+                    {
+                        return Err(invalid("parent original joined registration changed"));
+                    }
+                    state.parent_retirement_seals.get(&operation).cloned()
+                };
+                candidate
+                    .origin
+                    .validate(&self.control, &self.services.key)?;
+                let records = PrivateDir::open(
+                    &self
+                        .registration
+                        .root()
+                        .path()
+                        .join("worker-records")
+                        .join(operation.to_string()),
+                )?;
+                let model = history.model();
+                let preparation = history.preparation();
+                closed(model)?;
+                closed(preparation)?;
+                if model.runtime_id != candidate.permit.lease.runtime_id
+                    || model.owner_generation != candidate.permit.lease.owner_generation
+                    || model.expected.get("scope") != Some(&candidate.permit.scope_digest)
+                    || model.canonical_targets != [candidate.permit.work_key.clone()]
+                    || RunReference::from_receipt(model)?
+                        .as_ref()
+                        .map(|r| canonical_digest(1, r))
+                        .transpose()?
+                        != Some(canonical_digest(1, &candidate.budget)?)
+                {
+                    return Err(invalid(
+                        "retired parent run changed original registered budget/owner/scope",
+                    ));
+                }
 
-            if model
-                .observed_result
-                .as_ref()
-                .and_then(|v| v.get("observation"))
-                != Some(&candidate.observation)
-            {
-                return Err(invalid(
-                    "actual retired observation differs from joined result",
-                ));
-            }
-            let all = self.control.operations()?;
-            let effect_map = effects(&all, &[&model, &preparation])?;
-            let selected: Vec<_> = all
-                .into_iter()
-                .filter(|r| effect_map.contains_key(&r.operation_id))
-                .collect();
-            let journal = crate::worker::capture_parent_journal(
-                &records,
-                &model,
-                &candidate.completion,
-                &selected,
-            )?;
-            let record = ParentRunRetirementRecord {
-                schema_version: 1,
-                effect_history: ParentEffectHistory::RetainedReceiptScanWithoutEmittedIndex,
-                runtime: self.runtime_id,
-                operation,
-                origin: candidate.origin.digest()?,
-                preparation: preparation_id,
-                model: canonical_digest(1, &model)?,
-                observation: candidate.observation.clone(),
-                run: RunReference::from_receipt(&model)?
-                    .ok_or_else(|| invalid("parent run reference absent"))?,
-                processes: process_history(self, [&preparation, &model])?,
-                effects: effect_map,
-                grant_commands: candidate.origin.record().grant_commands(&self.control)?,
-                journal,
-                files: worker_files(&records)?,
-                retired_at: model.updated_at,
-                execution: execution.clone(),
-            };
-            let signed = self.services.key.sign(PURPOSE, &record)?;
-            let directory = self.registration.root().child("parent-run-retirements")?;
-            let digest = signed.digest()?;
-            match AuthenticatedParentRunRetirement::read(self, &directory, operation) {
-                Ok(prior) if prior.signed.digest()? == digest => {}
-                Ok(_) => return Err(invalid("retired parent seal was replaced")),
-                Err(error) if error.code == "record_missing" && known.is_none() => {
-                    // Only actual own-seal absence permits first write; missing
-                    // referenced files must never be mistaken for own absence.
-                    match directory.read_bytes(&leaf(operation), LIMIT) {
-                        Err(e) if e.code == "record_missing" => {}
-                        Err(e) => return Err(e),
-                        Ok(_) => return Err(error),
-                    }
-                    let bytes = serde_json::to_vec(&signed)
-                        .map_err(|_| invalid("parent seal encoding failed"))?;
-                    if bytes.len() as u64 > LIMIT {
-                        return Err(invalid("parent seal exceeds protected record bound"));
-                    }
-                    directory.create_bytes_exclusive(&leaf(operation), &bytes)?;
+                if model
+                    .observed_result
+                    .as_ref()
+                    .and_then(|v| v.get("observation"))
+                    != Some(&candidate.observation)
+                {
+                    return Err(invalid(
+                        "actual retired observation differs from joined result",
+                    ));
                 }
-                Err(error) => return Err(error),
-            }
-            if known.as_ref().is_some_and(|prior| prior != &digest) {
-                return Err(invalid("remembered parent seal identity changed"));
-            }
-            // Remember the authentic envelope before another fallible closure
-            // read so a later missing file can never enable reminting.
-            self.state
-                .lock()
-                .map_err(|_| invalid("parent seal anchor lock failed"))?
-                .parent_retirement_seals
-                .insert(operation, digest);
-            AuthenticatedParentRunRetirement::read(self, &directory, operation)?;
-            Ok(())
-        })
+                let effect_map = effects(history.effects(), &[model, preparation])?;
+                let journal = crate::worker::capture_parent_journal(
+                    &records,
+                    model,
+                    &candidate.completion,
+                    history.effects(),
+                )?;
+                let directory = self.registration.root().child("parent-run-retirements")?;
+                let prior = match AuthenticatedParentRunRetirement::read_in_gate(
+                    self, &directory, operation, history,
+                ) {
+                    Ok(prior) => Some(prior),
+                    Err(error) if error.code == "record_missing" && known.is_none() => {
+                        // Missing a referenced file is never own-seal absence.
+                        match directory.read_bytes(&leaf(operation), LIMIT) {
+                            Err(e) if e.code == "record_missing" => None,
+                            Err(e) => return Err(e),
+                            Ok(_) => return Err(error),
+                        }
+                    }
+                    Err(error) => return Err(error),
+                };
+                // Do not rewrite an existing valid legacy seal just to add a new
+                // provenance label. Fresh index validation above still applies.
+                let (schema_version, effect_history) = ParentEffectHistory::retain_or_observe(
+                    prior.as_ref().map(|prior| {
+                        (
+                            prior.signed.payload.schema_version,
+                            &prior.signed.payload.effect_history,
+                        )
+                    }),
+                    history.binding(),
+                )?;
+                let record = ParentRunRetirementRecord {
+                    schema_version,
+                    effect_history,
+                    runtime: self.runtime_id,
+                    operation,
+                    origin: candidate.origin.digest()?,
+                    preparation: preparation_id,
+                    model: canonical_digest(1, model)?,
+                    observation: candidate.observation.clone(),
+                    run: RunReference::from_receipt(model)?
+                        .ok_or_else(|| invalid("parent run reference absent"))?,
+                    processes: process_history(self, [preparation, model])?,
+                    effects: effect_map,
+                    grant_commands: candidate.origin.record().grant_commands(&self.control)?,
+                    journal,
+                    files: worker_files(&records)?,
+                    retired_at: model.updated_at,
+                    execution: execution.clone(),
+                };
+                let signed = self.services.key.sign(PURPOSE, &record)?;
+                let digest = signed.digest()?;
+                match prior {
+                    Some(prior) if prior.signed.digest()? == digest => {}
+                    Some(_) => return Err(invalid("retired parent seal was replaced")),
+                    None => {
+                        let bytes = serde_json::to_vec(&signed)
+                            .map_err(|_| invalid("parent seal encoding failed"))?;
+                        if bytes.len() as u64 > LIMIT {
+                            return Err(invalid("parent seal exceeds protected record bound"));
+                        }
+                        directory.create_bytes_exclusive(&leaf(operation), &bytes)?;
+                    }
+                }
+                if known.as_ref().is_some_and(|prior| prior != &digest) {
+                    return Err(invalid("remembered parent seal identity changed"));
+                }
+                // Remember the authentic envelope before another fallible closure
+                // read so a later missing file can never enable reminting.
+                self.state
+                    .lock()
+                    .map_err(|_| invalid("parent seal anchor lock failed"))?
+                    .parent_retirement_seals
+                    .insert(operation, digest);
+                AuthenticatedParentRunRetirement::read_in_gate(
+                    self, &directory, operation, history,
+                )?;
+                Ok(())
+            })
     }
 }
 

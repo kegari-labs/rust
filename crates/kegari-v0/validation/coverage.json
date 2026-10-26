@@ -432,6 +432,23 @@
           "limits": "Stored values are explicitly unsigned fixture data; this is not a worker origin/retirement capability, native process exit, complete cleanup lifecycle or Git object retention qualification.",
           "class": "deterministic",
           "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CONTROL-EFFECT-INDEX.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed actual Control/private-storage regressions cover index creation and write faults, missing/corrupt required membership and frozen records, pre-callback refusal and cleanup-only retention.",
+          "tests": [
+            "control::effect_index::tests::uncertain_head_writes_never_dispatch_or_recreate_writer",
+            "control::effect_index::tests::first_index_creation_failure_retains_prepared_admission_without_permit",
+            "control::effect_index::tests::retirement_post_rename_failure_retains_exact_cleanup_only_retry",
+            "control::effect_index::tests::lost_frozen_record_is_not_recreated_during_retained_retirement_retry",
+            "control::effect_index::tests::bounded_head_and_duplicate_membership_tampering_are_rejected",
+            "control::effect_index::parent_history::tests::frozen_zero_requires_all_original_files_and_known_identity_never_becomes_legacy"
+          ],
+          "limits": "Selected local write-fault boundaries only; not every crash point, filesystem/power-loss durability, STOPPED recovery or unsupported-version no-write scenario. Do not promote the entire atomic-storage requirement. Component callbacks and labeled terminal observations are not a live provider response, worker join, qualified check, descendant-exit proof or human acceptance. The exact final source passed local validation; required native, live-provider and human qualifications remain incomplete.",
+          "source_digest": "sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f"
         }
       ]
     },
@@ -1413,8 +1430,25 @@
       "line": 313,
       "sha256": "cc1d176c3bbc850086607e748738999355b7c2eda6a79ed754058535ef6525d2",
       "excerpt": "Every new operation, including a worker spawn, preparation/CI operation, integration or release attempt, MUST obtain a control-host admission permit containing its operation ID, ow",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CONTROL-EFFECT-INDEX.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed components bind the additive index policy to the exact typed parent preparation/model request, register membership before all three callbacks, refuse dispatch after failed current gate or frozen ownership, and prevent recreating known owner IDs.",
+          "tests": [
+            "control::admission_identity::tests::indexed_parent_request_is_additive_and_legacy_encoding_stays_exact",
+            "control::effect_index::tests::all_dispatch_funnels_register_before_callback_and_keep_acknowledged_members",
+            "control::effect_index::tests::rejected_gate_keeps_reserved_membership_and_no_callback",
+            "control::effect_index::tests::reservation_before_owner_freeze_cannot_transmit_after_preflight",
+            "control::effect_index::tests::missing_retired_owner_cannot_be_readmitted_or_replace_known_anchors"
+          ],
+          "limits": "Eligible phases are parent_integrated_validation and parent_evidence_review only. No new worker/CI/integration/release permit semantics, OS owner or cross-process pause/stop race qualification. Existing ordinary metadata/child paths and budget requirements remain separate. Component callbacks and labeled terminal observations are not a live provider response, worker join, qualified check, descendant-exit proof or human acceptance. The exact final source passed local validation; required native, live-provider and human qualifications remain incomplete.",
+          "source_digest": "sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f"
+        }
+      ]
     },
     {
       "id": "clause:6.1:c223b0782c0e",
@@ -3220,8 +3254,24 @@
       "line": 712,
       "sha256": "f8deb6e6b88a4fa9bb2b10cb70c9e47a8d36af6b75cd85f51f5117f7f08eda20",
       "excerpt": "Before external mutation, persist the prepared receipt and payload/generation identity; mark transmission and returned IDs as observed. Following a crash/lost response, query the p",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CONTROL-EFFECT-INDEX.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed Control components require reservation membership before local, synchronous and asynchronous transport callbacks, retain known not-sent/failed members and preserve frozen identity through uncertain remote completion and reconciliation.",
+          "tests": [
+            "control::effect_index::tests::all_dispatch_funnels_register_before_callback_and_keep_acknowledged_members",
+            "control::effect_index::tests::rejected_gate_keeps_reserved_membership_and_no_callback",
+            "control::effect_index::tests::transmitted_unknown_remains_indexed_and_reconciliation_preserves_frozen_reference",
+            "control::effect_index::tests::late_actual_remote_ack_does_not_change_original_retirement_retry"
+          ],
+          "limits": "No real provider lookup, exactly-once guarantee, service eventual-consistency test or complete remote-cancellation result. Membership proves reservation identity, not transmission or success. Component callbacks and labeled terminal observations are not a live provider response, worker join, qualified check, descendant-exit proof or human acceptance. The exact final source passed local validation; required native, live-provider and human qualifications remain incomplete.",
+          "source_digest": "sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f"
+        }
+      ]
     },
     {
       "id": "clause:11.3:10ea4c0ba419",
@@ -3229,8 +3279,24 @@
       "line": 714,
       "sha256": "10ea4c0ba41922abd4fba10c7539a0cb29bd4d306b76ccf24e2ae2c00fd76c3b",
       "excerpt": "Adopt an existing remote object only when exactly one matching object, target, actor/ownership and immutable payload can be verified. Multiple matches are a conflict. A failed/inco",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CONTROL-EFFECT-INDEX.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed regressions retain original owner/member identity despite removed or changed owner fields, refuse ACK/completion/reconciliation downgrade and preserve the exact pending canonical resources against an already-active overlapping owner after restored original Sent bytes.",
+          "tests": [
+            "control::effect_index::tests::reserved_remote_refuses_missing_or_changed_owner_before_any_transmit",
+            "control::effect_index::tests::actual_local_and_remote_completion_keep_holds_when_effect_owner_is_rewritten",
+            "control::effect_index::tests::owned_and_operator_reconciliation_use_retained_membership_without_owner_field",
+            "control::effect_index::tests::indexed_replay_failure_preserves_sent_resources_against_an_already_active_owner"
+          ],
+          "limits": "No real unique provider adoption or duplicate-correlation search; restoring bytes is not ACK/reconciliation. Resource hold refusal is exercised locally, not proof of all workspace/provider scheduling isolation. Component callbacks and labeled terminal observations are not a live provider response, worker join, qualified check, descendant-exit proof or human acceptance. The exact final source passed local validation; required native, live-provider and human qualifications remain incomplete.",
+          "source_digest": "sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f"
+        }
+      ]
     },
     {
       "id": "clause:11.3:a0f9ce016c7e",
@@ -3285,6 +3351,39 @@
           "limits": "Receipts are data fixtures, not actual joined workers. Despite one test name containing complete_effect_inventory, the scan cannot establish that no effect receipt was deleted before first capture; complete emitted-effect history and cold reconstruction remain unsupported.",
           "class": "deterministic",
           "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        },
+        {
+          "class": "implementation",
+          "reference": "validation/LOCAL-CONTROL-EFFECT-INDEX.md",
+          "status": "partial",
+          "verification": "source_inspection_only",
+          "scope": "Source inspection of the installed composition shows a private single-Control-gate preparation/model batch reader. It selects members from frozen owner indexes, compares retained anchors and full receipts, rejects active/held/pending owner or member IDs, and supplies the same borrowed batch to parent seal creation and revalidation. Schema2 explicitly records each owner as indexed or legacy; schema1 signed encoding remains unchanged. Existing actual join/Arc, original source/assignment, qualified-check and process guards remain required.",
+          "tests": [],
+          "limits": "Static review of Control v5, consumer v1 and the narrow boxing/fixture corrections; no native positive. The callback is immutable observation data, not a permit or RunCompletion. Indexed Control membership does not close process membership, fresh descendants-exited, whole-store rollback or cold execution authority. Mixed/legacy provenance remains incomplete.",
+          "artifact_manifests": {
+            "Control_v5": "e867c1ac51b8f8e9dd677f8a5a728ea6230365d947d82f3560c8286127fd058d",
+            "consumer_v1": "1771532aad9e71bdd15e43a13cb60411f270e50498138478633dcf40e5f5ebc2"
+          },
+          "source_digest": "sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CONTROL-EFFECT-INDEX.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed actual Control batch-reader components cover missing indexed members before first callback, frozen-empty prerequisites, known-identity downgrade, unchanged original unresolved closure after late ACK, mixed legacy data and cold comparison without recreating a live writer. Passed pure schema tests cover exact schema1 encoding and strict per-owner schema2 identity.",
+          "tests": [
+            "control::effect_index::parent_history::tests::real_control_pair_retains_all_reserved_outcomes_without_reader_writes",
+            "control::effect_index::parent_history::tests::missing_or_substituted_indexed_receipt_blocks_before_first_consumer_callback",
+            "control::effect_index::parent_history::tests::frozen_zero_requires_all_original_files_and_known_identity_never_becomes_legacy",
+            "control::effect_index::parent_history::tests::late_actual_ack_preserves_membership_but_does_not_rewrite_original_unresolved_owner",
+            "control::effect_index::parent_history::tests::partial_legacy_data_never_invents_the_other_owners_index",
+            "control::effect_index::parent_history::tests::cold_reader_restores_comparison_history_without_a_live_index_writer",
+            "runtime::parent_retirement::tests::schema_one_provenance_stays_byte_identical_even_with_new_index_comparison_data",
+            "runtime::parent_retirement::tests::schema_two_requires_exact_both_owner_fields_and_never_upgrades_legacy_data"
+          ],
+          "limits": "Legacy input is explicitly protected-receipt data; schema1 signature test is a schema tuple, not a full parent seal. No genuine joined parent-seal positive or cold worker/source/permit reconstruction. Pending-ID guards are reviewed but not exhaustively tested; later ACK alone does not rewrite the original nonempty unresolved owner list. Component callbacks and labeled terminal observations are not a live provider response, worker join, qualified check, descendant-exit proof or human acceptance. The exact final source passed local validation; required native, live-provider and human qualifications remain incomplete.",
+          "source_digest": "sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f"
         }
       ]
     },
@@ -6700,13 +6799,48 @@
           "limits": "Events are plain fixture data; no native session, check, hook, exit or completion capability is constructed. This does not test every atomic-write/crash boundary, STOPPED recovery or unsupported-version no-write behavior.",
           "class": "deterministic",
           "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CONTROL-EFFECT-INDEX.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed actual Control/private-storage regressions cover index creation and write faults, missing/corrupt required membership and frozen records, pre-callback refusal and cleanup-only retention.",
+          "tests": [
+            "control::effect_index::tests::uncertain_head_writes_never_dispatch_or_recreate_writer",
+            "control::effect_index::tests::first_index_creation_failure_retains_prepared_admission_without_permit",
+            "control::effect_index::tests::retirement_post_rename_failure_retains_exact_cleanup_only_retry",
+            "control::effect_index::tests::lost_frozen_record_is_not_recreated_during_retained_retirement_retry",
+            "control::effect_index::tests::bounded_head_and_duplicate_membership_tampering_are_rejected",
+            "control::effect_index::parent_history::tests::frozen_zero_requires_all_original_files_and_known_identity_never_becomes_legacy"
+          ],
+          "limits": "Selected local write-fault boundaries only; not every crash point, filesystem/power-loss durability, STOPPED recovery or unsupported-version no-write scenario. Do not promote the entire atomic-storage requirement. Component callbacks and labeled terminal observations are not a live provider response, worker join, qualified check, descendant-exit proof or human acceptance. The exact final source passed local validation; required native, live-provider and human qualifications remain incomplete.",
+          "source_digest": "sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f"
         }
       ]
     },
     {
       "id": "V0-T09",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CONTROL-EFFECT-INDEX.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed local Control tests cover unchanged request replay/conflict, missing known member/owner non-remint, operator-kind UUID reuse refusal and exact original owner retirement retry after a late component ACK or labeled readback.",
+          "tests": [
+            "control::effect_index::tests::all_dispatch_funnels_register_before_callback_and_keep_acknowledged_members",
+            "control::effect_index::tests::late_actual_remote_ack_does_not_change_original_retirement_retry",
+            "control::effect_index::tests::missing_retired_owner_cannot_be_readmitted_or_replace_known_anchors",
+            "control::effect_index::tests::missing_known_effect_is_not_recreated_by_fresh_prepare",
+            "control::effect_index::tests::intact_known_owner_preserves_request_conflict_and_defensive_creation_never_replaces_it",
+            "control::effect_index::tests::operator_kind_cannot_recreate_a_deleted_known_owner_uuid"
+          ],
+          "limits": "No real provider committed-comment/PR/merge/job lost response, duplicate-correlation or incomplete-query qualification. Original known local identity survives deletion; whole trusted-store rollback is not covered. Component callbacks and labeled terminal observations are not a live provider response, worker join, qualified check, descendant-exit proof or human acceptance. The exact final source passed local validation; required native, live-provider and human qualifications remain incomplete.",
+          "source_digest": "sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f"
+        }
+      ]
     },
     {
       "id": "V0-T10",
