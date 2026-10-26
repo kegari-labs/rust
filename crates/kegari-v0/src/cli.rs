@@ -1064,6 +1064,11 @@ pub trait LocalActions {
         request_id: Uuid,
     ) -> LocalFuture<'a, OutputEnvelope>;
     fn guide<'a>(&'a mut self, request: &'a GuidanceRequest) -> LocalFuture<'a, String>;
+    /// Initial local guidance may derive the invoking host's identity. Existing
+    /// and remote configurations must continue through ordinary typed guidance.
+    fn guide_initial_setup(&mut self) -> LocalFuture<'_, String> {
+        self.guide(&GuidanceRequest::Setup)
+    }
     fn open_browser<'a>(&'a mut self, url: &'a str) -> LocalFuture<'a, ()>;
 }
 fn finish_guidance(request: GuidanceRequest, configuration: String) -> Result<Action> {
@@ -1115,12 +1120,23 @@ pub async fn execute(
     local: &mut dyn LocalActions,
 ) -> OutputEnvelope {
     let id = invocation.request_id;
+    let mut initial_local_setup = false;
     if let Action::Guided(request) = invocation.action {
-        invocation.action = match local
-            .guide(&request)
-            .await
-            .and_then(|text| finish_guidance(request, text))
-        {
+        initial_local_setup =
+            if matches!(request, GuidanceRequest::Setup) && invocation.target.is_none() {
+                match local.registered_control() {
+                    Ok(registered) => !registered,
+                    Err(error) => return OutputEnvelope::failure(id, None, error),
+                }
+            } else {
+                false
+            };
+        let guided = if initial_local_setup {
+            local.guide_initial_setup().await
+        } else {
+            local.guide(&request).await
+        };
+        invocation.action = match guided.and_then(|text| finish_guidance(request, text)) {
             Ok(action) => action,
             Err(error) => return OutputEnvelope::failure(id, None, error),
         };
@@ -1170,6 +1186,17 @@ pub async fn execute(
                             .bootstrap(&configuration, id)
                             .await
                             .unwrap_or_else(|error| OutputEnvelope::failure(id, None, error));
+                    }
+                    Ok(true) if initial_local_setup => {
+                        return OutputEnvelope::failure(
+                            id,
+                            None,
+                            Error::new(
+                                "setup_incomplete",
+                                "a local registration appeared during initial setup review; the generated draft was not submitted",
+                            )
+                            .next("Inspect the registered runtime before explicitly configuring it; do not retry the initial draft as a replacement"),
+                        );
                     }
                     Ok(true) => {}
                     Err(error) => return OutputEnvelope::failure(id, None, error),

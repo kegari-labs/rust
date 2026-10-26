@@ -334,6 +334,160 @@ fn guided_configuration_bound_and_supplied_error_request_identity_are_preserved(
 }
 
 #[test]
+fn initial_setup_collects_fields_and_reviews_exact_empty_scope_before_submission() {
+    let (_temporary, host, _) = fixture();
+    let linear = Uuid::from_u128(42);
+    let input = format!("fixture-operator\n{linear}\n2\n\n\ncreate\n");
+    let mut output = Vec::new();
+    let document = guided_initial_setup(&host, Cursor::new(&input), &mut output).unwrap();
+    let config = Config::parse(&document).unwrap();
+    assert!(!config.runtime.id.is_nil());
+    assert_eq!(config.runtime.host_id, host.host_id);
+    assert_eq!(config.runtime.max_agents, 2);
+    assert_eq!(
+        config.runtime.execution_root,
+        host.home.join(".kegari/runs").to_str().unwrap()
+    );
+    assert!(config.connections.is_empty());
+    assert!(config.workspaces.is_empty());
+    assert!(config.control.https.is_none());
+    assert!(config.control.tailscale_users.is_empty());
+    assert_eq!(config.control.local_users.len(), 1);
+    let operator = &config.control.local_users[&host.uid.to_string()];
+    assert_eq!(operator.id, "fixture-operator");
+    assert_eq!(operator.linear_user_id, linear);
+    assert_eq!(operator.roles.len(), 7);
+    assert!(
+        operator
+            .roles
+            .contains(&kegari_v0::config::ControlRole::Configure)
+    );
+    assert!(
+        !operator
+            .roles
+            .contains(&kegari_v0::config::ControlRole::Evaluate)
+    );
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains(&document));
+    assert!(output.contains("not yet provider-verified"));
+    assert!(output.contains("a macOS Keychain attestation key, with STOPPED intent"));
+    assert!(output.contains("connection add"));
+    assert!(output.contains("workspace add"));
+    assert!(output.find(&document).unwrap() < output.find("Type create").unwrap());
+    assert!(std::fs::read_dir(&host.home).unwrap().next().is_none());
+    let second = guided_initial_setup(&host, Cursor::new(&input), Vec::new()).unwrap();
+    assert_ne!(
+        config.runtime.id,
+        Config::parse(&second).unwrap().runtime.id
+    );
+}
+
+#[test]
+fn initial_setup_requires_real_values_and_explicit_review_confirmation() {
+    let (_temporary, host, _) = fixture();
+    let linear = Uuid::from_u128(42);
+    let complete =
+        format!("operator\n{linear}\n3\n~/private-runs\ninspect,configure,evaluate\ncreate\n");
+    let document = guided_initial_setup(&host, Cursor::new(&complete), Vec::new()).unwrap();
+    let config = Config::parse(&document).unwrap();
+    assert_eq!(
+        config.runtime.execution_root,
+        host.home.join("private-runs").to_str().unwrap()
+    );
+    assert_eq!(
+        config.control.local_users[&host.uid.to_string()]
+            .roles
+            .len(),
+        3
+    );
+    for input in [
+        complete.replace(&linear.to_string(), "not-a-uuid"),
+        complete.replace(&linear.to_string(), &Uuid::nil().to_string()),
+        complete.replace("\n3\n", "\n0\n"),
+        complete.replace("\n3\n", "\n\n"),
+        complete.replace("inspect,configure,evaluate", "inspect"),
+        complete.replace("inspect,configure,evaluate", "configure,configure"),
+        complete.replace("inspect,configure,evaluate", "configure,all"),
+        complete.replace("~/private-runs", "$UNREAD_SETUP_ENV"),
+        complete.replace("operator\n", "operator\u{1b}[0m\n"),
+    ] {
+        assert!(guided_initial_setup(&host, Cursor::new(input), Vec::new()).is_err());
+    }
+    for answers in 0..6 {
+        let input = complete
+            .lines()
+            .take(answers)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let error = guided_initial_setup(&host, Cursor::new(input), Vec::new()).unwrap_err();
+        assert_eq!(error.code, "cancelled");
+    }
+    for confirmation in ["/cancel", "yes", ""] {
+        let input = complete.replace("create\n", &format!("{confirmation}\n"));
+        assert_eq!(
+            guided_initial_setup(&host, Cursor::new(input), Vec::new())
+                .unwrap_err()
+                .code,
+            "cancelled"
+        );
+    }
+    assert_eq!(
+        guided_initial_setup(
+            &host,
+            Cursor::new(complete.trim_end_matches('\n')),
+            Vec::new()
+        )
+        .unwrap_err()
+        .code,
+        "cancelled"
+    );
+    assert!(std::fs::read_dir(&host.home).unwrap().next().is_none());
+}
+
+#[test]
+fn initial_setup_bounds_input_and_requires_successful_review_output() {
+    let (_temporary, host, _) = fixture();
+    assert_eq!(
+        guided_initial_setup(
+            &host,
+            Cursor::new(format!("{}\n", "x".repeat(4097))),
+            Vec::new()
+        )
+        .unwrap_err()
+        .code,
+        "invalid_input"
+    );
+    struct BrokenReview;
+    impl std::io::Write for BrokenReview {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes
+                .windows(b"Review the complete".len())
+                .any(|chunk| chunk == b"Review the complete")
+            {
+                return Err(std::io::Error::other("fixture review output unavailable"));
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let answers = format!("operator\n{}\n2\n\n\ncreate\n", Uuid::from_u128(42));
+    let mut input = Cursor::new(answers.as_bytes());
+    assert_eq!(
+        guided_initial_setup(&host, &mut input, BrokenReview)
+            .unwrap_err()
+            .code,
+        "io_error"
+    );
+    assert_eq!(
+        &answers.as_bytes()[input.position() as usize..],
+        b"create\n"
+    );
+    assert!(std::fs::read_dir(&host.home).unwrap().next().is_none());
+}
+
+#[test]
 fn service_binary_mismatch_never_clears_shutdown_marker() {
     let (_temp, host, _account) = fixture();
     let probe = Arc::new(Probe::new());

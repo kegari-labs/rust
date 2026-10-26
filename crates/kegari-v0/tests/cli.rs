@@ -847,13 +847,23 @@ struct LocalFixture {
     bootstraps: usize,
     services: usize,
     browsers: Vec<String>,
+    initial_guides: usize,
+    document_guides: usize,
+    guided_configuration: Option<String>,
+    submitted_configuration: Option<String>,
+    register_during_guidance: bool,
 }
 impl LocalActions for LocalFixture {
     fn registered_control(&mut self) -> Result<bool> {
         Ok(self.registered)
     }
-    fn bootstrap<'a>(&'a mut self, _: &'a str, id: Uuid) -> LocalFuture<'a, OutputEnvelope> {
+    fn bootstrap<'a>(
+        &'a mut self,
+        configuration: &'a str,
+        id: Uuid,
+    ) -> LocalFuture<'a, OutputEnvelope> {
         self.bootstraps += 1;
+        self.submitted_configuration = Some(configuration.to_owned());
         Box::pin(async move {
             Ok(OutputEnvelope::success(
                 id,
@@ -873,11 +883,22 @@ impl LocalActions for LocalFixture {
         })
     }
     fn guide<'a>(&'a mut self, _: &'a GuidanceRequest) -> LocalFuture<'a, String> {
-        Box::pin(async {
-            Err(Error::new(
-                "invalid_input",
-                "fixture has no interactive input",
-            ))
+        self.document_guides += 1;
+        let configuration = self.guided_configuration.clone();
+        Box::pin(async move {
+            configuration
+                .ok_or_else(|| Error::new("invalid_input", "fixture has no interactive input"))
+        })
+    }
+    fn guide_initial_setup(&mut self) -> LocalFuture<'_, String> {
+        self.initial_guides += 1;
+        let configuration = self.guided_configuration.clone();
+        Box::pin(async move {
+            if self.register_during_guidance {
+                tokio::task::yield_now().await;
+                self.registered = true;
+            }
+            configuration.ok_or_else(|| Error::new("cancelled", "fixture cancelled before review"))
         })
     }
     fn open_browser<'a>(&'a mut self, url: &'a str) -> LocalFuture<'a, ()> {
@@ -885,6 +906,165 @@ impl LocalActions for LocalFixture {
         Box::pin(async { Ok(()) })
     }
 }
+#[tokio::test]
+async fn guided_initial_setup_uses_local_identity_only_for_absent_local_registration() {
+    let temporary = TempDir::new().unwrap();
+    let home = temporary.path().canonicalize().unwrap();
+    let host = kegari_v0::platform::HostIdentity {
+        host_id: "explicit-fixture-host".into(),
+        boot_id: Uuid::new_v4(),
+        uid: 501,
+        user: "fixture-operator".into(),
+        home: home.clone(),
+    };
+    // Real pure guidance/typed validation; the LocalActions transaction below
+    // is deliberately a fixture, with no native discovery or Keychain action.
+    let answers = format!("operator\n{}\n2\n\n\ncreate\n", Uuid::from_u128(42));
+    let document = kegari_v0::local_cli::guided_initial_setup(
+        &host,
+        std::io::Cursor::new(answers),
+        Vec::new(),
+    )
+    .unwrap();
+    let store = TargetStore::new(PrivateDir::create(&home.join("client")).unwrap());
+    let make = |target: Option<&str>| {
+        let mut args = vec!["kegari-v0"];
+        if let Some(target) = target {
+            args.extend(["--target", target]);
+        }
+        args.push("setup");
+        Cli::try_parse_from(args)
+            .unwrap()
+            .prepare(&mut Inputs {
+                tty: true,
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let mut local = LocalFixture {
+        guided_configuration: Some(document.clone()),
+        ..Default::default()
+    };
+    let response = execute(make(None), &store, &mut local).await;
+    assert!(response.ok);
+    assert_eq!(local.initial_guides, 1);
+    assert_eq!(local.document_guides, 0);
+    assert_eq!(local.bootstraps, 1);
+    assert_eq!(
+        local.submitted_configuration.as_deref(),
+        Some(document.as_str())
+    );
+    assert_eq!(local.services, 0);
+    for (registered, target) in [(true, None), (false, Some("absent-remote"))] {
+        let mut local = LocalFixture {
+            registered,
+            guided_configuration: Some(document.clone()),
+            ..Default::default()
+        };
+        let response = execute(make(target), &store, &mut local).await;
+        assert_eq!(response.error.unwrap().code, "target_unavailable");
+        assert_eq!(local.initial_guides, 0);
+        assert_eq!(local.document_guides, 1);
+        assert_eq!(local.bootstraps, 0);
+        assert_eq!(local.services, 0);
+    }
+    let mut cancelled = LocalFixture::default();
+    let response = execute(make(None), &store, &mut cancelled).await;
+    assert_eq!(response.error.unwrap().code, "cancelled");
+    assert_eq!(cancelled.initial_guides, 1);
+    assert_eq!(cancelled.bootstraps, 0);
+    assert_eq!(cancelled.services, 0);
+    assert!(
+        std::fs::read_dir(home.join("client"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    let mut inputs = Inputs {
+        tty: true,
+        ..Default::default()
+    };
+    assert!(
+        Cli::try_parse_from(["kegari-v0", "setup", "--noninteractive"])
+            .unwrap()
+            .prepare(&mut inputs)
+            .is_err()
+    );
+    assert_eq!(inputs.reads, 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn initial_setup_registration_race_never_submits_generated_config_to_existing_host() {
+    let server = fixture(2, |_, request| {
+        Some((
+            200,
+            reply(&request, json!({"control_generation": 7})),
+            vec![],
+        ))
+    })
+    .await;
+    let temporary = TempDir::new().unwrap();
+    let home = temporary.path().canonicalize().unwrap();
+    let host = kegari_v0::platform::HostIdentity {
+        host_id: "initial-setup-race-fixture".into(),
+        boot_id: Uuid::new_v4(),
+        uid: 501,
+        user: "fixture-operator".into(),
+        home: home.clone(),
+    };
+    let document = kegari_v0::local_cli::guided_initial_setup(
+        &host,
+        std::io::Cursor::new(format!(
+            "operator\n{}\n2\n\n\ncreate\n",
+            Uuid::from_u128(42)
+        )),
+        Vec::new(),
+    )
+    .unwrap();
+    let client_root = home.join("client");
+    let store = TargetStore::new(PrivateDir::create(&client_root).unwrap());
+    // Retained client preferences are not a live registration observation.
+    // Leave a real reachable fixture endpoint to detect any accidental routing.
+    store
+        .register_local(server.client.target().clone())
+        .unwrap();
+    let before = std::fs::read(client_root.join("clients.toml")).unwrap();
+    let invocation = Cli::try_parse_from(["kegari-v0", "setup"])
+        .unwrap()
+        .prepare(&mut Inputs {
+            tty: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let id = invocation.request_id;
+    let mut local = LocalFixture {
+        guided_configuration: Some(document),
+        register_during_guidance: true,
+        ..Default::default()
+    };
+    let response = execute(invocation, &store, &mut local).await;
+    server.task.abort();
+    let _ = server.task.await;
+    assert_eq!(response.request_id, id);
+    assert_eq!(response.error.unwrap().code, "setup_incomplete");
+    assert!(response.runtime_id.is_none());
+    assert!(local.registered);
+    assert_eq!(local.initial_guides, 1);
+    assert_eq!(local.document_guides, 0);
+    assert_eq!(local.bootstraps, 0);
+    assert_eq!(local.services, 0);
+    assert!(local.submitted_configuration.is_none());
+    assert!(server.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read(client_root.join("clients.toml")).unwrap(),
+        before
+    );
+    for leaf in ["owner.json", "config.toml", "intent.json", "service.json"] {
+        assert!(!home.join(".kegari").join(leaf).exists());
+    }
+}
+
 #[tokio::test]
 async fn no_argument_first_launch_explains_setup_without_registering_or_starting() {
     let temp = TempDir::new().unwrap();

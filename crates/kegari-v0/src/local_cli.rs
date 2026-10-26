@@ -4,13 +4,14 @@ use crate::{
     api::{CommandName, CommandRequest},
     cli::{GuidanceRequest, LocalActions, LocalCommand, LocalFuture, OutputEnvelope},
     client::{ControlClient, Endpoint, Target, TargetStore},
-    config::{Config, Connection, Workspace},
+    config::{Config, Connection, ControlRole, Workspace},
     error::{Error, Result},
     platform::{self, AccountHome, HostIdentity, OwnerRecord, ServiceStartState},
     storage::PrivateDir,
 };
 use serde_json::json;
 use std::{
+    collections::BTreeSet,
     io::{BufRead, IsTerminal, Read, Write},
     path::PathBuf,
 };
@@ -222,9 +223,164 @@ impl LocalActions for NativeLocalActions {
             guided_document(request, std::io::stdin().lock(), std::io::stderr().lock())
         })
     }
+    fn guide_initial_setup(&mut self) -> LocalFuture<'_, String> {
+        Box::pin(async move {
+            if !std::io::stdin().is_terminal() {
+                return Err(Error::new(
+                    "invalid_input",
+                    "guided input requires an interactive terminal; use --from and --noninteractive",
+                ));
+            }
+            if self.registered_control()? {
+                return Err(Error::new(
+                    "setup_incomplete",
+                    "a local registration appeared before guidance; inspect it before configuring the existing runtime",
+                ));
+            }
+            let host = self.host()?;
+            guided_initial_setup(&host, std::io::stdin().lock(), std::io::stderr().lock())
+        })
+    }
     fn open_browser<'a>(&'a mut self, url: &'a str) -> LocalFuture<'a, ()> {
         Box::pin(crate::cli::open_client_browser(url))
     }
+}
+
+struct SetupPrompt<R, W> {
+    input: R,
+    output: W,
+    bytes_read: usize,
+}
+impl<R: BufRead, W: Write> SetupPrompt<R, W> {
+    fn ask(&mut self, prompt: &str) -> Result<String> {
+        write!(self.output, "{prompt}")
+            .and_then(|_| self.output.flush())
+            .map_err(|error| Error::io("write setup prompt", error))?;
+        let mut bytes = Vec::new();
+        let limit = 4096usize.min(crate::cli::MAX_CONFIG.saturating_sub(self.bytes_read));
+        let count = (&mut self.input)
+            .take((limit + 1) as u64)
+            .read_until(b'\n', &mut bytes)
+            .map_err(|error| Error::io("read setup answer", error))?;
+        if count == 0 {
+            return Err(setup_cancelled());
+        }
+        if count > limit {
+            return Err(Error::new(
+                "invalid_input",
+                "setup answer exceeds its bounded input limit",
+            ));
+        }
+        if bytes.last() != Some(&b'\n') {
+            return Err(setup_cancelled());
+        }
+        self.bytes_read += count;
+        let answer = String::from_utf8(bytes)
+            .map_err(|_| Error::new("invalid_input", "setup answer must be UTF-8"))?;
+        let answer = answer.trim_end_matches(['\r', '\n']);
+        if answer.chars().any(char::is_control) {
+            return Err(Error::new(
+                "invalid_input",
+                "setup answer contains control characters",
+            ));
+        }
+        let answer = answer.trim();
+        if answer == "/cancel" {
+            return Err(setup_cancelled());
+        }
+        Ok(answer.to_owned())
+    }
+}
+fn setup_cancelled() -> Error {
+    Error::new(
+        "cancelled",
+        "setup cancelled before submission; no registration, credentials or service changes were made",
+    )
+}
+
+/// Build and review a minimal initial configuration using an already observed
+/// host. This pure input/output step does not register, authenticate or persist;
+/// bootstrap independently verifies the actual host and applies the typed config.
+pub fn guided_initial_setup(
+    host: &HostIdentity,
+    input: impl BufRead,
+    output: impl Write,
+) -> Result<String> {
+    let mut prompt = SetupPrompt {
+        input,
+        output,
+        bytes_read: 0,
+    };
+    writeln!(prompt.output,
+        "Initial local setup. Enter /cancel at any prompt or end input to cancel.\nDo not enter secrets. The host identity and OS user mapping come from this host; a new runtime UUID will be generated.\nThis initial configuration has no connections, workspaces, remote control, repository selection or release scope. These must be configured explicitly afterward.")
+        .map_err(|error| Error::io("write setup introduction", error))?;
+    let operator = prompt.ask("Operator label (non-secret, required): ")?;
+    if operator.is_empty() || operator.len() > 128 {
+        return Err(Error::invalid("operator label must contain 1 to 128 bytes"));
+    }
+    let linear =
+        prompt.ask("Your Linear user UUID (operator-provided; not yet provider-verified): ")?;
+    let linear: Uuid = linear
+        .parse()
+        .map_err(|_| Error::invalid("Linear user identity must be a UUID"))?;
+    if linear.is_nil() {
+        return Err(Error::invalid("Linear user UUID must not be nil"));
+    }
+    let agents = prompt.ask("Maximum simultaneous agents (positive integer; no default): ")?;
+    let agents: u32 = agents
+        .parse()
+        .map_err(|_| Error::invalid("maximum agents must be a positive integer"))?;
+    if agents == 0 {
+        return Err(Error::invalid("maximum agents must be positive"));
+    }
+    let execution_root =
+        prompt.ask("Execution root (absolute path or ~/ path) [~/.kegari/runs]: ")?;
+    let execution_root = if execution_root.is_empty() {
+        "~/.kegari/runs"
+    } else {
+        &execution_root
+    };
+    let defaults = "inspect,configure,lifecycle,correct,accept,release,recover";
+    let roles = prompt.ask(&format!(
+        "Local roles, comma-separated [{defaults}]; evaluate is optional, configure is required: "
+    ))?;
+    let roles = if roles.is_empty() { defaults } else { &roles };
+    let mut selected = BTreeSet::new();
+    for name in roles.split(',').map(str::trim) {
+        let role: ControlRole = serde_json::from_value(json!(name))
+            .map_err(|_| Error::invalid("local roles must use the listed exact role names"))?;
+        if !selected.insert(role) {
+            return Err(Error::invalid("local roles must not repeat"));
+        }
+    }
+    if !selected.contains(&ControlRole::Configure) {
+        return Err(Error::invalid(
+            "initial setup operator requires the configure role",
+        ));
+    }
+    let mut config: Config = serde_json::from_value(json!({
+        "schema_version": 1,
+        "runtime": {"id": Uuid::new_v4(), "host_id": host.host_id,
+            "execution_root": execution_root, "max_agents": agents},
+        "connections": {}, "workspaces": {},
+        "control": {"local_users": {host.uid.to_string(): {
+            "id": operator, "linear_user_id": linear, "roles": selected
+        }}}
+    }))
+    .map_err(|_| Error::invalid("guided setup could not produce the typed configuration"))?;
+    // Resolve the displayed path now; guided input never silently adopts an
+    // environment value. --from retains the existing documented path handling.
+    config.resolve_paths(&host.home, |_| None)?;
+    let document = toml::to_string_pretty(&config)
+        .map_err(|_| Error::invalid("guided setup configuration could not be encoded"))?;
+    Config::parse(&document)?;
+    writeln!(prompt.output,
+        "\nReview the complete initial configuration (no provider credentials):\n{document}\nThe Linear UUID above is supplied by you; a configured Linear connection must verify the provider identity.\nConfirming submits this configuration to the ordinary setup transaction: local registration and a macOS Keychain attestation key, with STOPPED intent. It does not install/start a service or dispatch agents.\nAfter setup: explicitly install/start the registered service, then use connection add with supported authentication and workspace add with exact IDs, selectors, profiles, repository/check contracts and an explicit release policy. Run status and config check before considering orchestration start. No scope or provider qualification is inferred from this draft.")
+        .map_err(|error| Error::io("write setup review", error))?;
+    if prompt.ask("Type create to submit this reviewed setup, or /cancel: ")? != "create" {
+        return Err(setup_cancelled());
+    }
+    Ok(document)
 }
 /// A bounded document editor for the same typed configuration used by --from.
 /// Input is never logged or echoed by this function; secrets use separate stdin
