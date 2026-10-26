@@ -21,7 +21,8 @@ pub(crate) use effect_index::{ParentEffectHistoryBinding, ParentEffectHistoryObs
 #[path = "control_admission_identity.rs"]
 mod admission_identity;
 pub(crate) use admission_identity::{
-    ordinary_preparation_request_digest, ordinary_run_request_digest, receipt_request_digest,
+    broker_request_digest, ordinary_preparation_request_digest, ordinary_run_request_digest,
+    receipt_request_digest,
 };
 
 #[path = "control_parent_reassembly.rs"]
@@ -1326,6 +1327,21 @@ impl ControlHost {
         permit: &Permit,
         fresh_gate: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
+        self.with_valid_permit(permit, |_| fresh_gate())
+    }
+
+    pub(crate) fn validate_permit_observed<T>(
+        &self,
+        permit: &Permit,
+        observe: impl FnOnce(&ControlSnapshot) -> Result<T>,
+    ) -> Result<T> {
+        self.with_valid_permit(permit, |state| observe(&state.snapshot()))
+    }
+    fn with_valid_permit<T>(
+        &self,
+        permit: &Permit,
+        observe: impl FnOnce(&State) -> Result<T>,
+    ) -> Result<T> {
         let s = self
             .state
             .lock()
@@ -1341,7 +1357,7 @@ impl ControlHost {
                 "operation permit is absent, stale or fenced",
             ));
         }
-        fresh_gate()
+        observe(&s)
     }
 
     pub fn fence(&self, operation_id: Uuid) -> Result<()> {

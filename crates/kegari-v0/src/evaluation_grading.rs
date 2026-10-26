@@ -28,6 +28,7 @@ pub(super) fn collect(
     report.artifacts = facts.artifacts.clone();
     report.review_claim = facts.review_claim.clone();
     report.independent_boundary = facts.independent_boundary.clone();
+    report.independent_broker = facts.independent_broker.clone();
     report.declared_protocol = facts.declared_protocol.clone();
     report.evidence_references = facts.evidence_references.clone();
     report.observed_effects = Some(facts.effects.clone());
@@ -168,6 +169,11 @@ mod tests {
                 state: json!({"component":"grader error retention; no worker executed"}),
                 summary: None,
                 review_claim: None,
+                // Descriptive data only, used to verify failure-path retention.
+                independent_broker: Some(serde_json::from_value(json!({"schema_version":1,"operation":uuid::Uuid::from_u128(31),"runtime":uuid::Uuid::from_u128(32),"workspace":uuid::Uuid::from_u128(33),
+        "trial_digest":bytes_digest(b"data-only trial"),"suite_digest":bytes_digest(b"data-only suite"),"fixture_digest":bytes_digest(b"data-only fixture"),"instruction_digest":bytes_digest(b"data-only instruction"),
+        "contract_scope_digest":bytes_digest(b"data-only scope"),"context_digest":bytes_digest(b"data-only context"),"tool_contract_digest":bytes_digest(b"data-only tools"),"isolation_digest":bytes_digest(b"data-only isolation"),
+        "state":"unavailable","members":[],"receipts":[],"authority_at_collection":null,"gaps":["component_only_no_native_registration"]})).unwrap()),
                 independent_boundary: Some(IndependentBoundaryObservation {
                     schema_version: 1,
                     source_revision: "1".repeat(40),
@@ -259,6 +265,7 @@ mod tests {
                 "artifacts",
                 "review_claim",
                 "independent_boundary",
+                "independent_broker",
                 "declared_protocol",
                 "evidence_references",
                 "observed_effects",
@@ -277,6 +284,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&report.declared_protocol).unwrap(),
             serde_json::to_value(&facts.declared_protocol).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&report.independent_broker).unwrap(),
+            serde_json::to_value(&facts.independent_broker).unwrap()
         );
         assert_eq!(report.evidence_references, facts.evidence_references);
         assert_eq!(

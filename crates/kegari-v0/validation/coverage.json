@@ -5625,6 +5625,19 @@
           ],
           "verification": "verified_local_components_final_source",
           "source_digest": "sha256:e908c28aada5577ce254bcf2a78e2eb5e5c5c9b8e1950b4d01bccd20ce7e9c65"
+        },
+        {
+          "class": "deterministic",
+          "limits": "Protected local Control/Journal/source-reader components and descriptive archive fixtures only. No actual-agent adversarial trial, registered native worker positive, universal effect/read/output completeness, canary non-disclosure, claim acceptance, remote body readback or scorer qualification. Unknown/pending stays unknown; Complete remains unsupported. Only exact verified-source local evidence may support this append; existing row statuses and all prior evidence remain unchanged.",
+          "reference": "validation/LOCAL-INDEPENDENT-BROKER.md",
+          "scope": "Component report archive checks preserve explicitly unavailable same-owner broker diagnostics and legacy omission, and reject internally consistent diagnostic context/tool/source/permission contradictions against the recorded instruction manifest/report. Existing grading-error components retain broker facts without converting ungraded evidence into success.",
+          "status": "partial",
+          "tests": [
+            "tests/evaluation_reports.rs::broker_subset_diagnostic_survives_archive_without_complete_or_legacy_success",
+            "tests/evaluation_reports.rs::broker_actual_report_shape_rejects_context_tools_source_and_permission_contradictions"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:897b56c30c0a32c2ce82724c500e1897a44b09dfe7cbc85486d3b053ac5ea6a5"
         }
       ]
     },
@@ -5745,6 +5758,20 @@
           ],
           "verification": "verified_local_components_final_source",
           "source_digest": "sha256:e908c28aada5577ce254bcf2a78e2eb5e5c5c9b8e1950b4d01bccd20ce7e9c65"
+        },
+        {
+          "class": "deterministic",
+          "limits": "Protected local Control/Journal/source-reader components and descriptive archive fixtures only. No actual-agent adversarial trial, registered native worker positive, universal effect/read/output completeness, canary non-disclosure, claim acceptance, remote body readback or scorer qualification. Unknown/pending stays unknown; Complete remains unsupported. Only exact verified-source local evidence may support this append; existing row statuses and all prior evidence remain unchanged.",
+          "reference": "validation/LOCAL-INDEPENDENT-BROKER.md",
+          "scope": "Actual protected journal and source-reader components bind diagnostic references to the original timestamped write or descriptor bytes, reject first-read mutation/deletion and JSON-escaped oversize success claims, and bound optional diagnostic writes through one shared nonrenewing allowance. Report diagnostics remain digest/reference-only with explicit gaps.",
+          "status": "partial",
+          "tests": [
+            "worker::broker_observation::tests::same_write_journal_anchor_refuses_mutation_before_first_read_and_missing_bytes",
+            "worker::broker_observation::tests::shared_capture_budget_never_renews_and_refuses_before_write",
+            "worker::broker_observation::tests::admitted_source_observation_uses_the_returned_bytes_and_refuses_traversal"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:897b56c30c0a32c2ce82724c500e1897a44b09dfe7cbc85486d3b053ac5ea6a5"
         }
       ]
     },

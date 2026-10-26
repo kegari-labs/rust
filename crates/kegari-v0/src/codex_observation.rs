@@ -354,6 +354,9 @@ impl ProtocolCapture {
                     bytes: bytes.len() as u64,
                 });
             }
+            Err(error) if error.code == "observation_limit" => {
+                self.issue(ProtocolCaptureIssue::CaptureBound)
+            }
             Err(_) => self.issue(ProtocolCaptureIssue::ProtectedStorage),
         }
     }

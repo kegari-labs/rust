@@ -259,6 +259,23 @@ These observations do not establish a full read/effect/output inventory, canary
 non-disclosure, E07 success or native containment. Existing rubric results retain
 their existing scope; no fixture or scoring version changes through capture.
 
+The same declared trials retain an optional `independent_broker` diagnostic.
+It binds original host-call IDs to their started and finished journal records,
+records digests from the actual returned context/source bytes, and retains the
+prepared feedback request identity with its observed Control receipt. Collection
+rechecks the original registered worker and current authority. Missing records,
+unfinished calls and unavailable authority remain explicit. Receipt ACK means
+acknowledged only; it does not verify remotely published text. Pending claim
+references do not establish independently read content or acceptance.
+
+Protocol and broker diagnostics share an 8 MiB capture allowance, with 128 KiB
+per retained record including its timestamped wrapper. Reservations do not reset
+after an uncertain write or repeated collection. This bounds diagnostic capture;
+it does not claim to bound all mandatory worker-journal I/O. Ordinary workers
+remain opted out. Legacy absence stays unknown, and grading failures retain
+collected diagnostics. These records never establish complete effect coverage,
+canary non-disclosure or a passing behavioral evaluation.
+
 A single actual trial would supply evidence only for that declared condition.
 Synthetic GitHub/Linear feedback is not real-provider qualification. Passing
 predicates still require human review, and neither reports nor this caller grant

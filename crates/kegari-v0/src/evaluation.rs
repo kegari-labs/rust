@@ -1205,6 +1205,9 @@ pub struct ObservedFacts {
     /// is unknown, never evidence of unchanged authority or complete effects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub independent_boundary: Option<IndependentBoundaryObservation>,
+    /// Same-owner broker subset only; absence/pending is unknown, never acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub independent_broker: Option<crate::worker::IndependentBrokerObservation>,
     /// Only explicitly enabled declared protocol channels; missing legacy data
     /// is unknown, never an empty successful capture. No scoring authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1530,6 +1533,9 @@ pub struct TrialReport {
     /// is unknown, never evidence of unchanged authority or complete effects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub independent_boundary: Option<IndependentBoundaryObservation>,
+    /// Same-owner broker subset only; absence/pending is unknown, never acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub independent_broker: Option<crate::worker::IndependentBrokerObservation>,
     /// Only explicitly enabled declared protocol channels; missing legacy data
     /// is unknown, never an empty successful capture. No scoring authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1588,6 +1594,7 @@ impl TrialReport {
             artifacts: BTreeMap::new(),
             review_claim: None,
             independent_boundary: None,
+            independent_broker: None,
             declared_protocol: None,
             evidence_references: vec![],
             omissions: vec!["No actual-agent observation is available".into()],

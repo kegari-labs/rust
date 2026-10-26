@@ -5,6 +5,10 @@ mod retirement;
 pub(crate) use retirement::{ParentJournalHistory, capture_parent_journal};
 #[path = "worker_boundary.rs"]
 mod boundary;
+#[path = "worker_broker_observation.rs"]
+mod broker_observation;
+use broker_observation::{BrokerCapture, BrokerJournalReference, BrokerSemantic, CaptureBudget};
+pub use broker_observation::{BrokerControlBatch, BrokerInventory, IndependentBrokerObservation};
 
 use crate::codex::{SessionState, ToolBroker, ToolCall};
 use crate::control::{Actor, ControlHost, Lease, MutationRequest, Permit};
@@ -284,6 +288,18 @@ pub trait WorkerHost: Send + Sync {
     /// Observation-only callback, called outside Control. Production checks the
     /// exact original registered operation under its own single Control gate.
     /// A generic host cannot infer registration from equal serialized fields.
+    fn observe_independent_broker(
+        &self,
+        _control: &Arc<ControlHost>,
+        _permit: &Permit,
+        _contract: &Arc<WorkerContract>,
+        _inventory: &BrokerInventory,
+    ) -> Result<BrokerControlBatch> {
+        Err(Error::new(
+            "boundary_observation_unavailable",
+            "host has no actual registered broker observation",
+        ))
+    }
     fn observe_independent_boundary(
         &self,
         _control: &Arc<ControlHost>,
@@ -788,6 +804,30 @@ impl Journal {
         })
     }
     fn append(&self, kind: &str, value: &impl Serialize) -> Result<String> {
+        self.append_reference(kind, value)
+            .map(|reference| reference.leaf)
+    }
+    fn append_reference(
+        &self,
+        kind: &str,
+        value: &impl Serialize,
+    ) -> Result<BrokerJournalReference> {
+        self.append_reference_with_budget(kind, value, None)
+    }
+    fn append_observation(
+        &self,
+        kind: &str,
+        value: &impl Serialize,
+        budget: &CaptureBudget,
+    ) -> Result<BrokerJournalReference> {
+        self.append_reference_with_budget(kind, value, Some(budget))
+    }
+    fn append_reference_with_budget(
+        &self,
+        kind: &str,
+        value: &impl Serialize,
+        budget: Option<&CaptureBudget>,
+    ) -> Result<BrokerJournalReference> {
         let mut seq = self
             .next
             .lock()
@@ -799,12 +839,21 @@ impl Journal {
             ));
         }
         let leaf = format!("event-{:08}.json", *seq);
-        self.dir.write(
-            &leaf,
-            &json!({"kind":kind,"record":value,"observed_at":Utc::now()}),
-        )?;
+        let written = json!({"kind":kind,"record":value,"observed_at":Utc::now()});
+        let reference = BrokerJournalReference {
+            leaf: leaf.clone(),
+            kind: kind.into(),
+            digest: canonical_digest(1, &written)?,
+            bytes: serde_json::to_vec(&written)
+                .map_err(|_| Error::invalid("journal value encoding"))?
+                .len() as u64,
+        };
+        if let Some(budget) = budget {
+            budget.reserve(reference.bytes as usize)?;
+        }
+        self.dir.write(&leaf, &written)?;
         *seq += 1;
-        Ok(leaf)
+        Ok(reference)
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -820,6 +869,7 @@ struct Proposal {
 }
 #[derive(Clone)]
 struct CallReceipt {
+    operation: Uuid,
     digest: String,
     result: Option<std::result::Result<Value, Error>>,
 }
@@ -847,6 +897,8 @@ pub struct ScopedWorker {
     session: Option<SessionState>,
     // Enabled only by the declared evaluator, never ordinary worker creation.
     protocol_capture: Option<crate::codex::ProtocolCapture>,
+    capture_budget: Option<Arc<CaptureBudget>>,
+    broker_capture: Option<BrokerCapture>,
     applied_transition: Option<Arc<crate::corrections::VerifiedCorrectionTransition>>,
     correction_turn: Option<(String, String)>,
     pending: Option<String>,
@@ -932,6 +984,8 @@ impl ScopedWorker {
             executions,
             session: None,
             protocol_capture: None,
+            capture_budget: None,
+            broker_capture: None,
             applied_transition: None,
             correction_turn: None,
             pending: None,
@@ -1378,6 +1432,16 @@ impl ScopedWorker {
             processed_correction,
         };
         let reference = self.journal.append("proposal_pending", &p)?;
+        match canonical_digest(1, &p.claim) {
+            Ok(claim_digest) => self.broker_semantic(
+                id,
+                BrokerSemantic::PendingProposal {
+                    proposal: id,
+                    claim_digest,
+                },
+            ),
+            Err(error) => self.broker_gap(&error),
+        }
         self.proposals.push(p);
         Ok(json!({"proposal_id":id,"state":"pending_host_verification","receipt":reference}))
     }
@@ -1385,18 +1449,65 @@ impl ScopedWorker {
         match call.name.as_str() {
             "context_read" => {
                 let a: ContextRead = parse(&call.arguments)?;
-                if a.key == "correction_state" {
-                    return serde_json::to_value(self.correction_requirement())
-                        .map_err(|_| Error::invalid("correction reference encoding"));
+                let result = if a.key == "correction_state" {
+                    serde_json::to_value(self.correction_requirement())
+                        .map_err(|_| Error::invalid("correction reference encoding"))
+                } else {
+                    let v = self.contract.context.get(&a.key).ok_or_else(|| {
+                        Error::new("missing_context", "named context entry unavailable")
+                    })?;
+                    bounded_value(v.clone())
+                };
+                if let Ok(value) = &result {
+                    match canonical_digest(1, value).and_then(|digest| {
+                        Ok((
+                            digest,
+                            serde_json::to_vec(value)
+                                .map_err(|_| Error::invalid("context observation encoding"))?
+                                .len(),
+                        ))
+                    }) {
+                        Ok((digest, bytes)) => self.broker_semantic(
+                            id,
+                            BrokerSemantic::Context {
+                                key: a.key.clone(),
+                                origin: if a.key == "correction_state" {
+                                    "owner_correction_state"
+                                } else {
+                                    "contract_context"
+                                }
+                                .into(),
+                                digest,
+                                bytes: bytes as u64,
+                            },
+                        ),
+                        Err(error) => self.broker_gap(&error),
+                    }
                 }
-                let v = self.contract.context.get(&a.key).ok_or_else(|| {
-                    Error::new("missing_context", "named context entry unavailable")
-                })?;
-                bounded_value(v.clone())
+                result
             }
             "source_read" => {
                 let a: SourceRead = parse(&call.arguments)?;
-                read_source(&self.contract.isolation, &a.path)
+                let mut fact = None;
+                let result =
+                    read_source(&self.contract.isolation, &a.path, |path, bytes, value| {
+                        fact = Some(canonical_digest(1, value).map(|returned_value_digest| {
+                            BrokerSemantic::Source {
+                                requested_path: a.path.clone(),
+                                path: path.into(),
+                                digest: bytes_digest(bytes),
+                                bytes: bytes.len() as u64,
+                                returned_value_digest,
+                            }
+                        }));
+                    });
+                if let Some(fact) = fact {
+                    match fact {
+                        Ok(fact) => self.broker_semantic(id, fact),
+                        Err(error) => self.broker_gap(&error),
+                    }
+                }
+                result
             }
             "outcome_submit" => {
                 let a: OutcomeArgs = parse(&call.arguments)?;
@@ -1459,19 +1570,30 @@ impl ScopedWorker {
                     &self.contract.authority,
                 )?;
                 let lease = self.permit.lease.clone();
+                let request = self.mutation(id, "review_feedback", json!({}));
+                let command = ProviderMutation::GithubComment {
+                    repository: target.repository.clone(),
+                    pr: target.pull_request,
+                    expected_head: target.head.clone(),
+                    body: a.body.clone(),
+                };
+                if let Some(capture) = &mut self.broker_capture {
+                    let identity = self
+                        .providers
+                        .independent_feedback_request(request.clone(), &command)
+                        .and_then(|request| {
+                            crate::control::broker_request_digest(&request, &self.permit)
+                        });
+                    capture.feedback(&self.journal, id, target, &a.body, identity);
+                }
                 let response = self
                     .providers
                     .mutate(
                         self.control.clone(),
-                        self.mutation(id, "review_feedback", json!({})),
+                        request,
                         Some(self.permit.clone()),
                         None,
-                        ProviderMutation::GithubComment {
-                            repository: target.repository,
-                            pr: target.pull_request,
-                            expected_head: target.head,
-                            body: a.body,
-                        },
+                        command,
                         move || {
                             host.verify_owner(&lease)?;
                             authority.compare(&host.current_authority(&authority)?)
@@ -1813,6 +1935,20 @@ impl ScopedWorker {
             };
             self.journal.append("outcome_pending", &outcome)?;
             let reference = self.sink.record(&outcome)?;
+            if let Some(capture) = &mut self.broker_capture {
+                capture.semantic(
+                    &self.journal,
+                    proposal.id,
+                    BrokerSemantic::PendingClaim {
+                        proposal: proposal.id,
+                        reference_digest: bytes_digest(reference.as_bytes()),
+                    },
+                );
+                capture.gap(&Error::new(
+                    "pending_claim_content_not_independently_read",
+                    "sink return is a pending claim reference, not acceptance",
+                ));
+            }
             self.journal.append(
                 "outcome_recorded",
                 &json!({"proposal_id":proposal.id,"reference":reference}),
@@ -1830,6 +1966,10 @@ impl ToolBroker for ScopedWorker {
     ) {
         if let Some(capture) = &mut self.protocol_capture {
             capture.disable(crate::codex::ProtocolCaptureIssue::ConflictingDuplicate);
+            self.broker_gap(&Error::new(
+                "observation_conflict",
+                "duplicate declaration cannot reset observation",
+            ));
             return;
         }
         let mut capture = crate::codex::ProtocolCapture::new(
@@ -1852,6 +1992,16 @@ impl ToolBroker for ScopedWorker {
             capture.disable(crate::codex::ProtocolCaptureIssue::ScopeNotDeclared);
         } else if declaration.trial_digest().is_none() {
             capture.disable(crate::codex::ProtocolCaptureIssue::DeclarationUnavailable);
+        }
+        if declaration.operation() == self.permit.operation_id
+            && declaration.instruction_digest() == self.contract.assembled.manifest_digest
+            && matches!(self.contract.authority, WorkerAuthority::Independent(_))
+            && declaration.trial_digest().is_some()
+        {
+            let budget = Arc::new(CaptureBudget::default());
+            self.broker_capture =
+                BrokerCapture::new(&self.permit, &self.contract, declaration, budget.clone());
+            self.capture_budget = Some(budget);
         }
         self.protocol_capture = Some(capture);
     }
@@ -1881,8 +2031,12 @@ impl ToolBroker for ScopedWorker {
             capture.issue(crate::codex::ProtocolCaptureIssue::BindingChanged);
             return;
         }
-        capture.observe(event, &mut |value| {
-            self.journal.append("protocol_observation", value)
+        capture.observe(event, &mut |value| match &self.capture_budget {
+            Some(budget) => self
+                .journal
+                .append_observation("protocol_observation", value, budget)
+                .map(|reference| reference.leaf),
+            None => self.journal.append("protocol_observation", value),
         });
     }
     fn observe_session(&mut self, state: &SessionState) -> Result<()> {
@@ -1894,16 +2048,21 @@ impl ToolBroker for ScopedWorker {
         call: &'a ToolCall,
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
         Box::pin(async move {
-            self.validate_call(call)?;
+            if let Err(error) = self.validate_call(call) {
+                self.broker_gap(&error);
+                return Err(error);
+            }
             let key = format!("{}:{}:{}", call.thread_id, call.turn_id, call.call_id);
             let digest =
                 canonical_digest(1, &json!({"tool":call.name,"arguments":call.arguments}))?;
             if let Some(prior) = self.calls.get(&key) {
                 if prior.digest != digest {
-                    return Err(Error::new(
+                    let error = Error::new(
                         "request_conflict",
                         "provider reused a tool call identity with changed arguments",
-                    ));
+                    );
+                    self.broker_gap(&error);
+                    return Err(error);
                 }
                 return prior.result.clone().unwrap_or_else(|| {
                     Err(Error::new(
@@ -1916,23 +2075,46 @@ impl ToolBroker for ScopedWorker {
                 return Err(Error::new("tool_limit", "worker exceeded bounded calls"));
             }
             let id = Uuid::new_v4();
-            self.journal.append(
+            let started = match self.journal.append_reference(
                 "tool_started",
                 &json!({"call":key,"request_id":id,"tool":call.name,"arguments_digest":digest}),
-            )?;
+            ) {
+                Ok(reference) => reference,
+                Err(error) => {
+                    self.broker_gap(&error);
+                    return Err(error);
+                }
+            };
             self.calls.insert(
                 key.clone(),
                 CallReceipt {
-                    digest,
+                    operation: id,
+                    digest: digest.clone(),
                     result: None,
                 },
             );
+            if let Some(capture) = &mut self.broker_capture {
+                capture.started(id, call, &digest, started);
+            }
             let result = self.perform(call, id).await;
-            self.journal.append(
+            if let Some(capture) = &mut self.broker_capture {
+                capture.returned(id, &result);
+            }
+            let finished = match self.journal.append_reference(
                 "tool_finished",
                 &json!({"call":key,"request_id":id,"result":result}),
-            )?;
-            self.calls.get_mut(&key).expect("inserted call").result = Some(result.clone());
+            ) {
+                Ok(reference) => reference,
+                Err(error) => {
+                    self.broker_gap(&error);
+                    return Err(error);
+                }
+            };
+            let actual = self.calls.get_mut(&key).expect("inserted call");
+            if let Some(capture) = &mut self.broker_capture {
+                capture.finished(actual.operation, finished);
+            }
+            actual.result = Some(result.clone());
             result
         })
     }
@@ -2126,6 +2308,7 @@ impl TrialHost for ScopedWorker {
             summary,
             review_claim,
             independent_boundary,
+            independent_broker: self.broker_observation(),
             declared_protocol: self.protocol_capture.as_ref().map(|capture| {
                 capture.finish(self.session.as_ref(), self.pending.as_deref(), &|leaf| {
                     self.journal.dir.read_bounded(leaf, 256 * 1024)
@@ -2280,7 +2463,11 @@ fn bounded_value(value: Value) -> Result<Value> {
     }
     Ok(value)
 }
-fn read_source(boundary: &ValidatedIsolation, path: &str) -> Result<Value> {
+fn read_source(
+    boundary: &ValidatedIsolation,
+    path: &str,
+    mut observe: impl FnMut(&str, &[u8], &Value),
+) -> Result<Value> {
     boundary.revalidate()?;
     let relative = Path::new(path);
     if path.is_empty()
@@ -2347,7 +2534,18 @@ fn read_source(boundary: &ValidatedIsolation, path: &str) -> Result<Value> {
     }
     let content = std::str::from_utf8(&bytes)
         .map_err(|_| Error::new("invalid_input", "source is not UTF-8"))?;
-    bounded_value(json!({"path":path,"digest":bytes_digest(&bytes),"content":content}))
+    let value = json!({"path":path,"digest":bytes_digest(&bytes),"content":content});
+    let admitted = actual
+        .strip_prefix(&boundary.plan().repository)
+        .map_err(|_| Error::new("scope_violation", "admitted source left repository"))?;
+    let admitted = admitted
+        .to_str()
+        .ok_or_else(|| Error::new("scope_violation", "admitted source path is not UTF-8"))?;
+    // Record a successful read result only after the exact public Value passes
+    // its unchanged encoded-size bound (escaped UTF-8 may expand substantially).
+    let value = bounded_value(value)?;
+    observe(admitted, &bytes, &value);
+    Ok(value)
 }
 #[cfg(unix)]
 fn open_source(path: &Path) -> Result<std::fs::File> {

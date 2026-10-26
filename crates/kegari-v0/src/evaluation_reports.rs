@@ -195,7 +195,7 @@ impl ReportArchive {
             "elapsed_ms":(!self.reconstructed.contains(&r.trial.name()?)).then_some(r.elapsed_ms),"turns_started":r.turns_started,"usage_tokens":r.usage_tokens,
             "earlier_usage_unknown":r.earlier_usage_unknown,"unresolved_remote_effects":r.unresolved_remote_effects,
             "grading_error":r.grading_error,"observed_effects":r.observed_effects,
-            "runtime_build":r.runtime_build,"review_claim":r.review_claim,"independent_boundary":r.independent_boundary,"declared_protocol":r.declared_protocol,"instruction_digest":r.instruction_manifest.as_ref().map(|m|canonical_digest(1,m)).transpose()?
+            "runtime_build":r.runtime_build,"review_claim":r.review_claim,"independent_boundary":r.independent_boundary,"independent_broker":r.independent_broker,"declared_protocol":r.declared_protocol,"instruction_digest":r.instruction_manifest.as_ref().map(|m|canonical_digest(1,m)).transpose()?
         }))).collect::<Result<Vec<_>>>()?;
         Ok(
             json!({"schema_version":1,"report_root":self.root,"suite_digest":self.suite.digest()?,
@@ -218,6 +218,28 @@ fn validate_actual_report(
     let manifest: crate::instructions::InstructionManifest =
         serde_json::from_value(report.instruction_manifest.clone().ok_or_else(conflict)?)
             .map_err(|_| conflict())?;
+    if let Some(observation) = &report.independent_broker {
+        observation.validate()?;
+        if manifest.role != crate::instructions::AgentRole::IndependentReview
+            || observation.operation != manifest.operation_id
+            || observation.workspace != manifest.workspace_id
+            || observation.suite_digest != report.suite_digest
+            || observation.fixture_digest != report.fixture_digest
+            || observation.context_digest != manifest.context_digest
+            || Some(&observation.tool_contract_digest) != report.tool_contract_digest.as_ref()
+            || observation.trial_digest != canonical_digest(1, &report.trial)?
+            || observation.instruction_digest
+                != canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &manifest)?
+        {
+            return Err(conflict());
+        }
+        if let Some(identity) = &observation.authority_at_collection
+            && (manifest.repository_revision.as_deref() != Some(identity.source_revision.as_str())
+                || identity.permission_digest != canonical_digest(1, &manifest.permissions)?)
+        {
+            return Err(conflict());
+        }
+    }
     if let Some(observation) = &report.declared_protocol {
         observation.validate()?;
         if (manifest.role != crate::instructions::AgentRole::IndependentReview

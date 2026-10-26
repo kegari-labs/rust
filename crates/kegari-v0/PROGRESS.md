@@ -3,6 +3,232 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
+Current worktree: the reviewed five-path broker component test layer passed
+all-target compilation (16.462s), strict Clippy (17.345s), all eight broker
+component tests (36.012s), 95 integration tests (30.773s) and formatting (1.544s).
+The integration targets contain 24 control-storage, 30 provider and 41 worker
+tests. All three new regressions passed; all 696 source inputs and toolchain
+observations stayed unchanged at
+`sha256:f26dfec202ba3840ab7c81dda8c6979ee0abb94aeef11c67d7b0195dc258105c`.
+Sessions8702/24399 are closed. No canary implementation is installed. Originals
+and installation record remain in
+`/private/tmp/kegari-v0-broker-components-installed-source1`; the exact evidence
+bundle is `/private/tmp/kegari-v0-broker-components-verified-evidence-1`.
+Reports: [component validation](validation/LOCAL-BROKER-CALL-FAILURES.md) and
+[machine evidence](validation/broker-call-failures-checks.json). Their SHA-256
+hashes are `930969c2f9da608590167294f6a29647805846aff21aa73a28306ba66120000a`
+and `46eb7765bdd6cdd8694d1998580fb62a91f515902d87f3824525229d3df4f54c`.
+No full-suite result is claimed for this test-only increment; the coverage ledger
+is unchanged. The uncertain-effect regression intentionally retained its owned
+synthetic records at
+`/var/folders/s3/gnkb4nw50msf40dxc1jrpsyh0000gn/T/.tmpAZP6yJ`.
+The independent installed/evidence audit found no material discrepancy:
+`/private/tmp/kegari-broker-components-installed-evidence-audit-v1/REVIEW.md`,
+SHA-256 `9b126f4a8194bcb3802e6c3cd885fbd54921be062588065e0fbb813857842061`.
+Root read it and corrected the older checkpoint's time-qualified wording.
+These are directly related broker regressions, so the current unpublished broker
+commit will be amended after creating a local recovery reference. No other
+history will be consolidated, and no remote write is authorized.
+The committed broker results below remain evidence for their exact older source.
+
+The broker-observation increment is locally verified: 954 tests passed, zero
+failed and two required native checks were ignored across 39 full groups in
+785.104s. All seven new tests and all 32 required named regressions passed once
+in their actual full targets. The full raw log SHA-256 is
+`b7dc6fddbefd8ee736c067fa23064d4b7da1013c54ab3be6c0a0cb8a82ffcf74`.
+The dispatch-disabled Plan passed in 32.297s (28 variants, 56 slots, dispatch=false).
+Session26323 is closed; no validation process remains running. Source and toolchain
+remained unchanged. Native/live/human qualification remains incomplete.
+
+Fifteen source/test paths (two new modules) compose reviewed v1/v2 onto committed transport source3.
+Root verified all 158 candidate artifact members, reviewed the five overlap paths
+and preserved the existing evaluator loop, transport collector and report prefix.
+The six receipt/publication corrections are unchanged. Exact originals and merged
+files: `/private/tmp/kegari-independent-broker-on-transport-source3-v1`; installation
+record: `/private/tmp/kegari-v0-broker-installed-source1/INSTALL.json`.
+The 694 current inputs are frozen at
+`sha256:897b56c30c0a32c2ce82724c500e1897a44b09dfe7cbc85486d3b053ac5ea6a5`.
+The serial pipeline completed. All-target check passed in
+23.988s and strict Clippy in 24.922s, with source/toolchain unchanged. The five
+broker component tests passed in 41.504s; Control 103 tests in 12.196s, runtime
+33 in 1.759s, evaluation 44 in 1.951s, and protocol observations 23 in 0.165s.
+The ten complete integration targets passed 195 tests in 93.884s, including both
+new archive tests. Formatting passed in 1.529s. These focused counts overlap and
+are not a full-suite total. All seven new functions passed their focused
+targets and the final full run. Historical 947-test transport counts are separate.
+
+The executed collector verified all 13 recorded invocations and the full test
+memberships, exact source/candidate/history and only two partial ledger appends.
+Inventory passed in 0.045s and diff checking in 0.023s. Root read the collector,
+verified all 15 held members and 303 pins, and checked its 13 inherited helpers
+against the previously reviewed version. A separate collector static audit found
+no material issue, SHA-256
+`a9a29b71834b351ad22bd7e9b4798e5c1e374f54efdd7230c6c0a3d79ec18eac`.
+That auditor authored the broker candidate; this is an audit of the separately
+authored collector, not a second independent review of the implementation.
+Reports: [local validation](validation/LOCAL-INDEPENDENT-BROKER.md) and
+[machine evidence](validation/independent-broker-checks.json). The exact verified
+bundle is `/private/tmp/kegari-v0-broker-verified-evidence-1`. Both repository copies
+match its COMPLETE manifest. Coverage SHA-256:
+`fe0cac41325595a8acba2a035f19b3f95e5312842bac3430e3617b2e8e5b905a`.
+Only two existing report/provenance rows received one partial entry each; statuses,
+prior evidence and all other rows are unchanged. Ledger originals are retained at
+`/private/tmp/kegari-v0-broker-ledger-finalization-1`. Committed locally as
+`316c362d86799ae066f48a772d0aa1c4d2256d5a` —
+`feat(kegari-v0): retain independent broker observations`. All 20 intended files
+and 694 tested inputs match HEAD, with a clean tree after verification. No commits
+were consolidated, rewritten or pushed. Verification:
+`/private/tmp/kegari-v0-broker-commit-verification.json`.
+
+The final artifact/evidence-scope audit found no material inconsistency:
+`/private/tmp/kegari-broker-source1-final-artifact-audit-v1/REVIEW.md`, SHA-256
+`d80eb9adcc660b17cc2b216ecc0a4685f74c463554c3ea31f60a5040169a165e`.
+It verifies the exact outputs, 13 records, 32 memberships, historical failures and
+two-row transform; it is not an additional independent implementation review.
+
+This broker increment retains a separate local commit from transport: original
+host calls and Control receipts have different producer paths and failure modes
+from protocol streams, and the shared storage allowance and archive consistency
+checks have their own component/compatibility evidence. This preserves both
+validated boundaries for review without rewriting the earlier checkpoint.
+
+Independent v1 review found B1 (observed success before encoded source-result
+bound) and B2 (archive consistency omitted actual manifest comparisons). V2 fixes
+both and adds real oversized-result/no-callback and contradictory archive cases.
+Its independent rereview found no remaining material issue in the bounded scope:
+`/private/tmp/kegari-independent-broker-observation-independent-review-v2/REVIEW.md`,
+SHA-256 `e59a8f48802b2b5cd91dc0e078a6d44706811dc9608da49dba42624db90024fd`.
+The installed-source integration audit also found no material issue:
+`/private/tmp/kegari-independent-broker-installed-source1-integration-review-v1/REVIEW.md`,
+SHA-256 `a95c3bb5618caa2aae2cdcd5b1ac191fcd444e03f9069212140fa9369ee4ce53`.
+It independently checked the exact 694 inputs, five overlaps, one-Control
+callback/lock ordering, docs and eleven-command pipeline.
+Original membership, same-write anchors, shared finite capture allowance and exact
+Control receipt snapshots remain diagnostic-only. ACK does not prove remote text;
+missing/pending data stays unknown; no Complete or acceptance state is introduced.
+At that preceding checkpoint, collector-enabled cancellation and actual
+finish-write failure had not been exercised; the later component runs above now
+cover those bounded cases. Registered native positive evidence remains
+unperformed. Operator guidance records the qualification limits.
+Canary policy addendum and independent review are complete. A default-omitted
+per-variant sidecar can bind actual private materialization without changing the
+shipped scorer/suite or existing authority. Named host-input absence stays
+separate from unavailable provider discovery and unqualified output coverage.
+Addendum SHA-256:
+`1b3882c52ef3f50d1908290d2f3400b22f38f97822009235781540fbbd85ea50`;
+review SHA-256:
+`4ff5653c8c392d4134849646e9023236336a83bebd7c6a3435c9d5eb54de9c86`.
+Root verified all 35 source pins and read both. TEMP implementation is assigned,
+including original shared-budget capture, append-only actual binding, fixed-parent
+path checks, cleanup-owner retention and final readback before work settlement.
+No canary code is installed or executed.
+
+Two further broker component regressions are assigned in TEMP from the reviewed
+plan `/private/tmp/kegari-broker-cancel-finish-component-plan-v1/PLAN.md` (SHA-256
+`cacbca55362618d6338521e160411431b9b6434c2c981bbedd7e49ab461d04ee`).
+They will exercise actual call cancellation and a pre-write final journal refusal
+with test-seeded diagnostic enrollment and a synthetic transport, retaining the
+real host's registration-unavailable result. They must not manufacture native
+capabilities or call the pre-write refusal an uncertain post-rename outcome.
+The two tests are held only in TEMP at
+`/private/tmp/kegari-broker-cancel-finish-components-v1` (FILES SHA-256
+`4e3c375ccf41719428872eb6135262728135d873a42e6efd2bd1b6a726c0332e`).
+Root read the complete new module, verified all 21 artifact members and confirmed
+the exact extraction preserves the complete integration body. Historical drafts
+counted 36 tests with a narrow regex; the actual body has 41 including five
+parameterized Tokio attributes. No helper test was added or duplicated.
+At initial handoff only standalone formatting and byte checks had run. Independent
+implementation review found that failure cleanup can accept a nonpending Sent
+receipt and discard unresolved-effect storage. A v2 correction is assigned to
+require an explicitly settled, unheld receipt and empty retirement obligations;
+uncertainty must retain the directory. V1 remains unchanged for review history.
+The independent implementation review is
+`/private/tmp/kegari-broker-cancel-finish-components-independent-review-v1/REVIEW.md`,
+SHA-256 `54f8727639ac301d7f6ffaebe298fda1d9d13e5dc04477d18bd66601205e6f39`.
+Its author wrote the plan, not the implementation; root read the full review.
+V2 fixes BC-1 and adds a third actual-Control lost-response regression. Its
+independent rereview found no remaining material issue in that correction:
+`/private/tmp/kegari-broker-cancel-finish-components-independent-review-v2/REVIEW.md`,
+SHA-256 `b4043e010c3c8f5c2df12eb76f744723d000ca5f2aa05b74d2ed8e9d73f23507`.
+Root read the full delta/review and verified all held manifests before installing
+the exact five-path composition. V2 FILES SHA-256:
+`a7d366fc790c0a33b852559cc97cd3206e9aeeaabaf551fe0fd47d79c561968a`.
+Compilation and focused/compatibility execution now pass as recorded above.
+Current full validation remains the
+committed 694-input source1. The approved test-only fixture
+reuse moves the existing `tests/worker.rs` prelude into
+`tests/support/worker_fixture.rs`, included by both existing integration tests and
+the new private unit-test submodule. Existing assertions must remain exact.
+If necessary for the reused nested support module, a minimal test-only crate
+alias in `src/lib.rs` is authorized; no production capability/API is added.
+The cancelled-call cleanup may prove the original Control receipt became terminal
+and pending cleared; it cannot claim a direct JoinHandle/native join. An unexpected
+cleanup timeout must retain the owned fixture rather than delete beneath it.
+
+Canary external literal wiring currently has one known root-owned change after
+integration: `tests/evaluation.rs` ObservedFacts needs `canary_diagnostic: None`.
+The exact one-line uninstalled overlay is saved at
+`/private/tmp/kegari-canary-external-defaults-root-v1` (FILES SHA-256
+`f2ef64912f691e18332d2ef8581e07037cdf1a3bf6605027df7b4861bce269f1`).
+Owned module defaults stay with the canary author. A separate TEMP design task is
+resolving the later E07 native PR source/context and actual forbidden-path operand;
+it may not invent E05 OIDs or claim the old ../scorer path reaches the new marker.
+That design is now held at
+`/private/tmp/kegari-e07-native-source-context-path-plan-v1/PLAN.md`, SHA-256
+`4b3307ff233c8a13b09f50e072662f353e7e8ed5cc3275162d442147e083c5d6`.
+Root read it and assigned independent review. It proposes E07's own local Git
+history, an independent workflow without scratch-dependent check rewriting, and
+a narrowly owned context operand before contract assembly. No proposed API,
+source object, migrated fixture or E07 result exists from this design.
+The independent design review found no material defect, subject to its explicitly
+missing private operand producer:
+`/private/tmp/kegari-e07-native-source-context-path-independent-review-v1/REVIEW.md`,
+SHA-256 `3f9b2b60017fcd3ca37c6e663b761c2a220836ce19f9d6cf2d1823a990cfe99a`.
+Root read it and verified all five plan members and 59 source pins. Only the
+closed source-data recipe/tool/tests/docs portion is assigned in TEMP now; Rust
+schema3/context ownership integration depends on the held canary implementation.
+There are no new source objects, generated fixture output or test results yet.
+
+Root also prepared design-based operator documentation in TEMP at
+`/private/tmp/kegari-canary-operator-docs-root-v1` (FILES SHA-256
+`c597d4ebb6eb8419fe0eb7361ab1dac1d0aacbc7736b1de48318dca75a555ff8`).
+It is not installed or evidence of implemented behavior; adoption requires
+comparison with the held canary code and its reviewed public schema.
+
+The canary implementation is held at
+`/private/tmp/kegari-canary-diagnostic-implementation-v1` (FILES SHA-256
+`7914da197af3449da314aa4c0be39962f8d6e1d6ddbac442c66278286be847ae`).
+Root read all eight existing-path diffs, both new modules and README/test limits;
+independent v1 review is complete:
+`/private/tmp/kegari-canary-diagnostic-implementation-independent-review-v1/REVIEW.md`,
+SHA-256 `9ffeefc88c5ee58c9a9edfb675a98405e6ffd7b92170a4aa08ae12b084249147`.
+Thirteen tests are authored, not compiled or run. Confirmed findings are rejection
+of the actual fresh E05 `corrections: []`, a fallible request lock before retaining
+the real admitted cleanup owner, and missing original file identity allowing
+same-byte replacement. Bounded scan/deadline and form-allocation charging also
+need correction, as do two narrow test-evidence claims. V2 is assigned in TEMP,
+including a minimal crate-private same-creation protected-file identity helper;
+existing storage checks/public behavior must remain unchanged. Root verified all
+26 ARTIFACTS members and ten draft/eight base hashes. No canary code is installed.
+
+The separate E07 four-path source-data implementation is held at
+`/private/tmp/kegari-e07-source-data-preparation-v1` (FILES SHA-256
+`bf848db263868a5ced381581d97a134e5f0ec6d2456b36daf9cb0b093ced2606`).
+Root read its full code/test/recipe/doc delta and assigned independent review.
+Seven new Python tests are authored, not run; original E05 helpers/tests remain
+unchanged. Runtime schema3 and original-owner path support remain missing, and
+the proposed tool output says so explicitly. No tool code is installed, no source
+objects have been created and no fixture program has been executed.
+
+Initial resume inspection confirmed the approved SPEC hash, `main`, an empty
+index and then only this progress record changed since the broker commit. A read-only `ps`
+inventory was denied (`Operation not permitted`); no retry or escalation was
+made. Closed owned tool sessions remain the evidence for completed validation;
+no global process-inventory claim follows.
+
+The following transport checkpoint is committed and predates the current broker
+changes. Its validation remains evidence for that exact source only.
+
 Transport source3's full suite passed: 947 tests, zero failures and two required
 native ignores across 39 groups in 800.907s. All 16 new tests, three extended
 diagnostics, both previously failing tests and both other affected successor
@@ -12,8 +238,12 @@ the toolchain also remained unchanged. Full log SHA-256:
 `19d9de485c37ce593a61d505209d59750baf48da3bc9c84368944cb4277de409`.
 The dispatch-disabled Plan passed in 35.245s with 28 variants, 56 slots and
 `dispatch_authorized=false`. Session21501 is closed; no validation process remains
-running. Inventory passed in 0.041s and diff checking in 0.020s. The local commit
-remains pending.
+running at this checkpoint. Inventory passed in 0.041s and diff checking in
+0.020s. Committed locally as `998677a6c9c49d4545fd523210646fb30010f460` —
+`feat(kegari-v0): observe bounded evaluation transport tails`. All 22 intended files
+and 692 tested inputs matched HEAD with a clean tree afterward. No commits were
+consolidated, rewritten or pushed. Verification:
+`/private/tmp/kegari-v0-transport-commit-verification.json`.
 
 Source3 all-target check passed in 17.691s, strict Clippy in 18.110s, both receipt
 regressions in 26.167s, exact validation-retry regression in 30.942s and exact chain
@@ -62,7 +292,7 @@ A separate source3 integration audit also found no material discrepancy in the
 six corrections or nine pipeline records, SHA-256
 `8214663a225e55cf0bac4f47bcb2679b25d245213ae9976a27b60eb27b7d01a3`.
 
-This increment will retain a separate local commit: the new original-reader
+This increment retains a separate local commit: the new original-reader
 lifecycle and receipt-reconstruction serialization have distinct runtime effects
 and regression evidence from the prior observation-record checkpoint. Preserving
 that boundary makes the locking correction and transport behavior independently
@@ -1389,7 +1619,7 @@ exhaustive SPEC audit or a new native qualification.
 | Scope | Current remaining work |
 | --- | --- |
 | Control membership and parent history | Committed1e14788 after917 full-suite passes and two required native ignores; all38 new names passed. Evidence and narrow partial coverage are finalized. |
-| Native evaluation and E07 | Declared authority/protocol observations committed102984e after931 passes; transport extension locally verified with947 passes, broker read/effect inventory in TEMP. Concrete canary/output rubric and versioned pr_attack migration remain. Only independent_malicious currently has native context;27 contexts and other role/prior-state lanes still need genuine producers. All56 slots remain unqualified. |
+| Native evaluation and E07 | Declared authority/protocol observations committed102984e after931 passes; transport extension committed998677a after947 passes; broker read/effect inventory committed316c362 after954 passes; three further broker regressions now locally verified, canary corrections and E07 source-data tool in TEMP. Concrete canary/output rubric and versioned pr_attack migration remain. Only independent_malicious currently has native context;27 contexts and other role/prior-state lanes still need genuine producers. All56 slots remain unqualified. |
 | Coordination and continuation observations | Derive assertions from actual scoped publications, receipts and predecessor lineage. Repository-free coordination needs its own substrate; fixture JSON cannot create prior execution authority. |
 | Cold recovery and native containment | Historical parent seals do not recreate worker/source/completion capabilities. Implement a distinct supported cold obligation with fresh evidence. Actual descendant containment remains a code gap in addition to the denied native host prerequisites; group/leader exit is insufficient. |
 | External targets and visual cold readback | Add explicitly supported serving-artifact/source and authenticated video retrieval producers. Existing deployment-free/owned-target paths remain valid within their local evidence limits. |

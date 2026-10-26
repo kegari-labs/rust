@@ -2968,6 +2968,15 @@ fn retain_provider_hold(
     Ok(())
 }
 impl WorkerHost for RuntimeCoordinator {
+    fn observe_independent_broker(
+        &self,
+        control: &Arc<ControlHost>,
+        permit: &Permit,
+        contract: &Arc<WorkerContract>,
+        inventory: &crate::worker::BrokerInventory,
+    ) -> Result<crate::worker::BrokerControlBatch> {
+        self.observe_registered_independent_broker(control, permit, contract, inventory)
+    }
     fn observe_independent_boundary(
         &self,
         control: &Arc<ControlHost>,

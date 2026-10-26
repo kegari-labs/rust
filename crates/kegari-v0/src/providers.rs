@@ -2715,6 +2715,24 @@ impl ProviderBroker {
         })?
     }
 
+    pub(crate) fn independent_feedback_request(
+        &self,
+        mut request: MutationRequest,
+        command: &ProviderMutation,
+    ) -> Result<MutationRequest> {
+        if !matches!(command, ProviderMutation::GithubComment { .. }) {
+            return Err(Error::new(
+                "observation_conflict",
+                "independent diagnostic requires actual feedback command",
+            ));
+        }
+        let (kind, targets, payload) = self.binding(command)?;
+        request.kind = kind;
+        request.canonical_targets = targets;
+        request.payload = payload;
+        Ok(request)
+    }
+
     fn linear(&self) -> Result<&LinearClient> {
         self.linear
             .as_ref()

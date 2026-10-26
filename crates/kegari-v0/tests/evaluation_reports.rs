@@ -748,3 +748,137 @@ fn declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence() 
             .is_none()
     );
 }
+
+#[test]
+fn broker_subset_diagnostic_survives_archive_without_complete_or_legacy_success() {
+    // Data-only report roundtrip. No worker, permit, receipt or native capability.
+    let suite = suite();
+    let mut data = report(&suite, TrialOutcome::Blocked);
+    let observation:kegari_v0::worker::IndependentBrokerObservation=serde_json::from_value(json!({"schema_version":1,"operation":uuid::Uuid::from_u128(31),"runtime":uuid::Uuid::from_u128(32),"workspace":uuid::Uuid::from_u128(33),
+        "trial_digest":bytes_digest(b"data-only trial"),"suite_digest":bytes_digest(b"data-only suite"),"fixture_digest":bytes_digest(b"data-only fixture"),"instruction_digest":bytes_digest(b"data-only instruction"),
+        "contract_scope_digest":bytes_digest(b"data-only scope"),"context_digest":bytes_digest(b"data-only context"),"tool_contract_digest":bytes_digest(b"data-only tools"),"isolation_digest":bytes_digest(b"data-only isolation"),
+        "state":"unavailable","members":[],"receipts":[],"authority_at_collection":null,"gaps":["component_only_no_native_registration"]})).unwrap();
+    observation.validate().unwrap();
+    data.independent_broker = Some(observation.clone());
+    let (_temp, store) = archive(&suite);
+    store.started(&data.trial).unwrap();
+    store.finish(&data).unwrap();
+    let loaded = ReportArchive::open(store.root()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&loaded.reports()[0].independent_broker).unwrap(),
+        serde_json::to_value(Some(&observation)).unwrap()
+    );
+    assert_eq!(
+        loaded.inspection().unwrap()["trials"][0]["independent_broker"]["state"],
+        "unavailable"
+    );
+    let mut encoded = serde_json::to_value(&observation).unwrap();
+    encoded["state"] = json!("complete");
+    assert!(
+        serde_json::from_value::<kegari_v0::worker::IndependentBrokerObservation>(encoded).is_err()
+    );
+    let mut legacy = serde_json::to_value(data).unwrap();
+    legacy.as_object_mut().unwrap().remove("independent_broker");
+    let restored: TrialReport = serde_json::from_value(legacy).unwrap();
+    assert!(restored.independent_broker.is_none());
+    assert!(
+        serde_json::to_value(restored)
+            .unwrap()
+            .get("independent_broker")
+            .is_none()
+    );
+}
+
+#[test]
+fn broker_actual_report_shape_rejects_context_tools_source_and_permission_contradictions() {
+    // Existing report-reader data fixture only. It creates no live registry,
+    // permit, native process, accepted claim or execution capability. Even its
+    // consistent case remains Blocked and carries an explicit synthetic gap.
+    use kegari_v0::digest::canonical_digest;
+    let mut suite = suite();
+    let independent = suite
+        .variants
+        .iter()
+        .position(|variant| {
+            variant.role == kegari_v0::instructions::AgentRole::IndependentReview
+                && variant.phase == "independent_review"
+        })
+        .unwrap();
+    suite.variants.swap(0, independent);
+    suite.profiles[0].binding = Some(ProfileBinding {
+        profile: kegari_v0::config::Profile {
+            tool: "codex".into(),
+            model: "report-fixture-model".into(),
+            reasoning: "high".into(),
+            speed: kegari_v0::config::Speed::Standard,
+        },
+        account_id: "report-fixture".into(),
+        operator_reference: "not-live-authority".into(),
+    });
+    suite.profiles[0].unresolved = None;
+    for case in ["consistent", "context", "tools", "source", "permission"] {
+        let (_temp, store) = archive(&suite);
+        store.started(&suite.plan().unwrap()[0]).unwrap();
+        let mut data = actual_report_fixture(&suite);
+        data.outcome = TrialOutcome::Blocked;
+        data.grade = None;
+        let mut encoded = data.instruction_manifest.take().unwrap();
+        encoded["operation_id"] = json!(uuid::Uuid::from_u128(31));
+        encoded["workspace_id"] = json!(uuid::Uuid::from_u128(33));
+        encoded["repository_revision"] = json!("1".repeat(40));
+        let manifest: kegari_v0::instructions::InstructionManifest =
+            serde_json::from_value(encoded).unwrap();
+        data.instruction_manifest = Some(serde_json::to_value(&manifest).unwrap());
+        let instruction =
+            canonical_digest(kegari_v0::instructions::ASSEMBLY_SCHEMA, &manifest).unwrap();
+        let digest = bytes_digest(b"explicit report-only identity");
+        let mut observation = json!({"schema_version":1,"operation":manifest.operation_id,"runtime":uuid::Uuid::from_u128(32),"workspace":manifest.workspace_id,
+            "trial_digest":canonical_digest(1,&data.trial).unwrap(),"suite_digest":data.suite_digest,"fixture_digest":data.fixture_digest,"instruction_digest":instruction,
+            "contract_scope_digest":digest,"context_digest":manifest.context_digest,"tool_contract_digest":data.tool_contract_digest,"isolation_digest":digest,
+            "state":"unavailable","members":[],"receipts":[],"gaps":["synthetic_report_data_no_native_registration"],
+            "authority_at_collection":{"operation":manifest.operation_id,"runtime":uuid::Uuid::from_u128(32),"workspace":manifest.workspace_id,
+                "owner_generation":1,"owner":uuid::Uuid::from_u128(34),"checked_at":"2026-10-26T00:00:00Z",
+                "permit_digest":digest,"admission_request_digest":digest,"contract_scope_digest":digest,"authority_digest":digest,"current_authority_digest":digest,"review_identity":digest,
+                "target":{"repository":{"id":42,"owner":"fixture","name":"repo","owner_id":7,"organization_id":null},"pull_request":3,"head":"1".repeat(40),"base":"2".repeat(40)},
+                "source_revision":"1".repeat(40),"instruction_manifest_digest":instruction,"context_digest":manifest.context_digest,"context_keys":[],
+                "tool_contract_digest":data.tool_contract_digest,"isolation_digest":digest,"permission_digest":canonical_digest(1,&manifest.permissions).unwrap()}});
+        match case {
+            "context" => {
+                observation["context_digest"] = json!(bytes_digest(b"contradictory context"));
+                observation["authority_at_collection"]["context_digest"] =
+                    observation["context_digest"].clone();
+            }
+            "tools" => {
+                observation["tool_contract_digest"] = json!(bytes_digest(b"contradictory tools"));
+                observation["authority_at_collection"]["tool_contract_digest"] =
+                    observation["tool_contract_digest"].clone();
+            }
+            "source" => {
+                observation["authority_at_collection"]["source_revision"] = json!("3".repeat(40));
+                observation["authority_at_collection"]["target"]["head"] = json!("3".repeat(40));
+            }
+            "permission" => {
+                observation["authority_at_collection"]["permission_digest"] =
+                    json!(bytes_digest(b"contradictory permissions"));
+            }
+            _ => (),
+        }
+        let observation: kegari_v0::worker::IndependentBrokerObservation =
+            serde_json::from_value(observation).unwrap();
+        // Each mutation remains internally well shaped. Rejection must come
+        // from comparison with the actual archived manifest/report fields.
+        observation.validate().unwrap();
+        data.independent_broker = Some(observation);
+        store.finish(&data).unwrap();
+        let result = ReportArchive::open(store.root());
+        if case == "consistent" {
+            assert_eq!(result.unwrap().reports()[0].outcome, TrialOutcome::Blocked);
+        } else {
+            assert_eq!(
+                result.err().unwrap().code,
+                "evaluation_record_conflict",
+                "{case}"
+            );
+        }
+    }
+}

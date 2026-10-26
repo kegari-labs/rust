@@ -189,6 +189,36 @@ pub(crate) fn receipt_request_digest(receipt: &Receipt) -> Result<String> {
     )
 }
 
+/// Diagnostic expectation from the actual original provider request and permit.
+/// It performs no admission, storage write or first-receipt identity adoption.
+pub(crate) fn broker_request_digest(request: &MutationRequest, permit: &Permit) -> Result<String> {
+    let mut request = request.clone();
+    request
+        .expected
+        .insert("admitted_work".into(), permit.work_key.clone());
+    request.expected.insert(
+        "admission_operation".into(),
+        permit.operation_id.to_string(),
+    );
+    request
+        .expected
+        .insert("admitted_scope".into(), permit.scope_digest.clone());
+    canonical_digest(
+        1,
+        &Identity {
+            operation: request.request_id,
+            request: request.request_id,
+            runtime: request.runtime_id,
+            owner: permit.lease.owner_generation,
+            actor: &request.actor.identity,
+            kind: &request.kind,
+            targets: &request.canonical_targets,
+            payload: &payload_digest(&request)?,
+            expected: &request.expected,
+        },
+    )
+}
+
 fn expected_digest(permit: &Permit, reference: AdmissionReference) -> Result<String> {
     let request = request(permit, Some(reference))?;
     canonical_digest(

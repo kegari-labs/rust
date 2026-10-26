@@ -1,4 +1,7 @@
 //! Kegari's deterministic control and delivery core.
+// Shared integration fixture helpers name this crate from nested test modules.
+#[cfg(test)]
+extern crate self as kegari_v0;
 /// Deterministic identity of compiled runtime sources, assets and dependency lock.
 /// The installed executable also has a separate exact-byte digest in owner metadata.
 pub const BUILD_ID: &str = env!("KEGARI_BUILD_ID");
