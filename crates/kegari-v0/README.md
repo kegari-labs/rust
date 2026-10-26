@@ -23,6 +23,40 @@ are recorded in [PROGRESS.md](PROGRESS.md). A successful build or fixture test
 does not establish native isolation, live provider compatibility or human review.
 The two explicitly ignored native tests remain blocked, not passed.
 
+## Versioned prerelease executable
+
+The application is versioned as `0.2.0-alpha.1`; the package and executable remain
+`kegari-v0`. This prerelease does not complete the 0.2.0 containment milestone.
+Repository command execution still refuses `process_tree_unverified`, and native,
+provider, actual-agent and human qualification remain incomplete.
+
+Build the optimized executable from the workspace root:
+
+```sh
+cargo build --locked --release -p kegari-v0 --bin kegari-v0
+./target/release/kegari-v0 --version
+./target/release/kegari-v0 --help
+./target/release/kegari-v0 __build-info
+./target/release/kegari-v0 __handover-info
+```
+
+These inspection commands do not set up or start the coordinator. The hidden
+metadata commands are exact internal forms, useful here for checking the build;
+they are not an installation or handover procedure. `__handover-info` validates
+the embedded instruction catalog before reporting its version and asset hashes.
+The six role assets and starter workflow are embedded in the executable, so they
+do not require a companion checkout. Instruction asset version `3` and persisted
+schema versions are independent of the application's prerelease version.
+
+`--version` reports the application version and source/profile build digest.
+Record the executable's SHA-256 separately: the build digest is not its file
+checksum or a complete record of compiler settings. Release and debug profiles
+have different build identities. The build output is a development artifact;
+operational use requires a separately authorized immutable installation and
+qualification under SPEC §11.7. Building does not install, activate or replace a
+running coordinator. See [prerelease evidence](validation/LOCAL-PRERELEASE.md)
+for the exact artifact and checks performed.
+
 ## Operator and repository preparation
 
 Read the [configuration contract](docs/configuration.md),

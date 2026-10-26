@@ -1,0 +1,150 @@
+{
+  "application_version": "0.2.0-alpha.1",
+  "target": "aarch64-apple-darwin",
+  "profile": "release",
+  "source_base_commit": "cc0de47cc279eeee3531dddf1ad067dcb8947265",
+  "runtime_build": "sha256:8b8a461d6e87460abe4b4166e889fa1f77055f2f7ca0bc9ee360e54561b1ad1f",
+  "artifact": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.1-aarch64-apple-darwin-7c702b2da058/kegari-v0",
+  "artifact_sha256": "7c702b2da058157013ededbb812dc88e94296e11bb0bcc9511695e6263a2b7f9",
+  "artifact_size": 40236832,
+  "artifact_mode": "0o555",
+  "inspection_commands": [
+    "--help",
+    "--version",
+    "__build-info",
+    "__handover-info"
+  ],
+  "handover_info": {
+    "schema_version": 1,
+    "api_version": 1,
+    "config_schema": 1,
+    "receipt_schema": 1,
+    "runtime_version": "0.2.0-alpha.1",
+    "runtime_build": "sha256:8b8a461d6e87460abe4b4166e889fa1f77055f2f7ca0bc9ee360e54561b1ad1f",
+    "instruction_schema": 1,
+    "asset_version": "3",
+    "assets": {
+      "authority": "sha256:093132ce901d79612deb74bc4fd58b3ee143127b9242f38c72e3ac879bdfc6cd",
+      "child": "sha256:2b737180ae7865ef3333a8ac8f28f8b79d6010e71a4c4f4b3407c0a1382f5d62",
+      "continuation": "sha256:051405a5808c16c0234a3896657b791ff06eea6499e67a75d617f3270a50e5d8",
+      "coordination": "sha256:07554377881779d4008480760389801c4ad6baa8726a51961577d5a504af57ae",
+      "review": "sha256:ecd1ae2c1d9fe5c17f0002eba010323687217b66f221b447bd02d94e268f826c",
+      "validation": "sha256:329827b6c7f47f6522ea802bc5919e2234c185d1b64ea7a2f2c4ef8baf0efc18"
+    }
+  },
+  "qualification": "incomplete; containment refusal retained; no coordinator activation",
+  "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-apple-darwin\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)\nrelease: 1.99.1\ncommit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e\ncommit-date: 2026-08-27\nhost: aarch64-apple-darwin\nlibgit2: 1.9.6 (sys:0.21.0 vendored)\nlibcurl: 8.7.1 (sys:0.4.90+curl-8.21.0 system ssl:(SecureTransport) LibreSSL/3.3.6)\nssl: OpenSSL 3.6.3 9 Jun 2026\nos: Mac OS 27.0.1 [64-bit]\n",
+  "build_environment": {
+    "RUSTUP_TOOLCHAIN": "stable",
+    "CARGO_HOME": "/private/tmp/kegari-v0-cargo-cache"
+  },
+  "compiler_environment": {},
+  "compiler_environment_note": "Only explicit environment overrides captured; not a claim of complete linker provenance or bitwise reproducibility.",
+  "source_input_count": 313,
+  "full_artifact_record": {
+    "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.1-aarch64-apple-darwin-7c702b2da058/artifact.json",
+    "sha256": "bc390e34f5c5b129af4f67f934aa95f4123ead4b6e37ffaffb9255e15fe72628"
+  },
+  "logs": {
+    "release-build.jsonl": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.1-aarch64-apple-darwin-7c702b2da058/release-build.jsonl",
+      "sha256": "a781cc20d85d7a831654b58472ebbe6383f765bff53540ae04b892c734e264c6"
+    },
+    "release-build.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.1-aarch64-apple-darwin-7c702b2da058/release-build.stderr",
+      "sha256": "feaeb5db3f3ba5f9533f0e5b0c9cbb0d121da05cfe6564042bc3b8b716eb9242"
+    },
+    "release-tests.stdout": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.1-aarch64-apple-darwin-7c702b2da058/release-tests.stdout",
+      "sha256": "fd05f58a39f56c583e580e3d1c24f78e02dc4a891af5ecc0ca34f408e769e7c3"
+    },
+    "release-tests.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.1-aarch64-apple-darwin-7c702b2da058/release-tests.stderr",
+      "sha256": "3b44c08aef49d96be48c250e8e05135ab7a8ac12393ccfe6ad8ab4437de9b302"
+    },
+    "fmt.stdout": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.1-aarch64-apple-darwin-7c702b2da058/fmt.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "fmt.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/prereleases/kegari-v0-0.2.0-alpha.1-aarch64-apple-darwin-7c702b2da058/fmt.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "commands": [
+    {
+      "argv": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "kegari-v0",
+        "--bin",
+        "kegari-v0",
+        "--message-format=json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "kegari-v0",
+        "--test",
+        "main",
+        "--test",
+        "config_harness"
+      ],
+      "exit_code": 0,
+      "passed": 34,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "argv": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0
+    },
+    {
+      "argv": [
+        "python3",
+        "crates/kegari-v0/tools/contract_inventory.py",
+        "--check"
+      ],
+      "exit_code": 0,
+      "contract_blocks": 496,
+      "named_requirements": 136
+    }
+  ],
+  "focused_test_sources": {
+    "crates/kegari-v0/tests/main.rs": "b944ffb43c28a49de88f42a813460178f62043d50d1860f97ff8610b169a9f58",
+    "crates/kegari-v0/tests/config_harness.rs": "d73daaf2fabe868d5aca6a1a494609612a0ae570b7629d5f820cdb5c0bad3201"
+  },
+  "test_build_executable_sha256": "17255a3452bddd1807cf10a8e5ec1b528d954f6f71640f22898c92ecbe1c8ce1",
+  "observed_artifact_difference": "Initial collector stopped before writing evidence because cargo test replaced target/release/kegari-v0 with different bytes. The separately staged cargo build artifact is unchanged. Both binaries report the same source/profile digest. Focused integration tests used the test-build binary; four direct offline inspections used the staged artifact. No bitwise equivalence is claimed.",
+  "independent_review": {
+    "reviewers": [
+      "config_harness",
+      "git_delivery"
+    ],
+    "result": "No material findings. git_delivery reviewed packaging and version/asset coupling; config_harness reviewed the final delta, all 313 input hashes, artifact/log identities, test results and qualification wording."
+  },
+  "limits": [
+    "No complete 0.2.0 milestone claim",
+    "Repository command refusal unchanged",
+    "No native ignored tests run",
+    "No actual-agent/provider/human qualification",
+    "No installation, service activation, signing or publication",
+    "Prior full-suite result belongs to 0.1.0 source; this prerelease has focused release tests only"
+  ]
+}

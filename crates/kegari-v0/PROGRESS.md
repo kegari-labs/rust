@@ -1,27 +1,44 @@
 # Kegari v0 build progress
 
-The Goal is active and incomplete following the user's resumption, verified
-through Goal lifecycle state. Supervision remains explicitly available; native
-qualification and host/live changes still need their separate scoped approval.
-The previous preparation turn made progress by reconciling the objective and
-recording supervision; it did not execute a native check.
+The Goal remains active and incomplete. Supervision is available; host/live
+changes and native qualification still require their separate scoped approval.
+The previous discussion clarified the containment trade-off without implementing
+it or changing the contract. This turn revalidated the clean `main` checkpoint
+`cc0de47` and completed the independent prerelease build portion of 0.2.0.
 
-The first resumed work is containment feasibility. Primary Apple documentation,
-SDK headers and independent source reviews are summarized in
-[process containment](docs/process-containment.md). Descendant-scoped Endpoint
-Security remains a candidate, not a selected/qualified solution. The user has no
-existing entitlement and is renewing Developer Program membership. No entitlement
-request, signing, installation, security change or ES activation has occurred.
-The current contract allows explicit uncertain recovery after total observer
-loss; it must not be strengthened into an unstated kernel kill-on-owner-loss
-requirement or weakened into successful shutdown without complete evidence.
+Application version is now **0.2.0-alpha.1**, retaining package/executable name
+`kegari-v0`. Package, lockfile and embedded catalog agree; instruction content
+version 3, dependencies and persisted schemas are unchanged. The optimized
+macOS arm64 artifact and exact identities are in
+[prerelease evidence](validation/LOCAL-PRERELEASE.md) and its
+[machine record](validation/prerelease-checks.json). All 34 focused release tests,
+four direct artifact inspections, formatting and contract inventory passed.
+Independent implementation/evidence reviews found no material issues.
+The prior 1,006-test full-suite result remains historical 0.1.0 evidence, not a
+new full-suite run. Two required native checks remain unexecuted here.
 
-The platform prerequisite test binary was prepared with locked Cargo --no-run;
-the command succeeded, reused the current artifact and ran no tests. Its exact
-identity and the pending native request's cleanup-bound limitation are recorded
-in the containment note. Repository-command refusal remains intact. Held B
-implementation drafts have not resumed. Work remains supervised and no native
-probe, provider operation or remote mutation has been authorized or attempted.
+The staged build artifact remains unchanged. Cargo's test invocation produced a
+different binary in the shared target/release location; both have the same
+source/profile identity. The evidence collector initially rejected that difference,
+then recorded separate hashes and the exact checks applied to each artifact.
+No runtime algorithm changed, no coordinator was activated and no installation,
+signing, entitlement request, provider operation or remote mutation occurred.
+
+Containment still blocks repository commands. The user questioned making an
+Endpoint Security entitlement a prerequisite; no such dependency is established
+and no application is planned. The current objective still explicitly requires
+escaped-descendant ownership. The pending supervised decision is whether to
+retain it or explicitly adopt a supported managed-workload contract for v0.
+Silence does not approve that scope change. Neither the refusal nor SPEC/GOAL
+has been weakened. See [containment findings](docs/process-containment.md).
+
+The milestone order remains 0.2.0 containment/build, 0.3.0 recovery, 0.4.0 evidence,
+0.5.0 operator handover, 0.6.0 evaluation machinery, 0.7.0 qualification. No minor
+milestone is complete. Continue independent authorized work while the containment
+decision is pending; the existing handover library lacks its public operator route.
+Held B evaluation drafts remain untouched. The earlier --no-run native-test binary
+belongs to the prior version and needs refreshed identity before a qualification
+request for this prerelease. No native test or host-change approval was inferred.
 
 Historical preparation reconciliation while paused:
 Preparation reconciliation on

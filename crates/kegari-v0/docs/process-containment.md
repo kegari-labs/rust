@@ -107,6 +107,9 @@ Cargo reused the current artifact (`fresh: true`):
 - SHA-256: `d45a9884f1e42762e6a0a2e9235ed318e128e4b353968d9b93e741b57b2a17fb`.
 - Build record: `/private/tmp/kegari-v0-native-prerequisite-build-1.jsonl`.
 
+This preparation predates 0.2.0-alpha.1. Refresh the executable identity before
+using a native prerequisite request to qualify that prerelease.
+
 The proposed first native pass remains unapproved: one host/birth-identity test,
 then, only on success, one owned-child signalling test using `/bin/sleep 30`.
 Neither establishes descendant containment. The second test's two-second poll
@@ -115,7 +118,12 @@ wait. A reviewed outer execution/cleanup bound and a permitted host environment
 must be supplied before the exact request is ready to execute. Existing sandbox
 and boot-identity denials must not be retried unchanged or bypassed.
 
-The next engineering decision is whether the candidate can support the required
-live-interval closure argument and a deployable entitled helper. Keep the refusal
-until implementation and actual qualification supply that evidence; preserve
-independent authorized work when a resource or platform decision is pending.
+In the subsequent supervised discussion, the user questioned making an ES
+entitlement a prerequisite. None has been established and no application is
+planned. The pending decision is whether to retain escaped-descendant coverage
+or explicitly change v0 to a supported managed-workload contract. A documented
+foreground-only policy does not enforce that restriction against arbitrary
+repository code. No requirement has changed; keep the refusal until a conforming
+implementation is qualified or the user explicitly approves a revised contract.
+Independent authorized work continues, including the 0.2.0-alpha.1 executable;
+that artifact does not complete containment or require ES activation.
