@@ -2780,3 +2780,59 @@ async fn evaluation_does_not_fall_back_from_malformed_latest_review_to_earlier_p
         "invalid_outcome"
     );
 }
+
+#[test]
+fn independent_observation_without_actual_runtime_registration_stays_unavailable() {
+    // Real ScopedWorker/Control/contract and source observation, but this test
+    // host has no RuntimeCoordinator registration. It must not invent a match.
+    let f = Fixture::new(AgentRole::IndependentReview);
+    let observed = f.worker.observe().unwrap();
+    let boundary = observed.independent_boundary.as_ref().unwrap();
+    assert_eq!(boundary.source_revision, observed.revision);
+    assert_eq!(boundary.candidate_digest, observed.candidate_digest);
+    boundary.validate().unwrap();
+    match &boundary.check {
+        kegari_v0::evaluation::IndependentBoundaryCheck::Unavailable { error } => {
+            assert_eq!(error.code, "boundary_observation_unavailable");
+        }
+        _ => panic!("a component host cannot assert actual runtime registration"),
+    }
+    assert!(observed.review_claim.is_none());
+    assert_eq!(observed.state, json!({"delivery":"pending"}));
+    assert!(observed.effects.is_empty());
+    assert!(
+        Fixture::new(AgentRole::Implementation)
+            .worker
+            .observe()
+            .unwrap()
+            .independent_boundary
+            .is_none()
+    );
+}
+
+#[test]
+fn ordinary_scoped_worker_does_not_enable_raw_protocol_capture() {
+    // Real component Control/contract/journal, no declared evaluation or native
+    // run. Receiving the callback alone must not opt this worker into logging.
+    let mut f = Fixture::new(AgentRole::IndependentReview);
+    let journal = PrivateDir::open(
+        &f._temp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("control/worker"),
+    )
+    .unwrap();
+    let before = journal.records().unwrap();
+    let params = json!({"threadId":"thread","turnId":"turn","callId":"outside-trial","tool":"unsupported","arguments":{"text":"must not be logged"}});
+    f.worker
+        .observe_protocol(kegari_v0::codex::ProtocolObservation::ServerRequest {
+            state: Some(&f.state),
+            rpc_id: &json!(1),
+            sequence: 1,
+            method: "item/tool/call",
+            params: &params,
+        });
+    assert_eq!(journal.records().unwrap(), before);
+    assert!(f.worker.observe().unwrap().declared_protocol.is_none());
+}

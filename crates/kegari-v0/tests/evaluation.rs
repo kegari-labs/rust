@@ -316,6 +316,8 @@ fn good(fixture: &PreparedFixture, trace: &Value) -> ObservedFacts {
         state: trace["state"].clone(),
         summary: review_claim.is_none().then_some(summary),
         review_claim,
+        independent_boundary: None,
+        declared_protocol: None,
         evidence_references: vec!["deterministic:known-good-trace".into()],
     }
 }

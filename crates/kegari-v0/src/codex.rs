@@ -17,6 +17,13 @@ use tokio::time::{Instant, timeout_at};
 #[path = "codex_history.rs"]
 mod history;
 pub use history::RecordedThreadHistory;
+#[path = "codex_observation.rs"]
+mod observation;
+pub use observation::{
+    DeclaredProtocolObservation, ProtocolCaptureIssue, ProtocolCaptureState, ProtocolObservation,
+    ProtocolRecordReference,
+};
+pub(crate) use observation::{ProtocolCapture, ProtocolOperationBinding};
 #[path = "codex_resume.rs"]
 mod resume;
 pub use resume::{
@@ -1062,6 +1069,15 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 pub trait ToolBroker: Send {
+    /// Explicit declared-evaluation opt-in only. It grants no permissions.
+    fn begin_evaluation_protocol_observation(
+        &mut self,
+        _declaration: &crate::evaluation::DeclaredProtocolTrial,
+    ) {
+    }
+    /// Diagnostic callback before filtering or after terminal validation. No
+    /// error return: capture failure cannot change dispatch or erase its hold.
+    fn observe_protocol(&mut self, _event: ProtocolObservation<'_>) {}
     /// Adapter-owned current state before a bound tool request, including tools
     /// interleaved before a synchronous start/steer response arrives.
     fn observe_session(&mut self, _state: &SessionState) -> Result<()> {
@@ -1079,6 +1095,26 @@ fn checkpoint_notification(
     params: &Value,
 ) -> Result<SessionEvent> {
     let result = state.notification(method, params);
+    match method {
+        "turn/completed" => broker.observe_protocol(ProtocolObservation::TerminalTurn {
+            state,
+            params,
+            accepted: result.is_ok(),
+        }),
+        "item/completed" => broker.observe_protocol(ProtocolObservation::CompletedItem {
+            state,
+            params,
+            accepted: result.is_ok(),
+        }),
+        "item/agentMessage/delta" => {
+            broker.observe_protocol(ProtocolObservation::AgentMessageDelta {
+                state,
+                params,
+                accepted: result.is_ok(),
+            })
+        }
+        _ => (),
+    }
     // A protocol inconsistency cannot hide a policy signal already observed
     // from the bound provider thread. Persist that hold before returning either
     // the ordinary event or its validation error.
@@ -1543,6 +1579,10 @@ impl RpcClient {
         self.events.push_back(event);
         Ok(())
     }
+    /// Count of processed server requests only; not stdout EOF/tail evidence.
+    pub(crate) fn observed_server_request_count(&self) -> u64 {
+        self.server_request_count
+    }
     pub fn drain_events(&mut self) -> Vec<SessionEvent> {
         self.events.drain(..).collect()
     }
@@ -1558,6 +1598,13 @@ impl RpcClient {
             .server_request_count
             .checked_add(1)
             .ok_or_else(|| Error::new("protocol_error", "server request count overflow"))?;
+        broker.observe_protocol(ProtocolObservation::ServerRequest {
+            state: state.as_deref(),
+            rpc_id: &id,
+            sequence: self.server_request_count,
+            method,
+            params: &params,
+        });
         let thread = params
             .get("threadId")
             .and_then(Value::as_str)
@@ -1593,6 +1640,11 @@ impl RpcClient {
                         "tool is unavailable for this bound role, phase or turn",
                     ))
                 };
+                broker.observe_protocol(ProtocolObservation::ToolResult {
+                    state: state.as_deref(),
+                    rpc_id: &id,
+                    error_code: tool_result.as_ref().err().map(|e| e.code.as_str()),
+                });
                 event_kind = if tool_result.is_ok() {
                     EventKind::ToolResult
                 } else {

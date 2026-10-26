@@ -3,6 +3,8 @@
 #[path = "worker_retirement.rs"]
 mod retirement;
 pub(crate) use retirement::{ParentJournalHistory, capture_parent_journal};
+#[path = "worker_boundary.rs"]
+mod boundary;
 
 use crate::codex::{SessionState, ToolBroker, ToolCall};
 use crate::control::{Actor, ControlHost, Lease, MutationRequest, Permit};
@@ -279,6 +281,20 @@ pub trait WorkerHost: Send + Sync {
     fn correction_event(&self, operation: Uuid, watermark: u64, input: &str) -> Result<String>;
     /// Authoritative workflow state, not a model's claimed completion.
     fn observed_state(&self, operation: Uuid) -> Result<Value>;
+    /// Observation-only callback, called outside Control. Production checks the
+    /// exact original registered operation under its own single Control gate.
+    /// A generic host cannot infer registration from equal serialized fields.
+    fn observe_independent_boundary(
+        &self,
+        _control: &Arc<ControlHost>,
+        _permit: &Permit,
+        _contract: &Arc<WorkerContract>,
+    ) -> Result<crate::evaluation::IndependentBoundaryIdentity> {
+        Err(Error::new(
+            "boundary_observation_unavailable",
+            "host does not supply actual independent worker registration evidence",
+        ))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -829,6 +845,8 @@ pub struct ScopedWorker {
     journal: Arc<Journal>,
     executions: Arc<ExecutionRegistry>,
     session: Option<SessionState>,
+    // Enabled only by the declared evaluator, never ordinary worker creation.
+    protocol_capture: Option<crate::codex::ProtocolCapture>,
     applied_transition: Option<Arc<crate::corrections::VerifiedCorrectionTransition>>,
     correction_turn: Option<(String, String)>,
     pending: Option<String>,
@@ -913,6 +931,7 @@ impl ScopedWorker {
             journal,
             executions,
             session: None,
+            protocol_capture: None,
             applied_transition: None,
             correction_turn: None,
             pending: None,
@@ -926,6 +945,39 @@ impl ScopedWorker {
             effects: vec![],
             evidence: vec![],
         })
+    }
+    fn verify_session_contract(&self, state: &SessionState) -> Result<()> {
+        let m = &self.contract.assembled.manifest;
+        if state.binding.operation_id != self.permit.operation_id.to_string()
+            || state.binding.account_id != self.contract.account_id
+            || state.binding.instruction_digest != self.contract.assembled.manifest_digest
+            || state.binding.isolation_digest != self.contract.isolation.digest()
+            || state.binding.work_identity != self.permit.work_key
+            || state.binding.generation != m.work_generation
+            || state.binding.cwd != m.cwd
+            || state.binding.profile.model != m.profile.model
+            || state.binding.profile.reasoning != m.profile.reasoning
+            || state.binding.profile.speed
+                != match m.profile.speed {
+                    crate::config::Speed::Standard => "standard",
+                    crate::config::Speed::Fast => "fast",
+                }
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "provider session differs from immutable worker admission",
+            ));
+        }
+        if let Some(prior) = &self.session
+            && prior.thread_id.is_some()
+            && prior.thread_id != state.thread_id
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "provider thread identity changed within an operation",
+            ));
+        }
+        Ok(())
     }
     /// Obtain a launch capability from this exact admitted production broker.
     /// Live evaluation uses the same native launch, process journal and RPC gate.
@@ -1772,6 +1824,62 @@ impl ScopedWorker {
     }
 }
 impl ToolBroker for ScopedWorker {
+    fn begin_evaluation_protocol_observation(
+        &mut self,
+        declaration: &crate::evaluation::DeclaredProtocolTrial,
+    ) {
+        if let Some(capture) = &mut self.protocol_capture {
+            capture.disable(crate::codex::ProtocolCaptureIssue::ConflictingDuplicate);
+            return;
+        }
+        let mut capture = crate::codex::ProtocolCapture::new(
+            crate::codex::ProtocolOperationBinding {
+                operation: self.permit.operation_id,
+                runtime: self.permit.lease.runtime_id,
+                workspace: self.contract.authority.workspace(),
+            },
+            self.contract.scope_digest.clone(),
+            self.contract.assembled.manifest_digest.clone(),
+            declaration.trial_digest().map(str::to_owned),
+            declaration.suite_digest().into(),
+            declaration.fixture_digest().into(),
+        );
+        if declaration.operation() != self.permit.operation_id
+            || declaration.instruction_digest() != self.contract.assembled.manifest_digest
+        {
+            capture.disable(crate::codex::ProtocolCaptureIssue::BindingChanged);
+        } else if !matches!(self.contract.authority, WorkerAuthority::Independent(_)) {
+            capture.disable(crate::codex::ProtocolCaptureIssue::ScopeNotDeclared);
+        } else if declaration.trial_digest().is_none() {
+            capture.disable(crate::codex::ProtocolCaptureIssue::DeclarationUnavailable);
+        }
+        self.protocol_capture = Some(capture);
+    }
+    fn observe_protocol(&mut self, event: crate::codex::ProtocolObservation<'_>) {
+        if self.protocol_capture.is_none() {
+            return;
+        }
+        let state = match &event {
+            crate::codex::ProtocolObservation::ServerRequest { state, .. }
+            | crate::codex::ProtocolObservation::ToolResult { state, .. } => *state,
+            crate::codex::ProtocolObservation::AdapterInventory { state, .. }
+            | crate::codex::ProtocolObservation::TerminalTurn { state, .. }
+            | crate::codex::ProtocolObservation::CompletedItem { state, .. }
+            | crate::codex::ProtocolObservation::AgentMessageDelta { state, .. } => Some(*state),
+        };
+        let bound = state.is_none_or(|s| self.verify_session_contract(s).is_ok());
+        let capture = self
+            .protocol_capture
+            .as_mut()
+            .expect("checked opted-in capture");
+        if !bound {
+            capture.issue(crate::codex::ProtocolCaptureIssue::BindingChanged);
+            return;
+        }
+        capture.observe(event, &mut |value| {
+            self.journal.append("protocol_observation", value)
+        });
+    }
     fn observe_session(&mut self, state: &SessionState) -> Result<()> {
         let pending = self.pending.clone();
         self.checkpoint(state, pending.as_deref())
@@ -2002,6 +2110,7 @@ impl TrialHost for ScopedWorker {
                     )
                 })?
         };
+        let independent_boundary = self.independent_boundary_observation(&revision, &candidate);
         Ok(ObservedFacts {
             revision,
             candidate_digest: candidate,
@@ -2011,6 +2120,12 @@ impl TrialHost for ScopedWorker {
             state: self.host.observed_state(self.permit.operation_id)?,
             summary,
             review_claim,
+            independent_boundary,
+            declared_protocol: self.protocol_capture.as_ref().map(|capture| {
+                capture.finish(self.session.as_ref(), self.pending.as_deref(), &|leaf| {
+                    self.journal.dir.read_bounded(leaf, 256 * 1024)
+                })
+            }),
             evidence_references: self.evidence.clone(),
         })
     }
@@ -2094,36 +2209,7 @@ impl TrialHost for ScopedWorker {
                 "session exceeds its original finite admitted turn bound",
             ));
         }
-        let m = &self.contract.assembled.manifest;
-        if state.binding.operation_id != self.permit.operation_id.to_string()
-            || state.binding.account_id != self.contract.account_id
-            || state.binding.instruction_digest != self.contract.assembled.manifest_digest
-            || state.binding.isolation_digest != self.contract.isolation.digest()
-            || state.binding.work_identity != self.permit.work_key
-            || state.binding.generation != m.work_generation
-            || state.binding.cwd != m.cwd
-            || state.binding.profile.model != m.profile.model
-            || state.binding.profile.reasoning != m.profile.reasoning
-            || state.binding.profile.speed
-                != match m.profile.speed {
-                    crate::config::Speed::Standard => "standard",
-                    crate::config::Speed::Fast => "fast",
-                }
-        {
-            return Err(Error::new(
-                "worker_binding",
-                "provider session differs from immutable worker admission",
-            ));
-        }
-        if let Some(prior) = &self.session
-            && prior.thread_id.is_some()
-            && prior.thread_id != state.thread_id
-        {
-            return Err(Error::new(
-                "worker_binding",
-                "provider thread identity changed within an operation",
-            ));
-        }
+        self.verify_session_contract(state)?;
         self.journal.append(
             "session",
             &json!({"state":state,"pending_method":pending_method}),

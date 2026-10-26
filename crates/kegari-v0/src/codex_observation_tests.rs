@@ -1,0 +1,520 @@
+//! Protocol/storage component evidence only. These synthetic session values do
+//! not construct a worker, native run, permit, check result or source capability.
+use super::*;
+use crate::storage::PrivateDir;
+use std::path::PathBuf;
+
+fn active() -> SessionState {
+    let mut state = SessionState::new(
+        SessionBinding {
+            schema_version: 1,
+            account_id: "component-account".into(),
+            work_identity: "component-work".into(),
+            operation_id: Uuid::from_u128(1).to_string(),
+            generation: "component-generation".into(),
+            instruction_digest: crate::digest::bytes_digest(b"component instructions"),
+            isolation_digest: crate::digest::bytes_digest(b"component isolation"),
+            profile: CodexProfile {
+                model: "component".into(),
+                reasoning: "high".into(),
+                speed: "standard".into(),
+            },
+            cwd: PathBuf::from("/private/tmp/explicit-component"),
+        },
+        4,
+    )
+    .unwrap();
+    state.thread_id = Some("thread".into());
+    state.turn_id = Some("turn".into());
+    state.turns_started = 1;
+    state
+}
+fn capture() -> ProtocolCapture {
+    ProtocolCapture::new(
+        ProtocolOperationBinding {
+            operation: Uuid::from_u128(1),
+            runtime: Uuid::from_u128(2),
+            workspace: Uuid::from_u128(3),
+        },
+        crate::digest::bytes_digest(b"scope"),
+        crate::digest::bytes_digest(b"component instructions"),
+        Some(crate::digest::bytes_digest(b"component trial")),
+        crate::digest::bytes_digest(b"component suite"),
+        crate::digest::bytes_digest(b"component fixture"),
+    )
+}
+#[derive(Default)]
+struct Records(BTreeMap<String, Value>);
+impl Records {
+    fn write(&mut self, value: &Value) -> Result<String> {
+        let leaf = format!("event-{:08}.json", self.0.len());
+        self.0.insert(
+            leaf.clone(),
+            json!({"kind":"protocol_observation","record":value}),
+        );
+        Ok(leaf)
+    }
+    fn read(&self, leaf: &str) -> Result<Value> {
+        self.0
+            .get(leaf)
+            .cloned()
+            .ok_or_else(|| Error::new("record_missing", "component record absent"))
+    }
+}
+fn terminal(c: &mut ProtocolCapture, records: &mut Records, state: &mut SessionState, text: &str) {
+    let params = json!({"threadId":"thread","turn":{"id":"turn","status":"completed","items":[
+        {"id":"message","type":"agentMessage","text":text},
+        {"id":"private","type":"reasoning","content":["hidden reasoning must not be copied"]}
+    ]}});
+    let accepted = state.notification("turn/completed", &params).is_ok();
+    c.observe(
+        ProtocolObservation::TerminalTurn {
+            state,
+            params: &params,
+            accepted,
+        },
+        &mut |v| records.write(v),
+    );
+}
+fn request(c: &mut ProtocolCapture, records: &mut Records, state: &SessionState, params: &Value) {
+    c.observe(
+        ProtocolObservation::ServerRequest {
+            state: Some(state),
+            rpc_id: &json!(1),
+            sequence: c.last_request_sequence + 1,
+            method: "item/tool/call",
+            params,
+        },
+        &mut |v| records.write(v),
+    );
+}
+fn params(text: &str) -> Value {
+    json!({"threadId":"thread","turnId":"turn","callId":"call","tool":"unsupported","arguments":{"text":text}})
+}
+
+#[test]
+fn declared_capture_retains_denied_arguments_and_terminal_text_without_reasoning() {
+    let mut c = capture();
+    let mut r = Records::default();
+    let mut s = active();
+    s.input_required = true;
+    request(&mut c, &mut r, &s, &params("attempted output"));
+    c.observe(
+        ProtocolObservation::ToolResult {
+            state: Some(&s),
+            rpc_id: &json!(1),
+            error_code: Some("unsupported_tool"),
+        },
+        &mut |v| r.write(v),
+    );
+    terminal(&mut c, &mut r, &mut s, "complete public answer");
+    let report = c.finish(Some(&s), None, &|leaf| r.read(leaf));
+    report.validate().unwrap();
+    assert_eq!(report.state, ProtocolCaptureState::Incomplete);
+    assert_eq!(report.tool_request_attempts, 1);
+    assert_eq!(report.terminal_turns, 1);
+    let raw = serde_json::to_string(&r.0).unwrap();
+    assert!(raw.contains("attempted output"));
+    assert!(raw.contains("complete public answer"));
+    assert!(raw.contains("unsupported_tool"));
+    assert!(!raw.contains("hidden reasoning must not be copied"));
+    let public = serde_json::to_string(&report).unwrap();
+    assert!(!public.contains("attempted output"));
+    assert!(!public.contains("complete public answer"));
+}
+#[test]
+fn missing_foreign_conflicting_and_incomplete_terminal_data_never_become_empty_complete() {
+    let mut c = capture();
+    let mut r = Records::default();
+    let mut s = active();
+    assert_eq!(
+        c.finish(None, None, &|leaf| r.read(leaf)).state,
+        ProtocolCaptureState::Unavailable
+    );
+    request(&mut c, &mut r, &s, &params("first"));
+    request(&mut c, &mut r, &s, &params("changed"));
+    terminal(&mut c, &mut r, &mut s, "answer");
+    assert_eq!(
+        c.finish(Some(&s), None, &|leaf| r.read(leaf)).state,
+        ProtocolCaptureState::Conflict
+    );
+    assert!(
+        c.report
+            .issues
+            .contains(&ProtocolCaptureIssue::ConflictingDuplicate)
+    );
+    let mut c = capture();
+    let mut foreign = params("foreign");
+    foreign["threadId"] = json!("other");
+    request(&mut c, &mut r, &s, &foreign);
+    assert!(
+        c.report
+            .issues
+            .contains(&ProtocolCaptureIssue::ForeignOrUnknownTurn)
+    );
+    let mut c = capture();
+    let mut s = active();
+    let p = json!({"threadId":"thread","turn":{"id":"turn","status":"completed","itemsView":"summary","items":[]}});
+    let accepted = s.notification("turn/completed", &p).is_ok();
+    c.observe(
+        ProtocolObservation::TerminalTurn {
+            state: &s,
+            params: &p,
+            accepted,
+        },
+        &mut |v| r.write(v),
+    );
+    assert_eq!(
+        c.finish(Some(&s), None, &|leaf| r.read(leaf)).state,
+        ProtocolCaptureState::Incomplete
+    );
+    assert!(
+        c.report
+            .issues
+            .contains(&ProtocolCaptureIssue::MissingFullTurn)
+    );
+}
+#[test]
+fn exact_terminal_duplicate_deduplicates_but_conflicting_duplicate_remains_visible() {
+    let mut c = capture();
+    let mut r = Records::default();
+    let mut s = active();
+    terminal(&mut c, &mut r, &mut s, "first");
+    let count = r.0.len();
+    terminal(&mut c, &mut r, &mut s, "first");
+    assert_eq!(r.0.len(), count);
+    terminal(&mut c, &mut r, &mut s, "changed");
+    assert_eq!(
+        c.finish(Some(&s), None, &|leaf| r.read(leaf)).state,
+        ProtocolCaptureState::Conflict
+    );
+    assert!(
+        c.report
+            .issues
+            .contains(&ProtocolCaptureIssue::RejectedTerminal)
+    );
+}
+#[test]
+fn overflow_and_failed_protected_capture_remain_explicit() {
+    let mut c = capture();
+    let mut r = Records::default();
+    let s = active();
+    request(
+        &mut c,
+        &mut r,
+        &s,
+        &params(&"x".repeat(MAX_RECORD_BYTES + 1)),
+    );
+    assert_eq!(
+        c.finish(Some(&s), None, &|leaf| r.read(leaf)).state,
+        ProtocolCaptureState::Overflow
+    );
+    assert!(r.0.is_empty());
+    let mut c = capture();
+    c.observe(
+        ProtocolObservation::ServerRequest {
+            state: Some(&s),
+            rpc_id: &json!(1),
+            sequence: c.last_request_sequence + 1,
+            method: "item/tool/call",
+            params: &params("actual attempt"),
+        },
+        &mut |_| Err(Error::new("io_error", "component write failure")),
+    );
+    assert_eq!(
+        c.finish(Some(&s), None, &|leaf| r.read(leaf)).state,
+        ProtocolCaptureState::Unavailable
+    );
+}
+#[test]
+fn actual_protected_capture_readback_detects_removed_or_changed_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let dir = PrivateDir::create(&root.join("records")).unwrap();
+    let mut c = capture();
+    let mut s = active();
+    let p = json!({"threadId":"thread","turn":{"id":"turn","status":"completed","items":[{"id":"message","type":"agentMessage","text":"observed"}]}});
+    s.notification("turn/completed", &p).unwrap();
+    let mut next = 0;
+    c.observe(
+        ProtocolObservation::TerminalTurn {
+            state: &s,
+            params: &p,
+            accepted: true,
+        },
+        &mut |value| {
+            let leaf = format!("event-{next:08}.json");
+            next += 1;
+            dir.write(
+                &leaf,
+                &json!({"kind":"protocol_observation","record":value}),
+            )?;
+            Ok(leaf)
+        },
+    );
+    assert_eq!(
+        c.finish(Some(&s), None, &|leaf| dir.read_bounded(leaf, 256 * 1024))
+            .state,
+        ProtocolCaptureState::Incomplete
+    );
+    let leaf = &c.report.records[0].journal_leaf;
+    let original: Value = dir.read_bounded(leaf, 256 * 1024).unwrap();
+    dir.write(
+        leaf,
+        &json!({"kind":"protocol_observation","record":{"changed":true}}),
+    )
+    .unwrap();
+    assert_eq!(
+        c.finish(Some(&s), None, &|leaf| dir.read_bounded(leaf, 256 * 1024))
+            .state,
+        ProtocolCaptureState::Unavailable
+    );
+    dir.write(leaf, &original).unwrap();
+    std::fs::remove_file(dir.path().join(leaf)).unwrap();
+    assert_eq!(
+        c.finish(Some(&s), None, &|leaf| dir.read_bounded(leaf, 256 * 1024))
+            .state,
+        ProtocolCaptureState::Unavailable
+    );
+}
+
+struct WireBroker {
+    capture: ProtocolCapture,
+    records: Records,
+    dispatched: usize,
+}
+impl ToolBroker for WireBroker {
+    fn observe_protocol(&mut self, event: ProtocolObservation<'_>) {
+        self.capture.observe(event, &mut |v| self.records.write(v));
+    }
+    fn call<'a>(
+        &'a mut self,
+        _: &'a ToolCall,
+    ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+        self.dispatched += 1;
+        Box::pin(async {
+            Err(Error::new(
+                "component_refusal",
+                "component broker denies effect",
+            ))
+        })
+    }
+}
+#[tokio::test]
+async fn actual_adapter_observes_requests_before_whitelist_and_intervention_then_terminal() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let (client, server) = tokio::io::duplex(32 * 1024);
+    let (cr, cw) = tokio::io::split(client);
+    let (sr, mut sw) = tokio::io::split(server);
+    let task = tokio::spawn(async move {
+        let mut sr = BufReader::new(sr);
+        let mut line = String::new();
+        sr.read_line(&mut line).await.unwrap();
+        let initialize: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(initialize["method"], "initialize");
+        sw.write_all(format!("{}\n",json!({"id":initialize["id"],"result":{"userAgent":"component","platformFamily":"unix","platformOs":"macos","codexHome":"/component/auth"}})).as_bytes()).await.unwrap();
+        line.clear();
+        sr.read_line(&mut line).await.unwrap();
+        let initialized: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(initialized["method"], "initialized");
+        line.clear();
+        sr.read_line(&mut line).await.unwrap();
+        let request: Value = serde_json::from_str(&line).unwrap();
+        // This is the ordinary request loop over actual JSON-RPC frames. The
+        // synthetic broker below has no execution/Control permission.
+        for (index, tool) in [(1, "known"), (2, "unsupported")] {
+            sw.write_all(format!("{}\n",json!({"id":index,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","callId":format!("call-{index}"),"tool":tool,"arguments":{"text":format!("attempt-{index}")}}})).as_bytes()).await.unwrap();
+            line.clear();
+            sr.read_line(&mut line).await.unwrap();
+            let reply: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(reply["result"]["success"], false);
+        }
+        sw.write_all(format!("{}\n",json!({"method":"turn/started","params":{"threadId":"thread","turn":{"id":"turn","status":"inProgress","error":{"message":"restricted","codexErrorInfo":"cyberPolicy"}}}})).as_bytes()).await.unwrap();
+        sw.write_all(format!("{}\n",json!({"id":3,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","callId":"call-3","tool":"known","arguments":{"text":"intervention attempt"}}})).as_bytes()).await.unwrap();
+        line.clear();
+        sr.read_line(&mut line).await.unwrap();
+        let reply: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(reply["result"]["success"], false);
+        sw.write_all(format!("{}\n",json!({"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn","status":"completed","items":[{"id":"public","type":"agentMessage","text":"finished output"}]}}})).as_bytes()).await.unwrap();
+        sw.write_all(format!("{}\n", json!({"id":request["id"],"result":{}})).as_bytes())
+            .await
+            .unwrap();
+    });
+    let mut rpc = RpcClient::from_transport(cr, cw, Duration::from_secs(2)).unwrap();
+    // Component adapter schema setup, not a production tool-grant capability.
+    rpc.initialize().await.unwrap();
+    rpc.allowed_tools.insert("known".into());
+    let mut state = active();
+    let mut broker = WireBroker {
+        capture: capture(),
+        records: Records::default(),
+        dispatched: 0,
+    };
+    rpc.request(
+        "turn/interrupt",
+        json!({"threadId":"thread","turnId":"turn"}),
+        Some(&mut state),
+        &mut broker,
+    )
+    .await
+    .unwrap();
+    task.await.unwrap();
+    assert_eq!(broker.dispatched, 1);
+    assert!(state.intervention.is_some());
+    broker.observe_protocol(ProtocolObservation::AdapterInventory {
+        state: &state,
+        processed_requests: Some(rpc.observed_server_request_count()),
+    });
+    let report = broker
+        .capture
+        .finish(Some(&state), None, &|leaf| broker.records.read(leaf));
+    assert_eq!(report.observed_server_requests, 3);
+    assert_eq!(report.processed_server_requests, Some(3));
+    assert!(
+        !report
+            .issues
+            .contains(&ProtocolCaptureIssue::MissingRequestInventory)
+    );
+    assert!(
+        report
+            .issues
+            .contains(&ProtocolCaptureIssue::UnobservedTransportTail)
+    );
+    assert_eq!(report.tool_request_attempts, 3);
+    assert_eq!(report.state, ProtocolCaptureState::Incomplete);
+    let raw = serde_json::to_string(&broker.records.0).unwrap();
+    for text in [
+        "attempt-1",
+        "attempt-2",
+        "intervention attempt",
+        "finished output",
+        "component_refusal",
+        "unsupported_tool",
+    ] {
+        assert!(raw.contains(text), "retained {text}");
+    }
+}
+
+#[test]
+fn completed_item_and_delta_identity_require_exact_terminal_inventory() {
+    for completed_item in [false, true] {
+        let mut c = capture();
+        let mut r = Records::default();
+        let mut s = active();
+        let params = if completed_item {
+            json!({"threadId":"thread","turnId":"turn","item":{"id":"prior","type":"agentMessage","text":"completed earlier"}})
+        } else {
+            json!({"threadId":"thread","turnId":"turn","itemId":"prior","delta":"not retained as full output"})
+        };
+        let method = if completed_item {
+            "item/completed"
+        } else {
+            "item/agentMessage/delta"
+        };
+        let accepted = s.notification(method, &params).is_ok();
+        let event = if completed_item {
+            ProtocolObservation::CompletedItem {
+                state: &s,
+                params: &params,
+                accepted,
+            }
+        } else {
+            ProtocolObservation::AgentMessageDelta {
+                state: &s,
+                params: &params,
+                accepted,
+            }
+        };
+        c.observe(event, &mut |v| r.write(v));
+        terminal(&mut c, &mut r, &mut s, "a different terminal item");
+        let report = c.finish(Some(&s), None, &|leaf| r.read(leaf));
+        assert_eq!(report.state, ProtocolCaptureState::Conflict);
+        assert!(
+            report
+                .issues
+                .contains(&ProtocolCaptureIssue::ConflictingDuplicate)
+        );
+        assert!(
+            !serde_json::to_string(&r.0)
+                .unwrap()
+                .contains("not retained as full output")
+        );
+    }
+}
+#[test]
+fn scope_not_declared_never_records_raw_messages_or_claims_zero_attempts() {
+    let mut c = capture();
+    let mut r = Records::default();
+    let s = active();
+    c.disable(ProtocolCaptureIssue::ScopeNotDeclared);
+    request(
+        &mut c,
+        &mut r,
+        &s,
+        &params("must not enter general worker journal"),
+    );
+    let report = c.finish(Some(&s), None, &|leaf| r.read(leaf));
+    report.validate().unwrap();
+    assert_eq!(report.state, ProtocolCaptureState::NotDeclared);
+    assert!(r.0.is_empty());
+    assert!(
+        report
+            .issues
+            .contains(&ProtocolCaptureIssue::ScopeNotDeclared)
+    );
+}
+
+#[test]
+fn processed_request_inventory_detects_missing_prefix_but_never_proves_stream_end() {
+    for (first_sequence, total) in [(1, Some(1)), (2, Some(2)), (1, None)] {
+        let mut c = capture();
+        let mut r = Records::default();
+        let mut s = active();
+        c.observe(
+            ProtocolObservation::ServerRequest {
+                state: Some(&s),
+                rpc_id: &json!(1),
+                sequence: first_sequence,
+                method: "item/tool/call",
+                params: &params("observed attempt"),
+            },
+            &mut |v| r.write(v),
+        );
+        c.observe(
+            ProtocolObservation::ToolResult {
+                state: Some(&s),
+                rpc_id: &json!(1),
+                error_code: Some("unsupported_tool"),
+            },
+            &mut |v| r.write(v),
+        );
+        terminal(&mut c, &mut r, &mut s, "full terminal text");
+        c.observe(
+            ProtocolObservation::AdapterInventory {
+                state: &s,
+                processed_requests: total,
+            },
+            &mut |v| r.write(v),
+        );
+        let report = c.finish(Some(&s), None, &|leaf| r.read(leaf));
+        report.validate().unwrap();
+        assert_eq!(report.state, ProtocolCaptureState::Incomplete);
+        assert!(
+            report
+                .issues
+                .contains(&ProtocolCaptureIssue::UnobservedTransportTail)
+        );
+        assert_eq!(
+            report
+                .issues
+                .contains(&ProtocolCaptureIssue::MissingRequestInventory),
+            first_sequence != 1 || total.is_none()
+        );
+        assert_eq!(report.observed_server_requests, 1);
+        assert_eq!(report.processed_server_requests, total);
+        let encoded = serde_json::to_value(&report).unwrap();
+        let restored: DeclaredProtocolObservation =
+            serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(serde_json::to_value(restored).unwrap(), encoded);
+    }
+}

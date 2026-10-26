@@ -51,6 +51,13 @@ impl RecordedThreadHistory {
         }
         Ok((completed, last))
     }
+    /// Existing semantic terminal fingerprint, without copying item contents.
+    pub(crate) fn observed_turn(&self, id: &str) -> Option<(&str, Option<&str>)> {
+        self.turns
+            .iter()
+            .find(|turn| turn.id == id)
+            .map(|turn| (turn.status.as_str(), turn.content_digest.as_deref()))
+    }
     pub(super) fn ordered_ids(&self) -> Vec<&str> {
         self.turns.iter().map(|turn| turn.id.as_str()).collect()
     }

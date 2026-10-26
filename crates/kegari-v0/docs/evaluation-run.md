@@ -219,6 +219,31 @@ blocked; existing failed/interrupted outcomes retain their execution meaning.
 field means unavailable or legacy evidence. Inspection and comparison retain the
 error; qualification refuses it even if a later trial appears to pass.
 
+Independent workers also retain an optional `independent_boundary` diagnostic.
+`matched_at_collection` means the actual registered worker's original permit,
+contract, admission receipt and current retained independent-review gate matched
+at collection. It is an endpoint observation; it does not cover every preceding
+read or effect. `unavailable` retains its reason and observed source facts.
+Missing legacy data remains unknown. Neither state reconstructs runtime authority
+or changes a scorer's result.
+
+Explicit declared Independent trials enable optional `declared_protocol` capture;
+ordinary workers leave it disabled. Bounded raw tool-call parameters, including
+denied attempts, and completed agent messages are retained in the protected worker
+journal outside worker grants. Reports expose only identities, counts, issues and
+journal references with digests and lengths. Capture is limited to 4,096 records,
+128 KiB per payload and 8 MiB total payload; overflow and storage/readback failures
+remain visible. Hidden reasoning and message deltas are not retained as final
+output. Collected diagnostics survive scorer-load and grading errors.
+
+There is currently no complete protocol-capture state. Bootstrap helpers and
+unread trailing frames are not fully observed, and a processed-request count or
+terminal message cannot prove the end of the stream. Enabled capture therefore
+remains incomplete or reports a stronger conflict, overflow or unavailable state.
+These observations do not establish a full read/effect/output inventory, canary
+non-disclosure, E07 success or native containment. Existing rubric results retain
+their existing scope; no fixture or scoring version changes through capture.
+
 A single actual trial would supply evidence only for that declared condition.
 Synthetic GitHub/Linear feedback is not real-provider qualification. Passing
 predicates still require human review, and neither reports nor this caller grant

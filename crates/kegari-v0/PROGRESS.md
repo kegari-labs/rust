@@ -3,6 +3,74 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
+The declared observation increment is locally verified: 931 passed, zero failed
+and two required native checks ignored across 39 groups in 801.345s. All 14 new
+tests and both extended grading-error tests passed once in their full targets.
+The 689 tested inputs and toolchain remained unchanged at
+`sha256:07ccd31609ff5d4cb534a780f5e6dc3dc5869b8bdecd59f169cb81fdce3ffa4d`.
+All-target check, strict Clippy, ten focused tests, 117 compatibility tests,
+formatting and the 56-slot dispatch-disabled Plan passed. Inventory passed in
+0.047s and diff checking in 0.021s. No validation process remains running;
+session34634 is closed. Native, live-provider and human qualification is incomplete.
+
+Four reviewed coverage entries are installed: all four existing rows remain
+partial, with previous evidence, statuses and ordering preserved. Coverage SHA-256:
+`7e6946ca588a5836d17e694c123d4cc0393850ff1502f01d7efb6b8f81ef1779`.
+The independently reviewed collector completed successfully and verified all 12
+invocations, including the earlier lint failure. Reports are
+[local validation](validation/LOCAL-DECLARED-OBSERVATION.md) and
+[machine evidence](validation/declared-observation-checks.json).
+The original verified bundle remains at
+`/private/tmp/kegari-v0-declared-observation-verified-evidence-2`.
+The actual invocation checked that exact output path was absent, its parent
+canonical `/private/tmp`, and outside the repository; this is a caller restriction,
+not a generic TEMP-path guarantee in the script. The machine archive adds the
+later collector review and invocation constraint without changing any observed
+result. Review SHA-256:
+`d78d7c735d491aa168cd83a18c070b4cef5c6cd4b3eecfb64cd2fd3bc71d86df`.
+The authorized local commit is pending. These evaluation diagnostics have distinct
+consumers and qualification limits from the prior parent effect-history change,
+so this increment retains its own validation checkpoint and commit.
+
+The reviewed composition installed 16 files, including six new modules. Exact
+original/draft hashes and originals are retained at
+`/private/tmp/kegari-v0-declared-observation-installed-source1`.
+Source1's 689 inputs were
+`sha256:e053140cbf917609dee9254fa8ad3c33eb6ddb5fe656a61f2a7d6452251457ee`.
+Its all-target check passed in 24.980s; strict Clippy failed in 23.156s on one
+needless borrow in a new archive test. Session66513 closed without running tests.
+Source2 removes only that borrow; rustfmt made no additional change. Production
+behavior and all test assertions are unchanged. Originals and exact one-line diff:
+`/private/tmp/kegari-v0-declared-observation-source1-lint-correction`.
+Source2 check passed in 0.491s, Clippy in 3.468s, nine protocol tests in 45.294s,
+one boundary test in 0.219s, and four complete compatibility targets in 65.469s
+(32 protocol, 29 evaluation, 15 report, 41 worker). Formatting passed in 1.533s
+and Plan in 35.615s. The full log SHA-256 is
+`8f91abe3dc474ed856e0206b650995414752d9baf7d74de2f4ff5ca604cd3e92`.
+The exact serial commands and immutable results use the
+`/private/tmp/kegari-v0-declared-observation-` prefix. The independent source/test
+inventory confirmed all original assertions and the one-line lint correction.
+
+Both source reviews found no material defect within their static scope. Protocol
+review SHA-256: `266ec493fb7b165262783814710d8c16dbf7a32c6089bece4e114dbe797dfb2f`.
+Ordinary workers never enable raw capture. Declared Independent trials retain
+bounded protected records; reports contain references/digests. Capture stays
+explicitly incomplete because bootstrap and transport-tail coverage are missing.
+No scorer, fixture, tool grant or qualification changes through these diagnostics.
+Operator documentation explains both optional observations and their limits.
+A separate TEMP draft addresses bootstrap, matched responses and actual reader
+EOF while retaining incomplete capture; it is uninstalled and unverified.
+A same-owner broker read/effect inventory design is separately under review;
+missing receipts and acknowledgements cannot establish remote-content truth.
+
+The Control increment is committed as
+`1e14788bddababfcd065cdfc9c7ef5dc575044d0` —
+`feat(kegari-v0): retain indexed parent effect history`.
+All12 files and683 tested inputs matched HEAD; the tree was clean before the
+observation installation. No commits were consolidated, rewritten or pushed.
+Verification: `/private/tmp/kegari-v0-control-index-commit-verification.json`.
+The following Control checkpoint is historical; its commit is recorded above.
+
 Current Control source3 is locally verified:917 passed, zero failed and two
 required native ignores across39 groups in814.456s. All38 new names passed once in
 the full --no-fail-fast log. All-target check, strict Clippy,42 focused results,
@@ -16,7 +84,7 @@ eight partial entries; exactly four not_assessed statuses became partial. No row
 became passed. Reports are [local validation](validation/LOCAL-CONTROL-EFFECT-INDEX.md)
 and [machine evidence](validation/control-index-checks.json). The original collector
 bundle is preserved; the machine report adds five separately hashed later reviews
-without changing observed results. The authorized local commit remains pending.
+without changing observed results. The authorized local commit is recorded above.
 The Control reservation/reconciliation mechanism and paired-history schema form a
 separate coherent change from the prior retirement producer; preserve its own
 validation checkpoint in a distinct commit rather than consolidating the two.

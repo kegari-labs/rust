@@ -195,7 +195,7 @@ impl ReportArchive {
             "elapsed_ms":(!self.reconstructed.contains(&r.trial.name()?)).then_some(r.elapsed_ms),"turns_started":r.turns_started,"usage_tokens":r.usage_tokens,
             "earlier_usage_unknown":r.earlier_usage_unknown,"unresolved_remote_effects":r.unresolved_remote_effects,
             "grading_error":r.grading_error,"observed_effects":r.observed_effects,
-            "runtime_build":r.runtime_build,"review_claim":r.review_claim,"instruction_digest":r.instruction_manifest.as_ref().map(|m|canonical_digest(1,m)).transpose()?
+            "runtime_build":r.runtime_build,"review_claim":r.review_claim,"independent_boundary":r.independent_boundary,"declared_protocol":r.declared_protocol,"instruction_digest":r.instruction_manifest.as_ref().map(|m|canonical_digest(1,m)).transpose()?
         }))).collect::<Result<Vec<_>>>()?;
         Ok(
             json!({"schema_version":1,"report_root":self.root,"suite_digest":self.suite.digest()?,
@@ -218,6 +218,44 @@ fn validate_actual_report(
     let manifest: crate::instructions::InstructionManifest =
         serde_json::from_value(report.instruction_manifest.clone().ok_or_else(conflict)?)
             .map_err(|_| conflict())?;
+    if let Some(observation) = &report.declared_protocol {
+        observation.validate()?;
+        if (manifest.role != crate::instructions::AgentRole::IndependentReview
+            && observation.state != crate::codex::ProtocolCaptureState::NotDeclared)
+            || observation.operation != manifest.operation_id
+            || observation.workspace != manifest.workspace_id
+            || observation.suite_digest != report.suite_digest
+            || observation.fixture_digest != report.fixture_digest
+            || observation
+                .trial_digest
+                .as_ref()
+                .is_some_and(|d| canonical_digest(1, &report.trial).ok().as_ref() != Some(d))
+            || observation.instruction_digest
+                != canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &manifest)?
+        {
+            return Err(conflict());
+        }
+    }
+    if let Some(boundary) = &report.independent_boundary {
+        boundary.validate()?;
+        if manifest.role != crate::instructions::AgentRole::IndependentReview {
+            return Err(conflict());
+        }
+        if let evaluation::IndependentBoundaryCheck::MatchedAtCollection { identity } =
+            &boundary.check
+            && (manifest.repository_revision.as_deref() != Some(boundary.source_revision.as_str())
+                || identity.operation != manifest.operation_id
+                || identity.workspace != manifest.workspace_id
+                || identity.instruction_manifest_digest
+                    != canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &manifest)?
+                || identity.context_digest != manifest.context_digest
+                || identity.permission_digest != canonical_digest(1, &manifest.permissions)?
+                || identity.source_revision != boundary.source_revision
+                || Some(&identity.tool_contract_digest) != report.tool_contract_digest.as_ref())
+        {
+            return Err(conflict());
+        }
+    }
     if let Some(review) = &report.review_claim {
         review.validate().map_err(|_| conflict())?;
         if !matches!(

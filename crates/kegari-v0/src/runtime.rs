@@ -35,6 +35,8 @@ mod correction_transitions;
 mod paired_recovery;
 #[path = "runtime_parent_retirement.rs"]
 mod parent_retirement;
+#[path = "runtime_worker_boundary.rs"]
+mod worker_boundary;
 pub(crate) use parent_retirement::ParentRunRegistrationInput;
 #[path = "runtime_parent_reassembly.rs"]
 mod parent_reassembly;
@@ -2966,6 +2968,14 @@ fn retain_provider_hold(
     Ok(())
 }
 impl WorkerHost for RuntimeCoordinator {
+    fn observe_independent_boundary(
+        &self,
+        control: &Arc<ControlHost>,
+        permit: &Permit,
+        contract: &Arc<WorkerContract>,
+    ) -> Result<crate::evaluation::IndependentBoundaryIdentity> {
+        self.observe_registered_independent_boundary(control, permit, contract)
+    }
     fn observed_session(
         &self,
         operation: Uuid,

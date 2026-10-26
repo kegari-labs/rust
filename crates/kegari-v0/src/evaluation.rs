@@ -32,6 +32,12 @@ pub use placement::prepare_worker_fixture;
 mod grading;
 pub use grading::{GradingError, GradingStage};
 
+#[path = "evaluation_boundary.rs"]
+mod boundary;
+pub use boundary::{
+    IndependentBoundaryCheck, IndependentBoundaryIdentity, IndependentBoundaryObservation,
+};
+
 #[path = "evaluation_review.rs"]
 mod review;
 pub use review::{ObservedReviewClaim, ReviewSourceRepository};
@@ -1195,6 +1201,14 @@ pub struct ObservedFacts {
     /// Missing legacy data stays missing; a summary is never converted into this claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_claim: Option<ObservedReviewClaim>,
+    /// Diagnostic endpoint observation only. Absence (including legacy reports)
+    /// is unknown, never evidence of unchanged authority or complete effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub independent_boundary: Option<IndependentBoundaryObservation>,
+    /// Only explicitly enabled declared protocol channels; missing legacy data
+    /// is unknown, never an empty successful capture. No scoring authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_protocol: Option<crate::codex::DeclaredProtocolObservation>,
     pub evidence_references: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1512,6 +1526,14 @@ pub struct TrialReport {
     /// Retained verbatim for qualitative review; never a product completion fact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_claim: Option<ObservedReviewClaim>,
+    /// Diagnostic endpoint observation only. Absence (including legacy reports)
+    /// is unknown, never evidence of unchanged authority or complete effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub independent_boundary: Option<IndependentBoundaryObservation>,
+    /// Only explicitly enabled declared protocol channels; missing legacy data
+    /// is unknown, never an empty successful capture. No scoring authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_protocol: Option<crate::codex::DeclaredProtocolObservation>,
     pub evidence_references: Vec<String>,
     pub omissions: Vec<String>,
     pub unresolved_remote_effects: bool,
@@ -1565,10 +1587,39 @@ impl TrialReport {
             trace: vec![],
             artifacts: BTreeMap::new(),
             review_claim: None,
+            independent_boundary: None,
+            declared_protocol: None,
             evidence_references: vec![],
             omissions: vec!["No actual-agent observation is available".into()],
             unresolved_remote_effects: false,
         })
+    }
+}
+/// Observation-only opt-in produced inside the actual declared trial. Private
+/// fields prevent ordinary callers or decoded data from enabling raw capture.
+/// This carries no permission to call tools or execute a provider.
+pub struct DeclaredProtocolTrial {
+    operation: uuid::Uuid,
+    instruction_digest: String,
+    trial_digest: Option<String>,
+    suite_digest: String,
+    fixture_digest: String,
+}
+impl DeclaredProtocolTrial {
+    pub(crate) fn operation(&self) -> uuid::Uuid {
+        self.operation
+    }
+    pub(crate) fn instruction_digest(&self) -> &str {
+        &self.instruction_digest
+    }
+    pub(crate) fn trial_digest(&self) -> Option<&str> {
+        self.trial_digest.as_deref()
+    }
+    pub(crate) fn suite_digest(&self) -> &str {
+        &self.suite_digest
+    }
+    pub(crate) fn fixture_digest(&self) -> &str {
+        &self.fixture_digest
     }
 }
 struct AuditedHost<'a> {
@@ -1614,6 +1665,11 @@ impl crate::worker_run::CorrectionBroker for AuditedHost<'_> {
     }
 }
 impl ToolBroker for AuditedHost<'_> {
+    fn observe_protocol(&mut self, event: crate::codex::ProtocolObservation<'_>) {
+        // Attempt observation must survive lease/intervention rejection. This
+        // does not invoke a tool, renew the lease or change its authorization.
+        self.host.observe_protocol(event);
+    }
     fn observe_session(&mut self, state: &SessionState) -> Result<()> {
         self.lease.check()?;
         self.host.observe_session(state)
@@ -2047,6 +2103,17 @@ pub async fn run_live_trial(
     let mut cancellation = CancelTrialOnDrop::new(|| {
         let _ = operation.provider.cancel();
     });
+    // Explicit trial-only opt-in; ordinary ScopedWorker creation records no
+    // raw tool arguments or agent-message text through this observer.
+    operation
+        .host
+        .begin_evaluation_protocol_observation(&DeclaredProtocolTrial {
+            operation: operation.assembled.manifest.operation_id,
+            instruction_digest: operation.assembled.manifest_digest.clone(),
+            trial_digest: canonical_digest(1, &report.trial).ok(),
+            suite_digest: report.suite_digest.clone(),
+            fixture_digest: report.fixture_digest.clone(),
+        });
     let mut audited = AuditedHost {
         host: operation.host,
         lease: lease.as_ref(),
@@ -2377,6 +2444,14 @@ pub async fn run_live_trial(
     // Owned termination has been observed, or cancellation was explicitly
     // attempted and the unknown result retained in the report above.
     cancellation.disarm();
+    audited
+        .host
+        .observe_protocol(crate::codex::ProtocolObservation::AdapterInventory {
+            state: &state,
+            processed_requests: client
+                .as_ref()
+                .map(|client| client.observed_server_request_count()),
+        });
     let observed = audited.host.observe();
     if let Ok(facts) = observed {
         grading::collect(

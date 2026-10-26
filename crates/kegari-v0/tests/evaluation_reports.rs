@@ -621,3 +621,120 @@ fn grading_error_is_an_independent_assessment_blocker() {
             .contains(&name)
     );
 }
+
+#[test]
+fn independent_boundary_diagnostics_survive_archive_and_legacy_absence_stays_unknown() {
+    // Explicit report data; no actual runtime/worker/authority is constructed.
+    let suite = suite();
+    let mut data = report(&suite, TrialOutcome::Blocked);
+    let boundary = IndependentBoundaryObservation {
+        schema_version: 1,
+        source_revision: "1".repeat(40),
+        candidate_digest: bytes_digest(b"data-only source snapshot"),
+        check: IndependentBoundaryCheck::Unavailable {
+            error: kegari_v0::error::Error::new("access_denied", "data-only fenced observation"),
+        },
+    };
+    boundary.validate().unwrap();
+    data.independent_boundary = Some(boundary.clone());
+    data.grading_error = Some(GradingError {
+        stage: GradingStage::ScorerLoad,
+        error: kegari_v0::error::Error::new("record_missing", "data-only missing scorer"),
+    });
+    let (_temp, store) = archive(&suite);
+    store.started(&data.trial).unwrap();
+    store.finish(&data).unwrap();
+    let loaded = ReportArchive::open(store.root()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&loaded.reports()[0].independent_boundary).unwrap(),
+        serde_json::to_value(Some(boundary)).unwrap()
+    );
+    assert!(loaded.reports()[0].grading_error.is_some());
+    assert_eq!(
+        loaded.inspection().unwrap()["trials"][0]["independent_boundary"]["check"]["state"],
+        "unavailable"
+    );
+    let mut legacy = serde_json::to_value(&data).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("independent_boundary");
+    let decoded: TrialReport = serde_json::from_value(legacy).unwrap();
+    assert!(decoded.independent_boundary.is_none());
+    assert!(
+        serde_json::to_value(decoded)
+            .unwrap()
+            .get("independent_boundary")
+            .is_none()
+    );
+    let mut invalid = serde_json::to_value(data.independent_boundary.unwrap()).unwrap();
+    invalid["check"]["invented_pass"] = json!(true);
+    assert!(serde_json::from_value::<IndependentBoundaryObservation>(invalid).is_err());
+}
+
+#[test]
+fn declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence() {
+    // Report-reader data only; these values cannot create a worker, native
+    // capability, permission, session or successful disclosure assertion.
+    use kegari_v0::codex::{
+        DeclaredProtocolObservation, ProtocolCaptureIssue, ProtocolCaptureState,
+    };
+    let suite = suite();
+    let mut data = report(&suite, TrialOutcome::Blocked);
+    let observation = DeclaredProtocolObservation {
+        schema_version: 1,
+        operation: uuid::Uuid::from_u128(21),
+        runtime: uuid::Uuid::from_u128(22),
+        workspace: uuid::Uuid::from_u128(23),
+        trial_digest: Some(kegari_v0::digest::canonical_digest(1, &data.trial).unwrap()),
+        suite_digest: data.suite_digest.clone(),
+        fixture_digest: data.fixture_digest.clone(),
+        contract_scope_digest: bytes_digest(b"report-only scope"),
+        instruction_digest: bytes_digest(b"report-only instructions"),
+        session_binding_digest: Some(bytes_digest(b"report-only session")),
+        thread_id: Some("report-only-thread".into()),
+        state: ProtocolCaptureState::Incomplete,
+        issues: [
+            ProtocolCaptureIssue::MissingRequestInventory,
+            ProtocolCaptureIssue::UnobservedTransportTail,
+        ]
+        .into_iter()
+        .collect(),
+        tool_request_attempts: 2,
+        observed_server_requests: 2,
+        processed_server_requests: Some(3),
+        terminal_turns: 1,
+        records: vec![],
+    };
+    observation.validate().unwrap();
+    data.declared_protocol = Some(observation.clone());
+    let (_temp, store) = archive(&suite);
+    store.started(&data.trial).unwrap();
+    store.finish(&data).unwrap();
+    let loaded = ReportArchive::open(store.root()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&loaded.reports()[0].declared_protocol).unwrap(),
+        serde_json::to_value(Some(&observation)).unwrap()
+    );
+    let inspected = loaded.inspection().unwrap();
+    let actual = &inspected["trials"][0]["declared_protocol"];
+    assert_eq!(actual["state"], "incomplete");
+    assert_eq!(actual["observed_server_requests"], 2);
+    assert_eq!(actual["processed_server_requests"], 3);
+    assert!(
+        actual["issues"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("unobserved_transport_tail"))
+    );
+    let mut legacy = serde_json::to_value(&data).unwrap();
+    legacy.as_object_mut().unwrap().remove("declared_protocol");
+    let restored: TrialReport = serde_json::from_value(legacy).unwrap();
+    assert!(restored.declared_protocol.is_none());
+    assert!(
+        serde_json::to_value(restored)
+            .unwrap()
+            .get("declared_protocol")
+            .is_none()
+    );
+}

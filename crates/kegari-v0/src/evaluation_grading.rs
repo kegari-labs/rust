@@ -27,6 +27,8 @@ pub(super) fn collect(
     // work. Missing observation never calls this helper or becomes Some(empty).
     report.artifacts = facts.artifacts.clone();
     report.review_claim = facts.review_claim.clone();
+    report.independent_boundary = facts.independent_boundary.clone();
+    report.declared_protocol = facts.declared_protocol.clone();
     report.evidence_references = facts.evidence_references.clone();
     report.observed_effects = Some(facts.effects.clone());
     let result = Scorer::load(
@@ -166,6 +168,37 @@ mod tests {
                 state: json!({"component":"grader error retention; no worker executed"}),
                 summary: None,
                 review_claim: None,
+                independent_boundary: Some(IndependentBoundaryObservation {
+                    schema_version: 1,
+                    source_revision: "1".repeat(40),
+                    candidate_digest: bytes_digest(b"explicit synthetic boundary snapshot"),
+                    check: IndependentBoundaryCheck::Unavailable {
+                        error: Error::new(
+                            "boundary_observation_unavailable",
+                            "component has no registered native worker",
+                        ),
+                    },
+                }),
+                declared_protocol: Some(crate::codex::DeclaredProtocolObservation {
+                    schema_version: 1,
+                    operation: uuid::Uuid::from_u128(1),
+                    runtime: uuid::Uuid::from_u128(2),
+                    workspace: uuid::Uuid::from_u128(3),
+                    trial_digest: None,
+                    suite_digest: bytes_digest(b"data-only suite"),
+                    fixture_digest: bytes_digest(b"data-only fixture"),
+                    contract_scope_digest: bytes_digest(b"data-only scope"),
+                    instruction_digest: bytes_digest(b"data-only instructions"),
+                    session_binding_digest: None,
+                    thread_id: None,
+                    state: crate::codex::ProtocolCaptureState::Unavailable,
+                    issues: BTreeSet::from([crate::codex::ProtocolCaptureIssue::MissingSession]),
+                    tool_request_attempts: 0,
+                    observed_server_requests: 0,
+                    processed_server_requests: None,
+                    terminal_turns: 0,
+                    records: vec![],
+                }),
                 evidence_references: vec!["data-only:collected-host-observation".into()],
             };
             Self {
@@ -224,6 +257,8 @@ mod tests {
                 "grade",
                 "artifacts",
                 "review_claim",
+                "independent_boundary",
+                "declared_protocol",
                 "evidence_references",
                 "observed_effects",
                 "grading_error",
@@ -234,6 +269,14 @@ mod tests {
             }
         }
         assert_eq!(report.observed_effects.as_ref(), Some(&facts.effects));
+        assert_eq!(
+            serde_json::to_value(&report.independent_boundary).unwrap(),
+            serde_json::to_value(&facts.independent_boundary).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&report.declared_protocol).unwrap(),
+            serde_json::to_value(&facts.declared_protocol).unwrap()
+        );
         assert_eq!(report.evidence_references, facts.evidence_references);
         assert_eq!(
             serde_json::to_value(&report.artifacts).unwrap(),

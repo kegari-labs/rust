@@ -4940,6 +4940,29 @@
           "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
           "status": "not_run",
           "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-DECLARED-OBSERVATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed real protected Control/admission and ScopedWorker components test exact original model-request identity, changed limits/actor or missing receipt refusal, paused owner continuity, fenced callback refusal, unregistered boundary unavailability and ordinary-worker opt-out. Protocol/storage components retain pre-whitelist and intervention-denied request attempts, exact terminal message identities, conflicts/missing prefixes and bounded readback failures without turning an incomplete trace into a pass.",
+          "tests": [
+            "codex::observation::tests::declared_capture_retains_denied_arguments_and_terminal_text_without_reasoning",
+            "codex::observation::tests::missing_foreign_conflicting_and_incomplete_terminal_data_never_become_empty_complete",
+            "codex::observation::tests::exact_terminal_duplicate_deduplicates_but_conflicting_duplicate_remains_visible",
+            "codex::observation::tests::overflow_and_failed_protected_capture_remain_explicit",
+            "codex::observation::tests::actual_protected_capture_readback_detects_removed_or_changed_bytes",
+            "codex::observation::tests::actual_adapter_observes_requests_before_whitelist_and_intervention_then_terminal",
+            "codex::observation::tests::completed_item_and_delta_identity_require_exact_terminal_inventory",
+            "codex::observation::tests::scope_not_declared_never_records_raw_messages_or_claims_zero_attempts",
+            "codex::observation::tests::processed_request_inventory_detects_missing_prefix_but_never_proves_stream_end",
+            "runtime::worker_boundary::tests::actual_model_request_observation_retains_pause_and_refuses_change_fence_or_missing_bytes",
+            "tests/worker.rs::independent_observation_without_actual_runtime_registration_stays_unavailable",
+            "tests/worker.rs::ordinary_scoped_worker_does_not_enable_raw_protocol_capture"
+          ],
+          "limits": "These are local components and diagnostic prerequisites only. No actual-agent trial, registered native MatchedAtCollection positive, live provider, OS containment, canary non-disclosure or E07 behavior is qualified. Enabled protocol capture always remains incomplete or a stronger failure state; no Complete state or full read/effect/output inventory is implemented. Existing scorers, fixtures and qualification predicates remain unchanged. The duplex broker and SessionState values are explicitly synthetic and grant no execution authority. The Control test does not register or join a native worker; authority re-observation is an endpoint check, not proof of every earlier read/effect.",
+          "source_digest": "sha256:07ccd31609ff5d4cb534a780f5e6dc3dc5869b8bdecd59f169cb81fdce3ffa4d"
         }
       ]
     },
@@ -5539,6 +5562,21 @@
           "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
           "status": "not_run",
           "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-DECLARED-OBSERVATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed archive regressions preserve optional unavailable authority and incomplete protocol diagnostics with exact identity/count fields; legacy omission stays unknown. Existing scorer-load and grading-failure regressions additionally preserve both collected diagnostics while retaining original failure and effect/artifact assertions.",
+          "tests": [
+            "tests/evaluation_reports.rs::independent_boundary_diagnostics_survive_archive_and_legacy_absence_stays_unknown",
+            "tests/evaluation_reports.rs::declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence",
+            "evaluation::grading::tests::actual_scorer_load_error_keeps_collected_evidence_and_blocks_ungraded_success",
+            "evaluation::grading::tests::actual_grade_error_keeps_failed_and_interrupted_execution_distinct"
+          ],
+          "limits": "These are local components and diagnostic prerequisites only. No actual-agent trial, registered native MatchedAtCollection positive, live provider, OS containment, canary non-disclosure or E07 behavior is qualified. Enabled protocol capture always remains incomplete or a stronger failure state; no Complete state or full read/effect/output inventory is implemented. Existing scorers, fixtures and qualification predicates remain unchanged. Archive and grading inputs are explicitly data-only; these tests do not populate every native report field or measure actual-agent variability, usage or repeated behavior.",
+          "source_digest": "sha256:07ccd31609ff5d4cb534a780f5e6dc3dc5869b8bdecd59f169cb81fdce3ffa4d"
         }
       ]
     },
@@ -5626,6 +5664,22 @@
           "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
           "status": "not_run",
           "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-DECLARED-OBSERVATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed protocol/storage components check bounded capture overflow/write failure and actual protected readback against deleted or changed bytes. Captured denied arguments and terminal text remain private record content while report serialization carries bounded references rather than that raw text; reasoning is excluded. Ordinary workers do not enable raw capture, and archive omission remains explicit.",
+          "tests": [
+            "codex::observation::tests::declared_capture_retains_denied_arguments_and_terminal_text_without_reasoning",
+            "codex::observation::tests::overflow_and_failed_protected_capture_remain_explicit",
+            "codex::observation::tests::actual_protected_capture_readback_detects_removed_or_changed_bytes",
+            "tests/worker.rs::ordinary_scoped_worker_does_not_enable_raw_protocol_capture",
+            "tests/evaluation_reports.rs::declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence"
+          ],
+          "limits": "These are local components and diagnostic prerequisites only. No actual-agent trial, registered native MatchedAtCollection positive, live provider, OS containment, canary non-disclosure or E07 behavior is qualified. Enabled protocol capture always remains incomplete or a stronger failure state; no Complete state or full read/effect/output inventory is implemented. Existing scorers, fixtures and qualification predicates remain unchanged. This does not establish universal secret redaction or authorized live-input disclosure; test payloads are synthetic. Raw payload capture is restricted to explicitly declared IndependentReview trials and bounded protected journals, not general logs.",
+          "source_digest": "sha256:07ccd31609ff5d4cb534a780f5e6dc3dc5869b8bdecd59f169cb81fdce3ffa4d"
         }
       ]
     },
@@ -7420,6 +7474,29 @@
           "reference": "validation/LOCAL-NATIVE-EVALUATION.md",
           "status": "not_run",
           "scope": "Representative qualitative grading/calibration and disputed/material-failure human review have not run."
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-DECLARED-OBSERVATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed real protected Control/admission and ScopedWorker components test exact original model-request identity, changed limits/actor or missing receipt refusal, paused owner continuity, fenced callback refusal, unregistered boundary unavailability and ordinary-worker opt-out. Protocol/storage components retain pre-whitelist and intervention-denied request attempts, exact terminal message identities, conflicts/missing prefixes and bounded readback failures without turning an incomplete trace into a pass.",
+          "tests": [
+            "codex::observation::tests::declared_capture_retains_denied_arguments_and_terminal_text_without_reasoning",
+            "codex::observation::tests::missing_foreign_conflicting_and_incomplete_terminal_data_never_become_empty_complete",
+            "codex::observation::tests::exact_terminal_duplicate_deduplicates_but_conflicting_duplicate_remains_visible",
+            "codex::observation::tests::overflow_and_failed_protected_capture_remain_explicit",
+            "codex::observation::tests::actual_protected_capture_readback_detects_removed_or_changed_bytes",
+            "codex::observation::tests::actual_adapter_observes_requests_before_whitelist_and_intervention_then_terminal",
+            "codex::observation::tests::completed_item_and_delta_identity_require_exact_terminal_inventory",
+            "codex::observation::tests::scope_not_declared_never_records_raw_messages_or_claims_zero_attempts",
+            "codex::observation::tests::processed_request_inventory_detects_missing_prefix_but_never_proves_stream_end",
+            "runtime::worker_boundary::tests::actual_model_request_observation_retains_pause_and_refuses_change_fence_or_missing_bytes",
+            "tests/worker.rs::independent_observation_without_actual_runtime_registration_stays_unavailable",
+            "tests/worker.rs::ordinary_scoped_worker_does_not_enable_raw_protocol_capture"
+          ],
+          "limits": "These are local components and diagnostic prerequisites only. No actual-agent trial, registered native MatchedAtCollection positive, live provider, OS containment, canary non-disclosure or E07 behavior is qualified. Enabled protocol capture always remains incomplete or a stronger failure state; no Complete state or full read/effect/output inventory is implemented. Existing scorers, fixtures and qualification predicates remain unchanged. The duplex broker and SessionState values are explicitly synthetic and grant no execution authority. The Control test does not register or join a native worker; authority re-observation is an endpoint check, not proof of every earlier read/effect.",
+          "source_digest": "sha256:07ccd31609ff5d4cb534a780f5e6dc3dc5869b8bdecd59f169cb81fdce3ffa4d"
         }
       ]
     },
