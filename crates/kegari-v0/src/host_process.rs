@@ -313,7 +313,6 @@ impl LocalProcessPermit {
         timeout: std::time::Duration,
         output_limit: usize,
     ) -> Result<crate::isolation::OwnedCommand> {
-        crate::isolation::repository_command_prerequisite()?;
         let cleanup = self.cleanup.as_ref().ok_or_else(|| {
             Error::new(
                 "scope_violation",
@@ -331,6 +330,7 @@ impl LocalProcessPermit {
                 "removal hook differs from sealed cleanup workflow",
             ));
         }
+        crate::isolation::repository_command_prerequisite(&expected)?;
         let launch_identity = crate::isolation::command_launch_identity(isolation, argv)?;
         let effect = Uuid::new_v4();
         let slot = Arc::new(CleanupCancellation::default());

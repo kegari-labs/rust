@@ -470,6 +470,32 @@ pub fn operation_tool_definitions(
 }
 impl WorkerContract {
     pub fn new(input: ContractInput) -> Result<Self> {
+        verify_managed_policy(&input.isolation, None)?;
+        Self::new_inner(input)
+    }
+    pub(crate) fn new_configured(
+        input: ContractInput,
+        workspace: &crate::config::Workspace,
+    ) -> Result<Self> {
+        if workspace.id != input.authority.workspace() {
+            return Err(Error::new(
+                "worker_binding",
+                "managed workspace identity differs",
+            ));
+        }
+        let executes = input.assembled.manifest.role.permits_repository_execution()
+            && input.repository.is_some();
+        verify_managed_policy(
+            &input.isolation,
+            if executes {
+                workspace.managed_execution.as_ref()
+            } else {
+                None
+            },
+        )?;
+        Self::new_inner(input)
+    }
+    fn new_inner(input: ContractInput) -> Result<Self> {
         let ContractInput {
             assembled,
             authority,
@@ -731,6 +757,24 @@ impl WorkerContract {
     }
     pub(crate) fn context(&self) -> &Value {
         &self.context
+    }
+}
+
+fn verify_managed_policy(
+    isolation: &ValidatedIsolation,
+    configured: Option<&crate::config::ManagedExecution>,
+) -> Result<()> {
+    match (&isolation.plan().managed_execution, configured) {
+        (None, None) => Ok(()),
+        (Some(actual), Some(expected))
+            if actual.policy_digest() == canonical_digest(1, expected)? =>
+        {
+            actual.revalidate()
+        }
+        _ => Err(Error::new(
+            "worker_binding",
+            "managed execution profile differs from the configured workspace",
+        )),
     }
 }
 
@@ -3086,6 +3130,10 @@ impl ToolBroker for RecoveryJournal {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "worker_managed_binding_tests.rs"]
+mod managed_binding_tests;
 
 #[cfg(test)]
 mod trial_checkpoint_tests {

@@ -2361,6 +2361,7 @@ async fn coordination_preservation_binds_actual_opaque_authority_and_directory_i
     let repository = root.child("repository").unwrap();
     let scratch = root.child("scratch").unwrap();
     let isolation = IsolationPlan {
+        managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::Coordination,
         execution_root: root.path().into(),

@@ -242,17 +242,20 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
         provider_discovery: input.provider_discovery,
         known_secrets: &input.known_secrets,
     })?;
-    let contract = Arc::new(WorkerContract::new(ContractInput {
-        assembled,
-        authority: input.authority,
-        isolation: isolation.clone(),
-        workflow: input.workflow,
-        context: input.context,
-        review: input.review,
-        account_id: connection.account_id.clone(),
-        repository: input.repository_id,
-        read_resources: input.read_resources,
-    })?);
+    let contract = Arc::new(WorkerContract::new_configured(
+        ContractInput {
+            assembled,
+            authority: input.authority,
+            isolation: isolation.clone(),
+            workflow: input.workflow,
+            context: input.context,
+            review: input.review,
+            account_id: connection.account_id.clone(),
+            repository: input.repository_id,
+            read_resources: input.read_resources,
+        },
+        workspace,
+    )?);
     Ok(PreparedRun {
         contract,
         isolation,

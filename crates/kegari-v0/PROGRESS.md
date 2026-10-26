@@ -6,7 +6,61 @@ paused. The previous pause followed the explicit "Keep the goal paused" /
 "Do not start implementation yet" instruction, rather than an entitlement
 prerequisite. Supervision and existing action restrictions remain in force.
 
-Current verified increment: **0.2.0-alpha.3** binds actual owned-group exit
+Current verified increment after `f0120cd`: alpha.4 adds guided initial local setup and
+host-owned managed foreground policy/tool inventory binding. The final release
+suite passed 1,041 tests (two explicitly ignored native tests), and all-target
+clippy, formatting, inventory and five exact staged-binary inspections passed.
+The exact alpha.4 executable and verification scope are in
+[managed setup evidence](validation/MANAGED-SETUP.md). Independent review found
+and resolved a guided-setup registration race and a dangling scratch-build
+symlink check; final source review found no additional material issue.
+A policy declaration does not constitute
+native qualification; normal repository commands retain a specific prerequisite
+refusal. Registered-service lifecycle and qualified command completion remain
+unfinished. Next implement the finite authenticated native qualification producer
+and the supported managed-command completion path using actual owned exit,
+durable guard release and joined output collectors; then registered-service
+start/readiness/stop/exit and all dependent writer/cleanup gates. Do not treat
+the policy JSON or the existing whole-runtime handover qualification record as
+that command qualification. Preserve role/resource isolation and current action
+restrictions. The prior goal turn made progress by committing and delivering the
+verified alpha.3 increment; this is continuation, not a restart.
+
+Supervised request NQ-01A was explicitly approved and executed once: the read-only
+native identity test passed (one selected test, zero failures, no timeout,
+0.384 seconds wrapper elapsed, empty stderr and no temporary cwd files).
+It used the preserved alpha.3 test binary at
+`target/native-qualification/nq-01-91160a62001a/platform-test`, SHA-256
+`91160a62001a6439c43cc4ffdca16879f5e69a23dcb9826738ee46bd6cb182fa`.
+Exact argv selects only the ignored
+`native_host_and_birth_identity_are_observed_without_environment_trust` test with
+one test thread; outer timeout 20 seconds, one attempt. It reads OS account/home,
+host/boot UUIDs, its own process identity and free bytes. The test spawns no child
+and changes no runtime state; the wrapper owns one test process and TEMP logs.
+No setup, Keychain, service, existing-process signal, provider action or second
+native check is included. The exact request is retained beside that binary in
+`request.json`, with exact result and hashed stdout/stderr alongside it. This
+establishes the native identity prerequisite only; it does not qualify setup,
+Keychain, signalling, sandboxing, command execution or broader native behavior.
+
+NQ-01B is prepared and awaiting separate approval: one alpha.4 native
+`child_signal_uses_owned_unreaped_handle_and_never_adopts_pid_metadata` test,
+with a 20-second outer timeout. Pinned executable:
+`target/native-qualification/nq-01b-aab9a5913248/platform-test`, SHA-256
+`aab9a591324848d091211acc0cd3aa44bd33a17e84497814455cbca763985e98`.
+It starts only `/bin/sleep 5` with a disposable fixture home and new owned group,
+captures its identity, signals that group with SIGKILL, reaps it and checks that
+signalling after reap is refused. The helper expires naturally after five seconds.
+No setup, Keychain, service, provider or pre-existing process is in scope. The
+request is retained beside the pinned executable; it has not been run.
+
+The guided setup change is committed as `2eab4ae` —
+`feat(kegari-v0): guide initial local setup with reviewed configuration`.
+The verified alpha.4 managed-policy, compatibility, documentation and evidence
+are recorded in a separate increment for reviewable history. All owned Cargo and
+artifact inspection processes have finished; NQ-01B is awaiting approval, not live.
+
+Prior verified increment: **0.2.0-alpha.3** binds actual owned-group exit
 evidence to its original spawn, distinguishes schema-2 evidence from legacy rows,
 retains journal/stream/guard uncertainty and improves first-launch guidance.
 The final release suite passed 1,025 tests, with two native tests still ignored;

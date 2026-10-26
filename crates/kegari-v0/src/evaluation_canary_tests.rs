@@ -476,6 +476,7 @@ fn actual_scorer_load_failure_keeps_materialization_diagnostic_without_native_cl
     )
     .unwrap();
     let isolation = crate::isolation::IsolationPlan {
+        managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::IndependentReview,
         execution_root: prepared.root.clone(),

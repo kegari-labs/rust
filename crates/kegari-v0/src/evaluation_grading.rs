@@ -132,6 +132,7 @@ mod tests {
             .unwrap();
             let prepared = prepare_fixture(&root, &variant, &base.join("trial"), &grader).unwrap();
             let isolation = IsolationPlan {
+                managed_execution: None,
                 schema_version: 1,
                 role: ExecutionRole::Child,
                 execution_root: prepared.root.clone(),

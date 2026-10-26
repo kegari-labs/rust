@@ -49,9 +49,10 @@ finite `tests/process_group.rs` regression demonstrates exactly that late write.
 It establishes a process-group limitation, not a filesystem-sandbox escape.
 
 `src/isolation.rs::repository_command_prerequisite` currently rejects repository
-commands with `process_tree_unverified`. Revising that implementation for the
-managed profile requires its own review and qualification; this documentation
-does not remove the refusal. Successful group cleanup and EOF cannot establish
+commands without a bound managed declaration with `process_tree_unverified`.
+A bound foreground declaration still returns `managed_profile_unqualified`;
+it cannot manufacture the missing native qualification. Successful group cleanup
+and EOF cannot establish
 arbitrary-descendant closure. PID enumeration alone also cannot establish complete
 membership or safely signal a process whose numeric PID has been reused.
 
@@ -94,10 +95,15 @@ Handover metadata schema 2 explicitly requires process schema 2; older metadata
 is refused rather than assumed compatible. No existing installation is migrated.
 
 This is an implementation increment, not complete managed-profile support. The
-explicit foreground tool/dependency profile, registered-service lifecycle and
-their command/check/hook/cleanup integration remain required. Repository-command
-preflight refusal remains until that integration is ready; native qualification
-is a separate unfinished obligation.
+alpha.4 declaration now pins foreground executable hashes, command-only toolchain
+read grants and optional generated execution under owned `scratch/build`.
+Preparation admission, model contracts and retained cleanup isolation bind that
+inventory; profile changes fence workspace authority and require drained
+configuration replacement. Model source-read grants do not expand with toolchain
+reads. Handover metadata schema 3 requires explicit managed-schema-1 support.
+The declaration does not qualify the native command path or provide registered
+services. Command completion, the finite native qualification route and service
+lifecycle remain required before the configured profile can execute work.
 
 SPEC §§6.1, 7.1, 11.2–11.5 require admission before launch, independent resource
 isolation, verified-owned termination, preserved uncertainty and safe recovery.

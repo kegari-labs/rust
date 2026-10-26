@@ -94,6 +94,7 @@ impl Case {
             )
         };
         let isolation = IsolationPlan {
+            managed_execution: None,
             schema_version: 1,
             role: ExecutionRole::Coordination,
             execution_root,

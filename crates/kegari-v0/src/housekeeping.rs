@@ -1182,7 +1182,7 @@ impl Housekeeping {
             .before_remove
             .is_some()
         {
-            crate::isolation::repository_command_prerequisite()?;
+            crate::isolation::repository_command_prerequisite(&registration.isolation.validate()?)?;
         }
         let actor = request.actor.clone();
         let state = self.control.snapshot()?;
@@ -1454,7 +1454,14 @@ impl CleanupProcesses for NativeCleanupProcesses {
     }
     fn before_remove<'a>(&'a self, request: CleanupHook<'a>) -> CleanupFuture<'a, ()> {
         Box::pin(async move {
-            crate::isolation::repository_command_prerequisite()?;
+            let (expected, _, _) = request.proof.command_identity()?;
+            if expected.digest() != request.isolation.digest() {
+                return Err(Error::new(
+                    "scope_violation",
+                    "removal hook isolation differs from its retained execution",
+                ));
+            }
+            crate::isolation::repository_command_prerequisite(&expected)?;
             let authority = self.scope(request.root, Some(request.proof.clone()))?;
             let git = self.git.clone();
             let scope = authority.clone();
@@ -2153,6 +2160,9 @@ pub struct HandoverInfo {
     /// Schema-2 metadata explicitly declares process journal compatibility;
     /// legacy metadata must not implicitly claim it can read owned exit records.
     pub process_schema: u32,
+    /// The replacement must understand managed policy fields in configuration
+    /// and retained isolation records; omission cannot imply that capability.
+    pub managed_execution_schema: u32,
     pub runtime_version: String,
     pub runtime_build: String,
     pub instruction_schema: u32,
@@ -2161,11 +2171,12 @@ pub struct HandoverInfo {
 }
 pub fn handover_info() -> Result<HandoverInfo> {
     Ok(HandoverInfo {
-        schema_version: 2,
+        schema_version: 3,
         api_version: 1,
         config_schema: 1,
         receipt_schema: 1,
         process_schema: 2,
+        managed_execution_schema: 1,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
         runtime_build: crate::BUILD_ID.into(),
         instruction_schema: crate::instructions::ASSEMBLY_SCHEMA,
@@ -2392,11 +2403,12 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
     let info =
         observed.map_err(|_| Error::new("timeout", "replacement metadata probe timed out"))??;
     binary.revalidate(true)?;
-    if info.schema_version != 2
+    if info.schema_version != 3
         || info.api_version != 1
         || info.config_schema != 1
         || info.receipt_schema != 1
         || info.process_schema != 2
+        || info.managed_execution_schema != 1
         || info.instruction_schema != crate::instructions::ASSEMBLY_SCHEMA
         || info.runtime_build.is_empty()
         || info.runtime_version.is_empty()

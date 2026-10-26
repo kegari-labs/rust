@@ -229,6 +229,7 @@ impl ReuseFixture {
             .source = source.to_string_lossy().into();
         registration.complete_setup(&config).unwrap();
         let boundary = IsolationPlan {
+            managed_execution: None,
             schema_version: 1,
             role: ExecutionRole::Validation,
             execution_root: execution.path().into(),

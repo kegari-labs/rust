@@ -30,7 +30,7 @@ authenticated OS UID or stable Tailscale user ID against the current role mappin
 including the operator ID, then compares the prepared and client configuration
 revisions and the requested control generation. Identity, account, permission, repository-path and deployment-authority changes
 require PAUSED or STOPPED, drained work and no unresolved effects. Ordinary
-selection, execution profile, workflow, budget and capacity changes apply to future
+selection, Codex profile, workflow, budget and capacity changes apply to future
 admissions; active operations retain their exact admitted settings while current
 provider permission, correction and dependency checks continue. Same-account
 credential replacement is identity-verified before import.
@@ -58,6 +58,44 @@ It requires the actual host ID and a configuring local operator mapping. Metadat
 probing may create private empty probe directories, but this helper does not save
 credentials, configuration or registration. The concrete bootstrap path may use
 the same manager after taking the canonical control lock and remains STOPPED.
+
+## Managed repository execution policy
+
+A workspace may declare `managed_execution` separately from its Codex model
+`profiles`. Its only lifecycle value is `foreground_v1`: supported foreground
+tools must finish with their managed work. This declaration neither prevents
+detachment nor registers background services. Omission preserves the previous
+configuration encoding and missing-profile refusal; there is no `enabled` or
+`qualified` assertion.
+
+The required `executables` array has 1–256 entries, each with a `path` and an exact
+SHA-256 `digest`. Declare the complete transitive tool inventory, including
+compilers, linkers and interpreters used by an authorized command. The optional
+`read_roots` array has at most 64 entries, each with a `path` and an explicit
+`directory` boolean. Paths are at most 4096 UTF-8 bytes and use the existing
+absolute-path, `~` or whole `$NAME` expansion rules. `/`, duplicate executable
+paths and duplicate read paths are rejected, including collisions after expansion.
+Filesystem identity, canonical aliases and forbidden-root overlap are checked
+when the execution boundary binds the declaration; parsing alone does not prove
+those properties. Empty read roots and absent generated-executable policy are
+omitted from the serialized policy.
+
+The optional `generated_executables = "scratch_build_v1"` declares generated
+programs under the operation's bound private scratch build area. It does not grant
+execution from the repository, home directory or an arbitrary tool directory.
+No ambient environment or directory-wide tool grant is implied. Cargo-style
+workloads still need their actual compiler/linker inventory, required SDK reads,
+supported scratch output routing and native qualification. Toolchain reads do
+not become model-visible source grants, and independent role, source, network
+and credential restrictions remain in force.
+
+Any policy addition, change or removal creates a workspace authority fence. A
+successful replacement requires PAUSED or STOPPED, drained work and no unresolved
+effects. Even a proposal with another invalid field retains the fence for a
+reliably parsed policy change; an unrelated invalid proposal with the same policy
+does not create this particular fence. Configuration validation and the component
+tests are not native qualification: production command admission continues to
+refuse a policy without the separate required qualification evidence.
 
 `config check` returns explicit verified/blocked metadata checks and an
 `operational_qualification: unverified` field. A workspace-limited check keeps the

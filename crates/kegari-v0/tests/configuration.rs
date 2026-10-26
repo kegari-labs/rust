@@ -1155,6 +1155,90 @@ async fn invalid_workspace_update_cannot_preserve_known_actor_repository_or_reso
 }
 
 #[tokio::test]
+async fn managed_policy_changes_fence_even_when_another_field_is_invalid() {
+    let policy: kegari_v0::config::ManagedExecution = serde_json::from_value(json!({
+        "lifecycle":"foreground_v1",
+        "executables":[{"path":"/private/tmp/declared-tool","digest":kegari_v0::digest::bytes_digest(b"fixture declaration only")}]
+    })).unwrap();
+    for change in [
+        "added",
+        "removed",
+        "executable",
+        "read_root",
+        "generated",
+        "unchanged",
+    ] {
+        let f = Fixture::with_configuration(|config| {
+            let fixture = workspace_fixture_config();
+            config.connections = fixture.connections;
+            config.workspaces = fixture.workspaces;
+            if change != "added" {
+                config
+                    .workspaces
+                    .get_mut("example")
+                    .unwrap()
+                    .managed_execution = Some(policy.clone());
+            }
+        });
+        let before = f.manager.snapshot().unwrap().revision().unwrap();
+        let mut workspace = f.manager.snapshot().unwrap().workspaces["example"].clone();
+        match change {
+            "added" => workspace.managed_execution = Some(policy.clone()),
+            "removed" => workspace.managed_execution = None,
+            "executable" => {
+                workspace.managed_execution.as_mut().unwrap().executables[0].digest =
+                    kegari_v0::digest::bytes_digest(b"different declared tool")
+            }
+            "read_root" => workspace
+                .managed_execution
+                .as_mut()
+                .unwrap()
+                .read_roots
+                .push(kegari_v0::config::ManagedReadRoot {
+                    path: "/private/tmp/declared-sdk".into(),
+                    directory: true,
+                }),
+            "generated" => {
+                workspace
+                    .managed_execution
+                    .as_mut()
+                    .unwrap()
+                    .generated_executables =
+                    Some(kegari_v0::config::ManagedGeneratedExecutables::ScratchBuildV1)
+            }
+            "unchanged" => {}
+            _ => unreachable!(),
+        }
+        workspace.max_agents = 0;
+        let request = f.request(
+            CommandName::WorkspaceConfigure,
+            json!({"workspace":"example","workspace_configuration":toml::to_string(&workspace).unwrap()}),
+        );
+        assert!(
+            f.manager
+                .execute(f.actor.clone(), request, None)
+                .await
+                .is_err(),
+            "{change}"
+        );
+        let fenced = f
+            .manager
+            .authority_fences()
+            .unwrap()
+            .check_workspace(workspace.id);
+        if change == "unchanged" {
+            fenced.unwrap();
+        } else {
+            assert_eq!(fenced.unwrap_err().code, "permission_fenced", "{change}");
+        }
+        assert_eq!(f.manager.snapshot().unwrap().revision().unwrap(), before);
+        assert_eq!(f.stored().revision().unwrap(), before);
+        assert_eq!(f.inputs.wire.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(f.store.writes.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
 async fn earlier_success_cannot_resolve_a_later_reduction_and_resolution_provenance_is_checked() {
     let f = Fixture::new();
     let current = f.manager.snapshot().unwrap();

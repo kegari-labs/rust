@@ -143,6 +143,83 @@ pub struct Workspace {
     pub test_resources: BTreeMap<String, TestResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation: Option<EvaluationBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_execution: Option<ManagedExecution>,
+}
+
+pub const MAX_MANAGED_EXECUTABLES: usize = 256;
+pub const MAX_MANAGED_READ_ROOTS: usize = 64;
+const MAX_MANAGED_PATH_BYTES: usize = 4096;
+
+/// Host-owned declaration only. Actual filesystem binding and native
+/// qualification are separate prerequisites; this configuration grants neither.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedExecution {
+    pub lifecycle: ManagedLifecycle,
+    pub executables: Vec<ManagedExecutable>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_roots: Vec<ManagedReadRoot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_executables: Option<ManagedGeneratedExecutables>,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ManagedLifecycle {
+    ForegroundV1,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedExecutable {
+    pub path: String,
+    pub digest: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedReadRoot {
+    pub path: String,
+    pub directory: bool,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ManagedGeneratedExecutables {
+    ScratchBuildV1,
+}
+impl ManagedExecution {
+    pub fn validate(&self) -> Result<()> {
+        if self.executables.is_empty()
+            || self.executables.len() > MAX_MANAGED_EXECUTABLES
+            || self.read_roots.len() > MAX_MANAGED_READ_ROOTS
+        {
+            return Err(Error::invalid(
+                "managed execution inventory is empty or exceeds its bound",
+            ));
+        }
+        let mut executables = BTreeSet::new();
+        for executable in &self.executables {
+            managed_path_syntax(&executable.path)?;
+            crate::evidence::validate_digest(&executable.digest)?;
+            if !executables.insert(&executable.path) {
+                return Err(Error::invalid("managed executable paths must be unique"));
+            }
+        }
+        let mut reads = BTreeSet::new();
+        for read in &self.read_roots {
+            managed_path_syntax(&read.path)?;
+            if !reads.insert(&read.path) {
+                return Err(Error::invalid("managed read paths must be unique"));
+            }
+        }
+        Ok(())
+    }
+}
+fn managed_path_syntax(value: &str) -> Result<()> {
+    if value.len() > MAX_MANAGED_PATH_BYTES || value == "/" {
+        return Err(Error::invalid(
+            "managed paths must be bounded and narrower than filesystem root",
+        ));
+    }
+    path_syntax(value)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -590,6 +667,14 @@ impl Config {
         }
         for workspace in next.workspaces.values_mut() {
             workspace.workflow = resolve(&workspace.workflow, home, &env)?;
+            if let Some(managed) = &mut workspace.managed_execution {
+                for executable in &mut managed.executables {
+                    executable.path = resolve(&executable.path, home, &env)?;
+                }
+                for read in &mut managed.read_roots {
+                    read.path = resolve(&read.path, home, &env)?;
+                }
+            }
             if let Some(evaluation) = &mut workspace.evaluation {
                 evaluation.suite_manifest = resolve(&evaluation.suite_manifest, home, &env)?;
                 evaluation.report_root = resolve(&evaluation.report_root, home, &env)?;
@@ -756,6 +841,9 @@ impl Config {
                 }
             }
             path_syntax(&workspace.workflow)?;
+            if let Some(managed) = &workspace.managed_execution {
+                managed.validate()?;
+            }
             workspace.linear.teams.validate()?;
             workspace.linear.projects.validate()?;
             workspace.linear.users.validate()?;

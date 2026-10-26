@@ -169,6 +169,7 @@ pub(crate) fn worker(input: WorkerInput<'_>) -> WorkerFixture {
         vec![]
     };
     let isolation = IsolationPlan {
+        managed_execution: None,
         schema_version: 1,
         role: match role {
             AgentRole::Review => ExecutionRole::Review,

@@ -88,7 +88,7 @@ fn start(control: &kegari_v0::control::ControlHost, runtime: Uuid) {
 }
 
 #[test]
-#[ignore = "native qualification blocked: outer sandbox denies kern.bootsessionuuid; do not weaken production checks"]
+#[ignore = "requires separately authorized native host identity qualification outside the sandbox"]
 fn native_host_and_birth_identity_are_observed_without_environment_trust() {
     let host = HostIdentity::discover().unwrap();
     assert!(host.home.is_absolute());
@@ -458,11 +458,14 @@ fn pending_startup_recovery_requires_no_live_process_and_no_runtime_lock() {
 }
 
 #[test]
-#[ignore = "native process-group qualification requires the blocked OS boot identity probe"]
+#[ignore = "requires separately authorized native owned-child capture and signalling"]
 fn child_signal_uses_owned_unreaped_handle_and_never_adopts_pid_metadata() {
     let (_temporary, host) = host_fixture();
     let binary = BinaryIdentity::inspect(Path::new("/bin/sleep"), false).unwrap();
-    let mut child = OwnedChild::spawn(&binary, &["30".into()], &host.home).unwrap();
+    // The fixture itself expires after five seconds even if native signalling
+    // or the test process fails. Its outer qualification wrapper is separately
+    // bounded; a failed observation must not leave a long-lived sleep behind.
+    let mut child = OwnedChild::spawn(&binary, &["5".into()], &host.home).unwrap();
     assert_ne!(child.identity().pid, std::process::id());
     assert!(child.signal_group(true).unwrap());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);

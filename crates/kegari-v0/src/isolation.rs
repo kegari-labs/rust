@@ -9,6 +9,10 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+#[path = "managed_execution.rs"]
+mod managed_execution;
+pub use managed_execution::BoundManagedExecution;
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionRole {
@@ -43,6 +47,8 @@ pub struct IsolationPlan {
     pub resource_writes: Vec<PathGrant>,
     pub forbidden_roots: Vec<PathBuf>,
     pub executables: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_execution: Option<BoundManagedExecution>,
 }
 
 /// Constructed only by checking the actual filesystem. Revalidated before use.
@@ -236,6 +242,9 @@ impl IsolationPlan {
                 "coordination and independent review cannot execute commands",
             ));
         }
+        if let Some(managed) = &plan.managed_execution {
+            managed.validate_plan(&plan)?;
+        }
         let digest = canonical_digest(1, &plan)?;
         Ok(ValidatedIsolation { plan, digest })
     }
@@ -335,7 +344,17 @@ impl ValidatedIsolation {
         }
         .canonicalize()
         .map_err(|e| Error::io("resolve command in execution cwd", e))?;
-        if !self.plan.executables.contains(&resolved) {
+        let generated = self
+            .plan
+            .managed_execution
+            .as_ref()
+            .map(|profile| profile.generated_root(&self.plan))
+            .transpose()?
+            .flatten();
+        let generated_target = generated.as_ref().is_some_and(|root| {
+            resolved != *root && resolved.starts_with(root) && resolved.is_file()
+        });
+        if !self.plan.executables.contains(&resolved) && !generated_target {
             return Err(Error::new("scope_violation", "executable is not admitted"));
         }
         Ok(resolved)
@@ -393,7 +412,12 @@ impl ValidatedIsolation {
                 quote_path(path)?
             ));
         }
-        for grant in &self.plan.read_roots {
+        let managed_reads = self
+            .plan
+            .managed_execution
+            .as_ref()
+            .map_or(&[][..], |profile| profile.read_roots());
+        for grant in self.plan.read_roots.iter().chain(managed_reads) {
             profile.push_str(&format!(
                 "(allow file-read* ({} {}))\n",
                 if grant.directory {
@@ -433,6 +457,14 @@ impl ValidatedIsolation {
                 "(allow file-read* (literal {}))\n(allow process-exec (literal {}))\n",
                 quote_path(executable)?,
                 quote_path(executable)?
+            ));
+        }
+        if let Some(managed) = &self.plan.managed_execution
+            && let Some(root) = managed.generated_root(&self.plan)?
+        {
+            profile.push_str(&format!(
+                "(allow process-exec (subpath {}))\n",
+                quote_path(&root)?
             ));
         }
         for forbidden in &self.plan.forbidden_roots {
@@ -550,6 +582,10 @@ pub fn command_launch_identity(
     }
     let resolved = isolation.resolve_executable(&argv[0])?;
     let profile = isolation.seatbelt_profile()?;
+    let mut launch = serde_json::json!({"argv":argv,"profile":profile,"resolved":resolved});
+    if let Some(managed) = &isolation.plan.managed_execution {
+        launch["managed_execution"] = serde_json::json!(canonical_digest(1, managed)?);
+    }
     Ok(CommandLaunchIdentity {
         cwd: isolation.plan.cwd.clone(),
         launcher: crate::platform::BinaryIdentity::inspect(
@@ -557,16 +593,24 @@ pub fn command_launch_identity(
             false,
         )?,
         target: crate::platform::BinaryIdentity::inspect(&resolved, false)?,
-        argv_digest: canonical_digest(
-            1,
-            &serde_json::json!({"argv":argv,"profile":profile,"resolved":resolved}),
-        )?,
+        argv_digest: canonical_digest(1, &launch)?,
     })
 }
-/// No supported native descendant-tree proof has been qualified. Reject before
-/// spawning repository code rather than creating a known permanent unknown hold.
-pub fn repository_command_prerequisite() -> Result<()> {
-    Err(process_tree_unverified())
+/// A resolved managed declaration is distinct from native qualification. Retain
+/// pre-spawn refusal until the supported profile's actual qualification path is
+/// implemented and its observations can justify native repository execution.
+pub fn repository_command_prerequisite(isolation: &ValidatedIsolation) -> Result<()> {
+    isolation.revalidate()?;
+    match &isolation.plan.managed_execution {
+        None => Err(Error::new(
+            "process_tree_unverified",
+            "no supported managed execution profile is bound to this operation",
+        )),
+        Some(profile) => Err(Error::new(
+            "managed_profile_unqualified",
+            "managed foreground policy is bound, but native qualification for this profile is not yet available",
+        ).detail(serde_json::json!({"profile": profile.policy_digest()}))),
+    }
 }
 enum CommandJournal {
     Worker(
@@ -652,7 +696,7 @@ fn start_command_inner(
             "the supported local command boundary requires macOS sandbox-exec",
         ));
     }
-    repository_command_prerequisite()?;
+    repository_command_prerequisite(isolation)?;
     let executable = isolation.resolve_executable(&argv[0])?;
     let profile = isolation.seatbelt_profile()?;
     let mut command = Command::new("/usr/bin/sandbox-exec");
@@ -671,6 +715,11 @@ fn start_command_inner(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(managed) = &isolation.plan.managed_execution
+        && let Some(root) = managed.generated_root(&isolation.plan)?
+    {
+        command.env("CARGO_TARGET_DIR", root);
+    }
     #[cfg(unix)]
     {
         command.process_group(0);
@@ -1062,8 +1111,32 @@ mod owned_exit_tests {
     use super::*;
     #[test]
     fn unqualified_repository_tree_is_rejected_before_native_launch() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let repository = root.join("repository");
+        let scratch = root.join("scratch");
+        std::fs::create_dir(&repository).unwrap();
+        std::fs::create_dir(&scratch).unwrap();
+        let isolation = IsolationPlan {
+            schema_version: 1,
+            role: ExecutionRole::Child,
+            execution_root: root,
+            cwd: repository.clone(),
+            repository,
+            scratch,
+            read_roots: vec![],
+            source_writes: vec![],
+            resource_writes: vec![],
+            forbidden_roots: vec![],
+            executables: vec![],
+            managed_execution: None,
+        }
+        .validate()
+        .unwrap();
         assert_eq!(
-            repository_command_prerequisite().unwrap_err().code,
+            repository_command_prerequisite(&isolation)
+                .unwrap_err()
+                .code,
             "process_tree_unverified"
         );
     }

@@ -447,6 +447,7 @@ mod tests {
             );
             assert_eq!(snapshot(&repository).unwrap(), fixture.before);
             let isolation = IsolationPlan {
+                managed_execution: None,
                 schema_version: 1,
                 role: ExecutionRole::Child,
                 execution_root,

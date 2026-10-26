@@ -71,6 +71,7 @@ fn fixture() -> (tempfile::TempDir, IsolationPlan) {
         std::fs::create_dir(root.join(d)).unwrap();
     }
     let plan = IsolationPlan {
+        managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::Child,
         execution_root: root.clone(),

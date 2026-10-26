@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "request": "NQ-01A",
+  "authorization": "User explicitly approved the single bounded test in the active goal conversation.",
+  "result": {
+    "exit_code": 0,
+    "timed_out": false,
+    "unexpected_cwd_entries": [],
+    "request": "NQ-01A",
+    "elapsed_seconds": 0.3843259159766603,
+    "binary_sha256": "91160a62001a6439c43cc4ffdca16879f5e69a23dcb9826738ee46bd6cb182fa",
+    "argv": [
+      "--ignored",
+      "--exact",
+      "native_host_and_birth_identity_are_observed_without_environment_trust",
+      "--test-threads=1"
+    ],
+    "stdout_sha256": "6807a5b5f606538d576a9e62493bce0d3cbda2b12558901393a12d90597a025e",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "files": {
+    "request.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-01-91160a62001a/request.json",
+      "sha256": "fa4bbff649095bf369eea719bc41b398b9db7e7b4fcf03e94d70d3016580fe58",
+      "bytes": 841
+    },
+    "attempt-started.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-01-91160a62001a/attempt-started.json",
+      "sha256": "4c86d383b25be0069cc2ab826fdefed075dec7581096c557f54a1c1795c49434",
+      "bytes": 120
+    },
+    "result.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-01-91160a62001a/result.json",
+      "sha256": "7d6f964a088e460ddb8afe57b166be8e94111cf793ccb0e9a38cb928e1995b60",
+      "bytes": 549
+    },
+    "native-identity.stdout": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-01-91160a62001a/native-identity.stdout",
+      "sha256": "6807a5b5f606538d576a9e62493bce0d3cbda2b12558901393a12d90597a025e",
+      "bytes": 194
+    },
+    "native-identity.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-01-91160a62001a/native-identity.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "run-once.py": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-01-91160a62001a/run-once.py",
+      "sha256": "67ea691b4d3ede6eeb2ed5eb275bb6f206bfc431c112499854eb1371f5c5d9c4",
+      "bytes": 1733
+    }
+  },
+  "selected_tests": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 9
+  },
+  "scope": "Host/account and own-process identity only; no other native or live qualification."
+}

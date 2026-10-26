@@ -19,33 +19,47 @@ entrypoint, not remote commands.
 
 ## First install and local status
 
-With no command, `./kegari-v0` means `overview`. Before initial setup alpha.3 reports
+With no command, `./kegari-v0` means `overview`. Before initial setup alpha.4 reports
 `target_unavailable: no local runtime is configured` and directs the operator to
 `kegari-v0 setup --help`. Alpha.2 used the earlier message
 `no registered local runtime; use explicit local setup` for the same condition.
 This is an absent registration, not an invitation to launch a hidden entrypoint.
 `--help`, `--version` and `setup --help` do not require a registered runtime.
 
-Alpha.3 can be inspected as a development artifact, but is not qualified or ready
+Alpha.4 can be inspected as a development artifact, but is not qualified or ready
 for activation. The sequence below describes the intended authorized installation
 after the supported profile and required native/provider prerequisites are
 established; it is not a recommendation to activate this prerelease now.
 
 For that installation, first copy the binary to its final protected, versioned
-path. Prepare a complete runtime TOML document using the
-[configuration contract](configuration.md); real host/account/workspace IDs,
-operator mappings, paths and permitted provider configuration must be supplied.
-Setup compares `runtime.host_id` with the actual OS host identity. There is no
-public host-identity export command or complete ready-to-use runtime configuration
-template yet, so bootstrap onboarding remains incomplete. Do not invent an ID to
-pass that check.
+path. Interactive initial local `setup` then collects a non-secret operator label,
+your Linear user UUID, an explicit positive concurrency limit, execution root,
+and local operator roles. It obtains the host identity and OS user mapping from
+the invoking host and generates a new runtime UUID. A supplied Linear UUID is
+operator-provided until a configured connection verifies the provider identity.
+There is no invented account or provider discovery.
 
-The explicit sequence is below; replace both example absolute paths with the
-actual installed binary and prepared configuration. Each step must succeed before
+The displayed role defaults are `inspect`, `configure`, `lifecycle`, `correct`,
+`accept`, `release` and `recover`; they apply to the setup operator. You can choose
+an explicit subset containing `configure`, or explicitly add `evaluate`. The
+initial configuration has no connections, workspaces, remote control, repository
+selection or release scope. The guide displays the complete validated non-secret
+TOML and what remains to configure. Only typing `create` submits it. `/cancel`,
+EOF, an invalid answer, or a failed review output submits nothing. Answers are
+bounded to 4 KiB each. Credentials are never requested by this guide.
+
+You can instead supply a complete TOML document using the
+[configuration contract](configuration.md) and `setup --from PATH --noninteractive`.
+That route keeps the same validation and actual-host comparison; it does not
+prompt or fill missing identities. A standalone host-identity export command and
+universal provider/workspace configuration template are not provided.
+
+The explicit sequence is below; replace the example absolute binary path with the
+actual installed binary. Each step must succeed before
 continuing. These commands perform setup and service actions, not just inspection.
 
 ```sh
-/absolute/versioned/kegari-v0 setup --from /absolute/path/runtime.toml --noninteractive
+/absolute/versioned/kegari-v0 setup
 /absolute/versioned/kegari-v0 service install --binary /absolute/versioned/kegari-v0
 /absolute/versioned/kegari-v0 service start
 /absolute/versioned/kegari-v0 status
@@ -54,7 +68,10 @@ continuing. These commands perform setup and service actions, not just inspectio
 
 Initial setup records STOPPED intent. Service installation writes the LaunchAgent
 without loading it; `service start` starts the control host and preserves that
-intent. Check actual readiness with `status` and `config check`; metadata checks
+intent. Next use `connection add` with supported authentication and `workspace add`
+with real IDs, exact selectors, profiles, repository/check contracts and an
+explicit release policy. The empty guided configuration grants none of that scope.
+Check actual readiness with `status` and `config check`; metadata checks
 do not establish operational qualification. Only after qualification and current
 execution prerequisites are satisfied, and the operator explicitly intends to
 admit work, the separate orchestration command is:
@@ -66,9 +83,10 @@ admit work, the separate orchestration command is:
 The earlier setup/service sequence does not grant qualification or start product
 work. Do not use `start` to bypass a reported blocker.
 
-Interactive `setup` without `--from` uses the bounded whole-document TOML editor
-described below. It is not a field-by-field onboarding wizard. A registered but
-unreachable runtime requires service/ownership diagnosis, and partial setup
+Guided setup for an existing or explicit remote target uses the bounded
+whole-document TOML editor described below, never the client host's generated
+initial configuration. A registered but unreachable runtime requires
+service/ownership diagnosis, and partial setup
 requires reconciliation; neither condition authorizes deleting registration or
 rerunning setup as a replacement installation.
 
@@ -114,11 +132,13 @@ Corrections take exactly one of `--message`, `--message-file` or `--stdin`, with
 1 MiB UTF-8/nonempty bound. Files are read on the CLI device. Setup, connection
 and workspace input is typed TOML, limited to 1 MiB; `--from -` explicitly reads
 configuration from stdin. Noninteractive missing fields fail without prompting.
-Interactive guidance is a bounded TOML document editor: it describes the required
+Except for the initial local setup guide above, interactive guidance is a bounded
+TOML document editor: it describes the required
 fields, accepts lines until a line containing only a period, and validates the
 whole document before submitting it through the same transaction as `--from`.
-EOF before the terminator cancels without submission. No configuration values
-are echoed by the guidance code; credentials belong only in the distinct secret
+EOF before the terminator cancels without submission. The document editor does
+not echo its input; the initial setup guide deliberately displays its generated
+non-secret configuration for review. Credentials belong only in the distinct secret
 import path. Guidance cannot bypass validation. Configuration edits still require the server's
 complete cross-connection/workspace validation and serialized apply.
 

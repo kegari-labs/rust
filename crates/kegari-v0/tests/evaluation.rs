@@ -81,6 +81,7 @@ fn setup_from(
         AgentRole::Validation => ExecutionRole::Validation,
     };
     let isolation = IsolationPlan {
+        managed_execution: None,
         schema_version: 1,
         role,
         execution_root: fixture.root.clone(),

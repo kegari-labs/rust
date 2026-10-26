@@ -108,6 +108,7 @@ impl Fixture {
             ExecutionRole::Child | ExecutionRole::Validation | ExecutionRole::Review
         );
         let boundary = IsolationPlan {
+            managed_execution: None,
             schema_version: 1,
             role,
             execution_root: root.clone(),

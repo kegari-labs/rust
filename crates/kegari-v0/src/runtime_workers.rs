@@ -20,7 +20,9 @@ use crate::{
     },
     housekeeping::{ReadOnlyIdentity, ReadOnlyPreparation},
     instructions::{AgentRole, ProviderDiscovery, RepositoryContext},
-    isolation::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation},
+    isolation::{
+        BoundManagedExecution, ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation,
+    },
     providers::ProviderBroker,
     runtime::RuntimeCoordinator,
     scheduler::PhaseKey,
@@ -490,6 +492,7 @@ impl LaunchRequest {
 }
 struct Plan {
     canary_operand: Option<Arc<crate::evaluation::OwnedCanaryPathOperand>>,
+    managed_execution: Option<BoundManagedExecution>,
     config: Arc<Config>,
     workspace: Workspace,
     workflow: Workflow,
@@ -578,6 +581,12 @@ async fn prepare_admitted_inner(
     if let Some(round) = &plan.request.review_round {
         prep_binding["review_round"] = json!(round.digest());
     }
+    if let Some(managed) = &plan.managed_execution {
+        prep_binding["managed_execution"] = json!({
+            "policy_digest": managed.policy_digest(),
+            "inventory_digest": canonical_digest(1, managed)?
+        });
+    }
     let prep_scope = canonical_digest(1, &prep_binding)?;
     let prep_admission = PreparationAdmission {
         request_id: prep_id,
@@ -591,6 +600,23 @@ async fn prepare_admitted_inner(
         },
     };
     let prep_gate = |snapshot: &crate::control::ControlSnapshot| {
+        plan.revalidate_managed_execution()?;
+        if plan.role.permits_repository_execution() && plan.repository_id.is_some() {
+            let current = runtime.configuration.snapshot()?;
+            let workspace = current
+                .workspaces
+                .values()
+                .find(|value| value.id == plan.workspace.id)
+                .ok_or_else(|| {
+                    Error::new("stale_config", "managed execution workspace disappeared")
+                })?;
+            if workspace.managed_execution != plan.workspace.managed_execution {
+                return Err(Error::new(
+                    "stale_config",
+                    "managed execution policy changed before preparation admission",
+                ));
+            }
+        }
         runtime.check_evaluation_context_operand(
             snapshot,
             &plan.request,
@@ -1011,6 +1037,12 @@ fn require_preparation_schedule(
     Ok(())
 }
 impl Plan {
+    fn revalidate_managed_execution(&self) -> Result<()> {
+        if let Some(managed) = &self.managed_execution {
+            managed.revalidate()?;
+        }
+        Ok(())
+    }
     fn schedule(
         &self,
         runtime: &RuntimeCoordinator,
@@ -1206,8 +1238,18 @@ impl Plan {
         let account = config.connections[&workspace.codex_connection]
             .account_id
             .clone();
+        let managed_execution = if role.permits_repository_execution() && repository_id.is_some() {
+            workspace
+                .managed_execution
+                .as_ref()
+                .map(BoundManagedExecution::resolve)
+                .transpose()?
+        } else {
+            None
+        };
         Ok(Self {
             canary_operand: None,
+            managed_execution,
             config,
             workspace,
             workflow,
@@ -1369,7 +1411,7 @@ async fn prepare_owned(
 ) -> Result<Prepared> {
     let mut directories = None;
     runtime.control.validate_permit(permit, || {
-        fresh_preparation(runtime, &plan.request)?;
+        fresh_plan_preparation(runtime, plan)?;
         let root = PrivateDir::create(Path::new(&plan.config.runtime.execution_root))?.child(&plan.request.operation_id.to_string())?;
         let records = runtime.registration.root().child("worker-records")?.child(&plan.request.operation_id.to_string())?;
         if std::fs::read_dir(records.path()).map_err(|error|Error::io("inspect preparation directory",error))?.next().is_some() {
@@ -1489,7 +1531,7 @@ async fn prepare_owned(
                 json!({"source":source,"destination":repository}),
             ),
             permit,
-            || fresh_preparation(runtime, &plan.request),
+            || fresh_plan_preparation(runtime, plan),
             |receipt| {
                 let running = git.as_ref().ok_or_else(|| Error::new("source_unavailable", "source Git adapter is missing"))?.start_journaled_operation(
                     GitLimits::default(),
@@ -1577,7 +1619,7 @@ async fn prepare_owned(
         runtime.control.complete_effect(
             effect,
             permit,
-            || fresh_preparation(runtime, &plan.request),
+            || fresh_plan_preparation(runtime, plan),
             match &result {
                 Ok((path, _, reads)) => {
                     json!({"clone":path,"revision":source.revision,"read_clones":reads})
@@ -1590,7 +1632,7 @@ async fn prepare_owned(
         read_clones = reads;
     } else {
         runtime.control.validate_permit(permit, || {
-            fresh_preparation(runtime, &plan.request)?;
+            fresh_plan_preparation(runtime, plan)?;
             let substrate = root.child("repository")?;
             if std::fs::read_dir(substrate.path()).map_err(|error|Error::io("inspect coordination substrate",error))?.next().is_some() { return Err(Error::new("ownership_conflict", "coordination substrate is not an empty newly owned directory")); }
             records.write("coordination-substrate.json", &json!({"operation":plan.request.operation_id,"authority":plan.request.authority.digest()?,"path":substrate.path(),"source_writes":false,"repository_execution":false}))
@@ -1617,7 +1659,10 @@ async fn prepare_owned(
     forbidden.sort();
     forbidden.dedup();
     let mut executables = Vec::new();
-    if plan.role.permits_repository_execution() && plan.repository_id.is_some() {
+    if let Some(managed) = &plan.managed_execution {
+        managed.revalidate()?;
+        executables = managed.executables();
+    } else if plan.role.permits_repository_execution() && plan.repository_id.is_some() {
         executables.extend([
             git_path
                 .clone()
@@ -1666,6 +1711,7 @@ async fn prepare_owned(
         source_writes: grants.writes,
         forbidden_roots: forbidden,
         executables,
+        managed_execution: plan.managed_execution.clone(),
     };
     let boundary = isolation.validate()?;
     if let Some(proof) = &independent_proof {
@@ -1824,7 +1870,7 @@ async fn after_create(
             json!({"workflow":plan.workflow.digest,"binding":execution.binding}),
         ),
         permit,
-        || fresh_preparation(runtime, &plan.request),
+        || fresh_plan_preparation(runtime, plan),
         |receipt| {
             let running = executor.start_hook(prepared)?;
             if let Some(cancellation) = running.cancellation() {
@@ -1864,7 +1910,7 @@ async fn after_create(
     runtime.control.complete_effect(
         effect,
         permit,
-        || fresh_preparation(runtime, &plan.request),
+        || fresh_plan_preparation(runtime, plan),
         match &result {
             Ok(result) => json!({"hook":"after_create","state":result.state}),
             Err(error) => json!({"hook":"after_create","error":error}),
@@ -2161,6 +2207,11 @@ fn scoped_evidence(
     }))
 }
 
+fn fresh_plan_preparation(runtime: &RuntimeCoordinator, plan: &Plan) -> Result<()> {
+    fresh_preparation(runtime, &plan.request)?;
+    plan.revalidate_managed_execution()
+}
+
 fn fresh_preparation(runtime: &RuntimeCoordinator, request: &LaunchRequest) -> Result<()> {
     runtime.verify_owner(&request.lease)?;
     let current = runtime.retained_authority(&request.authority)?;
@@ -2283,7 +2334,7 @@ async fn acquire_worker_source(
         .ok_or_else(|| Error::new("missing_secret", "object source provider is unavailable"))?;
     let mut object_records = None;
     runtime.control.validate_permit(permit, || {
-        fresh_preparation(runtime, &plan.request)?;
+        fresh_plan_preparation(runtime, plan)?;
         object_records = Some(records.child("object-sources")?);
         Ok(())
     })?;

@@ -433,6 +433,7 @@ async fn actual_thread_start_failure_does_not_establish_tentative_thread() {
         std::fs::create_dir(root.join(leaf)).unwrap();
     }
     let plan = IsolationPlan {
+        managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::Child,
         execution_root: root.clone(),

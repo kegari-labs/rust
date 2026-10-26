@@ -467,6 +467,7 @@ impl Fixture {
             ExecutionRole::Coordination
         };
         let isolation = IsolationPlan {
+            managed_execution: None,
             schema_version: 1,
             role: execution_role,
             execution_root: run.clone(),

@@ -128,6 +128,7 @@ async fn native_correction_check_keeps_original_marker_and_historical_evidence()
     let scratch = execution.join("scratch");
     fs::create_dir(&scratch).unwrap();
     let isolation = IsolationPlan {
+        managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::Child,
         execution_root: execution,

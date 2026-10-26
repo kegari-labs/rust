@@ -21,13 +21,16 @@ The build conversation uses an already installed `stable` alias verified to be
 that exact toolchain and an isolated Cargo cache; those local environment values
 are recorded in [PROGRESS.md](PROGRESS.md). A successful build or fixture test
 does not establish native isolation, live provider compatibility or human review.
-The two explicitly ignored native tests remain blocked, not passed.
+Native tests remain explicitly ignored in ordinary suite runs. The separately
+approved [NQ-01A identity check](validation/NATIVE-IDENTITY.md) passed once;
+owned-child signalling and the remaining native qualification are still pending.
 
 ## Versioned prerelease executable
 
-The application is versioned as `0.2.0-alpha.3`; the package and executable remain
+The application is versioned as `0.2.0-alpha.4`; the package and executable remain
 `kegari-v0`. This prerelease does not complete the 0.2.0 containment milestone.
-Repository command execution still refuses `process_tree_unverified`, and native,
+Repository commands still refuse missing profiles (`process_tree_unverified`) or
+unqualified declared profiles (`managed_profile_unqualified`), and native,
 provider, actual-agent and human qualification remain incomplete.
 
 Build the optimized executable from the workspace root:
@@ -54,30 +57,33 @@ checksum or a complete record of compiler settings. Release and debug profiles
 have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
-running coordinator. See [alpha.3 lifecycle and build evidence](validation/OWNED-GROUP-LIFECYCLE.md)
+running coordinator. See [alpha.4 setup/profile and build evidence](validation/MANAGED-SETUP.md)
 for the exact artifact and checks performed. The
+[alpha.3 report](validation/OWNED-GROUP-LIFECYCLE.md),
 [alpha.2 report](validation/LOCAL-SERVICE-SHUTDOWN.md) and
 [alpha.1 report](validation/LOCAL-PRERELEASE.md) remain historical evidence.
 
 ## First launch
 
 Running `./kegari-v0` without a command requests the local runtime's `overview`;
-it does not open a setup wizard or start a service. Before setup, alpha.3 reports
+it does not open a setup wizard or start a service. Before setup, alpha.4 reports
 `target_unavailable: no local runtime is configured` and directs you to
 `kegari-v0 setup --help`. Alpha.2's earlier message was
 `no registered local runtime; use explicit local setup`; both mean that no local
 runtime has been configured yet. Use `./kegari-v0 --help` or
 `./kegari-v0 setup --help` to inspect the available commands without setup.
 
-Alpha.3 is an inspectable development artifact, not a qualified installation ready
+Alpha.4 is an inspectable development artifact, not a qualified installation ready
 for activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
 requires the supported profile and native/provider prerequisites to be established
-first, then a final protected, versioned binary and complete runtime configuration.
-The interactive `setup` command accepts a complete TOML document; it does not
-discover or fill in your accounts, host identity or workspace policy. This package
-does not yet include a complete ready-to-use `runtime.toml` or a public command to
-export the required local host identity. This is an unfinished onboarding step;
-the starter `WORKFLOW.md` is repository guidance, not runtime configuration.
+first, then a final protected, versioned binary and explicit runtime configuration.
+Interactive initial local `setup` now derives host/account identity, generates the
+runtime UUID and asks for operator identity, concurrency, execution root and roles.
+It displays a validated initial TOML document with no provider/workspace scope
+and submits it only after `create`. Provider connections, verification and exact
+workspace policy remain subsequent explicit configuration steps. `setup --from`
+continues to accept complete TOML; existing/remote setup uses the document editor.
+The starter `WORKFLOW.md` supplies repository guidance, not runtime configuration.
 
 Setup, service installation and control-host start are separate actions. They do
 not qualify the prerelease or implicitly start orchestration. Missing native,

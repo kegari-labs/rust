@@ -100,6 +100,7 @@ impl ConfigurationInputs for NativeConfigurationInputs {
                 source_writes: vec![],
                 forbidden_roots: vec![auth_home.clone()],
                 executables: vec![executable.clone()],
+                managed_execution: None,
             }
             .validate()?;
             let permissions = PermissionConfiguration::for_isolation(&plan, &auth_home)?;
@@ -1228,12 +1229,16 @@ fn require_current_operator(config: &Config, actor: &Actor) -> Result<()> {
     Ok(())
 }
 fn restricted_revision(config: &Config) -> Result<String> {
-    // Execution choices belong to admission snapshots. Only authority and path
-    // identity replacements require paused/stopped, fully drained ownership.
+    // Model choices belong to admission snapshots. Authority, path identity and
+    // managed executable policy replacements require paused/stopped, drained ownership.
     let connections: BTreeMap<_,_> = config.connections.iter().map(|(name,c)| (name,json!({"kind":c.kind,"account_id":c.account_id,"endpoint":c.endpoint,"auth_home":c.auth_home,"argv":c.argv}))).collect();
     let workspaces: BTreeMap<_,_> = config.workspaces.iter().map(|(name,w)| {
         let repositories: BTreeMap<_,_> = w.repositories.iter().map(|(id,r)| (id,json!({"source":r.source,"hostname":r.hostname,"main":r.main,"staging":r.staging,"deployment":r.deployment}))).collect();
-        (name,json!({"id":w.id,"linear_workspace_id":w.linear_workspace_id,"linear_connection":w.linear_connection,"github_connection":w.github_connection,"codex_connection":w.codex_connection,"actors":w.actors,"authorization_label_id":w.linear.authorization_label_id,"states":w.linear.states,"organizations":w.github.organizations,"repositories_allowlist":w.github.repositories,"repositories":repositories,"test_resources":w.test_resources}))
+        let mut value = json!({"id":w.id,"linear_workspace_id":w.linear_workspace_id,"linear_connection":w.linear_connection,"github_connection":w.github_connection,"codex_connection":w.codex_connection,"actors":w.actors,"authorization_label_id":w.linear.authorization_label_id,"states":w.linear.states,"organizations":w.github.organizations,"repositories_allowlist":w.github.repositories,"repositories":repositories,"test_resources":w.test_resources});
+        if let Some(managed) = &w.managed_execution {
+            value["managed_execution"] = json!(managed);
+        }
+        (name, value)
     }).collect();
     canonical_digest(
         1,
@@ -1429,6 +1434,9 @@ fn scalar_changed(before: Option<&Value>, after: Option<&Value>) -> bool {
     after.is_some_and(Value::is_string) && before != after
 }
 fn workspace_reduction(before: &Value, after: &Value) -> bool {
+    if before.get("managed_execution") != after.get("managed_execution") {
+        return true;
+    }
     for key in [
         "id",
         "linear_workspace_id",

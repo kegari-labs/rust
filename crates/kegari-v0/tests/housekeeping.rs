@@ -314,6 +314,7 @@ impl Fixture {
             id: "101".into(),
         };
         let isolation = IsolationPlan {
+            managed_execution: None,
             schema_version: 1,
             role: ExecutionRole::Validation,
             execution_root: execution.path().into(),
@@ -1489,7 +1490,7 @@ async fn unsupported_replacement_format_preserves_old_state_and_qualification_ca
 }
 
 #[tokio::test]
-async fn replacement_must_explicitly_support_owned_process_journal_records() {
+async fn replacement_must_explicitly_support_owned_process_and_managed_policy_records() {
     let f = HandoverFixture::new();
     let preserved = [
         "owner.json",
@@ -1507,6 +1508,9 @@ async fn replacement_must_explicitly_support_owned_process_journal_records() {
         "unknown_process",
         "missing_process",
         "old_metadata",
+        "alpha3_metadata",
+        "missing_managed_policy",
+        "unknown_managed_policy",
     ] {
         let mut info = serde_json::to_value(&f.info).unwrap();
         match fault {
@@ -1515,6 +1519,13 @@ async fn replacement_must_explicitly_support_owned_process_journal_records() {
             "missing_process" => {
                 info.as_object_mut().unwrap().remove("process_schema");
             }
+            "alpha3_metadata" => info["schema_version"] = 2.into(),
+            "missing_managed_policy" => {
+                info.as_object_mut()
+                    .unwrap()
+                    .remove("managed_execution_schema");
+            }
+            "unknown_managed_policy" => info["managed_execution_schema"] = 99.into(),
             _ => info["schema_version"] = 1.into(),
         }
         let binary = metadata_binary(&f.host.home.join(fault), &info);

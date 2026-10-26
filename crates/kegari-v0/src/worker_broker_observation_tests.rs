@@ -430,6 +430,7 @@ fn admitted_source_observation_uses_the_returned_bytes_and_refuses_traversal() {
     std::fs::create_dir(&scratch).unwrap();
     std::fs::write(repository.join("limit.py"), b"return count < limit\n").unwrap();
     let isolation = IsolationPlan {
+        managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::IndependentReview,
         execution_root: root,
