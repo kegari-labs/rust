@@ -3,15 +3,25 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
-Latest verified local commit: `768b125a5954f53675aa6f0f638b3fe676ac23a0` —
+Latest verified local commit: `46c234fdb2351f901e902de920f0ee1358bf1eba` —
+`feat(kegari-v0)!: retain bounded declared output matches`.
+All 16 intended files and 706 tested inputs match committed and physical bytes;
+every other tree path matches parent 768b125. The tree was clean after verification.
+No commits were consolidated or pushed by this builder. The remote-tracking ref
+still pointed to 768b125. Verification:
+`/private/tmp/kegari-v0-output-matcher-commit-verification-1.json`.
+This progress update accompanies the next coordination/closure work, not a
+standalone commit solely for hash bookkeeping.
+
+Earlier verified local commit: `768b125a5954f53675aa6f0f638b3fe676ac23a0` —
 `feat(kegari-v0): bind E07 context to the original canary owner`.
 All 19 intended files and 704 tested inputs match the commit and physical tree;
 every other path matches parent 1d48265. The tree was clean after verification.
 No commits were consolidated; no push was performed. The remote-tracking ref
 still pointed to 1d48265 at that check. Verification:
 `/private/tmp/kegari-v0-e07-operand-commit-verification.json`.
-The reviewed matcher slice A is installed and locally validated, ready for a
-separate local commit. Final source 706 is
+The reviewed matcher slice A is installed, locally validated and committed
+as 46c234f. Final source 706 is
 `sha256:c4a8b71e52ef8b4c93523766e8293b6d7a1883e0804fa3700cb4a8458bcd32af`:
 1,001 tests passed, zero failed, two native checks remain ignored. All 14 final
 commands passed; the exact disabled 28-variant/56-slot Plan is unchanged.
@@ -19,8 +29,12 @@ Reports are installed: [declared-output matcher](validation/LOCAL-DECLARED-OUTPU
 and [machine evidence](validation/output-matcher-checks.json). All four reviewed
 coverage appends preserve partial statuses and prior evidence. Output remains
 partial: no finite negative, typed E07 grade, native/agent/human qualification.
-No Cargo process is running. Next work is the held coordination prerequisite
-candidate and correction of B's bootstrap-disposition design before implementation.
+Coordination prerequisite validation passed on installed709-input source1:
+1,006 tests passed, zero failed, the same two required native checks ignored.
+All11 commands and24 copied-suite Python tests pass; actual copy-only E01 CLI
+output is independently verified. Reports and the reviewed partial-only coverage
+updates are installed; the local commit is next. B's corrected bootstrap-disposition design is accepted for TEMP-only
+implementation; typed scoring/native qualification remains separate.
 
 The following matcher installation/validation history retains its real failures.
 At initial installation the matcher had not yet compiled or run. Its 12 paths
@@ -337,11 +351,95 @@ retained-workflow preparation separately from parent authority/native caller,
 full-context and scoring work. Continuation/cold recovery still requires genuine
 original publications, joined lineage and fresh authority, never fixture JSON.
 Root subsequently approved TEMP-only implementation of this bounded prerequisite;
-Config is preparing an immutable candidate against source2. This does not change
+Config sealed the candidate at `/private/tmp/kegari-native-coordination-prerequisite-v1`:
+FILES SHA-256 `b0831d806d37c08a3a1e79da45d5cdb0c4e1298650fdd703d4e31c62ef8df5a1`;
+patch `587d543330bd02bec8ba6fa90e72c8df0289d426dd669b3539b0c9da77a51666`.
+Root read all 1,186 patch lines, the complete new modules/tests, recipe/docs/README,
+and verified 28 members/seven exact bases/three new paths. At candidate sealing, five Rust and four Python component tests were authored
+and unrun; subsequent actual validation is recorded below.
+Root and reviewer identified a test-comment precision issue: refreshed-digest
+binding/prior/declaration cases hit the exact recipe identity gate before topology.
+Root prepared a comment-only correction with identical AST at
+`/private/tmp/kegari-coordination-test-comment-root-correction-1`; no recipe gate
+or assertion changed. The candidate and reviewed comment correction are now installed in10 paths;
+seven originals/manifest are retained at
+`/private/tmp/kegari-v0-coordination-substrate-installed-1`. Root read the complete
+independent implementation review and verified all six members; no material
+finding: `/private/tmp/kegari-native-coordination-prerequisite-independent-review-v1/REVIEW.md`,
+SHA-256 `c2f3753aed0f67d9fa3408489900f24e3069c0d1a380e171b969e7af64bef62d`.
+All-target check passed in25.463s on the709-input source1 snapshot
+`sha256:42a2b226ada583cdc7ae41094bc888d826012dbfb309df9e45b2491311ddf92f`;
+source/toolchain remained unchanged. Snapshot:
+`/private/tmp/kegari-v0-coordination-substrate-source1.json`. Strict Clippy passed
+in26.711s, the five new substrate tests in39.581s, evaluation tests in3.822s,
+compatibility109 in66.049s and fmt in1.698s. Evaluation passed88 tests.
+Full-suite passed1,006/0/2 across39 groups in767.515s; raw log SHA
+`561f4d4846687c1a9931d47bca8ed5a2e6c7ebf1c45a52c1d16e56baf15b26e5`.
+Root verified exact prior membership plus5 and unchanged native ignore reasons.
+Plan passed30.072s with the exact previous envelope/data (28variants/56slots,
+disabled dispatch), inventory0.042s and diff0.016s. All10 records retain unchanged
+source/toolchain. Root checks are `/private/tmp/kegari-v0-coordination-substrate-root-membership-1.json`
+and `...-root-plan-1.json`. Auxiliary before/after pin the same SPEC, inventory
+tool, operator guidance and coverage ledger; the before observation was during
+full-suite execution. An additional actual Rust CLI Plan consumes the retained
+E01-derived suite successfully in0.476s, raw
+`2e5d2917bd7fd124d82d6e79a869e91a27432ee68b54f905ddb48da162263c9e`.
+Root verified its whole successful response equals the original except for the
+expected derived suite_digest, which matches actual SOURCE-EVIDENCE. No source
+or toolchain changed. The additional aux-final observation retains all4 pins. The
+four new Python tests and all20 prior tests now pass with zero skips on the
+exact350-file TEMP copy (2.755s). Actual E01 copy-only CLI passed in0.197s.
+Root independently read its retained343-file output: exactly9 source payload
+files removed,2 declared files added, the repository is empty, and only the
+suite_version and coordination fixture_digest change in the manifest. All27
+other variants,profiles,scorers,retained file modes and56 slots are unchanged.
+All copied/installed input snapshots remain identical. Evidence:
+`/private/tmp/kegari-v0-coordination-substrate-python-1`; independent verification
+`cli-root-verification.json`. Output directory modes normalize to0700. No native
+context/caller/execution or grading qualification is supplied.
+The serial lint/focused/full/Plan checks are recorded at
+`/private/tmp/kegari-v0-coordination-substrate-source1-commands.json`. This does not change
 the frozen matcher source or add a native caller. The runtime-owned substrate
 record remains the native producer's responsibility; fixture binding checks actual
 exposed contract/empty-directory/workflow/context/isolation properties without
-adding a capability accessor. No installation, execution or qualification is claimed.
+adding a capability accessor. This local validation does not establish native,
+actual-agent or human qualification.
+Root read the entire432-line original coordination evidence collector and report
+specification, verifying9 members and56 input pins. Before execution, root found
+its tree reader includes the root-directory entry while the Python runner's
+snapshots omit it. The corrected collector must compare normalized snapshot
+views while retaining actual root modes for SOURCE-EVIDENCE verification. V1
+remains unexecuted; this is a static collector finding, not an application or test
+failure. V2 also adds the separate actual derived E01 Rust Plan record.
+The small coverage proposal retains all496 clause/136 named requirement rows,
+statuses and prior evidence; exactly3 partial rows receive one evidence append.
+Root read the independent review and verified5 members at
+`/private/tmp/kegari-coordination-substrate-coverage-static-review-v1/REVIEW.md`,
+SHA `18d98c7b040e6d1bab0cceff19ad264e27bca8ec008a19fc2fe3b1b2a51c6724`.
+Draft2 preserves original Unicode serialization, with identical decoded content
+to draft1; SHA `e46cd1bc322aaca8747282b9dd352085cb61434fbfbd4e5699d142fa584a4f2c`.
+Root read the full v2 correction and verified10 members/65 input pins, unchanged
+v1 and exact patch application. Root's literal diff-string checks used a different
+valid blank-line alignment; subsequent in-memory hunk application verified all5
+changed files exactly. Review record:
+`/private/tmp/kegari-v0-coordination-substrate-collector-root-review-1.json`.
+Collector v2 passed its first execution in0.261s, raw SHA
+`1f279c3834ebb85795e4fb10fc146e715e1ac31cfe197fea89b1a0f4a50f490f`.
+Source/toolchain remained unchanged. Root read the entire report, checked machine
+counts/provenance and installed exact reports:
+[local coordination evidence](validation/LOCAL-COORDINATION-SUBSTRATE.md) and
+[machine evidence](validation/coordination-substrate-checks.json).
+Report SHA `5df9c624f230c99549be184dd358a2fe93d173872147da9527d943f14f00e340`;
+machine SHA `cfb2bbee368a86e1d1abb8cc21d84389a410026338b8e78a3742477ab4b79a18`.
+Exactly3 reviewed evidence entries are appended with all statuses/prior evidence
+preserved; ledger SHA `e46cd1bc322aaca8747282b9dd352085cb61434fbfbd4e5699d142fa584a4f2c`.
+The report's earlier auxiliary ledger hash is retained as observed, not backfilled.
+Installation record: `/private/tmp/kegari-v0-coordination-substrate-evidence-installation-1.json`.
+The full collector v2 artifact is `/private/tmp/kegari-coordination-substrate-source1-evidence-draft-v2`,
+FILES SHA `079d54f0ecf1eae4da1d344631c3691f588c181ca17009978655e9cae85070e1`.
+At precommit readback origin/main also points to46c234f. No remote action was
+performed by this builder; that history will not be rewritten. This coordination
+preparation increment has a separate behavior/rollback boundary from matcher A.
 
 The next finite-output closure design is held at
 `/private/tmp/kegari-e07-output-matcher-slice-b-design-v1`. Root read all DESIGN/API
@@ -353,9 +451,19 @@ edges, complete server-attempt dispositions and the original live broker batch;
 public DTOs/EOF/ACK cannot substitute. Unknown schema/item mapping stays unavailable.
 Independent review identified a missing actual bootstrap metadata-response
 settlement path: the public request wrapper otherwise drops every pending edge.
-That design correction is required before implementation; no B source or tests
-have been authored/run. Root read the bounded broker subreview and verified
-its two members; it is not independent whole-design approval.
+The correction is sealed in design-v2, FILES
+`a5b733ca7a6bec1f83fff5900bf653f92993f3f000c79f4009d9c0d726350311`.
+Root read the complete correction and independent rereview, verified all13
+members/10 original bases and71 pins (69 unchanged,2 exact installed coordination
+overlaps). Review: `/private/tmp/kegari-e07-output-matcher-slice-b-v2-independent-review-v1/REVIEW.md`,
+SHA `f4cf8958d9b5dec4bfb9fe9a87b8811d071640e3672efa55b04fe24d23d4178c`.
+No additional material finding; B-1 is resolved at design level. Root authorized
+TEMP-only B implementation against source709; Codex owns composition and Config
+its separate adapter/reader/bootstrap layer. All30 proposed test obligations
+remain unrun. Typed scorer/C remains separate. Root verification:
+`/private/tmp/kegari-e07-output-matcher-slice-b-v2-root-verification-1.json`.
+Root also verified both original and revised independent-review manifests.
+No public DTO/EOF/ACK/caller boolean may mint a private closure witness.
 
 At the committed 1d48265 checkpoint, the reviewed canary v1/v2 composition, external defaults,
 operator documentation and E07 source-data preparer are installed in 20 paths.

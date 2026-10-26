@@ -125,3 +125,42 @@ Set `KEGARI_TEST_NATIVE_SUITE` as documented above as well to run both positive
 recipe groups. Missing explicit inputs skip those groups; a skipped group is not
 a pass. Current E05 tests and assertions remain unchanged. Actual results belong
 to the root task's later recorded validation, not to this unexecuted draft.
+
+
+### Empty coordination prerequisite (local data only)
+
+The explicit `--recipe e01-coordination-substrate-v1` branch copies the original
+28-variant suite into a new, absent owned output directory. It removes only the
+coordination fixture's product repository payload, retains an empty `repository/`,
+and adds `substrate.json` plus the captured `coordination-workflow.md` outside that
+repository. The original task/context, scorer assertions, 27 other variants,
+56 trial slots, profile bindings and retained file modes remain unchanged.
+
+```sh
+python3 -B evaluations/tools/prepare_native_source.py \
+  --suite /absolute/canonical/evaluations \
+  --output /absolute/canonical/owned-parent/new-coordination-copy \
+  --recipe e01-coordination-substrate-v1
+```
+
+This branch runs no Git command, program, hook, model or provider request and
+reads no Git identity/configuration. It writes its exact local derivation to
+`SOURCE-EVIDENCE.json`; base/head are null. Default E05 and explicit E07 preparation
+keep their existing routes. It never edits the supplied suite or an existing
+output directory.
+
+The public fixture reset/assembly machinery understands the closed declaration
+only for Fresh Coordination with no source writes, repository identity, checks
+or hooks. It retains the fixed workflow outside the worker read grant and checks
+actual empty reset/worker directories, including otherwise invisible `.git` or
+empty subdirectories. Preparation provenance omits the new field for all legacy
+fixtures. Native binding still requires a complete declared context and every
+existing operation, context, profile, workflow, isolation and private-scorer check.
+
+This recipe deliberately supplies no full native context declaration: its existing
+synthetic PARENT/CHILD-A task is not production provider authority. Thus the copied
+suite remains refused by owned-worker preparation until a separate, genuinely
+bound context/caller implementation exists. Configured evaluation still supports
+its existing IndependentReview lane only. This prerequisite does not qualify E01,
+create an Authorized gate, prove a runtime-owned substrate record, satisfy all
+unchanged scorer obligations, enable continuations, or grant dispatch authority.

@@ -2,9 +2,9 @@
 use super::{FileSnapshot, MAX_EVIDENCE_BYTES, MAX_FILES, file_mode, relative};
 use crate::digest::bytes_digest;
 use crate::error::{Error, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAX_TREE_ENTRIES: usize = MAX_FILES * 2;
 const MAX_TREE_DEPTH: usize = 128;
@@ -20,6 +20,10 @@ impl CapturedFile {
             digest: bytes_digest(&self.bytes),
             mode: self.mode,
         }
+    }
+
+    pub(super) fn mode(&self) -> u32 {
+        self.mode
     }
 
     pub(super) fn bytes(&self) -> &[u8] {
@@ -176,6 +180,8 @@ pub(super) fn read_open_file(
 
 pub(super) struct CapturedTree {
     files: BTreeMap<String, CapturedFile>,
+    // Topology is separate from the legacy file-only digest.
+    topology: BTreeSet<PathBuf>,
 }
 
 impl CapturedTree {
@@ -214,6 +220,7 @@ impl CapturedTree {
             root: &Path,
             path: &Path,
             files: &mut BTreeMap<String, CapturedFile>,
+            topology: &mut BTreeSet<PathBuf>,
             budget: &mut Budget,
             depth: usize,
             before_read: &mut dyn FnMut(usize) -> Result<()>,
@@ -227,6 +234,13 @@ impl CapturedTree {
                 ));
             }
             budget.entries += 1;
+            if path != root {
+                topology.insert(
+                    path.strip_prefix(root)
+                        .map_err(|_| Error::invalid("fixture escaped root"))?
+                        .to_owned(),
+                );
+            }
             // Also check the caller's original deadline on directory-only work.
             before_read(0)?;
             let metadata = std::fs::symlink_metadata(path)
@@ -239,9 +253,18 @@ impl CapturedTree {
                     // Preserve snapshot's existing root-only Git exclusion.
                     // Nested .git files remain part of the fixture digest.
                     if path == root && entry.file_name() == ".git" {
+                        topology.insert(".git".into());
                         continue;
                     }
-                    visit(root, &entry.path(), files, budget, depth + 1, before_read)?;
+                    visit(
+                        root,
+                        &entry.path(),
+                        files,
+                        topology,
+                        budget,
+                        depth + 1,
+                        before_read,
+                    )?;
                 }
             } else {
                 if files.len() >= MAX_FILES {
@@ -265,14 +288,27 @@ impl CapturedTree {
             Ok(())
         }
         let mut files = BTreeMap::new();
+        let mut topology = BTreeSet::new();
         let mut budget = Budget {
             bytes: 0,
             entries: 0,
             entry_limit,
             depth_limit,
         };
-        visit(root, root, &mut files, &mut budget, 0, before_read)?;
-        Ok(Self { files })
+        visit(
+            root,
+            root,
+            &mut files,
+            &mut topology,
+            &mut budget,
+            0,
+            before_read,
+        )?;
+        Ok(Self { files, topology })
+    }
+
+    pub(super) fn topology(&self) -> &BTreeSet<PathBuf> {
+        &self.topology
     }
 
     pub(super) fn snapshot(&self) -> BTreeMap<String, FileSnapshot> {

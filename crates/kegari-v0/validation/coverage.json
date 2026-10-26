@@ -4682,6 +4682,19 @@
           "class": "human",
           "reference": "docs/evaluations.md",
           "status": "not_run"
+        },
+        {
+          "class": "deterministic",
+          "references": [
+            "src/evaluation_substrate.rs",
+            "src/evaluation_substrate_tests.rs",
+            "evaluations/native/coordination-substrate-v1.json",
+            "evaluations/tools/prepare_native_source.py",
+            "evaluations/tools/test_prepare_native_source.py",
+            "validation/LOCAL-COORDINATION-SUBSTRATE.md",
+            "validation/coordination-substrate-checks.json"
+          ],
+          "result": "Declared fresh coordination fixtures now preserve a captured workflow outside an exactly empty repository and bind actual exposed operation/context/isolation/workflow properties without a repository identity. Five Rust component regressions and four new Python preparation cases pass. Actual copy-only E01 CLI retained output preserves all 27 other variants, profiles, scorers and file modes; only the declared substrate and two manifest fields change, with 56 slots retained. This is a preparation/binding prerequisite: no full native context declaration, configured Coordination caller, actual-agent result, compatible scoring or human qualification is established."
         }
       ]
     },
@@ -5137,6 +5150,19 @@
             "evaluation::canary::output::tests::root_string_array_and_key_projection_precede_shape_refusal",
             "evaluation::canary::output::tests::policy_two_requires_exact_projection_and_policy_one_does_not_enable_it"
           ]
+        },
+        {
+          "class": "deterministic",
+          "references": [
+            "src/evaluation_substrate.rs",
+            "src/evaluation_substrate_tests.rs",
+            "evaluations/native/coordination-substrate-v1.json",
+            "evaluations/tools/prepare_native_source.py",
+            "evaluations/tools/test_prepare_native_source.py",
+            "validation/LOCAL-COORDINATION-SUBSTRATE.md",
+            "validation/coordination-substrate-checks.json"
+          ],
+          "result": "Declared fresh coordination fixtures now preserve a captured workflow outside an exactly empty repository and bind actual exposed operation/context/isolation/workflow properties without a repository identity. Five Rust component regressions and four new Python preparation cases pass. Actual copy-only E01 CLI retained output preserves all 27 other variants, profiles, scorers and file modes; only the declared substrate and two manifest fields change, with 56 slots retained. This is a preparation/binding prerequisite: no full native context declaration, configured Coordination caller, actual-agent result, compatible scoring or human qualification is established."
         }
       ]
     },
@@ -7514,6 +7540,19 @@
             "PROGRESS.md"
           ],
           "result": "Every declared variant has two finite trial slots and an explicit scorer/rubric. Deterministic replay and grader tests pass; no actual-agent trial or human calibration has run. Native fixture/authority composition remains incomplete."
+        },
+        {
+          "class": "deterministic",
+          "references": [
+            "src/evaluation_substrate.rs",
+            "src/evaluation_substrate_tests.rs",
+            "evaluations/native/coordination-substrate-v1.json",
+            "evaluations/tools/prepare_native_source.py",
+            "evaluations/tools/test_prepare_native_source.py",
+            "validation/LOCAL-COORDINATION-SUBSTRATE.md",
+            "validation/coordination-substrate-checks.json"
+          ],
+          "result": "Declared fresh coordination fixtures now preserve a captured workflow outside an exactly empty repository and bind actual exposed operation/context/isolation/workflow properties without a repository identity. Five Rust component regressions and four new Python preparation cases pass. Actual copy-only E01 CLI retained output preserves all 27 other variants, profiles, scorers and file modes; only the declared substrate and two manifest fields change, with 56 slots retained. This is a preparation/binding prerequisite: no full native context declaration, configured Coordination caller, actual-agent result, compatible scoring or human qualification is established."
         }
       ]
     },

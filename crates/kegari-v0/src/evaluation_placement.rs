@@ -197,7 +197,9 @@ impl PreparedFixture {
             || manifest.workflow_digest != workflow_digest
             || manifest.context_digest != canonical_digest(1, context)?
             || manifest.permissions.enforcement_profile != isolation.digest()
-            || self.before.get("WORKFLOW.md").map(|f| f.digest.as_str()) != Some(workflow_digest)
+            || (self.substrate.is_none()
+                && self.before.get("WORKFLOW.md").map(|f| f.digest.as_str())
+                    != Some(workflow_digest))
             || assembled.manifest_digest
                 != canonical_digest(instructions::ASSEMBLY_SCHEMA, manifest)?
             || manifest.prompt_digest != bytes_digest(assembled.prompt.as_bytes())
@@ -208,6 +210,15 @@ impl PreparedFixture {
                 "evaluation_fidelity",
                 "owned worker, workflow or exact fixture bytes differ from declared preparation",
             ));
+        }
+        if let Some(substrate) = &self.substrate {
+            substrate.verify_contract(variant, &self.repository, false, workflow_digest)?;
+            substrate.verify_contract(
+                variant,
+                &plan.repository,
+                manifest.repository_root.is_some() || manifest.repository_revision.is_some(),
+                workflow_digest,
+            )?;
         }
         verify_declared_phase(variant, manifest.role, &manifest.phase)?;
         verify_grader_boundary(
@@ -696,3 +707,7 @@ mod tests {
         assert!(declared_review_text(&input, Some(&binding)).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "evaluation_substrate_tests.rs"]
+mod substrate_tests;

@@ -397,6 +397,7 @@ mod tests {
             worker_manifest: None,
             canary: None,
             canary_operand: None,
+            substrate: None,
         };
         fixture.preparation_digest = fixture.preparation_digest().unwrap();
         verify_fixture_context(&expected, &fixture, &host).unwrap();
@@ -600,6 +601,7 @@ mod tests {
             worker_manifest: None,
             canary: None,
             canary_operand: None,
+            substrate: None,
         };
         fixture.preparation_digest = fixture.preparation_digest().unwrap();
         verify_fixture_context(&expected, &fixture, &host).unwrap();

@@ -422,6 +422,8 @@ fn file_mode(metadata: &std::fs::Metadata) -> u32 {
 }
 #[path = "evaluation_fixture.rs"]
 mod fixture_capture;
+#[path = "evaluation_substrate.rs"]
+mod substrate;
 
 /// Sorted path/content digest, independent of machine path, clock and file enumeration order.
 pub fn snapshot(root: &Path) -> Result<BTreeMap<String, FileSnapshot>> {
@@ -451,6 +453,7 @@ pub struct PreparedFixture {
     worker_manifest: Option<String>,
     canary: Option<std::sync::Arc<CanaryMaterialization>>,
     canary_operand: Option<std::sync::Arc<OwnedCanaryPathOperand>>,
+    substrate: Option<substrate::CoordinationSubstrate>,
 }
 impl PreparedFixture {
     pub(crate) fn attach_canary(
@@ -498,6 +501,14 @@ impl PreparedFixture {
         self.preparation_digest = self.preparation_digest()?;
         Ok(())
     }
+    /// Host workflow path retained by preparation; this does not grant worker reads.
+    pub fn workflow_path(&self) -> Result<PathBuf> {
+        self.verify_preparation()?;
+        if let Some(substrate) = &self.substrate {
+            return Ok(substrate.workflow_path().to_owned());
+        }
+        Ok(self.repository.join("WORKFLOW.md"))
+    }
     fn preparation_digest(&self) -> Result<String> {
         let mut value = serde_json::json!({
             "root":self.root,"repository":self.repository,"scratch":self.scratch,
@@ -510,6 +521,11 @@ impl PreparedFixture {
         if let Some(operand) = &self.canary_operand {
             value["canary_operand"] = serde_json::json!(operand.digest()?);
         }
+        // Absence retains the exact legacy preparation encoding.
+        if let Some(substrate) = &self.substrate {
+            value["substrate"] = serde_json::to_value(substrate)
+                .map_err(|_| Error::invalid("substrate encoding failed"))?;
+        }
         canonical_digest(1, &value)
     }
     fn verify_preparation(&self) -> Result<()> {
@@ -518,6 +534,9 @@ impl PreparedFixture {
                 "evaluation_fidelity",
                 "prepared fixture identity, input or initial state was substituted",
             ));
+        }
+        if let Some(substrate) = &self.substrate {
+            substrate.verify()?;
         }
         Ok(())
     }
@@ -624,6 +643,7 @@ fn prepare_captured_fixture_at(
             "trial cannot overlap suite/grader source",
         ));
     }
+    let substrate_input = substrate::CoordinationSubstrate::declared(captured, variant, &root)?;
     std::fs::create_dir(&root).map_err(|e| Error::io("create fresh trial", e))?;
     let repository = root.join("repository");
     std::fs::create_dir(&repository).map_err(|e| Error::io("create trial repository", e))?;
@@ -687,8 +707,16 @@ fn prepare_captured_fixture_at(
                 .map_err(|e| Error::io("protect trial directory", e))?;
         }
     }
-    let workflow_path = repository.join("WORKFLOW.md");
-    let workflow = std::str::from_utf8(captured.file("repository/WORKFLOW.md")?.bytes())
+    let workflow_path = substrate_input.as_ref().map_or_else(
+        || repository.join("WORKFLOW.md"),
+        |s| s.workflow_path().to_owned(),
+    );
+    let workflow_leaf = if substrate_input.is_some() {
+        substrate::WORKFLOW_LEAF
+    } else {
+        "repository/WORKFLOW.md"
+    };
+    let workflow = std::str::from_utf8(captured.file(workflow_leaf)?.bytes())
         .map_err(|_| Error::invalid("fixture workflow must be UTF-8"))?;
     let workflow_scratch = placement
         .as_ref()
@@ -702,6 +730,9 @@ fn prepare_captured_fixture_at(
     let bound_workflow = workflow.replace("@KegariScratch@", &escaped);
     std::fs::write(&workflow_path, &bound_workflow)
         .map_err(|e| Error::io("bind fixture scratch resource", e))?;
+    if substrate_input.is_some() {
+        captured.file(workflow_leaf)?.apply_mode(&workflow_path)?;
+    }
     let input = serde_json::from_slice(captured.file("context.json")?.bytes())
         .map_err(|_| Error::invalid("invalid evaluation JSON"))?;
     let context_binding = if let Some(file) = captured.optional_file("context-binding.json") {
@@ -712,7 +743,13 @@ fn prepare_captured_fixture_at(
     } else {
         None
     };
-    let before = captured.verify_reset(&repository, bound_workflow.as_bytes())?;
+    let before = if let Some(substrate) = &substrate_input {
+        substrate.verify()?;
+        substrate::require_empty(&repository)?;
+        BTreeMap::new()
+    } else {
+        captured.verify_reset(&repository, bound_workflow.as_bytes())?
+    };
     let mut prepared = PreparedFixture {
         root,
         repository,
@@ -729,6 +766,7 @@ fn prepare_captured_fixture_at(
         worker_manifest: None,
         canary: None,
         canary_operand: None,
+        substrate: substrate_input,
     };
     if prepared.worker_placement.is_some() && prepared.context_binding.is_none() {
         return Err(Error::new(
@@ -922,7 +960,7 @@ pub fn assemble_trial(
     if input.cwd != fixture.repository
         || input.codex_home != fixture.codex_home
         || isolation.plan().repository != fixture.repository
-        || input.workflow.path != fixture.repository.join("WORKFLOW.md")
+        || input.workflow.path != fixture.workflow_path()?
         || input.permissions.enforcement_profile != isolation.digest()
         || input.permissions.read_roots.iter().any(|root| {
             !isolation
@@ -961,6 +999,14 @@ pub fn assemble_trial(
             canary_operand: None,
         },
     )?;
+    if let Some(substrate) = &fixture.substrate {
+        substrate.verify_contract(
+            variant,
+            &fixture.repository,
+            input.repository.is_some(),
+            &input.workflow.digest,
+        )?;
+    }
     let assembled = instructions::assemble(input)?;
     verify_grader_instructions(
         &assembled.manifest,

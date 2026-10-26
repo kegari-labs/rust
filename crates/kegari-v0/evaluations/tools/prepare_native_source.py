@@ -857,9 +857,125 @@ def prepare_e07(suite, output):
         return evidence
 
 
+# Closed copy-only coordination prerequisite. No source Git objects are needed.
+E01_RECIPE = "e01-coordination-substrate-v1"
+E01_RECIPE_PATH = "native/coordination-substrate-v1.json"
+E01_RECIPE_DIGEST = "sha256:fa08a4455a8c2440921b577f7e0414449c74e8d91f9f71a0dd10bfb46a7e1032"
+E01_FIXTURE = "fixtures/coordination"
+
+
+def plan_e01(captured):
+    raw = captured.files[E01_RECIPE_PATH][0]
+    require(len(raw) <= 16 * 1024 and sha(raw) == E01_RECIPE_DIGEST,
+            "E01 recipe bytes differ from the reviewed closed recipe")
+    recipe = load_json(raw)
+    require(set(recipe) == {"schema_version", "id", "purpose", "input_suite_version",
+            "output_suite_version", "grader_version", "input_variant", "fixture",
+            "declaration", "workflow", "new_file_mode"}, "E01 recipe fields differ")
+    require(recipe["schema_version"] == 1 and recipe["id"] == E01_RECIPE
+            and recipe["purpose"] == "local_substrate_data_only"
+            and recipe["fixture"] == E01_FIXTURE and recipe["new_file_mode"] == 0o600
+            and recipe["declaration"] == {"schema_version": 1, "kind": "coordination_empty",
+                                          "workflow": "coordination-workflow.md"},
+            "E01 substrate declaration differs")
+    manifest, _, _, _ = validate_suite(captured)
+    require(manifest["suite_version"] == recipe["input_suite_version"]
+            and manifest["grader_version"] == recipe["grader_version"], "E01 suite version differs")
+    variant = next(v for v in manifest["variants"] if v["id"] == "coordination")
+    require(variant == recipe["input_variant"] and variant["seed"] == {"kind": "fresh"}
+            and variant["role"] == "coordination" and variant["phase"] == "coordination",
+            "E01 input variant differs")
+    expected_top = {"context.json", "repository"}
+    fixture_names = set(captured.subtree(E01_FIXTURE).files) | set(captured.subtree(E01_FIXTURE).directories)
+    require(all(not n or n.split("/")[0] in expected_top for n in fixture_names),
+            "E01 refuses prior/binding/declaration or unrelated fixture assets")
+    context = load_json(captured.files[E01_FIXTURE + "/context.json"][0])
+    require(context["scope"]["write_paths"] == [], "E01 source writes must remain empty")
+    return recipe, manifest
+
+
+def derived_e01_suite(captured, recipe, original_manifest):
+    removed_prefix = E01_FIXTURE + "/repository/"
+    files = {n: v for n, v in captured.files.items() if not n.startswith(removed_prefix)}
+    directories = {n: v for n, v in captured.directories.items() if not n.startswith(removed_prefix)}
+    directories[E01_FIXTURE + "/repository"] = 0o700
+    files[E01_FIXTURE + "/substrate.json"] = (json_bytes(recipe["declaration"]), recipe["new_file_mode"])
+    files[E01_FIXTURE + "/coordination-workflow.md"] = (recipe["workflow"].encode(), recipe["new_file_mode"])
+    manifest = copy.deepcopy(original_manifest)
+    manifest["suite_version"] = recipe["output_suite_version"]
+    variant = next(v for v in manifest["variants"] if v["id"] == "coordination")
+    variant["fixture_digest"] = canonical(Captured(files, directories).snapshot(E01_FIXTURE))
+    files["manifest.json"] = (json_bytes(manifest), files["manifest.json"][1])
+    return Captured(files, directories), manifest, variant
+
+
+def verify_e01_output(captured, actual, recipe, original_manifest):
+    expected, manifest, variant = derived_e01_suite(captured, recipe, original_manifest)
+    require(actual.files == expected.files and set(actual.directories) == set(expected.directories),
+            "E01 output bytes/modes/topology exceed the exact allowed delta")
+    restored = copy.deepcopy(load_json(actual.files["manifest.json"][0]))
+    restored["suite_version"] = original_manifest["suite_version"]
+    original = next(v for v in original_manifest["variants"] if v["id"] == "coordination")
+    next(v for v in restored["variants"] if v["id"] == "coordination")["fixture_digest"] = original["fixture_digest"]
+    require(restored == original_manifest, "E01 changed other variants/profiles/bounds/scorers")
+    removed = {n for n in captured.files if n.startswith(E01_FIXTURE + "/repository/")}
+    added = {E01_FIXTURE + "/substrate.json", E01_FIXTURE + "/coordination-workflow.md"}
+    require(set(actual.files) == (set(captured.files) - removed) | added, "E01 file inventory differs")
+    for name, value in captured.files.items():
+        if name not in removed:
+            require(actual.files[name][1] == value[1], "E01 changed a retained file mode")
+            require(name == "manifest.json" or actual.files[name] == value, "E01 changed a retained asset")
+    require(not actual.subtree(E01_FIXTURE + "/repository").files
+            and set(actual.subtree(E01_FIXTURE + "/repository").directories) <= {""},
+            "E01 repository must be exactly empty")
+    require(canonical(actual.snapshot(E01_FIXTURE)) == variant["fixture_digest"], "E01 derived digest differs")
+    return manifest, variant
+
+
+def prepare_e01(suite, output):
+    suite = canonical_directory(suite)
+    require(not any(part.casefold().startswith(".git") for part in suite.parts), "input must not be under Git metadata")
+    output = Path(output)
+    require(output.is_absolute() and output.name not in ("", ".", ".."), "output must be absolute")
+    relative(output.name)
+    parent = canonical_directory(output.parent)
+    require_protected_parent(os.stat(parent, follow_symlinks=False))
+    protected_ancestry(parent)
+    require(str(output) == str(parent / output.name)
+            and not any(part.casefold().startswith(".git") for part in output.parts), "output spelling differs")
+    require(not output.exists() and not output.is_symlink(), "output must be absent; no overwrite")
+    require(not output.is_relative_to(suite) and not suite.is_relative_to(output), "input and output must be disjoint")
+    captured = capture(suite)
+    recipe, original_manifest = plan_e01(captured)
+    expected, _, _ = derived_e01_suite(captured, recipe, original_manifest)
+    with OutputGuard(parent, output.name) as owned:
+        owned.mkdir("suite")
+        owned.phase(materialize, output / "suite", expected)
+        actual = owned.phase(capture, output / "suite")
+        manifest, variant = verify_e01_output(captured, actual, recipe, original_manifest)
+        evidence = {"schema_version": 1, "recipe": E01_RECIPE,
+            "recipe_digest": sha(captured.files[E01_RECIPE_PATH][0]), "output": str(output),
+            "base_commit": None, "head_commit": None, "commands": [],
+            "fixture_digest": variant["fixture_digest"], "suite_digest": canonical(manifest),
+            "input_suite_digest": canonical(original_manifest), "input_files": captured.snapshot(),
+            "suite_files": actual.snapshot(), "input_directory_modes": captured.directories,
+            "suite_directory_modes": actual.directories, "variants": 28, "slots": 56,
+            "other_variant_objects_unchanged": 27, "profiles_unchanged": True,
+            "all_scorer_bytes_unchanged": True, "retained_file_modes_unchanged": True,
+            "dispatch_authorized": False, "native_executed": False, "runtime_supported": False,
+            "limits": ["Copy-only empty coordination substrate; no Git, host config, program, payload or hook execution.",
+                       "No full native context declaration is supplied; owned-worker preparation still refuses this output.",
+                       "No configured Coordination caller, provider authority, completion, model, grading qualification or human gate is supplied.",
+                       "Original task/scorer obligations remain unchanged, including obligations this prerequisite cannot yet satisfy."]}
+        owned.phase(write_new, owned.root_fd, "SOURCE-EVIDENCE.json", json_bytes(evidence))
+        return evidence
+
+
 def prepare_selected(suite, output, recipe=None):
     if recipe is None:
         return prepare(suite, output)
+    if recipe == E01_RECIPE:
+        return prepare_e01(suite, output)
     require(recipe == E07_RECIPE, "unsupported explicit source recipe")
     return prepare_e07(suite, output)
 
@@ -868,7 +984,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", required=True, help="existing canonical native-ready suite directory")
     parser.add_argument("--output", required=True, help="absent canonical owned output directory")
-    parser.add_argument("--recipe", choices=[E07_RECIPE], help="explicit E07 source-data migration; no runtime or grading qualification")
+    parser.add_argument("--recipe", choices=[E07_RECIPE, E01_RECIPE], help="explicit copied source/substrate prerequisite; no runtime or grading qualification")
     args = parser.parse_args()
     try:
         result = prepare_selected(args.suite, args.output, args.recipe)

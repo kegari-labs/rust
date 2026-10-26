@@ -462,5 +462,96 @@ class E07ActualLocalGitTests(unittest.TestCase):
         self.assertFalse((output / "SOURCE-EVIDENCE.json").exists())
 
 
+class CoordinationSubstrateTests(unittest.TestCase):
+    """Copy/reset data only; never an Authorized gate, worker or model run."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="kegari-e01-copy-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.suite = HERE.parent
+
+    def test_e01_copy_only_preserves_all_other_variants_profiles_scorers_modes_and_input(self):
+        before = module.capture(self.suite)
+        output = self.root / "copied"
+        with mock.patch.object(module, "LocalGit", side_effect=AssertionError("no Git")), \
+             mock.patch.object(module, "clean_environment", side_effect=AssertionError("no host environment")):
+            evidence = module.prepare_selected(self.suite, output, module.E01_RECIPE)
+        actual = module.capture(output / "suite")
+        recipe, manifest = module.plan_e01(before)
+        result, variant = module.verify_e01_output(before, actual, recipe, manifest)
+        self.assertEqual(module.capture(self.suite).files, before.files)
+        self.assertEqual(result["profiles"], manifest["profiles"])
+        self.assertEqual([v for v in result["variants"] if v["id"] != "coordination"],
+                         [v for v in manifest["variants"] if v["id"] != "coordination"])
+        for name, value in before.files.items():
+            if name.startswith("scorer/"):
+                self.assertEqual(actual.files[name], value)
+        self.assertEqual(list((output / "suite/fixtures/coordination/repository").iterdir()), [])
+        self.assertEqual(actual.files[module.E01_FIXTURE + "/context.json"],
+                         before.files[module.E01_FIXTURE + "/context.json"])
+        self.assertNotIn(module.E01_FIXTURE + "/context-binding.json", actual.files)
+        self.assertEqual(evidence["commands"], [])
+        self.assertIsNone(evidence["base_commit"])
+        self.assertIsNone(evidence["head_commit"])
+        for name in ("dispatch_authorized", "native_executed", "runtime_supported"):
+            self.assertIs(evidence[name], False)
+        self.assertEqual(evidence["fixture_digest"], variant["fixture_digest"])
+        self.assertEqual(evidence["slots"], 56)
+
+    def test_e01_refuses_overwrite_recipe_change_and_unrelated_derived_changes(self):
+        before = module.capture(self.suite)
+        recipe, manifest = module.plan_e01(before)
+        expected, _, _ = module.derived_e01_suite(before, recipe, manifest)
+        for target in ["scorer/coordination.json", "fixtures/independent_malicious/context.json",
+                       module.E01_FIXTURE + "/context.json"]:
+            files = dict(expected.files)
+            files[target] = (files[target][0] + b" ", files[target][1])
+            with self.assertRaises(module.PreparationError):
+                module.verify_e01_output(before, module.Captured(files, expected.directories), recipe, manifest)
+        files = dict(before.files)
+        files[module.E01_RECIPE_PATH] = (files[module.E01_RECIPE_PATH][0] + b" ", 0o644)
+        with self.assertRaisesRegex(module.PreparationError, "recipe bytes"):
+            module.plan_e01(module.Captured(files, before.directories))
+        existing = self.root / "existing"
+        existing.mkdir()
+        with self.assertRaisesRegex(module.PreparationError, "absent"):
+            module.prepare_selected(self.suite, existing, module.E01_RECIPE)
+        self.assertEqual(list(existing.iterdir()), [])
+
+    def test_e01_refuses_new_binding_prior_and_nonempty_output_repository(self):
+        before = module.capture(self.suite)
+        for leaf in ["context-binding.json", "prior.json", "substrate.json"]:
+            files = dict(before.files)
+            files[module.E01_FIXTURE + "/" + leaf] = (b"{}", 0o600)
+            # Update the fixture digest so stale-byte validation is not enough:
+            # the closed recipe rejects this changed variant identity before
+            # the fixture topology gate is reached.
+            value = json.loads(files["manifest.json"][0])
+            variant = next(v for v in value["variants"] if v["id"] == "coordination")
+            variant["fixture_digest"] = module.canonical(module.Captured(files, before.directories).snapshot(module.E01_FIXTURE))
+            files["manifest.json"] = (module.json_bytes(value), files["manifest.json"][1])
+            with self.assertRaises(module.PreparationError):
+                module.plan_e01(module.Captured(files, before.directories))
+        recipe, manifest = module.plan_e01(before)
+        expected, _, _ = module.derived_e01_suite(before, recipe, manifest)
+        directories = dict(expected.directories)
+        directories[module.E01_FIXTURE + "/repository/.git"] = 0o700
+        with self.assertRaises(module.PreparationError):
+            module.verify_e01_output(before, module.Captured(expected.files, directories), recipe, manifest)
+
+    def test_e01_selector_keeps_default_and_e07_routes_exact(self):
+        with mock.patch.object(module, "prepare", return_value="default") as ordinary, \
+             mock.patch.object(module, "prepare_e07", return_value="e07") as e07, \
+             mock.patch.object(module, "prepare_e01", return_value="e01") as e01:
+            self.assertEqual(module.prepare_selected("suite", "output"), "default")
+            self.assertEqual(module.prepare_selected("suite", "output", module.E07_RECIPE), "e07")
+            self.assertEqual(module.prepare_selected("suite", "output", module.E01_RECIPE), "e01")
+            ordinary.assert_called_once_with("suite", "output")
+            e07.assert_called_once_with("suite", "output")
+            e01.assert_called_once_with("suite", "output")
+            with self.assertRaises(module.PreparationError):
+                module.prepare_selected("suite", "output", "unknown")
+
+
 if __name__ == "__main__":
     unittest.main()
