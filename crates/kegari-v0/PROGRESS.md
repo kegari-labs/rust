@@ -1,9 +1,111 @@
 # Kegari v0 build progress
 
-Local implementation and validation remain in progress; the Goal is incomplete.
-Unattended mode remains in effect. No live trial or remote mutation is authorized.
+The Goal is active and incomplete following the user's resumption, verified
+through Goal lifecycle state. Supervision remains explicitly available; native
+qualification and host/live changes still need their separate scoped approval.
+The previous preparation turn made progress by reconciling the objective and
+recording supervision; it did not execute a native check.
 
-Latest verified local commit: `46c234fdb2351f901e902de920f0ee1358bf1eba` —
+The first resumed work is containment feasibility. Primary Apple documentation,
+SDK headers and independent source reviews are summarized in
+[process containment](docs/process-containment.md). Descendant-scoped Endpoint
+Security remains a candidate, not a selected/qualified solution. The user has no
+existing entitlement and is renewing Developer Program membership. No entitlement
+request, signing, installation, security change or ES activation has occurred.
+The current contract allows explicit uncertain recovery after total observer
+loss; it must not be strengthened into an unstated kernel kill-on-owner-loss
+requirement or weakened into successful shutdown without complete evidence.
+
+The platform prerequisite test binary was prepared with locked Cargo --no-run;
+the command succeeded, reused the current artifact and ran no tests. Its exact
+identity and the pending native request's cleanup-bound limitation are recorded
+in the containment note. Repository-command refusal remains intact. Held B
+implementation drafts have not resumed. Work remains supervised and no native
+probe, provider operation or remote mutation has been authorized or attempted.
+
+Historical preparation reconciliation while paused:
+Preparation reconciliation on
+2026-10-26 at 13:27 UTC records the user's explicit availability for supervised
+decisions and bounded native qualification. The user also explicitly requires
+continued pause, no implementation yet, and separate approval for required host
+or live operations. Earlier unattended-mode statements are historical. Presence
+does not resume the Goal or grant host, installation, provider or deployment
+authority; the existing action restrictions remain effective.
+
+Current HEAD on main and local origin/main are
+`97d1f05a4bf4bb2848756fe7da3dceb8a8bd0181` —
+`docs(kegari-v0): define versioned completion milestones`. No remote refresh or
+push was performed for this reconciliation. Only GOAL.md changed in committed
+files since the tested implementation checkpoint a217df8; the package remains
+0.1.0. The amended objective attachment and GOAL.md match after the command
+prefix and final newline. SPEC 1.2 retains its approved SHA-256
+`80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326`.
+The index is empty; PROGRESS.md is the only working-tree edit. Prior validation
+remains evidence for the unchanged implementation, not a newly executed check.
+
+The milestone sequence in GOAL.md controls future work: 0.2.0 containment and
+executable build; 0.3.0 recovery; 0.4.0 target/visual evidence; 0.5.0 operator
+handover; 0.6.0 evaluation machinery; 0.7.0 full v0 qualification. Compatible
+corrections use patch versions; 1.0.0 and the lasting build remain out of scope.
+On explicit resumption, first prepare the 0.2.0 containment feasibility decision:
+verify candidate API/host prerequisites, launch enrollment and descendant/exit
+guarantees; map cancellation, retirement and recovery consumers; then prepare
+finite adversarial cases and exact native-test approval details. Do not remove
+the current refusal or resume the held B drafts merely to regain momentum.
+
+Proposed native prerequisite request NQ-01 is not approved or executed: name a
+permitted macOS host/account and pin the source, executable, argv and owned TEMP
+directory; run the existing native host/birth-identity test once, followed only
+on success by the owned-child signalling test once. Run serially with a proposed
+two-minute aggregate execution deadline. The second test owns one /bin/sleep 30
+child. Retain bounded logs and exit/reaping evidence; uncertainty is not cleanup
+success. No retries after denial, sandbox bypass, installation, entitlement or
+security changes, credentials, model/provider work or remote mutation are
+included. Exact host/environment and executable details must be supplied before
+requesting approval. These tests qualify prerequisites only, not containment.
+
+This preparation used read-only source/evidence inspection and bounded subagent
+reviews; only this progress record was updated. No implementation, build, test,
+native probe or live operation ran. The completed implementation checkpoint had
+no remaining Cargo/test/collector invocation; no global process sweep was made
+during this preparation. Recheck owned execution state before future execution.
+
+Historical implementation pause: 2026-10-26 at 12:35 UTC, after the user reported
+1d 12h 11m 45s of goal execution. All three implementation agents were interrupted
+at that checkpoint; subsequent preparation reviews do not resume their drafts.
+
+Pause checkpoint: `a217df8d5af44ee3708110bc969fb0e854b688d8` —
+`feat(kegari-v0): prepare empty coordination evaluation substrates`.
+At that checkpoint the user reported pushing the latest changes, and HEAD and
+local origin/main both pointed to this commit. Root performed no push. The tree was clean before this
+pause-only progress update. All14 intended files and709 tested source inputs
+were verified against committed and physical bytes; all other tree paths match
+parent46c234f. No commits were consolidated. Verification:
+`/private/tmp/kegari-v0-coordination-substrate-commit-verification-1.json`.
+Local evidence:1,006 Rust tests passed, zero failed,2 required native checks
+ignored across39 groups;11 application commands and24 copied-suite Python tests
+passed. Actual E01 copy output and its Rust Plan were verified. See
+[coordination evidence](validation/LOCAL-COORDINATION-SUBSTRATE.md).
+
+Unintegrated B finite-output closure work is preserved in TEMP and remains
+incomplete, unreviewed as a composition, and uncompiled/unexecuted:
+- Core/finalizer owner Codex: `/private/tmp/kegari-e07-output-matcher-slice-b-implementation-v1`.
+- Adapter/reader/bootstrap owner Config: `/private/tmp/kegari-e07-declared-interval-adapter-v1`.
+- Worker/broker/journal owner Git: confirms the assignment stopped after source
+  tracing and interface coordination; no implementation overlay or sealed
+  artifact was created. The core and adapter draft directories still exist;
+  neither was integrated, compiled or qualified by this preparation.
+The accepted B-v2 design and independent rereview remain at the paths recorded
+below. Reconcile incomplete TEMP drafts against actual source before any future
+integration. Typed scoring and native coordination context/caller remain
+unfinished. Root's latest coordination investigation was read-only; no caller
+implementation or new native coordination design artifact was installed.
+The pause/preparation history accompanies the resumed containment work. Reflection
+and supervision alone did not authorize implementation; the later explicit Goal
+resumption enabled existing local engineering authority. Live qualification and
+host changes retain their separate approval boundaries.
+
+Earlier verified local commit: `46c234fdb2351f901e902de920f0ee1358bf1eba` —
 `feat(kegari-v0)!: retain bounded declared output matches`.
 All 16 intended files and 706 tested inputs match committed and physical bytes;
 every other tree path matches parent 768b125. The tree was clean after verification.
@@ -33,7 +135,7 @@ Coordination prerequisite validation passed on installed709-input source1:
 1,006 tests passed, zero failed, the same two required native checks ignored.
 All11 commands and24 copied-suite Python tests pass; actual copy-only E01 CLI
 output is independently verified. Reports and the reviewed partial-only coverage
-updates are installed; the local commit is next. B's corrected bootstrap-disposition design is accepted for TEMP-only
+updates are installed and committed as a217df8. B's corrected bootstrap-disposition design is accepted for TEMP-only
 implementation; typed scoring/native qualification remains separate.
 
 The following matcher installation/validation history retains its real failures.
@@ -3213,7 +3315,7 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
 | Native process ownership; §§6.1/11, V0-T07–09/23 | Read-only macOS boot-identity query returns `Operation not permitted` in this sandbox. Production ownership discovery fails closed; two retained native tests are explicitly blocked. Injected deterministic process fixtures verify registration/intent/lease logic only. A permitted supervised environment is required for actual process birth/boot identity, termination and restart qualification. |
 | Trusted native Git executable; §§7/8/9 | The installed Homebrew Git has a group-writable ancestor and fails the unchanged executable-identity policy. Exact-byte private copies are used only inside disposable tests. Production setup needs an operator-provisioned supported executable path satisfying the owner/mode/ancestor checks; no host permissions or installation have been changed. |
 | GitHub-hosted runner provenance; §§8.2/9.4 | Job labels do not prove runner type. Signed OIDC verifier now binds fixed issuer/JWKS, audience, exact job/run/attempt/workflow and time/replay guards. The trigger SHA is distinct from the source actually checked out: the reviewed pinned proof workflow must verify the tested checkout and derive the audience accordingly. Adapter fixtures pass; proof workflow preparation/collection and actual hosted route remain unqualified. |
-| Human qualitative review/calibration; §12.4.3 | Operator explicitly unavailable; not attempted. Prepare representative evidence across every qualitative rubric and all material failures, then request review only when supervision is explicit. |
+| Human qualitative review/calibration; §12.4.3 | Operator explicitly available for supervised decisions as of the 2026-10-26 preparation message; Goal remains paused. Calibration has not been performed. Prepare representative evidence across every qualitative rubric and all material failures for the real human gate; supervision itself is not a completed review. |
 
 These block only dependent validation, not local implementation. No missing prerequisite is permission to weaken the contract.
 
