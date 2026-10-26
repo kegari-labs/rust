@@ -7,8 +7,27 @@ Retain the package and executable name kegari-v0. Version the application
 within 0.x.y; reserve 1.0.0 for a future, explicitly agreed production-readiness
 decision. Do not begin the lasting kegari implementation as part of this goal.
 
-This amendment changes sequencing and release milestones. It does not weaken
-SPEC version 1.2, broaden permissions or remove any existing completion gate.
+This completion plan follows the approved managed-workload scope in SPEC 1.3.
+It does not broaden action permissions or remove unrelated completion gates.
+
+Managed-workload decision — approved 2026-10-26
+
+For v0, support qualified foreground tools and explicitly registered managed
+background services. Accept that unregistered detached descendants can escape
+supervision and fall outside the shutdown guarantee. Document this limitation;
+a policy forbidding detachment does not itself prevent it. Filesystem, network,
+credential, role and control-authority isolation remain required.
+
+Full descendant coverage remains desired future work and a prerequisite to
+claiming qualification for processing untrusted external context material,
+including public pull requests. Completion of the managed-workload v0 profile
+must not be represented as that broader qualification. Preserve the controlled
+adversarial evaluation obligations, including V0-E07; passing those fixtures
+alone cannot establish readiness for arbitrary untrusted external material.
+
+This explicit scope decision supersedes the earlier escaped-descendant closure
+requirement for the current managed-workload milestone. It does not authorize
+an Endpoint Security entitlement application or any host/live action.
 
 First reconcile the actual branch, working tree, staging, PROGRESS.md,
 validation evidence, outstanding processes and interrupted subagent drafts.
@@ -18,9 +37,9 @@ work merely because it was the last activity before the pause.
 
 Prioritize these milestones:
 
-0.2.0: Implement and validate supported process containment/descendant
-ownership, integrate commands, checks, hooks, cancellation, retirement and
-cleanup, and deliver a versioned release-mode executable with matching assets.
+0.2.0: Implement and validate managed-workload process supervision under the
+approved scope, integrate commands, checks, hooks, cancellation, retirement
+and cleanup, and deliver a versioned release-mode executable with matching assets.
 
 0.3.0: Complete cold workflow recovery and reassembly, fresh-authority
 revalidation, and supported provider-intervention resolution/readmission.
@@ -44,16 +63,19 @@ patches only for actual compatible corrections; do not place new capability
 or incompatible persisted-format changes in a patch release. Keep application,
 instruction, protocol, configuration and evidence schema identities explicit.
 
-Begin containment work with a finite feasibility investigation and focused
-adversarial experiments. Establish launch-time enrollment, escaped-descendant
-ownership, cancellation, identity safety, failure detection and restart
-semantics. Do not treat process-group exit, EOF, polling or self-reported
-success as proof of complete containment.
+Begin managed-workload implementation with launch-time registration, owned
+process/group and managed-service lifecycle, bounded cancellation, identity-safe
+signalling, failure detection and conservative restart semantics. Qualify the
+supported command/service configurations; do not declare success from EOF or
+self-report when their registered work remains active or uncertain. Preserve
+the detached-process regression as evidence of the accepted limitation rather
+than demanding its containment before enabling the managed profile. A managed
+group's exit is not proof that arbitrary detached descendants have terminated.
 
-If no conforming mechanism is available under current constraints, retain the
-refusal, document the rejected alternatives and exact missing prerequisite,
-and continue genuinely independent authorized work. Do not repeatedly retry
-unchanged denied probes or build further layers that assume containment works.
+Retain refusal for unmet prerequisites of the supported managed profile until
+its implementation and qualification justify removing it. Document specific
+missing prerequisites and continue independent authorized work. Do not repeatedly
+retry unchanged denied probes or assume a broader containment guarantee.
 
 For each milestone, implement a coherent increment, run relevant checks,
 obtain independent review, resolve findings and deliver an exact-source build
@@ -81,7 +103,7 @@ Authoritative inputs and starting point
 
 - Working repository: /Users/lgr/Development/com.kegari/com.kegari.rust
 - Implement the existing Cargo workspace member and executable kegari-v0 at crates/kegari-v0.
-- Read the entire SPEC.md and all applicable AGENTS.md instructions before implementation. The approved specification is version 1.2 (SHA-256: `80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326`); its source baselines are recorded in SPEC.md. Inspect the actual branch, working tree, staging and current specification. Preserve later or unrelated work; do not reset or silently substitute an older baseline. Report any material divergence from the approved contract.
+- Read the entire SPEC.md and all applicable AGENTS.md instructions before implementation. The approved specification is version 1.3 (SHA-256: `35d4515585fe92350ec1cc8b78a5919c834d559a48d48d071239d39305032fb3`); its source baselines are recorded in SPEC.md. Inspect the actual branch, working tree, staging and current specification. Preserve later or unrelated work; do not reset or silently substitute an older baseline. Report any material divergence from the approved contract.
 - SPEC.md is the self-contained product contract. Its current Kegari rules take precedence over conflicting Symphony defaults and older discovery direction. Operational instructions and permissions still govern actual actions. Do not weaken the specification or rewrite its requirements to match an easier implementation.
 - The sibling com.kegari.symphony and com.kegari.specification repositories are read-only references. Use them only to resolve a concrete question; do not restart discovery, require the entire corpus as runtime context, or update their pinned baselines. Prefer targeted official documentation for technical compatibility questions and record what you actually verify.
 

@@ -1,11 +1,34 @@
-# Process containment: requirement and current feasibility
+# Process containment: managed workload and future descendant coverage
 
-Kegari must know which local processes belong to an operation, stop only those
-processes on cancellation, and establish that none can keep executing before
-accepting complete local shutdown. The missing property is descendant lifetime
-ownership. Filesystem/network/tool restrictions remain a separate requirement.
-This note records the 2026-10-26 investigation at implementation checkpoint
-`a217df8`; it does not qualify a native backend or remove the current refusal.
+On 2026-10-26 the user selected the managed-workload contract recorded in
+[SPEC version 1.3](../SPEC.md#12-deliverable-and-exclusions). The current local
+lifecycle guarantee covers qualified foreground tools whose subprocesses remain
+within their declared, observed lifecycle, plus explicitly registered managed
+background services with verified ownership and bounded stop/exit handling.
+Registration does not grant additional execution, filesystem, network, credential
+or role authority. Required writers must finish before their artifacts are
+accepted as final.
+
+Escaped or unregistered descendants are outside this shutdown guarantee. A tool
+can violate a foreground-only policy by detaching; the policy does not technically
+prevent that behavior or promise to discover every escape. The supported profile
+must state its tools, services and lifecycle assumptions. Known or suspected
+ownership/exit uncertainty still blocks affected completion, cleanup, replacement
+work and handover. Independent resource isolation remains required.
+
+The managed-workload v0 profile can be completed and qualified without an
+arbitrary-descendant guarantee. Full descendant lifecycle coverage remains a
+desired future capability and a prerequisite to claiming qualification for
+processing untrusted external context, including public PR material. Controlled
+adversarial E07 implementation and evaluations remain required; their finite
+results do not establish that broader qualification. Independent PR review stays
+read/feedback-only and gains no repository execution permission.
+
+The feasibility research below records the earlier, stronger descendant contract
+at checkpoint `a217df8`. Endpoint Security was investigated as a candidate, not
+selected as an unconditional prerequisite. Neither this scope amendment nor that
+research qualifies an implementation or automatically removes a code-level
+refusal.
 
 ## Why the existing process group is insufficient
 
@@ -16,31 +39,36 @@ finite `tests/process_group.rs` regression demonstrates exactly that late write.
 It establishes a process-group limitation, not a filesystem-sandbox escape.
 
 `src/isolation.rs::repository_command_prerequisite` currently rejects repository
-commands with `process_tree_unverified`. Successful group cleanup and EOF cannot
-remove that refusal. PID enumeration alone also cannot establish complete
+commands with `process_tree_unverified`. Revising that implementation for the
+managed profile requires its own review and qualification; this documentation
+does not remove the refusal. Successful group cleanup and EOF cannot establish
+arbitrary-descendant closure. PID enumeration alone also cannot establish complete
 membership or safely signal a process whose numeric PID has been reused.
 
-| Feature | Required use of descendant ownership |
+| Feature | Required lifecycle evidence for the supported managed workload |
 | --- | --- |
 | Workflow hooks and local/integrated checks | Execute under the operation's role, then establish actual completion before accepting results. |
-| Codex app-server and Git subprocesses | Carry the same stronger proof through provider/Git cancellation handles and worker completion. Existing group results are insufficient. |
+| Codex app-server and Git subprocesses | Preserve actual ownership, bounded termination and completion observations through provider/Git cancellation handles. A group result does not prove arbitrary-descendant closure. |
 | Pause, stop, timeout and cancellation | Preserve graceful drain; fence mutation authority before forced termination; distinguish requested cancellation from verified exit. |
 | Restart and recovery | Preserve uncertain ownership and prevent duplicate replacement work; persisted PIDs, group-exit records and empty memory do not recreate live authority. |
-| Candidate/evidence sealing and delivery gates | Prevent an outstanding process from changing artifacts after they were treated as final. Remote CI/deployment outcomes require separate provider evidence. |
-| Cleanup and handover | Prove local shutdown before removing owned directories or replacing the coordinator. |
+| Candidate/evidence sealing and delivery gates | Settle every declared managed writer before treating artifacts as final; known or suspected outstanding writers block sealing. Remote CI/deployment outcomes require separate provider evidence. |
+| Cleanup and handover | Establish supported managed-workload shutdown, including registered services, before removing owned directories or replacing the coordinator; retain every known uncertainty. |
 | Actual-agent evaluations | Use the production lifecycle boundary and retain honest interrupted/unknown outcomes. |
 
 Compilation, help/version output, configuration parsing and deterministic
-fixtures can proceed while native qualification is incomplete. Independent PR
-review remains read/feedback-only and must not gain repository execution.
+fixtures can proceed while native qualification is incomplete. Completing those
+checks does not qualify a managed profile or a broader context profile by itself.
 
 ## Contract and implementation boundary
 
 SPEC §§6.1, 7.1, 11.2–11.5 require admission before launch, independent resource
 isolation, verified-owned termination, preserved uncertainty and safe recovery.
-The implementation needs enrollment before executable work, identity-safe
-signalling, complete membership through fork/exec/reparent/session changes,
-event-loss detection, and a defensible final observation boundary.
+Under version 1.3 these lifecycle and cleanup obligations apply to the supported
+managed workload and registered services. Implementations must establish that
+declared lifecycle rather than relabel unknown shutdown as success. The broader
+future descendant guarantee additionally needs complete membership through
+fork/exec/reparent/session changes, event-loss detection and a defensible final
+observation boundary. Existing process-group evidence is not that guarantee.
 
 The specification does not require the kernel to kill every descendant after
 simultaneous death of every observer. That failure may remain an explicit
@@ -50,7 +78,7 @@ Existing resource isolation must continue to enforce
 its boundary independently. This allowance does not waive actual force-stop
 termination or permit a live observer to declare success from incomplete data.
 
-## Candidate and unresolved questions
+## Historical stronger-contract candidate and unresolved questions
 
 The installed macOS 27 SDK and Apple's current documentation expose
 [`es_new_descendants_client`](https://developer.apple.com/documentation/endpointsecurity/es_new_descendants_client(_:_:)).
@@ -81,16 +109,19 @@ attributed to this candidate. See
 [client loss](https://developer.apple.com/forums/thread/850253) and
 [custodian lifetime](https://developer.apple.com/forums/thread/851230).
 
-No supported entitlement-free substitute was established by this investigation.
+No supported entitlement-free substitute for the stronger arbitrary-descendant
+contract was established by this investigation.
 Process groups/launchd group cleanup do not cover detached groups; ancestry scans
 have races; denying subprocess creation breaks ordinary repository tools;
 resource sandboxes do not themselves prove exit. This is a bounded feasibility
-finding, not proof that no future platform facility could satisfy the contract.
+finding, not proof that no future platform facility could satisfy that contract,
+and not a reason to require ES for the approved managed-workload profile.
 
-## Resource and qualification state
+## Historical preparation and current qualification limits
 
-The user reports no existing Endpoint Security entitlement and is renewing Apple
-Developer Program membership. Membership is distinct from Apple's restricted
+At the time of the investigation the user reported no existing Endpoint Security
+entitlement and was renewing Apple Developer Program membership. Membership is
+distinct from Apple's restricted
 entitlement approval. Apple identifies non-security helper supervision as an
 intended use case, but that is not approval for Kegari. The public request route
 is [System Extensions and DriverKit](https://developer.apple.com/system-extensions/).
@@ -118,12 +149,13 @@ wait. A reviewed outer execution/cleanup bound and a permitted host environment
 must be supplied before the exact request is ready to execute. Existing sandbox
 and boot-identity denials must not be retried unchanged or bypassed.
 
-In the subsequent supervised discussion, the user questioned making an ES
-entitlement a prerequisite. None has been established and no application is
-planned. The pending decision is whether to retain escaped-descendant coverage
-or explicitly change v0 to a supported managed-workload contract. A documented
-foreground-only policy does not enforce that restriction against arbitrary
-repository code. No requirement has changed; keep the refusal until a conforming
-implementation is qualified or the user explicitly approves a revised contract.
-Independent authorized work continues, including the 0.2.0-alpha.1 executable;
-that artifact does not complete containment or require ES activation.
+The subsequent decision is now explicit: use the managed-workload contract while
+retaining full descendant coverage as a future prerequisite for untrusted-context
+qualification. No ES entitlement, application or activation is a prerequisite to
+that managed-profile engineering work. A documented foreground-only policy still
+does not enforce the restriction against arbitrary repository code. Any future
+implementation change must retain honest unknowns and pass the applicable
+profile, isolation and lifecycle checks; neither the scope decision nor a
+prerelease executable supplies that evidence. The stronger-contract research and
+old native prerequisite build remain historical evidence, not a current native
+qualification result.

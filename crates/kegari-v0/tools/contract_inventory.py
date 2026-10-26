@@ -16,7 +16,7 @@ import pathlib
 import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-APPROVED = "80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326"
+APPROVED = "35d4515585fe92350ec1cc8b78a5919c834d559a48d48d071239d39305032fb3"
 
 
 def content_blocks(text):

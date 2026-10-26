@@ -1,6 +1,6 @@
 # Kegari v0
 
-Kegari v0 is the scoped Rust delivery coordinator defined by [SPEC 1.2](SPEC.md).
+Kegari v0 is the scoped Rust delivery coordinator defined by [SPEC 1.3](SPEC.md).
 Implementation and qualification remain in progress. The current build is not
 qualified to coordinate the lasting implementation. See [PROGRESS.md](PROGRESS.md)
 for the actual checkpoint, failed or blocked checks, and current work.

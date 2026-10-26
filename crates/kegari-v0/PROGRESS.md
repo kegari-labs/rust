@@ -1,5 +1,37 @@
 # Kegari v0 build progress
 
+The Goal is active and incomplete. On 2026-10-26 the user explicitly selected
+**managed workloads with the detached-process limitation**. SPEC 1.3 and the
+matching GOAL.md/objective now record that decision. Full descendant coverage
+remains desired future work and a prerequisite to qualification for untrusted
+external context, including public PR material. It is not a prerequisite to
+completing the managed-workload v0 profile. Controlled E07 evaluation obligations,
+filesystem/network/credential/role isolation and action restrictions remain.
+
+Approved SPEC SHA-256:
+`35d4515585fe92350ec1cc8b78a5919c834d559a48d48d071239d39305032fb3`.
+The reconciled inventory has 503 clauses and 136 named requirements: ten new or
+changed clauses are unassessed, three old clauses are retained as stale, and all
+surviving status/evidence entries and named requirement rows are unchanged. Six
+inventory tests pass. Independent review found no material amendment conflict.
+No broader qualification or implementation success follows from this amendment.
+
+The next 0.2.0 work is to implement and qualify the managed lifecycle through
+commands/checks/hooks, cancellation, retirement, recovery and cleanup. The existing
+repository-command refusal remains in code until that integration is ready.
+Endpoint Security is not an established prerequisite. Supervision is available;
+native/host/live actions retain their separate explicit approval requirements.
+
+A related service-shutdown correction is currently uncommitted: recovered local
+ownership and persistence uncertainty block reservation, unfinished replay stays
+uncertain, and retired-local/unknown-remote work remains distinguishable. The old
+code failed its new regression; 85 targeted release tests now pass and independent
+source review found no material issue. A separately staged 0.2.0-alpha.2 artifact
+has been prepared; final evidence and the implementation commit are in progress.
+The previous alpha.1 artifact remains unchanged. No service or coordinator was
+installed, activated, signed or published. Held B evaluation drafts remain held.
+
+Historical prerelease checkpoint (5489e0d; earlier scope decision was pending):
 The Goal remains active and incomplete. Supervision is available; host/live
 changes and native qualification still require their separate scoped approval.
 The previous discussion clarified the containment trade-off without implementing
