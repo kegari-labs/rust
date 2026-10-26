@@ -3372,4 +3372,4 @@ pub use history::MergedProductionRecovery;
 
 #[path = "delivery_production_carry.rs"]
 mod carry_production;
-pub(crate) use carry_production::CarryProduction;
+pub(crate) use carry_production::{CarryProduction, RetainedCarryProductionInput};

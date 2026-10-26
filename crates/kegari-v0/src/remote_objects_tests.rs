@@ -1522,3 +1522,126 @@ async fn exact_missing_object_probe_uses_owned_scope_and_never_fetches_on_query(
     );
     source.revalidate_filesystem().unwrap();
 }
+
+/// The source is produced by the existing actual owned Git import. This tests
+/// immutable source history only, not completed carry/native worker authority.
+#[tokio::test]
+async fn retained_read_history_requires_closed_owner_and_exact_protected_import() {
+    let fixture = fixture().await;
+    let source = Arc::new(
+        fixture
+            .acquisition
+            .acquire(fixture.request.clone())
+            .await
+            .unwrap(),
+    );
+    let control = fixture.runtime.control.clone();
+    let key = fixture.acquisition.services.key.clone();
+    let error = source
+        .retain_read_history(control.clone(), key.clone())
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "source_history_unavailable");
+    assert_eq!(
+        error.message,
+        "retained import requires its actually closed owner"
+    );
+    // acquire awaited the actual import and journal join; only now retire its
+    // real owner. No model completion or native confinement claim is constructed.
+    control
+        .retire_local(
+            fixture.request.permit.operation_id,
+            json!({"fixture":"actual object import joined"}),
+        )
+        .unwrap();
+    let proof = source.retain_read_history(control.clone(), key).unwrap();
+    let digest = proof.digest().unwrap();
+    let operations = canonical_digest(1, &control.operations().unwrap()).unwrap();
+    let fetches = fixture.wire.fetches.load(Ordering::SeqCst);
+    let requests = fixture.wire.requests.load(Ordering::SeqCst);
+    let processes = canonical_digest(
+        1,
+        &fixture
+            .acquisition
+            .services
+            .processes
+            .observe(fixture.request.permit.operation_id)
+            .unwrap(),
+    )
+    .unwrap();
+    proof.validate().unwrap();
+    // This is the exact already-serialized context used by final carry gates.
+    // The validator must not reenter Control snapshot or open a subprocess.
+    control.serialize_observation(|_| proof.validate()).unwrap();
+
+    for leaf in ["source.json", "intent.json", "objects.json"] {
+        let bytes = source.directory.read_bytes(leaf, 8 * 1024 * 1024).unwrap();
+        fs::remove_file(source.directory.path().join(leaf)).unwrap();
+        let error = proof.validate().unwrap_err();
+        assert_eq!(error.code, "record_missing");
+        assert_eq!(error.message, "required control record is missing");
+        source.directory.write_bytes(leaf, &bytes).unwrap();
+        source.directory.write_bytes(leaf, b"{}").unwrap();
+        let error = proof.validate().unwrap_err();
+        assert_eq!(error.code, "source_history_unavailable");
+        assert_eq!(error.message, "retained import file changed");
+        source.directory.write_bytes(leaf, &bytes).unwrap();
+        proof.validate().unwrap();
+    }
+    let receipts = fixture
+        .runtime
+        .services
+        .registration
+        .root()
+        .child("receipts")
+        .unwrap();
+    for operation in [
+        fixture.request.effect_id().unwrap(),
+        fixture.request.permit.operation_id,
+    ] {
+        let leaf = format!("{operation}.json");
+        let bytes = receipts.read_bytes(&leaf, 1024 * 1024).unwrap();
+        let original = control.operation(operation).unwrap();
+        fs::remove_file(receipts.path().join(&leaf)).unwrap();
+        assert_eq!(proof.validate().unwrap_err().code, "record_missing");
+        receipts.write_bytes(&leaf, &bytes).unwrap();
+        let mut changed = original;
+        changed.observed_result = Some(json!({"fixture":"substituted terminal record"}));
+        receipts.write(&leaf, &changed).unwrap();
+        let error = proof.validate().unwrap_err();
+        assert_eq!(error.code, "source_history_unavailable");
+        assert_eq!(error.message, "retained import receipt or owner changed");
+        receipts.write_bytes(&leaf, &bytes).unwrap();
+        proof.validate().unwrap();
+    }
+    let config_path = source.root().join("config");
+    let source_config = fs::read(&config_path).unwrap();
+    let mut changed = source_config.clone();
+    changed.extend_from_slice(b"\n# changed owned quarantine after observation\n");
+    fs::write(&config_path, changed).unwrap();
+    let error = proof.validate().unwrap_err();
+    assert_eq!(error.code, "ownership_conflict");
+    assert_eq!(error.message, "acquired Git source was replaced or changed");
+    fs::write(&config_path, source_config).unwrap();
+    proof.validate().unwrap();
+    assert_eq!(proof.digest().unwrap(), digest);
+    assert_eq!(
+        canonical_digest(1, &control.operations().unwrap()).unwrap(),
+        operations
+    );
+    assert_eq!(fixture.wire.fetches.load(Ordering::SeqCst), fetches);
+    assert_eq!(fixture.wire.requests.load(Ordering::SeqCst), requests);
+    assert_eq!(
+        canonical_digest(
+            1,
+            &fixture
+                .acquisition
+                .services
+                .processes
+                .observe(fixture.request.permit.operation_id)
+                .unwrap()
+        )
+        .unwrap(),
+        processes,
+    );
+}

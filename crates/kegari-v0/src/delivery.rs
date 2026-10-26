@@ -4655,6 +4655,7 @@ pub(crate) use production_release::tests::{
 
 #[path = "delivery_objects.rs"]
 mod objects;
+pub(crate) use objects::RetainedCarryIntegrations;
 
 #[path = "delivery_lineage_drop.rs"]
 mod lineage_drop;

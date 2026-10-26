@@ -3,6 +3,54 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
+Completed-current carry recovery source3 passed **825 tests, zero
+failures and 2 required native ignores across 39 groups**
+in 843.114s. All-target check, strict Clippy,
+formatting, dispatch-disabled Plan, inventory and diff checks passed. Six new
+recovery/inventory/import-history component tests also passed separately and are
+included in the full total. All 653 inputs stayed unchanged at
+`sha256:d0288da1dcd547c8a670373630ebad3542c8ff2aed57b63576e5ddb6d62db46b`.
+Session40448 is closed. All 15 invocation artifacts, source/tool/log
+identities and the unchanged SPEC were verified. See
+[the completed-carry recovery report](validation/LOCAL-COMPLETED-CARRY-RECOVERY.md)
+and [machine evidence](validation/completed-current-carry-checks.json).
+
+The real live writer retains exact recovery selections; a canonical protected
+reader yields historical provenance, followed by actual scoped current metadata
+reobservation and final serialized installation. Additional production integration
+proofs retain the original closed owner/import/source and predecessor closure.
+No worker authority or joined cache is reconstructed. One initial private-sibling
+compile error was corrected by ancestor-only visibility with unchanged behavior;
+earlier failures/results are retained. The final inventory formatting failure
+was corrected without semantic changes; inventory4 and diff4 passed afterward. Root and independent complete-layer reviews
+found no remaining material defect in this scope. Native cold carry, visual
+hydration and cold worker reconstruction remain unqualified or incomplete.
+
+The independently reviewed ledger now marks five carry clauses and V0-T17 partial,
+linking committed deterministic evidence and explicit native not_run. It contains
+465 not_assessed/31 partial clauses and 126 not_assessed/10 partial named items;
+no requirement is marked passed. Coverage hash:
+`e7ff810b945b9008a405ed835be980b833aad1bf82b433ca0f786419990f016c`.
+
+Next useful work is the concrete native evaluator caller. Its reviewed 23-file
+TEMP composition is `/private/tmp/kegari-native-evaluation-caller-composed-v4`
+(manifest `231a86032d1c7fb376074b6cd05d5736e89781bef557458b067a98a353fe92be`).
+Separate TEMP work adds exact full-plan synthetic trial identities, preserves
+actual ownership through preparation/unused-trial return and classifies native
+finalization failure before report publication. The terminal-report correction is
+`/private/tmp/kegari-native-evaluation-terminal-report-overlay` (manifest
+`884f4185e3e99313b2fc48f9c86dabe05de7270b2d9be1322c50b711d5b2177f`).
+The caller remains uninstalled/uncompiled; compatible full fixtures, real native
+execution, providers and human calibration remain incomplete. Root owns all
+repository changes/checks/commits; agents work in separate TEMP layers.
+
+The verified carried-acceptance checkpoint is
+`7b933f2cb5d11f149846ba81628ef5c5cc6c1501` —
+`feat(kegari-v0): reassemble carried acceptance on known baselines`.
+All 53 committed files and 648 tested inputs matched; the tree was clean afterward.
+No commits were consolidated, rewritten or pushed. Verification is retained at
+`/private/tmp/kegari-v0-carried-acceptance-commit-verification.json`.
+
 Carried-acceptance source6 passed **819 tests, zero failures and
 2 required native ignores across 39 groups** in
 771.633s. All-target check, strict Clippy,

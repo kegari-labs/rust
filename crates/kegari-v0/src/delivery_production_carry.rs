@@ -3,10 +3,18 @@
 use super::*;
 #[derive(Clone)]
 pub(crate) struct CarryProduction {
+    operation: Uuid,
+    existing: bool,
     proof: evidence::VerifiedProduction,
     references: crate::delivery::CarryReferences,
 }
 impl CarryProduction {
+    pub(crate) fn operation(&self) -> Uuid {
+        self.operation
+    }
+    pub(crate) fn existing(&self) -> bool {
+        self.existing
+    }
     pub(crate) fn proof(&self) -> &evidence::VerifiedProduction {
         &self.proof
     }
@@ -168,6 +176,77 @@ impl DeliveryCoordinator {
             observation,
             &[DeliveryPhase::Recovery, DeliveryPhase::Release],
         )?;
-        Ok(CarryProduction { proof, references })
+        Ok(CarryProduction {
+            operation,
+            existing: matches!(input, ReleaseStepEvidence::Existing { .. }),
+            proof,
+            references,
+        })
+    }
+}
+
+pub(crate) struct RetainedCarryProductionInput<'a> {
+    pub observation: &'a DeliveryObservation,
+    pub parent: &'a evidence::VerifiedParent,
+    pub integrations: &'a [crate::git::VerifiedProductionIntegration],
+    pub observer: &'a ProductionObserver,
+    pub operation: Uuid,
+    pub existing: bool,
+}
+impl DeliveryCoordinator {
+    /// Uses the exact producer-selected operation; this never scans/selects a
+    /// convenient old validation or dispatches another hosted run.
+    pub(crate) async fn reobserve_retained_carry_production(
+        &self,
+        input: RetainedCarryProductionInput<'_>,
+    ) -> Result<CarryProduction> {
+        let RetainedCarryProductionInput {
+            observation,
+            parent,
+            integrations,
+            observer,
+            operation,
+            existing,
+        } = input;
+        if existing {
+            let baseline = observer.observe(self.contract(observation)?).await?;
+            let production = self
+                .hydrate_existing_production_validation(
+                    observation,
+                    parent,
+                    integrations,
+                    operation,
+                )
+                .await?;
+            self.observe_carry_production(
+                observation,
+                parent,
+                ReleaseStepEvidence::Existing {
+                    baseline: &baseline,
+                    production: &production,
+                },
+                integrations,
+                operation,
+            )
+            .await
+        } else {
+            let prepared = self
+                .hydrate_production_candidate(observation, parent, operation)
+                .await?;
+            let production = self
+                .hydrate_production_validation(observation, &prepared, parent)
+                .await?;
+            self.observe_carry_production(
+                observation,
+                parent,
+                ReleaseStepEvidence::Changed {
+                    prepared: &prepared,
+                    production: &production,
+                },
+                integrations,
+                operation,
+            )
+            .await
+        }
     }
 }

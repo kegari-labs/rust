@@ -81,6 +81,8 @@ struct CarryRecord {
     baseline_digest: String,
     carry: CarriedAcceptance,
     references: CarryReferences,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovery: Option<recovery::CarryRecoveryBinding>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -90,11 +92,16 @@ struct CarryPublicationRecord {
     receipt: ReviewReceiptReference,
 }
 
+#[derive(Clone)]
+enum CarryBasis {
+    Live(Box<ReassembledParent>),
+    Reobserved(Box<recovery::ReobservedCarry>),
+}
 /// The receipt/native publication is part of this capability. A merely computed
 /// semantic carry is never sufficient for runtime readiness.
 #[derive(Clone)]
 pub(crate) struct PublishedCarry {
-    reassembled: ReassembledParent,
+    basis: CarryBasis,
     verified: VerifiedCarry,
     saved: Signed<CarryPublicationRecord>,
     records: Arc<PrivateDir>,
@@ -117,7 +124,10 @@ impl PublishedCarry {
         &self.verified
     }
     pub(crate) fn acceptance(&self) -> &VerifiedAcceptance {
-        self.reassembled.source.original().acceptance()
+        match &self.basis {
+            CarryBasis::Live(value) => value.source.original().acceptance(),
+            CarryBasis::Reobserved(value) => &value.acceptance,
+        }
     }
     pub(crate) fn publication_reference(&self) -> Result<(Uuid, String, Uuid)> {
         Ok((
@@ -143,10 +153,18 @@ impl PublishedCarry {
         &self.saved.payload.publication
     }
     pub(crate) fn parent(&self) -> &PublishedParent {
-        &self.reassembled.parent
+        match &self.basis {
+            CarryBasis::Live(value) => &value.parent,
+            CarryBasis::Reobserved(value) => &value.parent,
+        }
     }
     pub(crate) fn validate(&self, config: &Config) -> Result<()> {
-        self.reassembled.validate(config)?;
+        match &self.basis {
+            CarryBasis::Live(value) => value.validate(config)?,
+            CarryBasis::Reobserved(value) => value.validate(config, &self.host, &|authority| {
+                (value.current_grants)(authority.work())
+            })?,
+        }
         self.validate_publication()
     }
     fn validate_publication(&self) -> Result<()> {
@@ -179,10 +197,17 @@ impl PublishedCarry {
         &self,
         active: &ActiveParentGrantObserver,
     ) -> Result<()> {
-        self.reassembled
-            .validate_with_grants(active.configuration(), &|authority| {
-                active.observe_in_gate(authority)
-            })?;
+        match &self.basis {
+            CarryBasis::Live(value) => value
+                .validate_with_grants(active.configuration(), &|authority| {
+                    active.observe_in_gate(authority)
+                })?,
+            CarryBasis::Reobserved(value) => {
+                value.validate(active.configuration(), &self.host, &|authority| {
+                    active.observe_in_gate(authority)
+                })?
+            }
+        }
         self.validate_publication()?;
         self.verify_native_projection(&active.parent_in_gate()?)
     }
@@ -199,6 +224,10 @@ impl PublishedCarry {
             .observations
             .get(&parent.key.issue)
             .ok_or_else(|| invalid("carry parent not currently observed"))?;
+        self.verify_native_comments(&observation.comments)
+    }
+    fn verify_native_comments(&self, comments: &[crate::providers::Comment]) -> Result<()> {
+        let work = &self.parent().verified().manifest().work;
         let publications = [
             (
                 &self.saved.payload.signed.payload.current_publication,
@@ -213,8 +242,7 @@ impl PublishedCarry {
             ),
         ];
         for (publication, body) in publications {
-            if observation
-                .comments
+            if comments
                 .iter()
                 .filter(|c| {
                     c.id.to_string() == publication.record_id
@@ -234,8 +262,7 @@ impl PublishedCarry {
                 ));
             }
         }
-        let selected_parent = observation
-            .comments
+        let selected_parent = comments
             .iter()
             .find(|comment| {
                 comment.id.to_string()
@@ -251,7 +278,7 @@ impl PublishedCarry {
         DeliveryCoordinator::reject_superseding_parent_publication(
             &self.key,
             self.saved.payload.signed.payload.runtime,
-            &observation.comments,
+            comments,
             selected_parent,
         )?;
         let original = &self.saved.payload.signed.payload;
@@ -269,8 +296,7 @@ impl PublishedCarry {
                 )?,
             ),
         ] {
-            if observation
-                .comments
+            if comments
                 .iter()
                 .filter(|c| {
                     c.id == id
@@ -297,7 +323,7 @@ impl PublishedCarry {
             }
         }
         require_original_acceptance_selection(
-            &observation.comments,
+            comments,
             &original.original_acceptance,
             old_acceptance,
             &self.key,
@@ -686,6 +712,12 @@ impl DeliveryCoordinator {
                 baseline_digest: reassembled.source.transition().digest().into(),
                 carry: verified.record().clone(),
                 references: references.clone(),
+                recovery: Some(recovery::CarryRecoveryBinding::capture(
+                    reassembled,
+                    production,
+                    configuration,
+                    &self.host,
+                )?),
             },
         )?;
         let source = reassembled.source.clone();
@@ -769,7 +801,7 @@ impl DeliveryCoordinator {
         })?;
         let saved = retained.unwrap_or(saved);
         Ok(PublishedCarry {
-            reassembled: reassembled.clone(),
+            basis: CarryBasis::Live(Box::new(reassembled.clone())),
             verified,
             saved,
             records: self.records.clone(),
@@ -996,6 +1028,10 @@ impl DeliveryCoordinator {
         Ok(())
     }
 }
+
+#[path = "delivery_carried_recovery.rs"]
+mod recovery;
+pub(crate) use recovery::{ObservedCurrentCarry, RetainedCarrySubject};
 
 #[cfg(test)]
 mod readback_tests {

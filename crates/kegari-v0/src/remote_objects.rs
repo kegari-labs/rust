@@ -1365,3 +1365,7 @@ mod tests;
 #[path = "remote_objects_retained.rs"]
 mod retained;
 pub(crate) use retained::{retained_sources, select_delta_source};
+
+#[path = "remote_objects_read_history.rs"]
+mod read_history;
+pub(crate) use read_history::RetainedObjectReadHistory;

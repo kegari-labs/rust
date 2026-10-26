@@ -165,7 +165,7 @@ impl RuntimeDelivery {
             current.parent(prepared.reference.workspace, prepared.reference.work.parent)?;
         self.runtime.retain_carried_acceptance(&parent.key, carry)
     }
-    pub(in crate::runtime_delivery) fn retain_current_carry(
+    pub(in crate::runtime_delivery) async fn retain_current_carry(
         &self,
         workspace: &WorkspaceDelivery,
         parent: &ParentProjection,
@@ -189,13 +189,138 @@ impl RuntimeDelivery {
             .map_err(|_| Error::new("runtime_unavailable", "carry registry unavailable"))?
             .get(&key)
             .cloned();
-        if let Some(carry) = carry {
-            if carry.parent().verified().token() != current.token() {
-                return Ok(());
+        let carry = match carry {
+            Some(carry) if carry.parent().verified().token() == current.token() => Some(carry),
+            _ => {
+                self.recover_completed_current_carry(workspace, parent, snapshot)
+                    .await?
             }
-            carry.verify_current_projection(&workspace.configuration, parent)?;
-            snapshot.carried_acceptance(carry)?;
+        };
+        if let Some(carry) = carry {
+            self.runtime.control.serialize_observation(|_| {
+                self.runtime.registration.verify_control_owner()?;
+                let current = self.runtime.observations.admission_snapshot()?;
+                let observed = current.parent(parent.workspace_id, parent.key.issue)?;
+                let config = self.runtime.configuration.snapshot()?;
+                let gate = observed.fresh_gate(
+                    None,
+                    GatePurpose::NewOperation,
+                    &self.runtime.dependency_outcomes()?,
+                    Utc::now(),
+                    Duration::seconds(30),
+                )?;
+                snapshot
+                    .authority()
+                    .compare_current(&gate, Utc::now(), Duration::seconds(30))?;
+                carry.verify_current_projection(&config, observed)?;
+                snapshot.carried_acceptance(carry.clone())?;
+                self.parents
+                    .carries
+                    .lock()
+                    .map_err(|_| Error::new("runtime_unavailable", "carry registry unavailable"))?
+                    .insert(key, carry);
+                Ok(())
+            })?;
         }
         Ok(())
+    }
+}
+
+impl RuntimeDelivery {
+    async fn recover_completed_current_carry(
+        &self,
+        workspace: &WorkspaceDelivery,
+        parent: &ParentProjection,
+        snapshot: &VerifiedDeliverySnapshot,
+    ) -> Result<Option<PublishedCarry>> {
+        let current = snapshot
+            .parent_delivery()
+            .verified_parent()
+            .ok_or_else(|| {
+                Error::new(
+                    "evidence_missing",
+                    "cold carry requires independently hydrated current parent",
+                )
+            })?;
+        let projection = self.runtime.observations.admission_snapshot()?;
+        let actual = projection.parent(parent.workspace_id, parent.key.issue)?;
+        let outcomes = self.runtime.dependency_outcomes()?;
+        let gate = actual.fresh_gate(
+            None,
+            GatePurpose::NewOperation,
+            &outcomes,
+            Utc::now(),
+            Duration::seconds(30),
+        )?;
+        snapshot
+            .authority()
+            .compare_current(&gate, Utc::now(), Duration::seconds(30))?;
+        let Some(subject) = workspace.coordinator.retained_current_carry_subject(
+            &gate,
+            current.token(),
+            self.records.clone(),
+        )?
+        else {
+            return Ok(None);
+        };
+        let digest = subject.digest()?;
+        let mut children = BTreeMap::new();
+        for child in &actual.required_children {
+            children.insert(
+                *child,
+                actual.fresh_gate(
+                    Some(*child),
+                    GatePurpose::NewOperation,
+                    &outcomes,
+                    Utc::now(),
+                    Duration::seconds(30),
+                )?,
+            );
+        }
+        let predecessor = self.known_predecessor_baseline(&projection, &gate).await?;
+        let successor_observer = predecessor
+            .as_ref()
+            .map(|proof| workspace.observer.with_successor(proof.clone()))
+            .transpose()?;
+        let observer = successor_observer
+            .as_ref()
+            .unwrap_or(workspace.observer.as_ref());
+        // Existing rooted, bounded metadata owner; no ambient Git or old worker permit.
+        let (coordinator, owned) = self
+            .readonly_coordinator_with_successor(workspace, &gate, predecessor.as_deref())
+            .await?;
+        let result: Result<crate::delivery::ObservedCurrentCarry> = async {
+            let integration_history = predecessor
+                .map(|proof| coordinator.retained_carry_integrations(&gate, &subject, proof))
+                .transpose()?;
+            let integrations = integration_history
+                .as_ref()
+                .map(|history| history.proofs())
+                .unwrap_or(&[]);
+            let contract = coordinator.parent_contract(gate, actual, &workspace.workflow)?;
+            coordinator
+                .reobserve_current_carry(
+                    subject,
+                    ParentHydrationInputs {
+                        contract: &contract,
+                        observer,
+                        child_gates: &children,
+                        workflow: &workspace.workflow,
+                        production_integrations: integrations,
+                    },
+                    &workspace.configuration,
+                    &owned,
+                    self.parent_grant_observer(),
+                    integration_history.as_ref(),
+                )
+                .await
+        }
+        .await;
+        let retired = owned
+            .finish(json!({"read_only":true,"carry_recovery":digest,"verified":result.is_ok()}));
+        match (result, retired) {
+            (Ok(observed), Ok(receipt)) => observed.finish(&receipt).map(Some),
+            (Err(error), Ok(_)) | (_, Err(error)) => Err(error),
+        }
     }
 }

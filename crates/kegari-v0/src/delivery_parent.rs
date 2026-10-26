@@ -1905,8 +1905,8 @@ pub(crate) use carry_history::{CarryNamespace, CarryReferences};
 #[path = "delivery_carried_acceptance.rs"]
 mod carried_acceptance;
 pub(crate) use carried_acceptance::{
-    CarriedNoReleaseOrigin, CarriedOriginRef, CompletedParentReassemblyPhases, PublishedCarry,
-    ReassembledParent,
+    CarriedNoReleaseOrigin, CarriedOriginRef, CompletedParentReassemblyPhases,
+    ObservedCurrentCarry, PublishedCarry, ReassembledParent, RetainedCarrySubject,
 };
 
 impl DeliveryCoordinator {

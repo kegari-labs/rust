@@ -639,8 +639,9 @@ impl RuntimeDelivery {
                 match result {
                     Ok(mut snapshot) => {
                         if let Ok(workspace) = &workspace
-                            && let Err(error) =
-                                self.retain_current_carry(workspace, parent, &mut snapshot)
+                            && let Err(error) = self
+                                .retain_current_carry(workspace, parent, &mut snapshot)
+                                .await
                         {
                             self.runtime.invalidate_delivery(&parent.key, error)?;
                             continue;

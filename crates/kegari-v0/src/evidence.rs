@@ -2039,6 +2039,86 @@ pub(crate) fn carry_verified_acceptance(
     )
 }
 
+/// Recovery consumes an opaque authenticated producer-written historical subject,
+/// an independently hydrated current parent and freshly reobserved full proofs.
+/// It preserves the old acceptance/carry bytes and issues no dispatch authority.
+pub(crate) fn recover_current_carry_semantics(
+    subject: &crate::delivery::RetainedCarrySubject,
+    parent: &VerifiedParent,
+    production: &[VerifiedProduction],
+    permitted: &BTreeSet<String>,
+) -> Result<(VerifiedAcceptance, VerifiedCarry)> {
+    subject.validate_retained()?;
+    let signed = subject.original_acceptance();
+    let acceptance = &signed.payload;
+    let carry = subject.carry_record();
+    if subject.current_evidence() != parent.manifest()
+        || carry.current_evidence_token != parent.token()
+        || carry.original_reviewed_token != acceptance.reviewed_token
+        || carry.original_acceptance_digest != signed.digest()?
+        || acceptance.work != parent.manifest().work
+        || acceptance.schema_version != 1
+        || acceptance.runtime_id.is_nil()
+        || acceptance.operation_id.is_nil()
+        || acceptance.control_actor.is_empty()
+        || !permitted.contains(&acceptance.linear_actor)
+        || production.len() != parent.manifest().candidates.len()
+        || production
+            .iter()
+            .map(|p| &p.revision.repository)
+            .collect::<BTreeSet<_>>()
+            != parent
+                .manifest()
+                .candidates
+                .iter()
+                .map(|p| &p.repository)
+                .collect()
+        || canonical_digest(
+            1,
+            &production
+                .iter()
+                .map(VerifiedProduction::digest)
+                .collect::<Result<Vec<_>>>()?,
+        )? != carry.production_validation_digest
+    {
+        return Err(Error::new(
+            "acceptance_carry",
+            "recovered carry differs from exact original acceptance or current full validation",
+        ));
+    }
+    for candidate in &parent.manifest().candidates {
+        let result = candidate.result.as_ref().ok_or_else(|| {
+            Error::new("candidate_provenance", "recovered candidate result missing")
+        })?;
+        if !production.iter().any(|proof| {
+            proof.work == parent.manifest().work
+                && proof.revision.repository == candidate.repository
+                && proof.revision.head == result.commit
+                && proof.revision.base == candidate.production.commit
+                && proof.revision.tested_tree == result.tree
+                && !proof.checks.is_empty()
+                && proof.checks.iter().all(|run| {
+                    run.completed_at
+                        .is_some_and(|t| t >= parent.manifest().created_at && t <= carry.created_at)
+                })
+        }) {
+            return Err(Error::new(
+                "production_validation",
+                "recovered carry lost its exact full production validation",
+            ));
+        }
+    }
+    Ok((
+        VerifiedAcceptance {
+            acceptance: acceptance.clone(),
+            digest: signed.digest()?,
+        },
+        VerifiedCarry {
+            record: carry.clone(),
+        },
+    ))
+}
+
 fn validate_carry_acceptance(
     original: &VerifiedParent,
     newer: &VerifiedParent,

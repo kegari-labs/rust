@@ -1111,6 +1111,27 @@ impl DeliveryCoordinator {
     }
 }
 
+/// Current grant verification for an authenticated completed carry reader. It
+/// produces no source/assignment/model capability and never selects a budget.
+pub(super) fn verify_retained_parent_grants(
+    reference: &ParentReassemblyReference,
+    receipts: &[Receipt],
+    current: &[VerifiedRetryGrant],
+) -> Result<()> {
+    let (_, actual) = grant_lineage::capture_for_subject(
+        &reference.phase,
+        &reference.worker_work,
+        reference.workspace,
+        reference.runtime,
+        receipts,
+        current,
+    )?;
+    if actual != reference.grants {
+        return Err(blocked("retained parent native grant ancestry changed"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "delivery_parent_grant_tests.rs"]
 mod grant_tests;

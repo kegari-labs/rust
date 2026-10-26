@@ -9,6 +9,23 @@ pub(super) fn capture(
     receipts: &[Receipt],
     current: &[VerifiedRetryGrant],
 ) -> Result<(Vec<VerifiedRetryGrant>, Vec<ParentGrantReference>)> {
+    capture_for_subject(
+        phase,
+        authority.work(),
+        authority.workspace_id(),
+        runtime,
+        receipts,
+        current,
+    )
+}
+pub(super) fn capture_for_subject(
+    phase: &PhaseKey,
+    work: &WorkIdentity,
+    workspace: Uuid,
+    runtime: Uuid,
+    receipts: &[Receipt],
+    current: &[VerifiedRetryGrant],
+) -> Result<(Vec<VerifiedRetryGrant>, Vec<ParentGrantReference>)> {
     let mut selected = Vec::new();
     let mut cursor = phase.clone();
     let mut seen = BTreeSet::new();
@@ -25,9 +42,9 @@ pub(super) fn capture(
         };
         crate::runtime_workflow::require_current_grant(grant, current)?;
         if grant.phase_key() != cursor
-            || grant.work() != authority.work()
+            || grant.work() != work
             || grant.record().runtime_id != runtime
-            || grant.record().workspace_id != authority.workspace_id()
+            || grant.record().workspace_id != workspace
             || current
                 .iter()
                 .filter(|g| g.phase() == grant.phase())
@@ -42,7 +59,7 @@ pub(super) fn capture(
         cursor = grant.phase().clone();
     }
     if current.iter().any(|g| {
-        g.work() == authority.work()
+        g.work() == work
             && g.phase().work == phase.work
             && g.phase().generation == phase.generation
             && g.phase().phase == phase.phase

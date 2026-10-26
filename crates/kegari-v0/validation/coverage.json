@@ -2185,8 +2185,24 @@
       "line": 525,
       "sha256": "0d92b8450ecc3bca366c200fb3909161972e46bd3ad82af946de2df3718f4a70",
       "excerpt": "The operator explicitly permits acceptance to carry for an unchanged slice patch after fresh integrated validation. This exception MUST be narrow and observable:",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "src/delivery_carried_acceptance.rs",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:9.2:3de3818887a1",
@@ -2194,8 +2210,24 @@
       "line": 527,
       "sha256": "3de3818887a1a3f318c3b3f3d4234b4c5d309cb3bc96a06f9cdcb92200776515",
       "excerpt": "- The parent definition, correction generation, required-child scope/satisfaction, selected implementation deltas, intended behavior and authority are unchanged. Fresh test/evidenc",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "src/delivery_carried_acceptance.rs",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:9.2:930a6f5e1a24",
@@ -2203,8 +2235,24 @@
       "line": 533,
       "sha256": "930a6f5e1a243650b778875d2d50ae6dff97888da85d20a2d4ae55693df2cee2",
       "excerpt": "Record a `carried_acceptance` link from the original human-reviewed token to the new candidate/evidence token with the unchanged-patch proof and new validation results. Preserve wh",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "src/delivery_carried_acceptance.rs",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:9.2:68e071d37f65",
@@ -2212,8 +2260,24 @@
       "line": 535,
       "sha256": "68e071d37f65cea64797a6be7bd773546b5b2c89c3cf64f1f2f7017c44399bda",
       "excerpt": "Before a release command the CLI displays the original acceptance and current validated candidate/lineage. The release token names the current candidate, not a stale token silently",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "src/delivery_carried_acceptance.rs",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:9.3:da5d4e478c8f",
@@ -3621,8 +3685,24 @@
       "line": 801,
       "sha256": "704c26f598e059402e5ce162575c2365bdfa9bb423d28d16d6da4a294d75bfb0",
       "excerpt": "| V0-T17 | Production changes after acceptance: identical ordered patch bytes cleanly applied plus fresh integrated/production validation permits recorded carry lineage. Changed in",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "src/delivery_carried_acceptance.rs",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "clause:12.2:914a8fbff466",
@@ -5571,8 +5651,24 @@
     },
     {
       "id": "V0-T17",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "class": "implementation",
+          "reference": "src/delivery_carried_acceptance.rs",
+          "status": "partial"
+        },
+        {
+          "class": "deterministic",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "targeted_pass"
+        },
+        {
+          "class": "integration",
+          "reference": "validation/LOCAL-CARRIED-ACCEPTANCE.md",
+          "status": "not_run"
+        }
+      ]
     },
     {
       "id": "V0-T18",

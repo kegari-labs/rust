@@ -252,6 +252,17 @@ impl DeliveryCoordinator {
         predecessor: &crate::runtime_delivery::KnownPredecessorBaseline,
         historical: bool,
     ) -> Result<Vec<crate::git::VerifiedProductionIntegration>> {
+        Ok(self
+            .read_retained_integration_inventory(observation, predecessor, historical, false)?
+            .proofs)
+    }
+    fn read_retained_integration_inventory(
+        &self,
+        observation: &DeliveryObservation,
+        predecessor: &crate::runtime_delivery::KnownPredecessorBaseline,
+        historical: bool,
+        retain_history: bool,
+    ) -> Result<RetainedIntegrationInventory> {
         self.current(observation, &[DeliveryPhase::Recovery])?;
         predecessor.revalidate()?;
         let declared = predecessor
@@ -268,8 +279,12 @@ impl DeliveryCoordinator {
             &self.key,
             self.github()?,
             &contracts,
-        )?;
+        )?
+        .into_iter()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
         let mut result = Vec::new();
+        let mut history = BTreeMap::new();
         for (origin, effect) in predecessor.integration_sources() {
             let Some(crate::release::ObservedEffect::Merge {
                 repository,
@@ -337,11 +352,18 @@ impl DeliveryCoordinator {
                     "retained historical integration differs from original parent evidence",
                 ));
             }
+            if retain_history {
+                let retained = source.retain_read_history(self.host.clone(), self.key.clone())?;
+                history.insert(retained.digest()?, retained);
+            }
             result.push(proof);
         }
         predecessor.revalidate()?;
         self.current(observation, &[DeliveryPhase::Recovery])?;
-        unique_integrations(result)
+        Ok(RetainedIntegrationInventory {
+            proofs: unique_integrations(result)?,
+            history: history.into_values().collect(),
+        })
     }
     pub async fn acquire_release_objects(
         &self,
@@ -390,3 +412,12 @@ fn unique_integrations(
     }
     Ok(result)
 }
+
+struct RetainedIntegrationInventory {
+    proofs: Vec<crate::git::VerifiedProductionIntegration>,
+    history: Vec<crate::remote_objects::RetainedObjectReadHistory>,
+}
+
+#[path = "delivery_carry_integrations.rs"]
+mod carry_integrations;
+pub(crate) use carry_integrations::RetainedCarryIntegrations;

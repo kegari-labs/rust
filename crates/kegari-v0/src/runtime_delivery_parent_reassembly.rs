@@ -444,7 +444,7 @@ impl RuntimeDelivery {
 }
 
 impl RuntimeDelivery {
-    pub(super) fn parent_grant_observer(&self) -> ParentGrantObserver {
+    pub(in crate::runtime_delivery) fn parent_grant_observer(&self) -> ParentGrantObserver {
         let runtime = self.runtime.clone();
         Arc::new(move |work| {
             let config = runtime.configuration.snapshot()?;
