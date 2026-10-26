@@ -4,7 +4,10 @@ use kegari_v0::{
     error::Result,
     platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe},
     process_group::{OwnedGroup, Termination},
-    process_records::{ProcessJournal, RecoveryState, SpawnBinding},
+    process_records::{
+        CheckBundleMember, CheckMemberKind, ProcessJournal, ProcessRecord, RecoveryState,
+        SpawnBinding,
+    },
     storage::PrivateDir,
 };
 use std::{
@@ -85,6 +88,7 @@ fn setup() -> (
             owner_generation: 1,
         }),
         control_owner: None,
+        check_bundle: None,
         work_key: bytes_digest(b"canonical work"),
         scope_digest: bytes_digest(b"exact scope"),
         cwd: root,
@@ -116,6 +120,203 @@ fn reap_evidence(
         }
         assert!(Instant::now() < deadline, "owned fixture did not exit");
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn member_binding(mut binding: SpawnBinding) -> SpawnBinding {
+    binding.kind = "repository_command".into();
+    binding.check_bundle = Some(CheckBundleMember {
+        bundle_effect: Uuid::new_v4(),
+        plan_digest: bytes_digest(b"synthetic declared check plan, not an admitted capability"),
+        ordinal: 0,
+        kind: CheckMemberKind::Service,
+        service: Some("9database.v1".into()),
+    });
+    binding
+}
+fn records_for(binding: &SpawnBinding) -> (PrivateDir, String) {
+    (
+        PrivateDir::open(
+            &binding
+                .cwd
+                .join("processes")
+                .join(binding.operation_id.to_string()),
+        )
+        .unwrap(),
+        format!("{}.json", binding.effect_id),
+    )
+}
+
+#[test]
+fn schema_three_members_retain_starting_ancestry_without_launch_or_exit_authority() {
+    // Real protected journal operations with explicitly synthetic declaration
+    // data. No child is spawned and no Control attempt or exit proof is minted.
+    for (kind, ordinal, service) in [
+        (CheckMemberKind::Service, 0, Some("9database.v1".into())),
+        (CheckMemberKind::Readiness, 1, Some("9database.v1".into())),
+        (CheckMemberKind::Check, 2, None),
+    ] {
+        let (_temp, journal, _probe, binding) = setup();
+        let mut binding = member_binding(binding);
+        let member = binding.check_bundle.as_mut().unwrap();
+        member.kind = kind;
+        member.ordinal = ordinal;
+        member.service = service;
+        let guard = journal.begin(binding.clone()).unwrap();
+        let (records, name) = records_for(&binding);
+        let record: ProcessRecord = records.read(&name).unwrap();
+        assert_eq!(record.schema_version, 3);
+        assert_eq!(record.binding, binding);
+        assert_eq!(
+            serde_json::to_value(&record).unwrap()["state"],
+            serde_json::json!({"state":"starting"})
+        );
+        let bytes = std::fs::read(records.path().join(&name)).unwrap();
+        let rows = journal.observe(binding.operation_id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, RecoveryState::GuardHeld);
+        assert_eq!(rows[0].binding.check_bundle, binding.check_bundle);
+        assert!(rows[0].process.is_none());
+        assert!(!rows[0].owned_group_exited);
+        assert!(!rows[0].all_descendants_exited);
+        drop(guard);
+        let rows = journal.observe(binding.operation_id).unwrap();
+        assert_eq!(rows[0].state, RecoveryState::StartingUnknown);
+        assert!(!rows[0].owned_group_exited);
+        assert!(!rows[0].all_descendants_exited);
+        assert_eq!(
+            journal.begin(binding.clone()).err().unwrap().code,
+            "operation_uncertain"
+        );
+        assert_eq!(std::fs::read(records.path().join(&name)).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn schema_three_reader_refuses_downgrades_missing_members_and_invalid_member_authority() {
+    let (_temp, journal, probe, binding) = setup();
+    let binding = member_binding(binding);
+    drop(journal.begin(binding.clone()).unwrap());
+    let (records, name) = records_for(&binding);
+    let original: serde_json::Value = records.read(&name).unwrap();
+    let host_authority = serde_json::json!({
+        "runtime_id":binding.lease.as_ref().unwrap().runtime_id,
+        "owner_generation":1,"process":probe.host,"operation_id":binding.operation_id,
+        "work_key":binding.work_key,"scope_digest":binding.scope_digest,
+        "config_revision":bytes_digest(b"synthetic host metadata")
+    });
+    for (pointer, value) in [
+        ("/schema_version", serde_json::json!(1)),
+        ("/schema_version", serde_json::json!(2)),
+        ("/binding/check_bundle", serde_json::Value::Null),
+        ("/binding/check_bundle/kind", serde_json::json!("unknown")),
+        ("/binding/check_bundle/kind", serde_json::json!("check")),
+        ("/binding/check_bundle/service", serde_json::Value::Null),
+        (
+            "/binding/check_bundle/service",
+            serde_json::json!("-invalid"),
+        ),
+        (
+            "/binding/check_bundle/service",
+            serde_json::json!("../escape"),
+        ),
+        (
+            "/binding/check_bundle/service",
+            serde_json::json!("x".repeat(65)),
+        ),
+        ("/binding/check_bundle/ordinal", serde_json::json!(17)),
+        (
+            "/binding/check_bundle/bundle_effect",
+            serde_json::json!(Uuid::nil()),
+        ),
+        (
+            "/binding/check_bundle/bundle_effect",
+            serde_json::json!(binding.effect_id),
+        ),
+        (
+            "/binding/check_bundle/plan_digest",
+            serde_json::json!("not-a-digest"),
+        ),
+        ("/binding/kind", serde_json::json!("metadata")),
+        ("/binding/lease", serde_json::Value::Null),
+    ] {
+        let mut changed = original.clone();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        records.write(&name, &changed).unwrap();
+        let written = std::fs::read(records.path().join(&name)).unwrap();
+        assert!(
+            journal.observe(binding.operation_id).is_err(),
+            "accepted {pointer}"
+        );
+        assert_eq!(std::fs::read(records.path().join(&name)).unwrap(), written);
+    }
+    let mut removed = original.clone();
+    removed["binding"]
+        .as_object_mut()
+        .unwrap()
+        .remove("check_bundle");
+    records.write(&name, &removed).unwrap();
+    assert!(journal.observe(binding.operation_id).is_err());
+    let mut host_owned = original.clone();
+    host_owned["binding"]["lease"] = serde_json::Value::Null;
+    host_owned["binding"]["control_owner"] = host_authority;
+    records.write(&name, &host_owned).unwrap();
+    assert!(journal.observe(binding.operation_id).is_err());
+    records.write(&name, &original).unwrap();
+    let restored = journal.observe(binding.operation_id).unwrap();
+    assert_eq!(restored[0].state, RecoveryState::StartingUnknown);
+    assert!(!restored[0].owned_group_exited);
+}
+
+#[test]
+fn invalid_member_declarations_fail_before_creating_journal_records() {
+    let (_temp, journal, _probe, binding) = setup();
+    let valid = member_binding(binding);
+    for fault in [
+        "wrong_kind",
+        "same_effect",
+        "empty_name",
+        "wrong_member_kind",
+        "no_lease",
+    ] {
+        let mut changed = valid.clone();
+        match fault {
+            "wrong_kind" => changed.kind = "metadata".into(),
+            "same_effect" => {
+                changed.check_bundle.as_mut().unwrap().bundle_effect = changed.effect_id
+            }
+            "empty_name" => changed.check_bundle.as_mut().unwrap().service = Some(String::new()),
+            "wrong_member_kind" => {
+                changed.check_bundle.as_mut().unwrap().kind = CheckMemberKind::Check
+            }
+            "no_lease" => changed.lease = None,
+            _ => unreachable!(),
+        }
+        assert!(journal.begin(changed).is_err(), "accepted {fault}");
+        assert!(journal.operations().unwrap().is_empty(), "wrote {fault}");
+    }
+}
+
+#[test]
+fn ordinary_starting_schema_one_and_two_roundtrip_without_member_fields_or_promotion() {
+    let (_temp, journal, _probe, binding) = setup();
+    drop(journal.begin(binding.clone()).unwrap());
+    let (records, name) = records_for(&binding);
+    let mut original: serde_json::Value = records.read(&name).unwrap();
+    assert_eq!(original["schema_version"], 2);
+    assert!(original["binding"].get("check_bundle").is_none());
+    for schema in [1, 2] {
+        original["schema_version"] = schema.into();
+        let typed: ProcessRecord = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(serde_json::to_value(typed).unwrap(), original);
+        records.write(&name, &original).unwrap();
+        let bytes = std::fs::read(records.path().join(&name)).unwrap();
+        let rows = journal.observe(binding.operation_id).unwrap();
+        assert_eq!(rows[0].state, RecoveryState::StartingUnknown);
+        assert!(rows[0].binding.check_bundle.is_none());
+        assert!(!rows[0].owned_group_exited);
+        assert!(!rows[0].all_descendants_exited);
+        assert_eq!(std::fs::read(records.path().join(&name)).unwrap(), bytes);
     }
 }
 

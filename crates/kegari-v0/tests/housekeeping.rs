@@ -48,25 +48,32 @@ fn git_path() -> PathBuf {
         .unwrap()
 }
 fn git(path: &Path, args: &[&str]) -> String {
-    let out = Command::new(git_path())
-        .current_dir(path)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
-        .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
+    let out = kegari_v0::process_group::OwnedGroup::spawn_std(
+        Command::new(git_path())
+            .current_dir(path)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
+            .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .expect("spawn owned disposable fixture")
+    .0
+    .wait_with_output()
+    .unwrap();
     assert!(
         out.status.success(),
         "{}",
@@ -1505,16 +1512,19 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
     let receipts = serde_json::to_value(store.all().unwrap()).unwrap();
     for fault in [
         "old_process",
+        "pre_bundle_process",
         "unknown_process",
         "missing_process",
         "old_metadata",
         "alpha3_metadata",
         "missing_managed_policy",
+        "foreground_only_managed_policy",
         "unknown_managed_policy",
     ] {
         let mut info = serde_json::to_value(&f.info).unwrap();
         match fault {
             "old_process" => info["process_schema"] = 1.into(),
+            "pre_bundle_process" => info["process_schema"] = 2.into(),
             "unknown_process" => info["process_schema"] = 99.into(),
             "missing_process" => {
                 info.as_object_mut().unwrap().remove("process_schema");
@@ -1526,6 +1536,7 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
                     .remove("managed_execution_schema");
             }
             "unknown_managed_policy" => info["managed_execution_schema"] = 99.into(),
+            "foreground_only_managed_policy" => info["managed_execution_schema"] = 1.into(),
             _ => info["schema_version"] = 1.into(),
         }
         let binary = metadata_binary(&f.host.home.join(fault), &info);

@@ -1668,13 +1668,20 @@ async fn deployment_environment_is_resolved_by_canonical_id_and_same_name_recrea
 }
 
 fn fixture_git(path: &std::path::Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .current_dir(path)
-        .args(args)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .unwrap();
+    let output = kegari_v0::process_group::OwnedGroup::spawn_std(
+        std::process::Command::new("git")
+            .current_dir(path)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .expect("spawn owned disposable fixture")
+    .0
+    .wait_with_output()
+    .unwrap();
     assert!(
         output.status.success(),
         "{}",

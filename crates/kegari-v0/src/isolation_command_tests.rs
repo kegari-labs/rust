@@ -98,6 +98,7 @@ impl Fixture {
                 owner_generation: 1,
             }),
             control_owner: None,
+            check_bundle: None,
             work_key: bytes_digest(b"owned command component"),
             scope_digest: bytes_digest(b"owned command component scope"),
             cwd: root.clone(),
@@ -388,12 +389,14 @@ async fn eof_is_not_published_as_closure_before_both_actual_task_joins() {
             16,
             outputs.clone(),
             0,
+            None,
         )),
         stderr: Some(CommandOutputTasks::spawn(
             tokio::io::empty(),
             16,
             outputs.clone(),
             1,
+            None,
         )),
         outputs: outputs.clone(),
     };
@@ -468,8 +471,13 @@ async fn retained_exit_and_joined_collectors_survive_original_journal_write_fail
 async fn collector_guard_survives_spawn_and_latches_abort_before_first_poll() {
     let outputs = Arc::new(CommandOutputs::default());
     let reader_dropped = Arc::new(AtomicBool::new(false));
-    let task =
-        CommandOutputTasks::spawn(PendingRead(reader_dropped.clone()), 16, outputs.clone(), 0);
+    let task = CommandOutputTasks::spawn(
+        PendingRead(reader_dropped.clone()),
+        16,
+        outputs.clone(),
+        0,
+        None,
+    );
     // This current-thread test has not yielded since spawn. The whole collector
     // guard and actual reader remain in the spawned future, not the caller.
     assert!(!reader_dropped.load(Ordering::SeqCst));
@@ -486,4 +494,172 @@ async fn collector_guard_survives_spawn_and_latches_abort_before_first_poll() {
     assert!(outputs.uncertain.load(Ordering::SeqCst));
     assert!(!outputs.eof[0].load(Ordering::SeqCst));
     assert!(!outputs.closed());
+}
+
+async fn wait_fixture_marker(fixture: &Fixture, name: &str) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !fixture.root.join(name).is_file() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("owned fixture did not reach its explicit ready marker");
+}
+
+#[tokio::test]
+async fn service_term_shutdown_retains_clean_original_result_and_journal() {
+    let fixture = Fixture::new();
+    let (process, stdout, stderr, stdin) = fixture.spawn(
+        "SECONDS=0; trap 'printf stopped; exit 0' TERM; printf ready > ready; while [ \"$SECONDS\" -lt 12 ]; do read -t 1 value || :; done; exit 23",
+    );
+    let command = OwnedCommand::supervise(
+        fixture.run(Duration::from_secs(15)),
+        process.with_service(true),
+        stdout,
+        stderr,
+        1024,
+    );
+    let cancellation = command.cancellation();
+    wait_fixture_marker(&fixture, "ready").await;
+    assert!(cancellation.service_observation().unwrap().leader_running);
+    cancellation.cancel().unwrap();
+    let original_stop = cancellation.process.lock().unwrap().cancelled_at;
+    let result = tokio::time::timeout(Duration::from_secs(12), command.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.termination_signal, None);
+    assert_eq!(result.stdout, "stopped");
+    assert!(!result.timed_out);
+    cancellation.cancel().unwrap();
+    assert_eq!(
+        cancellation.process.lock().unwrap().cancelled_at,
+        original_stop
+    );
+    assert_eq!(
+        cancellation.service_observation().unwrap(),
+        ServiceObservation {
+            leader_running: false,
+            stop_requested: true,
+            kill_escalated: false,
+        }
+    );
+    assert!(cancellation.exited().unwrap());
+    fixture.assert_retired(&cancellation);
+    drop(stdin);
+}
+
+#[tokio::test]
+async fn service_ignoring_term_retains_actual_kill_and_original_stop_clock() {
+    let fixture = Fixture::new();
+    let (process, stdout, stderr, stdin) =
+        fixture.spawn("SECONDS=0; trap '' TERM; printf ready > ready; while [ \"$SECONDS\" -lt 12 ]; do read -t 1 value || :; done; exit 23");
+    let command = OwnedCommand::supervise(
+        fixture.run(Duration::from_secs(15)),
+        process.with_service(true),
+        stdout,
+        stderr,
+        1024,
+    );
+    let cancellation = command.cancellation();
+    wait_fixture_marker(&fixture, "ready").await;
+    cancellation.cancel().unwrap();
+    let original_stop = cancellation.process.lock().unwrap().cancelled_at.unwrap();
+    cancellation.cancel().unwrap();
+    assert_eq!(
+        cancellation.process.lock().unwrap().cancelled_at,
+        Some(original_stop)
+    );
+    let result = tokio::time::timeout(Duration::from_secs(12), command.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(original_stop.elapsed() >= COMMAND_EXIT_GRACE);
+    assert_eq!(result.exit_code, None);
+    assert_eq!(result.termination_signal, Some(libc::SIGKILL));
+    assert!(cancellation.service_observation().unwrap().kill_escalated);
+    assert!(cancellation.exited().unwrap());
+    fixture.assert_retired(&cancellation);
+    drop(stdin);
+}
+
+#[tokio::test]
+async fn terminal_service_leader_cannot_hide_forced_group_member_cleanup() {
+    let fixture = Fixture::new();
+    let (process, stdout, stderr, stdin) = fixture.spawn(
+        "(SECONDS=0; trap '' TERM; printf ready > child-ready; while [ \"$SECONDS\" -lt 12 ]; do :; done; exit 23) & SECONDS=0; trap 'exit 0' TERM; printf ready > ready; while [ \"$SECONDS\" -lt 12 ]; do read -t 1 value || :; done; exit 23",
+    );
+    let command = OwnedCommand::supervise(
+        fixture.run(Duration::from_secs(15)),
+        process.with_service(true),
+        stdout,
+        stderr,
+        1024,
+    );
+    let cancellation = command.cancellation();
+    wait_fixture_marker(&fixture, "ready").await;
+    wait_fixture_marker(&fixture, "child-ready").await;
+    cancellation.cancel().unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(12), command.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.exit_code, Some(0));
+    assert!(cancellation.service_observation().unwrap().kill_escalated);
+    assert!(!cancellation.service_observation().unwrap().leader_running);
+    assert!(cancellation.exited().unwrap());
+    fixture.assert_retired(&cancellation);
+    drop(stdin);
+}
+
+#[tokio::test]
+async fn bundle_output_allowance_is_shared_across_actual_stdout_and_stderr() {
+    let fixture = Fixture::new();
+    let (process, stdout, stderr, stdin) =
+        fixture.spawn("printf abcdefghij; printf klmnopqrst >&2");
+    drop(stdin);
+    let budget = Arc::new(CommandOutputBudget::new(7));
+    let command = OwnedCommand::supervise(
+        fixture.run(Duration::from_secs(3)),
+        process.with_output_budget(Some(budget.clone())),
+        stdout,
+        stderr,
+        1024,
+    );
+    let cancellation = command.cancellation();
+    let result = tokio::time::timeout(Duration::from_secs(8), command.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.stdout.len() + result.stderr.len(), 7);
+    assert_eq!(budget.remaining.load(Ordering::SeqCst), 0);
+    assert!(result.output_truncated);
+    assert!(cancellation.exited().unwrap());
+    fixture.assert_retired(&cancellation);
+}
+
+#[test]
+fn original_bundle_cutoff_is_not_renewed_by_preparation() {
+    let now = Instant::now();
+    let started = now - Duration::from_secs(1);
+    let deadline = now + Duration::from_secs(2);
+    assert_eq!(
+        remaining_bundle_timeout(Duration::from_secs(20), started, Some(deadline)).unwrap(),
+        deadline - started
+    );
+    assert_eq!(
+        remaining_bundle_timeout(Duration::from_secs(1), started, Some(deadline)).unwrap(),
+        Duration::from_secs(1)
+    );
+    assert_eq!(
+        remaining_bundle_timeout(Duration::from_secs(20), started, Some(started))
+            .unwrap_err()
+            .code,
+        "timeout"
+    );
+    assert_eq!(
+        remaining_bundle_timeout(Duration::from_secs(20), started, None).unwrap(),
+        Duration::from_secs(20)
+    );
 }

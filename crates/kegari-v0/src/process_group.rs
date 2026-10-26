@@ -18,6 +18,7 @@ pub struct OwnedGroup {
     ready_to_reap: bool,
     identity: uuid::Uuid,
     reaped: bool,
+    forced_kill: bool,
 }
 
 /// Evidence from reaping the exact owned child after observing its group clear.
@@ -27,6 +28,13 @@ pub struct OwnedGroupExit {
     identity: uuid::Uuid,
     pid: u32,
     status: std::process::ExitStatus,
+}
+fn spawn_error(context: &str, error: std::io::Error) -> Error {
+    if error.kind() == std::io::ErrorKind::TimedOut {
+        Error::new("timeout", "original process launch deadline expired")
+    } else {
+        Error::io(context, error)
+    }
 }
 impl OwnedGroupExit {
     pub fn status(&self) -> std::process::ExitStatus {
@@ -39,11 +47,17 @@ impl OwnedGroupExit {
 impl OwnedGroup {
     #[cfg(unix)]
     pub fn spawn_std(command: &mut std::process::Command) -> Result<(std::process::Child, Self)> {
+        Self::spawn_std_before(command, None)
+    }
+    #[cfg(unix)]
+    pub(crate) fn spawn_std_before(
+        command: &mut std::process::Command,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(std::process::Child, Self)> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
-        let child = command
-            .spawn()
-            .map_err(|error| Error::io("spawn owned process group", error))?;
+        let child = crate::process_spawn::spawn_std(command, deadline)
+            .map_err(|error| spawn_error("spawn owned process group", error))?;
         let group = Self::created(child.id());
         Ok((child, group))
     }
@@ -51,10 +65,16 @@ impl OwnedGroup {
     pub fn spawn_tokio(
         command: &mut tokio::process::Command,
     ) -> Result<(tokio::process::Child, Self)> {
+        Self::spawn_tokio_before(command, None)
+    }
+    #[cfg(unix)]
+    pub(crate) fn spawn_tokio_before(
+        command: &mut tokio::process::Command,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(tokio::process::Child, Self)> {
         command.process_group(0);
-        let child = command
-            .spawn()
-            .map_err(|error| Error::io("spawn owned async process group", error))?;
+        let child = crate::process_spawn::spawn_tokio(command, deadline)
+            .map_err(|error| spawn_error("spawn owned async process group", error))?;
         // A freshly spawned, never-waited Tokio Child necessarily has its ID.
         let group = Self::created(child.id().expect("new unreaped Tokio child has an ID"));
         Ok((child, group))
@@ -79,6 +99,7 @@ impl OwnedGroup {
             ready_to_reap: false,
             identity: uuid::Uuid::new_v4(),
             reaped: false,
+            forced_kill: false,
         }
     }
     fn from_spawn(pid: u32) -> Result<Self> {
@@ -91,6 +112,7 @@ impl OwnedGroup {
             ready_to_reap: false,
             identity: uuid::Uuid::new_v4(),
             reaped: false,
+            forced_kill: false,
         };
         // Also establish that the unreaped process is our actual child. WNOWAIT
         // does not consume a quick child's status during construction.
@@ -106,6 +128,19 @@ impl OwnedGroup {
             ));
         }
         Ok((self.identity, pid))
+    }
+    /// Observe this original unreaped leader without treating a terminal leader
+    /// with still-draining group members as a live service.
+    pub(crate) fn leader_running_tokio(&self, child: &tokio::process::Child) -> Result<bool> {
+        self.require_group_exit_observation()?;
+        let pid = child.id().ok_or_else(|| {
+            Error::new(
+                "ownership_conflict",
+                "owned service child was already reaped",
+            )
+        })?;
+        self.bind_child(pid)?;
+        Ok(!self.verify_live_group_or_terminal()?)
     }
     pub fn try_reap_std(
         &mut self,
@@ -318,8 +353,11 @@ impl OwnedGroup {
         }
         self.signal(signal, terminal)
     }
+    pub(crate) fn forced_kill_requested(&self) -> bool {
+        self.forced_kill
+    }
     #[cfg(unix)]
-    fn signal(&self, signal: Termination, terminal: bool) -> Result<()> {
+    fn signal(&mut self, signal: Termination, terminal: bool) -> Result<()> {
         // Darwin cannot getpgid a zombie. WNOWAIT still reserves the PID and
         // its creation-bound group identity until the Child owner reaps it.
         let mut terminal = terminal;
@@ -330,6 +368,11 @@ impl OwnedGroup {
             Termination::Terminate => libc::SIGTERM,
             Termination::Kill => libc::SIGKILL,
         };
+        // Retain the actual attempted group signal even if its syscall result
+        // becomes uncertain; a clean leader status cannot erase forced cleanup.
+        if signal == libc::SIGKILL {
+            self.forced_kill = true;
+        }
         let result = unsafe { libc::kill(-self.pid, signal) };
         if result != 0 {
             let error = std::io::Error::last_os_error();
@@ -363,7 +406,7 @@ impl OwnedGroup {
         live_or_changed_members(self.pid, &mut MacGroupInventory(self.pid))
     }
     #[cfg(not(unix))]
-    fn signal(&self, _: Termination, _: bool) -> Result<()> {
+    fn signal(&mut self, _: Termination, _: bool) -> Result<()> {
         Err(Error::new(
             "prerequisite",
             "owned groups require the supported Unix host",

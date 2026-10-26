@@ -1,7 +1,7 @@
 //! Host-owned managed foreground declarations bound to observed tool identities.
 //! A declaration describes the intended boundary; it is not native qualification.
 use super::{ExecutionRole, IsolationPlan, PathGrant, canonical_target, overlap, safe_absolute};
-use crate::config::{ManagedExecution, ManagedGeneratedExecutables};
+use crate::config::{ManagedExecution, ManagedGeneratedExecutables, ManagedLifecycle};
 use crate::digest::canonical_digest;
 use crate::error::{Error, Result};
 use crate::platform::BinaryIdentity;
@@ -65,7 +65,10 @@ impl BoundManagedExecution {
             });
         }
         Ok(Self {
-            schema_version: 1,
+            schema_version: match policy.lifecycle {
+                ManagedLifecycle::ForegroundV1 => 1,
+                ManagedLifecycle::CheckBundleV1 => 2,
+            },
             policy: policy.clone(),
             policy_digest: canonical_digest(1, policy)?,
             tools,
@@ -74,6 +77,9 @@ impl BoundManagedExecution {
     }
     pub fn policy_digest(&self) -> &str {
         &self.policy_digest
+    }
+    pub fn supports_check_bundles(&self) -> bool {
+        self.schema_version == 2 && self.policy.lifecycle == ManagedLifecycle::CheckBundleV1
     }
     pub fn tools(&self) -> &[BinaryIdentity] {
         &self.tools
@@ -85,7 +91,7 @@ impl BoundManagedExecution {
         &self.read_roots
     }
     pub fn revalidate(&self) -> Result<()> {
-        if self.schema_version != 1 || Self::resolve(&self.policy)? != *self {
+        if !matches!(self.schema_version, 1 | 2) || Self::resolve(&self.policy)? != *self {
             return Err(Error::new(
                 "identity_mismatch",
                 "managed execution inventory changed after preparation",
@@ -244,6 +250,62 @@ mod tests {
                 sdk,
             }
         }
+    }
+    #[test]
+    fn check_bundle_policy_is_explicit_and_cannot_be_schema_downgraded() {
+        let f = Fixture::new();
+        let foreground = BoundManagedExecution::resolve(&f.policy).unwrap();
+        assert!(!foreground.supports_check_bundles());
+        assert_eq!(
+            serde_json::to_value(&foreground).unwrap()["schema_version"],
+            1
+        );
+        let mut policy = f.policy.clone();
+        policy.lifecycle = ManagedLifecycle::CheckBundleV1;
+        let bundle = BoundManagedExecution::resolve(&policy).unwrap();
+        assert!(bundle.supports_check_bundles());
+        assert_ne!(bundle.policy_digest(), foreground.policy_digest());
+        bundle.revalidate().unwrap();
+        let mut record = serde_json::to_value(bundle).unwrap();
+        assert_eq!(record["schema_version"], 2);
+        record["schema_version"] = 1.into();
+        let changed: BoundManagedExecution = serde_json::from_value(record).unwrap();
+        assert!(changed.revalidate().is_err());
+    }
+    #[test]
+    fn executable_mapping_excludes_arbitrary_read_and_source_roots() {
+        let mut f = Fixture::new();
+        let profile = f.plan.validate().unwrap().seatbelt_profile().unwrap();
+        assert!(profile.contains(&format!(
+            "(allow file-read* file-map-executable (literal \"{}\"))",
+            f.tool.display()
+        )));
+        for path in [&f.sdk, &f.plan.repository, &f.plan.scratch] {
+            assert!(!profile.lines().any(|line| {
+                line.starts_with("(allow")
+                    && line.contains("file-map-executable")
+                    && line.contains(&format!("\"{}\"", path.display()))
+            }));
+        }
+        assert!(
+            profile.contains(
+                "(allow file-read* file-map-executable (subpath \"/System/Cryptexes/OS\"))"
+            )
+        );
+        assert!(profile.contains(&format!(
+            "(deny file-read* file-write* file-map-executable process-exec (subpath \"{}\"))",
+            f.plan.forbidden_roots[0].display()
+        )));
+        assert!(!profile.contains("(import"));
+        assert!(!profile.contains("(allow network"));
+        assert!(!profile.contains("(allow mach"));
+        f.policy.generated_executables = Some(ManagedGeneratedExecutables::ScratchBuildV1);
+        f.plan.managed_execution = Some(BoundManagedExecution::resolve(&f.policy).unwrap());
+        let generated = f.plan.validate().unwrap().seatbelt_profile().unwrap();
+        assert!(generated.contains(&format!(
+            "(allow file-map-executable (subpath \"{}\"))",
+            f.plan.scratch.join("build").display()
+        )));
     }
     #[test]
     fn managed_inventory_rejects_changed_bytes_aliases_and_substituted_records() {

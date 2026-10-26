@@ -5,25 +5,32 @@ use crate::isolation::{IsolationPlan, PathGrant};
 use std::{fs, os::unix::fs::PermissionsExt, process::Command, sync::Mutex};
 
 fn run(binary: &Path, root: &Path, args: &[&str]) {
-    let result = Command::new(binary)
-        .current_dir(root)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
-        .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgSign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
+    let result = kegari_v0::process_group::OwnedGroup::spawn_std(
+        Command::new(binary)
+            .current_dir(root)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
+            .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgSign=false",
+            ])
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .expect("spawn owned disposable fixture")
+    .0
+    .wait_with_output()
+    .unwrap();
     assert!(
         result.status.success(),
         "{}",
@@ -69,6 +76,7 @@ impl CommandBoundary for Boundary {
             cwd: isolation.plan().cwd.clone(),
             isolation_digest: isolation.digest().into(),
             exit_code: Some(0),
+            termination_signal: None,
             timed_out: false,
             stdout: String::new(),
             stderr: String::new(),

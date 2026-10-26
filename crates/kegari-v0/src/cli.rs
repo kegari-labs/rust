@@ -1300,15 +1300,23 @@ pub async fn open_client_browser(url: &str) -> Result<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
-    let result = tokio::time::timeout(std::time::Duration::from_secs(10), command.status())
-        .await
-        .map_err(|_| Error::new("timeout", "client browser launch timed out"))?
-        .map_err(|_| {
+    let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let result = tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), async {
+        let mut child = crate::process_spawn::spawn_tokio(&mut command, Some(cutoff))?;
+        child.wait().await
+    })
+    .await
+    .map_err(|_| Error::new("timeout", "client browser launch timed out"))?
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::TimedOut {
+            Error::new("timeout", "client browser launch timed out")
+        } else {
             Error::new(
                 "target_unavailable",
                 "client browser launcher is unavailable",
             )
-        })?;
+        }
+    })?;
     if !result.success() {
         return Err(Error::new(
             "target_unavailable",

@@ -3,6 +3,8 @@
 #![allow(dead_code)] // Reused fixture also supports the full integration target.
 
 include!("../tests/support/worker_fixture.rs");
+#[path = "worker_bundle_tests.rs"]
+mod bundle_tests;
 
 use super::super::{
     BrokerCapture, BrokerObservationState, BrokerReceiptState, CaptureBudget, OriginalRequest,

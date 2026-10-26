@@ -1623,6 +1623,7 @@ impl Git {
             cwd: cwd.to_owned(),
             isolation_digest: String::new(),
             exit_code: output.status.code(),
+            termination_signal: std::os::unix::process::ExitStatusExt::signal(&output.status),
             timed_out: false,
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -3285,6 +3286,7 @@ impl GitOperationState {
                         effect_id: Uuid::new_v4(),
                         lease: Some(permit.lease.clone()),
                         control_owner: None,
+                        check_bundle: None,
                         work_key: permit.work_key.clone(),
                         scope_digest: permit.scope_digest.clone(),
                         cwd,
@@ -3321,7 +3323,10 @@ impl GitOperationState {
             // The start gate and durable guard preparation may consume the
             // remaining budget. Never launch after either deadline has expired.
             check_current()?;
-            let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_std(&mut command)?;
+            let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_std_before(
+                &mut command,
+                Some(command_deadline.min(self.deadline)),
+            )?;
             let capture_error = guard
                 .as_mut()
                 .and_then(|guard| guard.spawned_std(&child, &group).err());

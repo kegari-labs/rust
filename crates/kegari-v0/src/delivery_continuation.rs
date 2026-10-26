@@ -1954,6 +1954,7 @@ mod tests {
         CheckExecutionRecord {
             schema_version: 1,
             correction: None,
+            bundle: None,
             binding: ExecutionBinding {
                 runtime_id: Uuid::from_u128(1),
                 operation_id: Uuid::from_u128(7),
@@ -1984,6 +1985,7 @@ mod tests {
                 cwd: PathBuf::from("/fixture"),
                 isolation_digest: isolation,
                 exit_code: Some(if success { 0 } else { 1 }),
+                termination_signal: None,
                 timed_out: false,
                 stdout: String::new(),
                 stderr: String::new(),

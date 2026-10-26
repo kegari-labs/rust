@@ -19,25 +19,32 @@ fn git_binary() -> PathBuf {
 }
 
 fn git_run(path: &Path, args: &[&str]) -> String {
-    let output = Command::new(git_binary())
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
-        .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
-        .current_dir(path)
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgSign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
+    let output = kegari_v0::process_group::OwnedGroup::spawn_std(
+        Command::new(git_binary())
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
+            .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
+            .current_dir(path)
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgSign=false",
+            ])
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .expect("spawn owned disposable fixture")
+    .0
+    .wait_with_output()
+    .unwrap();
     assert!(
         output.status.success(),
         "git {args:?}: {}",

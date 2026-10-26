@@ -62,11 +62,11 @@ the same manager after taking the canonical control lock and remains STOPPED.
 ## Managed repository execution policy
 
 A workspace may declare `managed_execution` separately from its Codex model
-`profiles`. Its only lifecycle value is `foreground_v1`: supported foreground
-tools must finish with their managed work. This declaration neither prevents
-detachment nor registers background services. Omission preserves the previous
-configuration encoding and missing-profile refusal; there is no `enabled` or
-`qualified` assertion.
+`profiles`. `foreground_v1` describes foreground tools that finish with their
+managed work. `check_bundle_v1` additionally opts into finite services declared
+inside a configured validation check. Neither setting prevents detachment or
+qualifies arbitrary tool invocations. Omission preserves the previous encoding
+and missing-profile refusal; there is no `enabled` or `qualified` assertion.
 
 The required `executables` array has 1–256 entries, each with a `path` and an exact
 SHA-256 `digest`. Declare the complete transitive tool inventory, including
@@ -88,6 +88,32 @@ workloads still need their actual compiler/linker inventory, required SDK reads,
 supported scratch output routing and native qualification. Toolchain reads do
 not become model-visible source grants, and independent role, source, network
 and credential restrictions remain in force.
+
+A local or integrated workflow check may have an optional `services` array.
+Each service has a unique stable `name`, literal `argv`, a `readiness` object
+with literal `argv` and `timeout_ms`, and `max_lifetime_ms`. At most eight services
+are allowed; each requires one finite readiness invocation before the main
+check. Readiness may poll within its configured bound. Services share the check's
+cwd, declared grants, aggregate deadline and captured-output budget. This does
+not grant environment overrides, sockets or network access; endpoint services
+remain unsupported until their scoped network boundary is implemented and qualified.
+
+Control retains the original validation effect throughout service start, readiness,
+check and shutdown. Each attempted member has an immutable order and distinct
+process identity. Service leaders must still be running after readiness and at
+check completion. Shutdown requests TERM, escalates after five seconds if needed,
+and joins every member before source and artifact snapshots. A nonzero service
+exit, timeout, truncation or KILL escalation prevents check success. Graceful
+services must handle TERM and exit zero. A service failure does not trigger code
+repair; a genuine nonzero main-check result may do so after clean service closure.
+These are finite check-owned services, not reusable daemons or independently
+installed host services. Supported native service qualification remains incomplete.
+
+Managed foreground records retain schema 1; bound check-bundle policies use
+schema 2. Service-member process rows use schema 3, while ordinary process rows
+remain schema 2 and legacy rows remain readable without promotion. Service-bearing
+check records use schema 3; checks without services retain schemas 1/2. Handover
+metadata remains version 3 and now requires process schema 3 and managed schema 2.
 
 Any policy addition, change or removal creates a workspace authority fence. A
 successful replacement requires PAUSED or STOPPED, drained work and no unresolved

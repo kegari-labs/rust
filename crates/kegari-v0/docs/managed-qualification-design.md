@@ -74,6 +74,35 @@ those actions and must never launch native qualification as a side effect.
 
 ## Next coherent implementation package
 
+The alpha.6 work implements finite check-owned service lifecycle alongside the
+foreground supervisor; native qualification remains incomplete. The next package
+is one closed macOS Rust/Cargo contract, not a general operator-profile issuer:
+
+| Contract element | Required implementation and evidence |
+| --- | --- |
+| Tool inventory | Bind the supported target/OS, exact Cargo/rustc/rustdoc identities and the compiler, linker and archive tools required by the locked dependencies. Add clippy/rustfmt only with their own supported cases. Avoid ambient rustup resolution. |
+| Offline inputs | Bind Cargo.lock and a complete dependency snapshot; prepare credential-free private Cargo configuration/cache, HOME and temporary state. Explicitly select compiler, linker, SDK/sysroot and dependency locations. |
+| Resource identity | Bind bounded content manifests for toolchain libraries, compiler resources and SDK, rather than only directory paths/types. Distinguish ordinary readable inputs from specifically permitted executable mappings. |
+| Generated executables | Keep build scripts, proc macros and generated test executables inside the authorized scratch/build root, with the original finite workload and resource bounds. |
+| Runtime matching | Match the configured inventory to the shipped contract during managed-policy resolution, retain the contract/resource digest through preparation and the worker contract, and revalidate at command preflight and cleanup. Unknown tools or changed resources remain blockers. |
+| Actual cases | Offline build/test, C dependency compilation/linking, build scripts/proc macros, generated tests and rustdoc; missing inputs, denied network/credentials/sibling paths, resource substitution, nonzero exit, timeout/cancellation, output limits and uncertain cleanup. Include an actual scoped Kegari build/test compatibility case. |
+
+Current implementation binds executable bytes but read roots only by path/type.
+Its command environment supplies PATH, HOME, TMPDIR, LANG and CARGO_TARGET_DIR;
+that is not yet a complete offline Rust toolchain environment. The repository's
+locked dependencies include `ring` and `cc`, so shell-only execution cannot
+establish compatibility. Do not grant executable mapping to every read root as a
+shortcut for supporting toolchain libraries.
+
+Implement the parser/matcher, resource binding, private offline preparation,
+environment/profile rendering and deterministic refusal cases first. Author the
+native cases against that production path, then request separate bounded approval.
+Neither these declarations nor the failed NQ-02A shell run establish a Rust pass.
+Preserve the existing managed-profile prerequisite until its actual evidence
+supports enabling the closed profile.
+
+The original sequencing remains:
+
 1. Finish actual owned-command completion and cancellation first: original child
    reap, collector completion and exact guard/journal closure, with uncertainty
    retained. Keep the current qualification prerequisite closed during this work.

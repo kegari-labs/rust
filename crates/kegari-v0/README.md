@@ -23,11 +23,13 @@ are recorded in [PROGRESS.md](PROGRESS.md). A successful build or fixture test
 does not establish native isolation, live provider compatibility or human review.
 Native tests remain explicitly ignored in ordinary suite runs. The separately
 approved [NQ-01A identity check](validation/NATIVE-IDENTITY.md) passed once;
-owned-child signalling and the remaining native qualification are still pending.
+[NQ-02B foreground recheck](validation/NATIVE-MANAGED-RECHECK.md) failed in loader
+bootstrap. Owned-child signalling and the remaining native qualification are still
+pending.
 
 ## Versioned prerelease executable
 
-The application is versioned as `0.2.0-alpha.5`; the package and executable remain
+The application is versioned as `0.2.0-alpha.6`; the package and executable remain
 `kegari-v0`. This prerelease does not complete the 0.2.0 containment milestone.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or
 unqualified declared profiles (`managed_profile_unqualified`), and native,
@@ -57,8 +59,11 @@ checksum or a complete record of compiler settings. Release and debug profiles
 have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
-running coordinator. See [alpha.5 command supervision evidence](validation/MANAGED-COMMAND-SUPERVISION.md)
-for the exact artifact and checks performed. The
+running coordinator. The [alpha.6 managed check increment](validation/MANAGED-CHECK-BUNDLES.md)
+adds finite registered services, records the exact staged executable and its
+1,097 passing local tests, and retains the qualification prerequisite. The earlier
+[alpha.5 command supervision evidence](validation/MANAGED-COMMAND-SUPERVISION.md)
+remains historical. The
 [alpha.4 setup/profile report](validation/MANAGED-SETUP.md),
 [alpha.3 report](validation/OWNED-GROUP-LIFECYCLE.md),
 [alpha.2 report](validation/LOCAL-SERVICE-SHUTDOWN.md) and
@@ -74,7 +79,7 @@ it does not open a setup wizard or start a service. Before setup, alpha.4 and la
 runtime has been configured yet. Use `./kegari-v0 --help` or
 `./kegari-v0 setup --help` to inspect the available commands without setup.
 
-Alpha.5 is an inspectable development artifact, not a qualified installation ready
+Alpha.6 is an inspectable development artifact, not a qualified installation ready
 for activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
 requires the supported profile and native/provider prerequisites to be established
 first, then a final protected, versioned binary and explicit runtime configuration.
@@ -129,7 +134,7 @@ retain their original receipts and are observed before any further action.
 
 ## Qualification evidence
 
-The [progression report](validation/LOCAL-PROGRESSION.md) records the current
+The [progression report](validation/LOCAL-PROGRESSION.md) records the historical
 523-test offline checkpoint. The earlier
 [integration report](validation/LOCAL-INTEGRATION.md) preserves its historical
 411-test result. Newer work and stale evidence are identified in

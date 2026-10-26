@@ -22,6 +22,47 @@ use std::{
 };
 use uuid::Uuid;
 
+/// Descriptive ancestry only. A persisted member never grants launch, adoption
+/// or signalling authority; Control must verify its original attempted step.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CheckBundleMember {
+    pub bundle_effect: Uuid,
+    pub plan_digest: String,
+    pub ordinal: u32,
+    pub kind: CheckMemberKind,
+    pub service: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckMemberKind {
+    Service,
+    Readiness,
+    Check,
+}
+impl CheckBundleMember {
+    pub(crate) fn validate(&self) -> Result<()> {
+        crate::evidence::validate_digest(&self.plan_digest)?;
+        let valid_name = self.service.as_ref().is_some_and(|name| {
+            !name.is_empty()
+                && name.len() <= 64
+                && name.as_bytes()[0].is_ascii_alphanumeric()
+                && name
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+        });
+        if self.bundle_effect.is_nil()
+            || self.ordinal >= 17
+            || match self.kind {
+                CheckMemberKind::Service | CheckMemberKind::Readiness => !valid_name,
+                CheckMemberKind::Check => self.service.is_some(),
+            }
+        {
+            return Err(Error::invalid("check bundle member identity is incomplete"));
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SpawnBinding {
@@ -30,6 +71,8 @@ pub struct SpawnBinding {
     pub lease: Option<Lease>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_owner: Option<crate::host_process::HostProcessIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_bundle: Option<CheckBundleMember>,
     pub work_key: String,
     pub scope_digest: String,
     pub cwd: PathBuf,
@@ -39,6 +82,22 @@ pub struct SpawnBinding {
     pub kind: String,
 }
 impl SpawnBinding {
+    fn validate_member(&self) -> Result<()> {
+        if let Some(member) = &self.check_bundle {
+            member.validate()?;
+            if self.kind != "repository_command"
+                || self.lease.is_none()
+                || self.control_owner.is_some()
+                || member.bundle_effect == self.effect_id
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "check member crosses launch authority",
+                ));
+            }
+        }
+        Ok(())
+    }
     fn runtime_id(&self) -> Result<Uuid> {
         match (&self.lease, &self.control_owner) {
             (Some(lease), None) => Ok(lease.runtime_id),
@@ -88,18 +147,21 @@ pub struct ProcessRecord {
 }
 impl ProcessRecord {
     fn validate_schema(&self) -> Result<()> {
-        if !matches!(self.schema_version, 1 | 2) {
+        if !matches!(self.schema_version, 1..=3)
+            || (self.schema_version == 3) != self.binding.check_bundle.is_some()
+        {
             return Err(Error::new(
                 "record_corrupt",
                 "unsupported process record schema",
             ));
         }
+        self.binding.validate_member()?;
         if let ProcessState::GroupExited {
             owned_group,
             guard_release_verified,
             ..
         } = &self.state
-            && ((self.schema_version == 2) != owned_group.is_some()
+            && ((self.schema_version >= 2) != owned_group.is_some()
                 || owned_group.is_some_and(|id| id.is_nil())
                 || (self.schema_version == 1 && *guard_release_verified))
         {
@@ -179,6 +241,7 @@ impl ProcessJournal {
         self.begin_owned(binding)
     }
     fn begin_owned(self: &Arc<Self>, binding: SpawnBinding) -> Result<SpawnGuard> {
+        binding.validate_member()?;
         if binding.operation_id.is_nil()
             || binding.effect_id.is_nil()
             || binding.runtime_id()? != self.runtime
@@ -263,7 +326,7 @@ impl ProcessJournal {
             ));
         }
         let record = ProcessRecord {
-            schema_version: 2,
+            schema_version: if binding.check_bundle.is_some() { 3 } else { 2 },
             host,
             guard: guard_name,
             guard_device,
@@ -349,9 +412,9 @@ impl ProcessJournal {
                                 "recorded group exit conflicts with the exact running process",
                             ));
                         }
-                        if record.schema_version == 2 && *guard_release_verified {
+                        if record.schema_version >= 2 && *guard_release_verified {
                             RecoveryState::OwnedGroupExitRecorded
-                        } else if record.schema_version == 2 {
+                        } else if record.schema_version >= 2 {
                             RecoveryState::GroupExitGuardUnverified
                         } else {
                             RecoveryState::GroupExitRecordedTreeUnverified
@@ -617,15 +680,20 @@ impl SpawnGuard {
                 ));
             }
         }
-        self.inherited.take();
-        self.lock.take();
         // A surviving inherited guard is contrary evidence even after the
-        // owned group closes. Do not erase this known lifecycle uncertainty.
-        let released = self.directory.observe_lock_existing(
-            &self.record.guard,
-            self.record.guard_device,
-            self.record.guard_inode,
-        );
+        // owned group closes. First exclude unrelated host fork-to-exec windows:
+        // CLOEXEC does not close their duplicate descriptors until exec itself.
+        // Release the boundary before persistence; never wait for a child here.
+        let released = {
+            let _boundary = crate::process_spawn::retirement()?;
+            self.inherited.take();
+            self.lock.take();
+            self.directory.observe_lock_existing(
+                &self.record.guard,
+                self.record.guard_device,
+                self.record.guard_inode,
+            )
+        };
         let _released = match released {
             Ok(released) => released,
             Err(error) if error.code == "ownership_conflict" => {

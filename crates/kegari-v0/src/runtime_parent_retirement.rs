@@ -147,6 +147,7 @@ fn effects(receipts: &[Receipt], owners: &[&Receipt]) -> Result<BTreeMap<Uuid, S
 fn process_history(
     runtime: &RuntimeCoordinator,
     owners: [&Receipt; 2],
+    effects: &[Receipt],
 ) -> Result<BTreeMap<Uuid, String>> {
     let root = PrivateDir::open(&runtime.registration.root().path().join("worker-processes"))?;
     // SpawnBinding.effect_id is a process-journal identity. Trusted Git,
@@ -155,6 +156,7 @@ fn process_history(
     // with provider/command mutation receipts. No live PID probe is performed.
     let journal = crate::process_records::ProcessJournal::new(root, runtime.runtime_id)?;
     let mut result = BTreeMap::new();
+    let mut bindings = Vec::new();
     for owner in owners {
         let records = journal.retained_records(owner.operation_id)?;
         for record in &records {
@@ -184,8 +186,12 @@ fn process_history(
                 ));
             }
         }
+        bindings.extend(records.iter().map(|record| record.binding.clone()));
         result.insert(owner.operation_id, canonical_digest(1, &records)?);
     }
+    runtime
+        .control
+        .verify_check_bundle_inventory(effects, &bindings)?;
     Ok(result)
 }
 
@@ -316,7 +322,8 @@ impl AuthenticatedParentRunRetirement {
             ));
         }
         if effects(history.effects(), &[model, preparation])? != record.effects
-            || process_history(runtime, [preparation, model])? != record.processes
+            || process_history(runtime, [preparation, model], history.effects())?
+                != record.processes
             || worker_files(&records)? != record.files
         {
             return Err(invalid("retired parent exact closure changed"));
@@ -625,7 +632,7 @@ impl RuntimeCoordinator {
                     observation: candidate.observation.clone(),
                     run: RunReference::from_receipt(model)?
                         .ok_or_else(|| invalid("parent run reference absent"))?,
-                    processes: process_history(self, [preparation, model])?,
+                    processes: process_history(self, [preparation, model], history.effects())?,
                     effects: effect_map,
                     grant_commands: candidate.origin.record().grant_commands(&self.control)?,
                     journal,

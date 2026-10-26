@@ -1250,7 +1250,7 @@ pub(crate) fn observed_check(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let current = record.schema_version == 1
+    let current = record.validate_shape().is_ok()
         && record.before == record.after
         && record.after.revision.commit == revision
         && after == *current

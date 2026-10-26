@@ -1,5 +1,9 @@
 # Managed command supervision and alpha.5 artifact
 
+Subsequent supervised NQ-02A execution failed in its first case; see the
+[native failure record](NATIVE-MANAGED-COMMAND.md). The alpha.5 checks below
+remain historical deterministic/artifact evidence, not native qualification.
+
 Alpha.5 implements managed foreground completion using the original owned group,
 durable process-journal retirement and joined output collectors. Checks, hooks
 and the owned clone dispatcher reserve cancellation ownership before starting.

@@ -37,6 +37,7 @@ pub mod platform;
 pub mod preparation;
 pub mod process_group;
 pub mod process_records;
+mod process_spawn;
 pub mod providers;
 pub mod reconcile;
 pub mod release;

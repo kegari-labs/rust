@@ -97,23 +97,35 @@ impl TailscaleCommand for InstalledTailscale {
                 ));
             }
             validate_executable_path(&self.executable)?;
-            let mut child = tokio::process::Command::new(&self.executable)
-                .args(args)
-                .env_clear()
-                .env("PATH", "/usr/bin:/bin")
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .map_err(|e| Error::io("start configured Tailscale identity command", e))?;
+            let cutoff = std::time::Instant::now() + self.timeout;
+            let mut child = crate::process_spawn::spawn_tokio(
+                tokio::process::Command::new(&self.executable)
+                    .args(args)
+                    .env_clear()
+                    .env("PATH", "/usr/bin:/bin")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true),
+                Some(cutoff),
+            )
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::TimedOut {
+                    Error::new(
+                        "identity_unavailable",
+                        "Tailscale identity lookup exceeded its deadline",
+                    )
+                } else {
+                    Error::io("start configured Tailscale identity command", error)
+                }
+            })?;
             let stdout = child.stdout.take().ok_or_else(|| {
                 Error::new("identity_unavailable", "Tailscale stdout unavailable")
             })?;
             let stderr = child.stderr.take().ok_or_else(|| {
                 Error::new("identity_unavailable", "Tailscale stderr unavailable")
             })?;
-            let result = tokio::time::timeout(self.timeout, async {
+            let result = tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), async {
                 let (mut out, mut err) = (Vec::new(), Vec::new());
                 let mut stdout = stdout.take((CLI_BOUND + 1) as u64);
                 let mut stderr = stderr.take((CLI_BOUND + 1) as u64);

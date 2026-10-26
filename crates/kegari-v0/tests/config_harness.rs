@@ -588,6 +588,7 @@ fn candidate_cwd_wins_over_conflicting_workflow_relative_scripts_and_artifacts()
     assert!(!result.status.success());
     let outside = CheckCommand {
         argv: vec!["true".into()],
+        services: vec![],
         result_artifact: workflow_dir
             .join("result.txt")
             .to_string_lossy()
@@ -601,6 +602,7 @@ fn candidate_cwd_wins_over_conflicting_workflow_relative_scripts_and_artifacts()
     let traversal = CheckCommand {
         argv: vec!["true".into()],
         result_artifact: "../workflow/result.txt".into(),
+        services: vec![],
     };
     assert!(
         workflow
@@ -633,6 +635,7 @@ fn artifact_symlink_cannot_escape_declared_roots() {
     let command = CheckCommand {
         argv: vec!["true".into()],
         result_artifact: "output/result.json".into(),
+        services: vec![],
     };
     assert!(
         workflow

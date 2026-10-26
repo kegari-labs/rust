@@ -404,7 +404,33 @@ impl ValidatedIsolation {
             "(version 1)\n(deny default)\n(allow process-fork)\n(allow sysctl-read)\n",
         );
         for path in ["/usr/lib", "/System/Library"] {
-            profile.push_str(&format!("(allow file-read* (subpath {}))\n", quote(path)));
+            profile.push_str(&format!(
+                "(allow file-read* file-map-executable (subpath {}))\n",
+                quote(path)
+            ));
+        }
+        // Current macOS dyld also loads OS libraries from Cryptex grafts.
+        // Keep these fixed OS resources separate from arbitrary configured read
+        // roots. Do not import Apple's general system profile (IPC/network etc.).
+        for path in [
+            "/System/Volumes/Preboot/Cryptexes/App/System",
+            "/System/Volumes/Preboot/Cryptexes/Incoming/OS",
+            "/System/Volumes/Preboot/Cryptexes/OS",
+            "/System/Volumes/Preboot/Cryptexes/Rosetta",
+            "/System/Cryptexes/App",
+            "/System/Cryptexes/OS",
+            "/System/Cryptexes/Rosetta",
+        ] {
+            profile.push_str(&format!(
+                "(allow file-read* file-map-executable (subpath {}))\n",
+                quote(path)
+            ));
+            for parent in Path::new(path).ancestors().skip(1) {
+                profile.push_str(&format!(
+                    "(allow file-read-metadata (literal {}))\n",
+                    quote_path(parent)?
+                ));
+            }
         }
         for path in ["/dev/null", "/dev/urandom", "/dev/random"] {
             profile.push_str(&format!("(allow file-read* (literal {}))\n", quote(path)));
@@ -458,7 +484,7 @@ impl ValidatedIsolation {
         ));
         for executable in &self.plan.executables {
             profile.push_str(&format!(
-                "(allow file-read* (literal {}))\n(allow process-exec (literal {}))\n",
+                "(allow file-read* file-map-executable (literal {}))\n(allow process-exec (literal {}))\n",
                 quote_path(executable)?,
                 quote_path(executable)?
             ));
@@ -467,13 +493,14 @@ impl ValidatedIsolation {
             && let Some(root) = managed.generated_root(&self.plan)?
         {
             profile.push_str(&format!(
-                "(allow process-exec (subpath {}))\n",
+                "(allow process-exec (subpath {}))\n(allow file-map-executable (subpath {}))\n",
+                quote_path(&root)?,
                 quote_path(&root)?
             ));
         }
         for forbidden in &self.plan.forbidden_roots {
             profile.push_str(&format!(
-                "(deny file-read* file-write* (subpath {}))\n",
+                "(deny file-read* file-write* file-map-executable process-exec (subpath {}))\n",
                 quote_path(forbidden)?
             ));
         }
@@ -534,6 +561,8 @@ pub struct CommandOutcome {
     pub cwd: PathBuf,
     pub isolation_digest: String,
     pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub termination_signal: Option<i32>,
     pub timed_out: bool,
     pub stdout: String,
     pub stderr: String,
@@ -548,9 +577,55 @@ fn redact(mut value: String, secrets: &[String]) -> String {
     value
 }
 
+/// One original retained-output allowance shared by all members of a bundle.
+/// Exhaustion truncates capture while actual pipes continue draining to EOF.
+pub struct CommandOutputBudget {
+    remaining: std::sync::atomic::AtomicUsize,
+}
+impl CommandOutputBudget {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            remaining: std::sync::atomic::AtomicUsize::new(limit),
+        }
+    }
+    fn take(&self, requested: usize) -> usize {
+        let before = self
+            .remaining
+            .try_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |left| Some(left.saturating_sub(requested)),
+            )
+            .expect("output budget update cannot refuse");
+        requested.min(before)
+    }
+}
+/// Original resource limits supplied only with an admitted bundle launch.
+/// These values grant no execution or filesystem authority.
+pub struct BundleCommandLimits {
+    pub(crate) timeout: Duration,
+    pub(crate) deadline: std::time::Instant,
+    pub(crate) output_limit: usize,
+    pub(crate) output_budget: std::sync::Arc<CommandOutputBudget>,
+}
+fn remaining_bundle_timeout(
+    timeout: Duration,
+    started: std::time::Instant,
+    deadline: Option<std::time::Instant>,
+) -> Result<Duration> {
+    match deadline {
+        Some(deadline) if deadline <= std::time::Instant::now() => Err(Error::new(
+            "timeout",
+            "original check bundle deadline expired before process launch",
+        )),
+        Some(deadline) => Ok(timeout.min(deadline.saturating_duration_since(started))),
+        None => Ok(timeout),
+    }
+}
 async fn bounded_output<R: tokio::io::AsyncRead + Unpin>(
     mut input: R,
     limit: usize,
+    shared: Option<std::sync::Arc<CommandOutputBudget>>,
 ) -> std::io::Result<(Vec<u8>, bool)> {
     let mut bytes = Vec::new();
     let mut truncated = false;
@@ -561,6 +636,7 @@ async fn bounded_output<R: tokio::io::AsyncRead + Unpin>(
             break;
         }
         let take = n.min(limit.saturating_sub(bytes.len()));
+        let take = shared.as_ref().map_or(take, |shared| shared.take(take));
         bytes.extend_from_slice(&buffer[..take]);
         truncated |= take < n;
         // A ready pipe must not starve cancellation or the supervisor's deadline.
@@ -624,6 +700,12 @@ enum CommandJournal {
         crate::control::Permit,
     ),
     Guard(Box<crate::process_records::SpawnGuard>),
+    Bundle {
+        journal: std::sync::Arc<crate::process_records::ProcessJournal>,
+        launch: crate::control::CheckBundleLaunch,
+        output_budget: std::sync::Arc<CommandOutputBudget>,
+        deadline: std::time::Instant,
+    },
 }
 pub fn start_guarded_command(
     isolation: &ValidatedIsolation,
@@ -672,6 +754,33 @@ pub fn start_journaled_command(
         Some(CommandJournal::Worker(journal, permit)),
     )
 }
+pub(crate) fn start_bundle_command(
+    isolation: &ValidatedIsolation,
+    argv: &[String],
+    limits: BundleCommandLimits,
+    journal: std::sync::Arc<crate::process_records::ProcessJournal>,
+    launch: crate::control::CheckBundleLaunch,
+) -> Result<OwnedCommand> {
+    remaining_bundle_timeout(
+        limits.timeout,
+        std::time::Instant::now(),
+        Some(limits.deadline),
+    )?;
+    start_command_inner(
+        isolation,
+        argv,
+        limits.timeout,
+        limits.output_limit,
+        &[],
+        Some(CommandJournal::Bundle {
+            journal,
+            launch,
+            output_budget: limits.output_budget,
+            deadline: limits.deadline,
+        }),
+    )
+}
+
 fn start_command_inner(
     isolation: &ValidatedIsolation,
     argv: &[String],
@@ -758,7 +867,18 @@ fn spawn_command_inner(
         command.process_group(0);
     }
     let started = std::time::Instant::now();
+    let bundle_deadline = match &journal {
+        Some(CommandJournal::Bundle { deadline, .. }) => Some(*deadline),
+        _ => None,
+    };
+    remaining_bundle_timeout(timeout, started, bundle_deadline)?;
     let identity = command_launch_identity(isolation, argv)?;
+    let service = matches!(&journal, Some(CommandJournal::Bundle { launch, .. })
+        if matches!(launch.member().kind, crate::process_records::CheckMemberKind::Service));
+    let output_budget = match &journal {
+        Some(CommandJournal::Bundle { output_budget, .. }) => Some(output_budget.clone()),
+        _ => None,
+    };
     let mut guard = match journal {
         Some(CommandJournal::Worker(journal, permit)) => {
             Some(journal.begin(crate::process_records::SpawnBinding {
@@ -773,6 +893,26 @@ fn spawn_command_inner(
                 observed_executables: vec![identity.target.clone()],
                 argv_digest: identity.argv_digest.clone(),
                 kind: "repository_command".into(),
+                check_bundle: None,
+            })?)
+        }
+        Some(CommandJournal::Bundle {
+            journal, launch, ..
+        }) => {
+            let permit = launch.permit();
+            Some(journal.begin(crate::process_records::SpawnBinding {
+                operation_id: permit.operation_id,
+                effect_id: launch.process_id(),
+                lease: Some(permit.lease.clone()),
+                control_owner: None,
+                work_key: permit.work_key.clone(),
+                scope_digest: permit.scope_digest.clone(),
+                cwd: identity.cwd.clone(),
+                executable: identity.launcher.clone(),
+                observed_executables: vec![identity.target.clone()],
+                argv_digest: identity.argv_digest.clone(),
+                kind: "repository_command".into(),
+                check_bundle: Some(launch.member().clone()),
             })?)
         }
         Some(CommandJournal::Guard(guard)) => {
@@ -795,7 +935,13 @@ fn spawn_command_inner(
     if let Some(guard) = &guard {
         guard.configure_tokio(&mut command)?;
     }
-    let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command)?;
+    // The original absolute cutoff survives preflight, journal I/O and lock
+    // waits. Synchronous spawn itself cannot be preempted by an async timeout.
+    let timeout = remaining_bundle_timeout(timeout, started, bundle_deadline)?;
+    let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_tokio_before(
+        &mut command,
+        Some(started + timeout),
+    )?;
     // A quick child can exit before native identity capture. Keep its actual
     // handle and Starting journal until owned cleanup and reap establish exit.
     let capture_error = guard
@@ -826,7 +972,9 @@ fn spawn_command_inner(
             timeout,
             secret_values: secret_values.to_vec(),
         },
-        CommandProcess::new(child, group, guard, capture_error),
+        CommandProcess::new(child, group, guard, capture_error)
+            .with_service(service)
+            .with_output_budget(output_budget),
         stdout,
         stderr,
         output_limit,
@@ -888,6 +1036,7 @@ impl CommandOutputTasks {
         limit: usize,
         outputs: std::sync::Arc<CommandOutputs>,
         stream: usize,
+        shared: Option<std::sync::Arc<CommandOutputBudget>>,
     ) -> CommandCollectorTask
     where
         R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -900,7 +1049,7 @@ impl CommandOutputTasks {
             complete: false,
         };
         tokio::spawn(async move {
-            let result = bounded_output(input, limit).await;
+            let result = bounded_output(input, limit, shared).await;
             if result.is_ok() {
                 // Borrow the whole guard so its Drop state is retained by the
                 // future, including cancellation before the first task poll.
@@ -1001,6 +1150,9 @@ struct CommandProcess {
     journal_retired: bool,
     capture_error: Option<Error>,
     cancelled_at: Option<std::time::Instant>,
+    service: bool,
+    kill_escalated: bool,
+    output_budget: Option<std::sync::Arc<CommandOutputBudget>>,
 }
 impl CommandProcess {
     fn new(
@@ -1018,7 +1170,32 @@ impl CommandProcess {
             journal_retired: false,
             capture_error,
             cancelled_at: None,
+            service: false,
+            kill_escalated: false,
+            output_budget: None,
         }
+    }
+    fn with_output_budget(mut self, budget: Option<std::sync::Arc<CommandOutputBudget>>) -> Self {
+        self.output_budget = budget;
+        self
+    }
+    fn with_service(mut self, service: bool) -> Self {
+        self.service = service;
+        self
+    }
+    fn advance_service_stop(&mut self) -> Result<()> {
+        if self.service
+            && self.reaped.is_none()
+            && !self.kill_escalated
+            && self
+                .cancelled_at
+                .is_some_and(|at| at.elapsed() >= COMMAND_EXIT_GRACE)
+        {
+            self.group
+                .terminate(crate::process_group::Termination::Kill)?;
+            self.kill_escalated = true;
+        }
+        Ok(())
     }
     fn observe(&mut self) -> Result<Option<std::process::ExitStatus>> {
         if self.reaped.is_none() {
@@ -1043,10 +1220,21 @@ impl CommandProcess {
             // Observation failure is not permission to abandon the owned child.
             // Signalling still requires the original unreaped group identity.
             self.group
-                .terminate(crate::process_group::Termination::Kill)?;
+                .terminate(if self.service && !self.kill_escalated {
+                    crate::process_group::Termination::Terminate
+                } else {
+                    crate::process_group::Termination::Kill
+                })?;
         }
         observed.map(|_| ())
     }
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceObservation {
+    pub leader_running: bool,
+    pub stop_requested: bool,
+    pub kill_escalated: bool,
 }
 /// Non-serializable capability anchored to an actual unreaped owned child.
 /// The control host must persist/fence operator cancellation before using it.
@@ -1055,6 +1243,25 @@ pub struct OwnedCommandCancellation {
     process: std::sync::Arc<std::sync::Mutex<CommandProcess>>,
 }
 impl OwnedCommandCancellation {
+    pub fn service_observation(&self) -> Result<ServiceObservation> {
+        let process = self
+            .process
+            .lock()
+            .map_err(|_| Error::new("process_error", "owned command lock failed"))?;
+        if !process.service {
+            return Err(Error::new(
+                "scope_violation",
+                "command is not a registered bundle service",
+            ));
+        }
+        let leader_running =
+            process.reaped.is_none() && process.group.leader_running_tokio(&process.child)?;
+        Ok(ServiceObservation {
+            leader_running,
+            stop_requested: process.cancelled_at.is_some(),
+            kill_escalated: process.kill_escalated || process.group.forced_kill_requested(),
+        })
+    }
     /// Observes only the directly owned managed group and joined inherited
     /// streams. It does not establish arbitrary escaped-descendant containment.
     pub fn group_exited(&self) -> Result<bool> {
@@ -1107,8 +1314,20 @@ impl OwnedCommand {
     {
         let outputs = process.outputs.clone();
         let tasks = CommandOutputTasks {
-            stdout: Some(CommandOutputTasks::spawn(stdout, limit, outputs.clone(), 0)),
-            stderr: Some(CommandOutputTasks::spawn(stderr, limit, outputs.clone(), 1)),
+            stdout: Some(CommandOutputTasks::spawn(
+                stdout,
+                limit,
+                outputs.clone(),
+                0,
+                process.output_budget.clone(),
+            )),
+            stderr: Some(CommandOutputTasks::spawn(
+                stderr,
+                limit,
+                outputs.clone(),
+                1,
+                process.output_budget.clone(),
+            )),
             outputs,
         };
         let process = std::sync::Arc::new(std::sync::Mutex::new(process));
@@ -1183,14 +1402,17 @@ impl CommandRun {
         }
         let mut timed_out = false;
         loop {
-            let (observed, cancelled_at, output_uncertain) = {
+            let (observed, cancelled_at, service, output_uncertain) = {
                 let mut process = cancellation
                     .process
                     .lock()
                     .map_err(|_| Error::new("process_error", "owned command lock failed"))?;
                 (
-                    process.observe(),
+                    process
+                        .advance_service_stop()
+                        .and_then(|()| process.observe()),
                     process.cancelled_at,
+                    process.service,
                     process
                         .outputs
                         .uncertain
@@ -1220,7 +1442,12 @@ impl CommandRun {
                     failure.get_or_insert(error);
                 }
             }
-            if cancelled_at.is_some_and(|at| at.elapsed() >= COMMAND_EXIT_GRACE) {
+            let exit_grace = if service {
+                COMMAND_EXIT_GRACE.saturating_mul(2)
+            } else {
+                COMMAND_EXIT_GRACE
+            };
+            if cancelled_at.is_some_and(|at| at.elapsed() >= exit_grace) {
                 return Err(failure.unwrap_or_else(|| {
                     Error::new(
                         "operation_uncertain",
@@ -1262,12 +1489,20 @@ impl CommandRun {
                 "host policy prevented applying the execution sandbox",
             ));
         }
+        #[cfg(unix)]
+        let termination_signal = {
+            use std::os::unix::process::ExitStatusExt;
+            status.signal()
+        };
+        #[cfg(not(unix))]
+        let termination_signal = None;
         Ok(CommandOutcome {
             schema_version: 1,
             argv: self.argv,
             cwd: self.cwd,
             isolation_digest: self.isolation_digest,
             exit_code: status.code(),
+            termination_signal,
             timed_out,
             stdout: redact(
                 String::from_utf8_lossy(&out).into_owned(),

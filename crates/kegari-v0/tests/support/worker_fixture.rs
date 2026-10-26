@@ -1,5 +1,8 @@
 #[path = "pinned_git.rs"]
 mod pinned_git;
+#[path = "worker_bundle.rs"]
+#[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
+mod worker_bundle;
 use chrono::{Duration, Utc};
 use kegari_v0::{
     authority::*,
@@ -56,25 +59,32 @@ fn git_path() -> PathBuf {
         .unwrap()
 }
 fn git_run(path: &Path, args: &[&str]) {
-    let r = Command::new(git_path())
-        .current_dir(path)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
-        .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgSign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
+    let r = kegari_v0::process_group::OwnedGroup::spawn_std(
+        Command::new(git_path())
+            .current_dir(path)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Disposable Fixture Human")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
+            .env("GIT_COMMITTER_NAME", "Disposable Fixture Human")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgSign=false",
+            ])
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .expect("spawn owned disposable fixture")
+    .0
+    .wait_with_output()
+    .unwrap();
     assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
 }
 struct Host {
@@ -146,6 +156,7 @@ struct Boundary {
     block: AtomicBool,
     unknown: AtomicBool,
     last_cancel: Mutex<Option<Arc<CancelFlag>>>,
+    bundle: Option<Arc<worker_bundle::BundleBoundary>>,
 }
 struct CancelFlag {
     cancelled: AtomicBool,
@@ -194,6 +205,18 @@ impl CommandBoundary for Boundary {
     fn evidence_class(&self) -> ExecutionEvidenceClass {
         ExecutionEvidenceClass::DeterministicFixture
     }
+    fn start_bundle_member(
+        &self,
+        isolation: &ValidatedIsolation,
+        argv: &[String],
+        limits: BundleCommandLimits,
+        launch: CheckBundleLaunch,
+    ) -> Result<Box<dyn StartedCommand>> {
+        self.bundle
+            .as_ref()
+            .ok_or_else(|| Error::new("unsupported_check_bundle", "fixture has no bundle"))?
+            .start_bundle_member(isolation, argv, limits, launch)
+    }
     fn start(
         &self,
         b: &ValidatedIsolation,
@@ -222,6 +245,7 @@ impl CommandBoundary for Boundary {
                 } else {
                     0
                 }),
+                termination_signal: None,
                 timed_out: false,
                 stdout: "deterministic fixture".into(),
                 stderr: String::new(),
@@ -249,11 +273,25 @@ struct Fixture {
     permit: Permit,
     execution: Option<Arc<WorkerExecution>>,
 }
+type ConfiguredContract =
+    fn(ContractInput, &kegari_v0::config::Workspace) -> Result<WorkerContract>;
 impl Fixture {
     fn new(role: AgentRole) -> Self {
         Self::with_hooks(role, "")
     }
     fn with_hooks(role: AgentRole, hooks: &str) -> Self {
+        Self::configured(role, hooks, None, None)
+    }
+    #[allow(dead_code)] // Shared prelude also serves the unchanged worker target.
+    fn with_bundle(mode: worker_bundle::Mode, configured: ConfiguredContract) -> Self {
+        Self::configured(AgentRole::Implementation, "", Some(mode), Some(configured))
+    }
+    fn configured(
+        role: AgentRole,
+        hooks: &str,
+        bundle: Option<worker_bundle::Mode>,
+        configured: Option<ConfiguredContract>,
+    ) -> Self {
         let temp = TempDir::new().unwrap();
         let base = temp.path().canonicalize().unwrap();
         let source = base.join("operator");
@@ -268,8 +306,25 @@ impl Fixture {
         PrivateDir::create(&auth).unwrap();
         git_run(&source, &["init", "-b", "main"]);
         std::fs::write(source.join("a.txt"), "original\n").unwrap();
+        let main = if bundle.is_some() { ", \"check\"" } else { "" };
+        let services = if bundle.is_some() {
+            "      services:\n        - name: database\n          argv: [\"/usr/bin/true\", \"service\"]\n          readiness:\n            argv: [\"/usr/bin/true\", \"readiness\"]\n            timeout_ms: 3000\n          max_lifetime_ms: 10000\n"
+        } else {
+            ""
+        };
+        // The configured workspace requires an integrated obligation too. It is
+        // declared for config/workflow fidelity but is not run by these local
+        // bundle tests; ordinary fixtures retain their exact previous workflow.
+        let integrated = if bundle.is_some() {
+            format!(
+                "  integrated:\n    e2e:\n      argv: [\"/usr/bin/true\"]\n      result_artifact: \"{}/integrated.json\"\n",
+                scratch.display()
+            )
+        } else {
+            String::new()
+        };
         let workflow_text = format!(
-            "---\nschema_version: 1\n{hooks}checks:\n  local:\n    suite:\n      argv: [\"/usr/bin/true\"]\n      result_artifact: \"{}/check.json\"\n---\nOutcome: {{{{ issue | json }}}}\n",
+            "---\nschema_version: 1\n{hooks}checks:\n  local:\n    suite:\n      argv: [\"/usr/bin/true\"{main}]\n      result_artifact: \"{}/check.json\"\n{services}{integrated}---\nOutcome: {{{{ issue | json }}}}\n",
             scratch.display()
         );
         std::fs::write(source.join("WORKFLOW.md"), workflow_text).unwrap();
@@ -298,6 +353,34 @@ impl Fixture {
         let git = Arc::new(Git::new(&pinned_git_path).unwrap());
         let revision = git.revision(&repo, "HEAD").unwrap();
         let child = role.permits_source_writes();
+        let executables = if child {
+            vec![
+                PathBuf::from("/usr/bin/true"),
+                PathBuf::from("/bin/sh"),
+                pinned_git_path.clone(),
+            ]
+        } else {
+            vec![]
+        };
+        let configured_policy = bundle.map(|_| kegari_v0::config::ManagedExecution {
+            lifecycle: kegari_v0::config::ManagedLifecycle::CheckBundleV1,
+            executables: executables
+                .iter()
+                .map(|path| {
+                    let identity =
+                        kegari_v0::platform::BinaryIdentity::inspect(path, false).unwrap();
+                    kegari_v0::config::ManagedExecutable {
+                        path: identity.path.to_string_lossy().into_owned(),
+                        digest: identity.digest,
+                    }
+                })
+                .collect(),
+            read_roots: vec![],
+            generated_executables: None,
+        });
+        let configured_workspace = configured_policy.as_ref().map(|policy| {
+            worker_bundle::configuration(&auth, &workflow.path, &source, policy, profile())
+        });
         let work = WorkIdentity {
             linear_endpoint: "https://linear.invalid/graphql".into(),
             linear_workspace: id(2),
@@ -356,7 +439,10 @@ impl Fixture {
             blockers: vec![],
             prerequisites: BTreeSet::new(),
             source_digest: bytes_digest(b"sources"),
-            config_revision: bytes_digest(b"config"),
+            config_revision: configured_workspace.as_ref().map_or_else(
+                || bytes_digest(b"config"),
+                |config| config.revision().unwrap(),
+            ),
             drain_config_revision: bytes_digest(b"config-drain"),
             workflow_digest: workflow.digest.clone(),
             coordination_profile: profile(),
@@ -466,8 +552,11 @@ impl Fixture {
         } else {
             ExecutionRole::Coordination
         };
+        let managed_execution = configured_policy
+            .as_ref()
+            .map(|policy| BoundManagedExecution::resolve(policy).unwrap());
         let isolation = IsolationPlan {
-            managed_execution: None,
+            managed_execution,
             schema_version: 1,
             role: execution_role,
             execution_root: run.clone(),
@@ -488,15 +577,7 @@ impl Fixture {
                 vec![]
             },
             forbidden_roots: vec![source.clone(), private.clone(), auth.clone()],
-            executables: if child {
-                vec![
-                    PathBuf::from("/usr/bin/true"),
-                    PathBuf::from("/bin/sh"),
-                    pinned_git_path.clone(),
-                ]
-            } else {
-                vec![]
-            },
+            executables,
         }
         .validate()
         .unwrap();
@@ -564,7 +645,13 @@ impl Fixture {
             repository: Some(repository.clone()),
             read_resources: BTreeMap::new(),
         };
-        let contract = Arc::new(WorkerContract::new(input.clone()).unwrap());
+        let contract = Arc::new(match (&configured_workspace, configured) {
+            (Some(config), Some(construct)) => {
+                construct(input.clone(), &config.workspaces["fixture"]).unwrap()
+            }
+            (None, None) => WorkerContract::new(input.clone()).unwrap(),
+            _ => panic!("bundle fixture must use the original configured contract constructor"),
+        });
         let dir = PrivateDir::create(&private).unwrap();
         let control = Arc::new(
             ControlHost::setup(dir.child("runtime").unwrap(), id(1), Uuid::new_v4()).unwrap(),
@@ -616,6 +703,7 @@ impl Fixture {
             block: AtomicBool::new(false),
             unknown: AtomicBool::new(false),
             last_cancel: Mutex::new(None),
+            bundle: bundle.map(worker_bundle::BundleBoundary::new),
         });
         let execution = if child {
             Some(Arc::new(WorkerExecution {

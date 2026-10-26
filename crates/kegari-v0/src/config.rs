@@ -167,6 +167,9 @@ pub struct ManagedExecution {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ManagedLifecycle {
     ForegroundV1,
+    /// Explicit finite services owned by one admitted validation check. This
+    /// does not declare reusable daemons or widen resource/network authority.
+    CheckBundleV1,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

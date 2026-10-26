@@ -932,8 +932,7 @@ impl OwnedChild {
                 }
             });
         }
-        let mut child = command
-            .spawn()
+        let mut child = crate::process_spawn::spawn_std(&mut command, None)
             .map_err(|e| Error::io("spawn registered orchestration", e))?;
         let identity = match native::process(child.id()) {
             Ok(Some(identity))
@@ -1328,9 +1327,15 @@ pub async fn verify_installed_build(binary: &BinaryIdentity) -> Result<BuildInfo
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .process_group(0);
-    let mut child = command
-        .spawn()
-        .map_err(|e| Error::io("verify installed binary", e))?;
+    let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut child =
+        crate::process_spawn::spawn_tokio(&mut command, Some(cutoff)).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::TimedOut {
+                Error::new("timeout", "installed build verification timed out")
+            } else {
+                Error::io("verify installed binary", error)
+            }
+        })?;
     let mut stdout = child
         .stdout
         .take()
@@ -1342,7 +1347,7 @@ pub async fn verify_installed_build(binary: &BinaryIdentity) -> Result<BuildInfo
         })?
         .take(65_537);
     let mut bytes = Vec::new();
-    let observed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let observed = tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), async {
         stdout
             .read_to_end(&mut bytes)
             .await
@@ -1611,15 +1616,28 @@ async fn launchctl(args: &[String]) -> Result<bool> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    let status = tokio::time::timeout(std::time::Duration::from_secs(5), command.status())
-        .await
-        .map_err(|_| {
+    let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), async {
+        let mut child = crate::process_spawn::spawn_tokio(&mut command, Some(cutoff))?;
+        child.wait().await
+    })
+    .await
+    .map_err(|_| {
+        Error::new(
+            "operation_uncertain",
+            "launchd action timed out; inspect service state before retry",
+        )
+    })?
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::TimedOut {
             Error::new(
                 "operation_uncertain",
                 "launchd action timed out; inspect service state before retry",
             )
-        })?
-        .map_err(|e| Error::io("invoke explicit launchd action", e))?;
+        } else {
+            Error::io("invoke explicit launchd action", error)
+        }
+    })?;
     Ok(status.success())
 }
 /// Explicit local service start; never force-restarts a running service.
@@ -1780,13 +1798,15 @@ mod owned_child_cleanup_tests {
     use super::*;
     #[test]
     fn failed_owned_handshake_drop_kills_and_reaps_only_its_direct_child() {
-        let child = Command::new("/bin/sleep")
-            .arg("30")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let child = crate::process_spawn::spawn_std(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+            None,
+        )
+        .unwrap();
         let pid = child.id();
         // Synthetic metadata: this tests owned-handle cleanup, not native birth
         // identity qualification (which remains a separate blocked check).

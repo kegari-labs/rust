@@ -2157,8 +2157,8 @@ pub struct HandoverInfo {
     pub api_version: u32,
     pub config_schema: u32,
     pub receipt_schema: u32,
-    /// Schema-2 metadata explicitly declares process journal compatibility;
-    /// legacy metadata must not implicitly claim it can read owned exit records.
+    /// Explicit process journal compatibility, including schema-3 check members.
+    /// Older readers must not silently discard retained bundle ancestry.
     pub process_schema: u32,
     /// The replacement must understand managed policy fields in configuration
     /// and retained isolation records; omission cannot imply that capability.
@@ -2175,8 +2175,8 @@ pub fn handover_info() -> Result<HandoverInfo> {
         api_version: 1,
         config_schema: 1,
         receipt_schema: 1,
-        process_schema: 2,
-        managed_execution_schema: 1,
+        process_schema: 3,
+        managed_execution_schema: 2,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
         runtime_build: crate::BUILD_ID.into(),
         instruction_schema: crate::instructions::ASSEMBLY_SCHEMA,
@@ -2362,16 +2362,22 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
         .process_group(0);
-    let mut child = command
-        .spawn()
-        .map_err(|e| Error::io("inspect immutable replacement metadata", e))?;
+    let cutoff = std::time::Instant::now() + Duration::from_secs(5);
+    let mut child =
+        crate::process_spawn::spawn_tokio(&mut command, Some(cutoff)).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::TimedOut {
+                Error::new("timeout", "replacement metadata probe timed out")
+            } else {
+                Error::io("inspect immutable replacement metadata", error)
+            }
+        })?;
     let mut stdout = child
         .stdout
         .take()
         .ok_or_else(|| Error::new("incompatible_version", "replacement metadata unavailable"))?
         .take(65537);
     let mut bytes = vec![];
-    let observed = tokio::time::timeout(Duration::from_secs(5), async {
+    let observed = tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), async {
         stdout
             .read_to_end(&mut bytes)
             .await
@@ -2407,8 +2413,8 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
         || info.api_version != 1
         || info.config_schema != 1
         || info.receipt_schema != 1
-        || info.process_schema != 2
-        || info.managed_execution_schema != 1
+        || info.process_schema != 3
+        || info.managed_execution_schema != 2
         || info.instruction_schema != crate::instructions::ASSEMBLY_SCHEMA
         || info.runtime_build.is_empty()
         || info.runtime_version.is_empty()

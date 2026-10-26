@@ -3,11 +3,17 @@ use crate::digest::bytes_digest;
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 pub const MAX_WORKFLOW_BYTES: usize = 1_048_576;
 pub const MAX_RENDER_BYTES: usize = 8_388_608;
+pub const MAX_CHECK_SERVICES: usize = 8;
+pub const MAX_SERVICE_NAME_BYTES: usize = 64;
+pub const MAX_SERVICE_ARGV: usize = 128;
+pub const MAX_SERVICE_ARGUMENT_BYTES: usize = 4096;
+pub const MAX_SERVICE_COMMAND_BYTES: usize = 65_536;
+pub const MAX_SERVICE_LIFETIME_MS: u64 = 86_400_000;
 const MAX_LOOP_ITERATIONS: usize = 10_000;
 fn schema_one() -> u32 {
     1
@@ -28,6 +34,82 @@ pub struct Checks {
 pub struct CheckCommand {
     pub argv: Vec<String>,
     pub result_artifact: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<CheckService>,
+}
+/// A declaration within one check, not permission to start a background task.
+/// Services share the check's actual cwd, grants and aggregate execution budget.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CheckService {
+    pub name: String,
+    pub argv: Vec<String>,
+    pub readiness: ServiceReadiness,
+    pub max_lifetime_ms: u64,
+}
+/// Exactly one finite command; any polling must remain within this invocation.
+/// Readiness adds no socket, network, filesystem or executable grants.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceReadiness {
+    pub argv: Vec<String>,
+    pub timeout_ms: u64,
+}
+impl CheckCommand {
+    pub fn validate_services(&self) -> Result<()> {
+        if self.services.is_empty() {
+            return Ok(());
+        }
+        if self.services.len() > MAX_CHECK_SERVICES {
+            return Err(Error::invalid(
+                "check service inventory exceeds its finite bound",
+            ));
+        }
+        bounded_service_argv(&self.argv)?;
+        let mut names = BTreeSet::new();
+        for service in &self.services {
+            let name = service.name.as_bytes();
+            if name.is_empty()
+                || name.len() > MAX_SERVICE_NAME_BYTES
+                || !name[0].is_ascii_alphanumeric()
+                || !name
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'-' | b'.'))
+                || !names.insert(&service.name)
+            {
+                return Err(Error::invalid(
+                    "check services require unique bounded stable names",
+                ));
+            }
+            bounded_service_argv(&service.argv)?;
+            bounded_service_argv(&service.readiness.argv)?;
+            if service.max_lifetime_ms == 0
+                || service.max_lifetime_ms > MAX_SERVICE_LIFETIME_MS
+                || service.readiness.timeout_ms == 0
+                || service.readiness.timeout_ms > service.max_lifetime_ms
+            {
+                return Err(Error::invalid(
+                    "service readiness and lifetime require ordered finite positive bounds",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+fn bounded_service_argv(argv: &[String]) -> Result<()> {
+    if argv.is_empty()
+        || argv.len() > MAX_SERVICE_ARGV
+        || argv[0].trim().is_empty()
+        || argv
+            .iter()
+            .any(|argument| argument.len() > MAX_SERVICE_ARGUMENT_BYTES || argument.contains('\0'))
+        || argv.iter().map(String::len).sum::<usize>() > MAX_SERVICE_COMMAND_BYTES
+    {
+        return Err(Error::invalid(
+            "check bundle commands need bounded argv without NUL",
+        ));
+    }
+    Ok(())
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,6 +165,8 @@ pub struct ResolvedCheck {
     pub argv: Vec<String>,
     pub artifact_roots: Vec<PathBuf>,
     pub result_artifact: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<CheckService>,
 }
 impl Workflow {
     pub fn load(path: &Path) -> Result<Self> {
@@ -185,6 +269,7 @@ impl Workflow {
                     "checks need a name, argv command and result_artifact",
                 ));
             }
+            command.validate_services()?;
         }
         let tokens = tokenize(&body)?;
         let mut cursor = 0;
@@ -218,6 +303,9 @@ impl Workflow {
         cwd: &Path,
         artifact_roots: &[PathBuf],
     ) -> Result<ResolvedCheck> {
+        // Recheck declarations supplied through the public typed API as well as
+        // parsed workflows; resolution does not grant service execution.
+        command.validate_services()?;
         let cwd = std::fs::canonicalize(cwd).map_err(|e| Error::io("resolve check cwd", e))?;
         if !cwd.is_dir() {
             return Err(Error::invalid("check cwd is not an execution directory"));
@@ -240,6 +328,7 @@ impl Workflow {
             argv: command.argv.clone(),
             artifact_roots: roots,
             result_artifact: resolved,
+            services: command.services.clone(),
         })
     }
     /// Use only for an explicitly identified workflow resource link. This does

@@ -71,6 +71,12 @@ struct CommandSlot {
     cancel_requested: AtomicBool,
 }
 impl crate::execution::CommandCancellation for CommandSlot {
+    fn check_bundle_owner(&self) -> Option<&crate::execution::CheckBundleOwner> {
+        match self.command.get() {
+            Some(ReservedCommand::Owned(command)) => command.check_bundle_owner(),
+            _ => None,
+        }
+    }
     fn cancel(&self) -> Result<()> {
         self.cancel_requested.store(true, Ordering::SeqCst);
         match self.command.get() {
@@ -122,6 +128,35 @@ impl ExecutionReservation {
     }
 }
 impl ExecutionRegistry {
+    /// Retain the exact original aggregate under its operation/effect key.
+    /// Release the registry mutex before inspecting the owner's state or taking
+    /// any Control gate. Pending reservations and ordinary commands return None.
+    pub(crate) fn retained_check_bundle(
+        &self,
+        operation: Uuid,
+        effect: Uuid,
+    ) -> Result<Option<Arc<dyn crate::execution::CommandCancellation>>> {
+        let handle = self
+            .active
+            .lock()
+            .map_err(|_| Error::new("ownership_conflict", "execution registry lock failed"))?
+            .get(&operation)
+            .and_then(|effects| effects.get(&effect))
+            .cloned();
+        let Some(handle) = handle else {
+            return Ok(None);
+        };
+        let Some(owner) = handle.check_bundle_owner() else {
+            return Ok(None);
+        };
+        if owner.plan().owner_operation() != operation || owner.plan().effect_id() != effect {
+            return Err(Error::new(
+                "ownership_conflict",
+                "registered bundle differs from its exact owner/effect key",
+            ));
+        }
+        Ok(Some(handle))
+    }
     pub(crate) fn reserve(&self, operation: Uuid, effect: Uuid) -> Result<ExecutionReservation> {
         let mut active = self
             .active
@@ -207,7 +242,16 @@ impl ExecutionRegistry {
         if let Some(effects) = active.get_mut(&operation) {
             let exited = effects
                 .iter()
-                .map(|(id, handle)| handle.exited().map(|exited| (*id, exited)))
+                .map(|(id, handle)| {
+                    // Process exit precedes bundle artifact capture and Control
+                    // ACK. Keep that original owner until terminal-aware pruning
+                    // or the worker's explicit post-ACK removal.
+                    if handle.check_bundle_owner().is_some() {
+                        Ok((*id, false))
+                    } else {
+                        handle.exited().map(|exited| (*id, exited))
+                    }
+                })
                 .collect::<Result<Vec<_>>>()?;
             for (id, exited) in exited {
                 if exited {
@@ -217,6 +261,58 @@ impl ExecutionRegistry {
             }
             if effects.is_empty() {
                 active.remove(&operation);
+            }
+        }
+        Ok(removed)
+    }
+    /// Caller owns the Control observation gate and supplies its actual receipt
+    /// batch. No registry mutex is held while inspecting bundle/process state.
+    pub(crate) fn observe_settled_check_bundles(
+        &self,
+        control: &ControlHost,
+        receipts: &[crate::control::Receipt],
+    ) -> Result<usize> {
+        let handles = self
+            .active
+            .lock()
+            .map_err(|_| Error::new("ownership_conflict", "execution registry lock failed"))?
+            .iter()
+            .flat_map(|(operation, effects)| {
+                effects
+                    .iter()
+                    .map(|(effect, handle)| (*operation, *effect, handle.clone()))
+            })
+            .collect::<Vec<_>>();
+        let by_effect = receipts
+            .iter()
+            .map(|receipt| (receipt.operation_id, receipt))
+            .collect::<BTreeMap<_, _>>();
+        let mut removed = 0;
+        for (operation, effect, handle) in handles {
+            let Some(owner) = handle.check_bundle_owner() else {
+                continue;
+            };
+            let Some(receipt) = by_effect.get(&effect) else {
+                continue;
+            };
+            if !control.check_bundle_owner_closed(receipt, owner)? {
+                continue;
+            }
+            let mut active = self
+                .active
+                .lock()
+                .map_err(|_| Error::new("ownership_conflict", "execution registry lock failed"))?;
+            if let Some(effects) = active.get_mut(&operation) {
+                if effects
+                    .get(&effect)
+                    .is_some_and(|current| Arc::ptr_eq(current, &handle))
+                {
+                    effects.remove(&effect);
+                    removed += 1;
+                }
+                if effects.is_empty() {
+                    active.remove(&operation);
+                }
             }
         }
         Ok(removed)
@@ -1971,31 +2067,95 @@ impl ScopedWorker {
                 }
                 None => executor.prepare_check(invocation, persist)?,
             };
-            let (effect, running) = control.begin_effect(
-                request,
-                &permit,
-                || {
-                    host.verify_owner(&permit.lease)?;
-                    expected_authority.compare(&effective_authority(
-                        host.as_ref(),
-                        permit.operation_id,
-                        &contract.authority,
-                    )?)
-                },
-                |receipt| {
-                    executor.preflight_check(&prepared)?;
-                    let reservation =
-                        executions.reserve(permit.operation_id, receipt.operation_id)?;
-                    let running = executor.start_check(prepared)?;
-                    reservation.attach(running.cancellation())?;
-                    Ok(running)
-                },
-            )?;
-            // No control mutex is held across child output, timeout, or process wait.
-            let completion = handle.block_on(
-                executor
-                    .complete_check(running, |entry| journal.append("check", entry).map(|_| ())),
-            )?;
+            let current = || {
+                host.verify_owner(&permit.lease)?;
+                expected_authority.compare(&effective_authority(
+                    host.as_ref(),
+                    permit.operation_id,
+                    &contract.authority,
+                )?)
+            };
+            enum ValidationEffect {
+                Single(Box<crate::control::InFlightEffect>),
+                Bundle(
+                    Box<crate::control::InFlightCheckBundle>,
+                    Arc<crate::execution::CheckBundleOwner>,
+                ),
+            }
+            let (effect, completion) = if prepared.requires_bundle() {
+                let prepared = executor.prepare_bundle(prepared, id)?;
+                let owner = prepared.owner();
+                let (mut bundle, ()) = control.begin_check_bundle(
+                    request,
+                    &permit,
+                    prepared.plan().clone(),
+                    current,
+                    |receipt| {
+                        // Known no-spawn refusals precede reservation. The
+                        // aggregate owner is attached before any member starts.
+                        executor.preflight_bundle(&prepared)?;
+                        let reservation =
+                            executions.reserve(permit.operation_id, receipt.operation_id)?;
+                        reservation.attach(owner.clone())?;
+                        Ok(())
+                    },
+                )?;
+                let completed = handle.block_on(executor.complete_bundle(
+                    prepared,
+                    |prepared, ordinal| {
+                        control.advance_check_bundle(
+                            &mut bundle,
+                            &permit,
+                            ordinal,
+                            current,
+                            |launch| executor.launch_bundle_member(prepared, launch),
+                        )
+                    },
+                    |entry| journal.append("check", entry).map(|_| ()),
+                ));
+                let completion = match completed {
+                    Ok(completion) => completion,
+                    Err(error) => {
+                        // A real closed prefix may settle a known service
+                        // failure, but never creates a failed-check repair cap.
+                        // Unknown starts/collectors/journals retain the hold.
+                        match control
+                            .complete_check_bundle_failure(bundle, &permit, &owner, current, &error)
+                        {
+                            Ok(_) => {
+                                executions.remove(permit.operation_id, id)?;
+                                return Err(error);
+                            }
+                            Err(settlement) => {
+                                return Err(error.clone().detail(json!({
+                                    "original_details": error.details,
+                                    "bundle_settlement_error": settlement,
+                                })));
+                            }
+                        }
+                    }
+                };
+                (
+                    ValidationEffect::Bundle(Box::new(bundle), owner),
+                    completion,
+                )
+            } else {
+                let (effect, running) =
+                    control.begin_effect(request, &permit, current, |receipt| {
+                        executor.preflight_check(&prepared)?;
+                        let reservation =
+                            executions.reserve(permit.operation_id, receipt.operation_id)?;
+                        let running = executor.start_check(prepared)?;
+                        reservation.attach(running.cancellation())?;
+                        Ok(running)
+                    })?;
+                // No Control mutex is held across output or process waits.
+                let completion =
+                    handle.block_on(executor.complete_check(running, |entry| {
+                        journal.append("check", entry).map(|_| ())
+                    }))?;
+                (ValidationEffect::Single(Box::new(effect)), completion)
+            };
             let (value, verified, failed, retained) = match completion {
                 crate::execution::CheckCompletion::Passed(checked) => {
                     let retained = checked.retain_outputs(&contract.isolation, &journal.dir)?;
@@ -2014,20 +2174,18 @@ impl ScopedWorker {
                     )
                 }
             };
-            executions.remove(permit.operation_id, id)?;
-            let receipt = control.complete_effect(
-                effect,
-                &permit,
-                || {
-                    host.verify_owner(&permit.lease)?;
-                    expected_authority.compare(&effective_authority(
-                        host.as_ref(),
-                        permit.operation_id,
-                        &contract.authority,
-                    )?)
-                },
-                value,
-            )?;
+            let receipt = match effect {
+                ValidationEffect::Single(effect) => {
+                    executions.remove(permit.operation_id, id)?;
+                    control.complete_effect(*effect, &permit, current, value)?
+                }
+                ValidationEffect::Bundle(bundle, owner) => {
+                    let receipt =
+                        control.complete_check_bundle(*bundle, &permit, &owner, current, value)?;
+                    executions.remove(permit.operation_id, id)?;
+                    receipt
+                }
+            };
             Ok::<_, Error>((receipt, verified, failed, retained))
         })
         .await

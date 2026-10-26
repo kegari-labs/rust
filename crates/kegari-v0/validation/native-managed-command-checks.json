@@ -1,0 +1,48 @@
+{
+  "exit_code": 101,
+  "timed_out": false,
+  "residual_cwd_entries": [
+    ".tmphqx7PS"
+  ],
+  "retained_cwd": "/private/tmp/kegari-nq02a-n_3qkjgx",
+  "request": "NQ-02A",
+  "elapsed_seconds": 0.744292207993567,
+  "binary_sha256": "a989ca4d2520ca9a10a858bee23a043db87e5052eebc3eb79bea3f030c375227",
+  "argv": [
+    "--ignored",
+    "--exact",
+    "isolation::native_tests::managed_foreground_native_exit_output_and_timeout_are_journaled",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "stdout_sha256": "a8c3ec41bd159de56dced483f88bb596ee727e464cecd8ff7b99b7552168c83a",
+  "stderr_sha256": "881f46b38f0f09c12cdb246592684e7f5b96da543388067015db825753e4976f",
+  "status": "failed_first_case",
+  "test_result": {
+    "passed": 0,
+    "failed": 1,
+    "ignored": 0,
+    "filtered": 507,
+    "test_seconds": 0.08
+  },
+  "observed": {
+    "case": 0,
+    "expected_exit_code": 0,
+    "actual_exit_code": null,
+    "journal_state": "group_exited",
+    "guard_release_verified": true,
+    "scratch_empty": true,
+    "protected_sentinel_unchanged": true,
+    "subsequent_cases": "not_run"
+  },
+  "limitations": [
+    "Command output and termination signal were not persisted before the assertion",
+    "Exact failure cause remains unconfirmed",
+    "Approval consumed; another native run requires a new explicit approval",
+    "No supported-profile qualification established"
+  ],
+  "retained_fixture": "/private/tmp/kegari-nq02a-n_3qkjgx/.tmphqx7PS",
+  "request_path": "target/native-qualification/nq-02a-a989ca4d2520/request.json",
+  "stdout_path": "target/native-qualification/nq-02a-a989ca4d2520/native-managed-command.stdout",
+  "stderr_path": "target/native-qualification/nq-02a-a989ca4d2520/native-managed-command.stderr"
+}

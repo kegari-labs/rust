@@ -20,6 +20,13 @@ use uuid::Uuid;
 #[path = "execution_corrections.rs"]
 mod corrections;
 pub use corrections::{CorrectionExecutionProvenance, EffectiveExecutionBinding};
+#[path = "execution_check_bundle.rs"]
+mod check_bundle;
+#[path = "execution_record_validation.rs"]
+mod record_validation;
+pub use check_bundle::{
+    CheckBundleExecutionRecord, CheckBundleMemberResult, CheckBundleOwner, ServiceExecutionRecord,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +42,17 @@ pub trait CommandCancellation: Send + Sync {
     /// adapters conservatively retain their registry entry.
     fn exited(&self) -> Result<bool> {
         Ok(false)
+    }
+    /// A warm pending-inventory query may inspect only this original aggregate.
+    /// Ordinary, missing and decoded cancellation handles expose no bundle owner.
+    fn check_bundle_owner(&self) -> Option<&CheckBundleOwner> {
+        None
+    }
+    fn service_observation(&self) -> Result<isolation::ServiceObservation> {
+        Err(Error::new(
+            "service_observation_unavailable",
+            "boundary has no original service leader observation",
+        ))
     }
 }
 pub trait StartedCommand: Send {
@@ -59,6 +77,19 @@ pub trait CommandBoundary: Send + Sync {
         timeout: Duration,
         output_limit: usize,
     ) -> Result<Box<dyn StartedCommand>>;
+    /// Only the original Control launch token selects a planned bundle member.
+    fn start_bundle_member(
+        &self,
+        _isolation: &ValidatedIsolation,
+        _argv: &[String],
+        _limits: isolation::BundleCommandLimits,
+        _launch: crate::control::CheckBundleLaunch,
+    ) -> Result<Box<dyn StartedCommand>> {
+        Err(Error::new(
+            "unsupported_check_bundle",
+            "command boundary does not support registered check bundles",
+        ))
+    }
     fn run<'a>(
         &'a self,
         isolation: &'a ValidatedIsolation,
@@ -80,6 +111,9 @@ impl CommandCancellation for isolation::OwnedCommandCancellation {
     }
     fn exited(&self) -> Result<bool> {
         isolation::OwnedCommandCancellation::exited(self)
+    }
+    fn service_observation(&self) -> Result<isolation::ServiceObservation> {
+        isolation::OwnedCommandCancellation::service_observation(self)
     }
 }
 impl StartedCommand for isolation::OwnedCommand {
@@ -131,6 +165,30 @@ impl JournaledSandboxBoundary {
     }
 }
 impl CommandBoundary for JournaledSandboxBoundary {
+    fn start_bundle_member(
+        &self,
+        isolation: &ValidatedIsolation,
+        argv: &[String],
+        limits: isolation::BundleCommandLimits,
+        launch: crate::control::CheckBundleLaunch,
+    ) -> Result<Box<dyn StartedCommand>> {
+        if canonical_digest(1, launch.permit())? != canonical_digest(1, &self.permit)?
+            || launch.launch_digest() != check_bundle::launch_digest(isolation, argv)?
+        {
+            return Err(Error::new(
+                "check_bundle_identity",
+                "native launch differs from its admitted bundle member",
+            ));
+        }
+        Ok(Box::new(isolation::start_bundle_command(
+            isolation,
+            argv,
+            limits,
+            self.journal.clone(),
+            launch,
+        )?))
+    }
+
     fn evidence_class(&self) -> ExecutionEvidenceClass {
         ExecutionEvidenceClass::ConfinedExecution
     }
@@ -584,6 +642,8 @@ pub struct CheckExecutionRecord {
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correction: Option<CorrectionExecutionProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<CheckBundleExecutionRecord>,
     pub binding: ExecutionBinding,
     pub workflow_digest: String,
     pub check_name: String,
@@ -611,6 +671,12 @@ pub enum CheckJournalEntry {
         started_at: DateTime<Utc>,
     },
     Finished(Box<CheckExecutionRecord>),
+    BundleStopped {
+        operation_id: Uuid,
+        plan_digest: String,
+        members: Vec<CheckBundleMemberResult>,
+        error: Option<Error>,
+    },
     Uncertain {
         operation_id: Uuid,
         error_code: String,
@@ -644,7 +710,13 @@ impl FailedCheckExecution {
                 "fixture failure is not production repair evidence",
             ));
         }
-        if self.record.successful
+        self.record.validate_shape()?;
+        if self
+            .record
+            .bundle
+            .as_ref()
+            .is_some_and(|bundle| !bundle.services_completed_cleanly())
+            || self.record.successful
             || self.record.before != self.record.after
             || self.record.command.exit_code.is_none_or(|code| code == 0)
             || self.record.command.timed_out
@@ -729,6 +801,7 @@ impl VerifiedCheckExecution {
                 "deterministic execution fixture is not actual validation evidence",
             ));
         }
+        self.record.validate_shape()?;
         Ok(&self.record)
     }
     /// Preserve bytes outside every worker read/write root before permitting a
@@ -836,6 +909,11 @@ pub struct PreparedCheck {
 pub struct RunningCheck {
     prepared: PreparedCheck,
     command: Box<dyn StartedCommand>,
+}
+impl PreparedCheck {
+    pub(crate) fn requires_bundle(&self) -> bool {
+        !self.resolved.services.is_empty()
+    }
 }
 impl RunningCheck {
     pub fn cancellation(&self) -> std::sync::Arc<dyn CommandCancellation> {
@@ -1060,6 +1138,12 @@ impl LocalExecutor<'_> {
     /// Synchronous actual process creation. The host persists sent/unknown and
     /// reserves cancellation ownership in the same serialized effect gate.
     pub fn start_check(&self, prepared: PreparedCheck) -> Result<RunningCheck> {
+        if prepared.requires_bundle() {
+            return Err(Error::new(
+                "check_bundle_admission_required",
+                "service checks require the original serialized bundle admission",
+            ));
+        }
         self.preflight_check(&prepared)?;
         let command = self.boundary.start(
             self.isolation,
@@ -1077,6 +1161,25 @@ impl LocalExecutor<'_> {
         mut persist: impl FnMut(&CheckJournalEntry) -> Result<()>,
     ) -> Result<CheckCompletion> {
         let RunningCheck { prepared, command } = running;
+        let command = match command.wait().await {
+            Ok(result) => result,
+            Err(error) => {
+                persist(&CheckJournalEntry::Uncertain {
+                    operation_id: prepared.binding.operation_id,
+                    error_code: error.code.clone(),
+                })?;
+                return Err(error);
+            }
+        };
+        self.complete_check_result(prepared, command, None, persist)
+    }
+    fn complete_check_result(
+        &self,
+        prepared: PreparedCheck,
+        command: CommandOutcome,
+        bundle: Option<CheckBundleExecutionRecord>,
+        mut persist: impl FnMut(&CheckJournalEntry) -> Result<()>,
+    ) -> Result<CheckCompletion> {
         let PreparedCheck {
             binding,
             effective,
@@ -1090,16 +1193,6 @@ impl LocalExecutor<'_> {
             started_at,
             evidence_class,
         } = prepared;
-        let command = match command.wait().await {
-            Ok(result) => result,
-            Err(error) => {
-                persist(&CheckJournalEntry::Uncertain {
-                    operation_id: binding.operation_id,
-                    error_code: error.code.clone(),
-                })?;
-                return Err(error);
-            }
-        };
         let after = match self
             .check_ownership_binding(&binding, effective.as_ref())
             .and_then(|original| self.preflight(original))
@@ -1162,7 +1255,14 @@ impl LocalExecutor<'_> {
             ));
         }
         let record = CheckExecutionRecord {
-            schema_version: if effective.is_some() { 2 } else { 1 },
+            schema_version: if bundle.is_some() {
+                3
+            } else if effective.is_some() {
+                2
+            } else {
+                1
+            },
+            bundle,
             correction: effective
                 .as_ref()
                 .map(EffectiveExecutionBinding::provenance)
@@ -1181,6 +1281,7 @@ impl LocalExecutor<'_> {
             successful: blocker.is_none(),
             blocker,
         };
+        record.validate_shape()?;
         let entry = CheckJournalEntry::Finished(Box::new(record));
         persist(&entry)?;
         let CheckJournalEntry::Finished(record) = entry else {

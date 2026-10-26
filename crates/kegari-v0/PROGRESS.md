@@ -6,44 +6,66 @@ paused. The previous pause followed the explicit "Keep the goal paused" /
 "Do not start implementation yet" instruction, rather than an entitlement
 prerequisite. Supervision and existing action restrictions remain in force.
 
-Current verified increment after `354b27a`: **0.2.0-alpha.5** implements
-owned managed-command completion and retained bounded supervision, reserves
-check/hook/clone ownership before starts, and attempts every fenced cancellation.
-The release suite passed 1,051 tests with zero failures and three native tests
-ignored across 39 groups. A subsequent test-only lock-scope correction passed its
-exact regression; all-target clippy, formatting, inventory and five staged-binary
-inspections pass. Production/native-fixture source is unchanged since the full
-suite. Initial fixture failures and lint failures are preserved with the source
-manifests in [managed command evidence](validation/MANAGED-COMMAND-SUPERVISION.md).
-Independent final review found no remaining material issue in this increment.
+Current verified increment after `5b7078d`: **0.2.0-alpha.6** implements finite
+check-owned services under the original admitted effect: ordered start/readiness/
+check/stop, retained aggregate ownership, shared deadlines/output limits, writer
+closure before snapshots, and strict warm/cold membership checks. It also fixes
+a host fork/guard-retirement race without weakening genuine-holder uncertainty.
+The exact final release suite passed **1,097 tests, zero failures, three native
+tests ignored, across 40 groups**. Focused regressions, all-target clippy,
+formatting, inventory and five staged-executable inspections pass. Independent
+review found no remaining material finding in the reviewed bundle/interlock
+increment. Native loader bootstrap remains an explicitly unresolved gap.
 
-The exact alpha.5 executable is staged under
-`target/prereleases/kegari-v0-0.2.0-alpha.5-aarch64-apple-darwin-b7f0e3ca25de/`;
-SHA-256 `b7f0e3ca25de43318ac0b1a0c0074482791799c794acc7205e8d35826e505e3d`.
-It is an inspectable development artifact, not an installed/qualified coordinator.
-Normal repository commands retain the missing/unqualified-profile refusal.
-Group exit, durable guard release and joined EOF now support the managed closure
-path; actual supported-profile qualification and registered services remain.
-The owned supervisor continues cleanup if its caller drops the wait. Async
-cleanup deadlines cannot preempt a blocked synchronous OS/storage call.
+The exact executable is staged at
+`target/prereleases/kegari-v0-0.2.0-alpha.6-aarch64-apple-darwin-f273893778f2/kegari-v0`;
+SHA-256 `f273893778f2d48f50f737da6e0a1e553a1c067c6f1d07f82a8410b066f88af7`;
+build identity
+`sha256:a75a0af27f0150c1a0bcaca1e9e91bb0daa2cc98088c30f1ab48c967895ec98e`.
+This is a development executable; it is not installed or operationally qualified.
+See [finite check evidence](validation/MANAGED-CHECK-BUNDLES.md) for exact source,
+commands, artifacts, failed attempts, reviews, compatibility and remaining limits.
 
-Next finish the closed shipped supported-profile/case manifest, verify configured
-tool inventories against that support contract and obtain separately approved
-native evidence. SPEC does not require a new per-profile runtime qualification
-API/issuer/registry; that extra proposed dependency is explicitly deferred in
-[the qualification design](docs/managed-qualification-design.md). Earlier notes
-calling that producer the next mandatory prerequisite are superseded. Qualification
-must still identify tools, toolchain/SDK inputs, host/OS constraints, lifecycle
-assumptions and the actual evidence; operator-supplied hashes alone do not qualify
-a tool. Preserve role/resource isolation and the current action restrictions.
+| Current scope | State |
+| --- | --- |
+| Foreground supervision and finite check-owned services | Implemented and locally tested; no service native qualification claimed |
+| Native foreground launch | NQ-02A and NQ-02B each approved/executed once and failed; both approvals consumed |
+| Managed-profile admission | Public refusal remains enforced; configuration or hashes do not qualify tools |
+| Final-source native checks, supported Rust/Cargo and endpoint services | Incomplete; native runs need separate approval |
+| 0.3 recovery → 0.4 external/visual → 0.5 handover → 0.6 evaluations → 0.7 real qualification | Sequence unchanged; no minor milestone complete |
 
-Then integrate registered service start/readiness/stop/exit and writer gates.
-A service cannot simply keep a separate Sent start effect open: Control holds its
-work key and would prevent the next check. The minimum coherent first service
-slice is a finite owned check bundle with narrowly typed continuation under the
-same admitted effect, and service writers stopped/joined before final artifact
-snapshots. Do not add a generic held-work bypass or count a service declaration
-as lifecycle implementation. Later 0.3–0.7 milestones remain unchanged/incomplete.
+NQ-02B's retained outcome shows SIGABRT in the first Bash case, empty output,
+no timeout, and closed original group/journal/collectors. The other two cases
+were not reached. The matching existing OS crash report places the abort in
+libignition/dyld bootstrap. Apple's installed profile documents literal-root and
+fixed-Cryptex-ancestor read/existence access absent from our tested policy. This
+is the strongest next correction; the exact denied operation remains unproven.
+The pin predates alpha.6's interlock. See [native recheck evidence](validation/NATIVE-MANAGED-RECHECK.md).
+
+**Next work package:** correct only those bounded bootstrap grants, add static
+scope regressions, review/build a new pin and request a fresh bounded native run.
+Do not rerun either consumed NQ-02 request. NQ-01B remains separately pending.
+Then implement the closed shipped Rust/Cargo support contract: content-bound
+compiler/linker/SDK resources, credential-free offline inputs/private state,
+explicit environment and generated-executable cases. The concrete plan is in
+[the qualification design](docs/managed-qualification-design.md). A runtime
+per-profile issuer/registry is not required by SPEC and remains deferred.
+Endpoint services need scoped network support and separate native cases.
+
+All owned Cargo, native-test and artifact-inspection commands have finished.
+NQ-02A/B failed roots and diagnostics are retained; no stale PID has been adopted
+or signalled. No setup, Keychain, installation, service/coordinator activation,
+provider action or push occurred. The full suite's deliberately injected
+uncertainty fixtures remain diagnostic evidence. Source/input manifests and
+failed compile/test/lint history are archived beside the staged artifact.
+
+Previous verified increment `5b7078d` —
+`feat(kegari-v0): retain managed command supervision through completion` —
+delivered alpha.5 owned command completion/cancellation. Its 1,051-pass suite,
+three native ignores and artifact
+`target/prereleases/kegari-v0-0.2.0-alpha.5-aarch64-apple-darwin-b7f0e3ca25de/`
+remain historical [command evidence](validation/MANAGED-COMMAND-SUPERVISION.md).
+The current increment is separate; no commits are consolidated.
 
 Previous verified increment `354b27a` —
 `feat(kegari-v0)!: bind managed foreground policy to execution scope` — delivered
@@ -79,32 +101,54 @@ signalling after reap is refused. The helper expires naturally after five second
 No setup, Keychain, service, provider or pre-existing process is in scope. The
 request is retained beside the pinned executable; it has not been run.
 
-NQ-02A is prepared and awaiting separate explicit approval: one ignored native
-managed-command component test containing three fixed cases, outer timeout
-30 seconds and one attempt. Pinned full-suite test binary:
-`target/native-qualification/nq-02a-a989ca4d2520/managed-command-test`, SHA-256
-`a989ca4d2520ca9a10a858bee23a043db87e5052eebc3eb79bea3f030c375227`.
-Exact argv selects only
-`isolation::native_tests::managed_foreground_native_exit_output_and_timeout_are_journaled`
-with `--ignored --exact --test-threads=1 --nocapture`. The cases run fixed shell
-output/fixture file-access checks, shell exit 7, and an owned `/bin/sleep 5` timed
-out after 100 ms. They use the production Seatbelt/spawn/supervisor path and real
-native identity, group, journal and output observations with a disposable
-synthetic fixture lease. They do not test authenticated Control admission or
-issue operational qualification. Only own groups may be signalled; no existing
-process, setup, Keychain, service, provider or other test is authorized. The test
-and wrapper preserve evidence roots on failure/timeout. The request, immutable
-binary, one-attempt wrapper and full-suite source manifest are retained beside
-the binary. It predates only the later test-only lock-scope lint correction;
-production/native-fixture code is unchanged. No attempt marker/result exists.
-NQ-01B and NQ-02A are pending decisions, not live processes. All owned Cargo and
-artifact inspection processes for alpha.5 have finished.
+NQ-02A was explicitly approved and executed **once**, then failed in its first
+case: expected shell exit 0, observed no numeric exit code. Test exit 101;
+0 passed / 1 failed / 507 filtered; outer timeout did not fire (0.744 seconds).
+Cases two and three were not reached. The pinned binary and one-use permission
+are unchanged; **do not rerun it**. The retained first-case journal records owned
+group exit and verified guard release, with a null exit code; scratch is empty
+and the protected sentinel is unchanged. The test did not retain its command
+output or termination signal before asserting, so the exact cause is unresolved.
+See [native managed-command failure](validation/NATIVE-MANAGED-COMMAND.md).
+
+Read-only diagnosis found absent executable-mapping grants and an undeclared
+transitive shell: this host's `/bin/sh` selects `/bin/bash` through
+`/private/var/select/sh`. These are supported launch incompatibilities, not proof
+of the particular denied operation. Correct the scoped profile and fixture
+observability, run deterministic checks, then prepare a new pinned request before
+any separately approved native repeat. Preserve the original failed root at
+`/private/tmp/kegari-nq02a-n_3qkjgx/.tmphqx7PS` and request/result beside
+`target/native-qualification/nq-02a-a989ca4d2520/managed-command-test`.
+NQ-01B remains unapproved/unexecuted. No native test is currently running.
+
+NQ-02B was explicitly approved and executed **once** after the final Cargo
+checks finished. Pinned binary:
+`target/native-qualification/nq-02b-ac6cf23ac60b/managed-command-test`, SHA-256
+`ac6cf23ac60b314bd3839880d7ffb1ab026a26ff0a2612e30bf66e403e78a4c9`.
+The first case failed: SIGABRT (6), no numeric exit, empty output, no truncation
+or timeout. Test exit 101; 0 passed / 1 failed / 541 filtered; wrapper exit 1,
+0.649546 seconds. Original group/journal/collector closure is recorded; scratch
+is empty and the protected sentinel unchanged. Exit-7 and sleep cases were not
+reached. The request, one-attempt marker, result and failed evidence root
+`/private/tmp/kegari-nq02b-8944rt1y/.tmpOxKZ33` are preserved. This pin predates
+final host-launch synchronization and does not qualify alpha.6. Approval is
+consumed; NQ-01B was not included and remains unexecuted. No native test is running.
+
+
+Alpha.6 validation retained the initial compile/lint failures, invalid new-worker
+fixture setup, the production canonical-float digest defect exposed by those
+fixtures, and the second full suite's guarded Git-probe failure. The corrected
+plan binds its five actual integer bounds. A controlled pre-exec regression proves
+the transient inherited-descriptor race mechanism; the specific historical
+holder was not identified. The interlock and original cutoff checks pass focused
+and final full regression. [Detailed evidence](validation/MANAGED-CHECK-BUNDLES.md)
+records every attempt and distinguishes component tests from native qualification.
 
 The guided setup change is committed as `2eab4ae` —
 `feat(kegari-v0): guide initial local setup with reviewed configuration`.
 The verified alpha.4 managed-policy, compatibility, documentation and evidence
-are recorded in a separate increment for reviewable history. All owned Cargo and
-artifact inspection processes have finished; NQ-01B is awaiting approval, not live.
+are recorded in a separate increment for reviewable history. Its owned Cargo and
+artifact inspection processes finished; NQ-01B remained awaiting approval.
 
 Prior verified increment: **0.2.0-alpha.3** binds actual owned-group exit
 evidence to its original spawn, distinguishes schema-2 evidence from legacy rows,

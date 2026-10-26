@@ -14,6 +14,11 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "control_check_bundle.rs"]
+mod check_bundle;
+pub use check_bundle::CheckBundleLaunch;
+pub(crate) use check_bundle::{CheckBundlePlan, CheckBundleStepSpec, InFlightCheckBundle};
+
 #[path = "control_effect_index.rs"]
 mod effect_index;
 pub(crate) use effect_index::{ParentEffectHistoryBinding, ParentEffectHistoryObservation};
@@ -1703,6 +1708,12 @@ impl ControlHost {
         fresh_gate: impl FnOnce() -> Result<()>,
         launch: impl FnOnce(&Receipt) -> Result<T>,
     ) -> Result<(InFlightEffect, T)> {
+        if request.expected.contains_key(check_bundle::PLAN_KEY) {
+            return Err(Error::new(
+                "scope_violation",
+                "a check bundle requires its typed admission path",
+            ));
+        }
         self.begin_owned_effect(request, permit, fresh_gate, launch, false)
     }
 
@@ -1742,6 +1753,20 @@ impl ControlHost {
             .lock()
             .map_err(|_| Error::new("control_failed", "control serialization failed"))?;
         validate_live_permit(&s, permit)?;
+        if request.expected.contains_key(check_bundle::PLAN_KEY) {
+            let registered = s.permits.get(&permit.operation_id).ok_or_else(|| {
+                Error::new(
+                    "check_bundle_identity",
+                    "bundle has no actual registered permit",
+                )
+            })?;
+            if canonical_digest(1, registered)? != canonical_digest(1, permit)? {
+                return Err(Error::new(
+                    "check_bundle_identity",
+                    "bundle permit differs from its complete original registration",
+                ));
+            }
+        }
         if request.runtime_id != s.intent.runtime_id || s.service_stopping {
             return Err(Error::new(
                 "access_denied",
@@ -1789,6 +1814,9 @@ impl ControlHost {
             fresh_gate()
         };
         if let Err(error) = check {
+            if receipt.expected.contains_key(check_bundle::PLAN_KEY) {
+                check_bundle::record_never_started(&mut receipt)?;
+            }
             receipt.phase = ReceiptPhase::Reconciled;
             receipt.observed_result =
                 Some(serde_json::json!({"effect":"not_started","error":error}));
@@ -1833,6 +1861,12 @@ impl ControlHost {
             .lock()
             .map_err(|_| Error::new("control_failed", "control serialization failed"))?;
         let mut receipt = self.receipts.get(effect.request_id)?;
+        if receipt.expected.contains_key(check_bundle::PLAN_KEY) {
+            return Err(Error::new(
+                "scope_violation",
+                "a check bundle requires its actual settled owner",
+            ));
+        }
         if effect.permit.operation_id != permit.operation_id
             || effect.permit.lease != permit.lease
             || effect.permit.scope_digest != permit.scope_digest

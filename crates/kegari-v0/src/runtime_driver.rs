@@ -273,53 +273,99 @@ impl RuntimeDriver {
         Ok(())
     }
     fn recover_processes(&self) -> Result<()> {
-        let receipts = self.runtime.control.operations()?;
-        let by_operation: BTreeMap<_, _> = receipts
-            .iter()
-            .map(|receipt| (receipt.operation_id, receipt))
-            .collect();
-        let snapshot = self.runtime.control.snapshot()?;
-        let mut pending = Vec::new();
-        for operation in self.processes.operations()? {
-            let observed = self.processes.observe(operation)?;
-            if observed.is_empty() {
-                continue;
-            }
-            let receipt = by_operation.get(&operation).ok_or_else(|| {
-                Error::new(
-                    "record_corrupt",
-                    "native process record lacks its durable admission",
-                )
-            })?;
-            for process in &observed {
-                validate_process_admission(process, receipt)?;
-            }
-            if matches!(receipt.phase, ReceiptPhase::Prepared | ReceiptPhase::Sent) {
-                if !snapshot.unresolved_operations.contains_key(&operation)
-                    && !snapshot
-                        .active_operations
-                        .iter()
-                        .any(|permit| permit.operation_id == operation)
+        // Membership creation and the receipt/process batch share the original
+        // Control gate. Native exit observations may progress concurrently, but
+        // no new bundle member can race this inventory as a missing record.
+        let pending = self.runtime.control.serialize_observation(|snapshot| {
+            let receipts = self.runtime.control.operations()?;
+            let by_operation: BTreeMap<_, _> = receipts
+                .iter()
+                .map(|receipt| (receipt.operation_id, receipt))
+                .collect();
+            for receipt in &receipts {
+                if receipt.phase == ReceiptPhase::Sent
+                    && receipt.expected.contains_key("check_bundle")
                 {
-                    return Err(Error::new(
+                    let work = receipt.expected.get("admitted_work").ok_or_else(|| {
+                        Error::new("record_corrupt", "pending bundle lost admitted work")
+                    })?;
+                    if !snapshot
+                        .unresolved_operations
+                        .get(&receipt.operation_id)
+                        .is_some_and(|targets| {
+                            targets.contains(work)
+                                && receipt
+                                    .canonical_targets
+                                    .iter()
+                                    .all(|target| targets.contains(target))
+                        })
+                    {
+                        return Err(Error::new(
+                            "record_corrupt",
+                            "pending bundle lost its original work/resource hold",
+                        ));
+                    }
+                }
+            }
+            let mut pending = Vec::new();
+            let mut bindings = Vec::new();
+            for operation in self.processes.operations()? {
+                let observed = self.processes.observe(operation)?;
+                if observed.is_empty() {
+                    continue;
+                }
+                let receipt = by_operation.get(&operation).ok_or_else(|| {
+                    Error::new(
                         "record_corrupt",
-                        "unfinished process admission lost its canonical hold",
+                        "native process record lacks its durable admission",
+                    )
+                })?;
+                for process in &observed {
+                    validate_process_admission(process, receipt)?;
+                    bindings.push(process.binding.clone());
+                }
+                if matches!(receipt.phase, ReceiptPhase::Prepared | ReceiptPhase::Sent) {
+                    if !snapshot.unresolved_operations.contains_key(&operation)
+                        && !snapshot
+                            .active_operations
+                            .iter()
+                            .any(|permit| permit.operation_id == operation)
+                    {
+                        return Err(Error::new(
+                            "record_corrupt",
+                            "unfinished process admission lost its canonical hold",
+                        ));
+                    }
+                    pending.extend(observed);
+                } else if observed.iter().any(|process| {
+                    !matches!(
+                        process.state,
+                        crate::process_records::RecoveryState::GroupExitRecordedTreeUnverified
+                            | crate::process_records::RecoveryState::OwnedGroupExitRecorded
+                    )
+                }) {
+                    return Err(Error::new(
+                        "ownership_conflict",
+                        "terminal admission conflicts with unconfirmed recorded process exit",
                     ));
                 }
-                pending.extend(observed);
-            } else if observed.iter().any(|process| {
-                !matches!(
-                    process.state,
-                    crate::process_records::RecoveryState::GroupExitRecordedTreeUnverified
-                        | crate::process_records::RecoveryState::OwnedGroupExitRecorded
-                )
-            }) {
-                return Err(Error::new(
-                    "ownership_conflict",
-                    "terminal admission conflicts with unconfirmed recorded process exit",
-                ));
             }
-        }
+            // Compare the emitted attempted inventory even when an entire process
+            // directory is missing. Descriptive member rows do not recreate handles.
+            self.runtime.control.verify_live_check_bundle_inventory(
+                &receipts,
+                &bindings,
+                |operation, effect| {
+                    self.runtime
+                        .executions
+                        .retained_check_bundle(operation, effect)
+                },
+            )?;
+            self.runtime
+                .executions
+                .observe_settled_check_bundles(&self.runtime.control, &receipts)?;
+            Ok(pending)
+        })?;
         self.state()?.recovery = pending;
         Ok(())
     }
@@ -1446,6 +1492,7 @@ mod tests {
                 owner_id: id(4),
             }),
             control_owner: None,
+            check_bundle: None,
             work_key: "canonical-work".into(),
             scope_digest: bytes_digest(b"scope"),
             cwd: root,

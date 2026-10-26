@@ -1,0 +1,290 @@
+{
+  "recorded_at": "2026-10-26T19:44:56.431802+00:00",
+  "request": {
+    "id": "NQ-02B",
+    "binary": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02b-ac6cf23ac60b/managed-command-test",
+    "sha256": "ac6cf23ac60b314bd3839880d7ffb1ab026a26ff0a2612e30bf66e403e78a4c9",
+    "argv": [
+      "--ignored",
+      "--exact",
+      "isolation::native_tests::managed_foreground_native_exit_output_and_timeout_are_journaled",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "timeout_seconds": 30,
+    "attempts": 1,
+    "actions": "One corrected native foreground component test: direct pinned /bin/bash --noprofile --norc --posix tests redacted output, disposable scratch writes and denied protected-fixture reads/writes; direct Bash exits 7; owned /bin/sleep 5 is timed out after 100 ms and requires its own SIGKILL/exit evidence. Uses corrected fixed OS loader/executable mappings, actual native identity, owned groups, journal and joined collectors. Fixture lease is synthetic; no authenticated runtime admission or qualification is issued.",
+    "cleanup": "Only fresh disposable fixtures and original owned processes. Each case persists profile/launch/redacted outcome/journal diagnostics before asserting. Evidence roots remain on failure/timeout; fixture root is removed only after all three cases prove expected output, group, guard and journal closure. Wrapper preserves failed or nonempty cwd. No repeat is authorized.",
+    "not_authorized": "No NQ-01B, setup, Keychain, service start/install, launchctl, existing-process action, provider/network operation, signing, installation or other test.",
+    "status": "prepared_not_executed_requires_explicit_user_approval",
+    "source_manifest": "source-inputs.json",
+    "source_validation": "Built with Rust/Cargo 1.99.1; latest five actual worker component tests pass; final full regression is running separately. This request does not claim native qualification."
+  },
+  "result": {
+    "exit_code": 101,
+    "timed_out": false,
+    "residual_cwd_entries": [
+      ".tmpOxKZ33"
+    ],
+    "retained_cwd": "/private/tmp/kegari-nq02b-8944rt1y",
+    "request": "NQ-02B",
+    "elapsed_seconds": 0.6495460839942098,
+    "binary_sha256": "ac6cf23ac60b314bd3839880d7ffb1ab026a26ff0a2612e30bf66e403e78a4c9",
+    "argv": [
+      "--ignored",
+      "--exact",
+      "isolation::native_tests::managed_foreground_native_exit_output_and_timeout_are_journaled",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "stdout_sha256": "c1f7b00f7091d091ea20bbc70de448adbfa5cb80281a0680df1a13ea82293681",
+    "stderr_sha256": "4211cd1e9a03baa8bb213ea1fce454ba8193c03ea1fd2a4b4357bcdfc393a1c2"
+  },
+  "test_result": {
+    "passed": 0,
+    "failed": 1,
+    "ignored": 0,
+    "filtered": 541
+  },
+  "status": "failed_or_interrupted_pinned_foreground_component",
+  "approval": "Explicit single bounded run approved in this goal chat; consumed by the one recorded attempt.",
+  "artifact_files": {
+    "request.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02b-ac6cf23ac60b/request.json",
+      "sha256": "6b23280b8e2bb80555b63e2c84bbc1350a162a36de86e90d8e85b6c1c798abe7"
+    },
+    "attempt-started.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02b-ac6cf23ac60b/attempt-started.json",
+      "sha256": "66307c88fe4b87169aa964af05905b2cad6cf0a82d7ad750231398eb12ba66c4"
+    },
+    "result.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02b-ac6cf23ac60b/result.json",
+      "sha256": "02df90009b7f3c17021f0020885750448a2d57f1f1cdb432f709780393225083"
+    },
+    "run-once.py": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02b-ac6cf23ac60b/run-once.py",
+      "sha256": "9e671fa7bad25c9732ccdefded4a2d48fbb8d5f08f04d547328feca631a93713"
+    },
+    "source-inputs.json": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02b-ac6cf23ac60b/source-inputs.json",
+      "sha256": "32e4d1a0a340f88ee328f23878b9094e0310ecdb54a4b0ad5bda4a81d6555ce8"
+    },
+    "native-managed-command.stdout": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02b-ac6cf23ac60b/native-managed-command.stdout",
+      "sha256": "c1f7b00f7091d091ea20bbc70de448adbfa5cb80281a0680df1a13ea82293681"
+    },
+    "native-managed-command.stderr": {
+      "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02b-ac6cf23ac60b/native-managed-command.stderr",
+      "sha256": "4211cd1e9a03baa8bb213ea1fce454ba8193c03ea1fd2a4b4357bcdfc393a1c2"
+    }
+  },
+  "fixture_root": "/private/tmp/kegari-nq02b-8944rt1y/.tmpOxKZ33",
+  "fixture_root_retained": true,
+  "source_changes_after_pin": [
+    {
+      "path": "src/cli.rs",
+      "pinned_sha256": "0c76eaea23e74e6ccd584b50e66323f3ff22cf6bfe412d4f42b8f5f0c7138bfc",
+      "final_sha256": "ea99b7c151c74294e16a5a3b069724bccd13265f14c6e00b4a3ec064f385b8d0"
+    },
+    {
+      "path": "src/evaluation_placement.rs",
+      "pinned_sha256": "3cddc47139c80d4ed38d1a78bd6f75d0c1eba89d7da2f91c962840b072019558",
+      "final_sha256": "be3ced7570579ab9abd83dd787462ce3eea084df87136150f2a5de354de31d6f"
+    },
+    {
+      "path": "src/execution_corrections_tests.rs",
+      "pinned_sha256": "8d718d3429a6b0c6c30ef79c346fd2b6fd05a416b3d8bf1349ec3326ee9c2617",
+      "final_sha256": "88e54435645bdc64171ac414fad0cc602e27ab16c0df47a77ca89ebbb79a6de8"
+    },
+    {
+      "path": "src/git.rs",
+      "pinned_sha256": "71df6e0317fd5c01b67c4d740daf478d87d9871d536bbf7a170f2d839b58fa99",
+      "final_sha256": "e759d5092aaca57641a176dc89751818d98fa49328c9b7a403f29c55452ecbbf"
+    },
+    {
+      "path": "src/git_reuse_family_tests.rs",
+      "pinned_sha256": "9268d18efbaeee0eec59881b99c27554f9aa0e6c4019561ff8478d4eb7a98599",
+      "final_sha256": "179ec65ee32f5fa4f8cf07e3091c6a8d7839f37be46fa85876d501386896cd04"
+    },
+    {
+      "path": "src/git_startup_exit_tests.rs",
+      "pinned_sha256": "9c376e4ede79b145cb05e8b7f9819de85a95308203de2cd5cf249ca20ab06f71",
+      "final_sha256": "edfb7e30d90649a23c0c49c7bde6ba55efb646e1ed3111de590edcdb7877bfb9"
+    },
+    {
+      "path": "src/housekeeping.rs",
+      "pinned_sha256": "774827002cd56633f8e63587a97544d2b70f9c47f647f0f6bdc61424f4585c6e",
+      "final_sha256": "dbafec773269a7535ce6be30c4a86ac6db1e4646f8fe584c84b50867840b3359"
+    },
+    {
+      "path": "src/isolation.rs",
+      "pinned_sha256": "577379d37a9bcc045e3257474337806a6094c7c0fa71ed459ffcf6d141051c36",
+      "final_sha256": "ce55bd8508caebfcc0a4e58bfd9f541a859e316fb24c9e5e13238b3f824b683b"
+    },
+    {
+      "path": "src/lib.rs",
+      "pinned_sha256": "9f819cf6956a58fc5fa4d54650776c222f18cfc501c0589240af946a3fc7b9d2",
+      "final_sha256": "04ab43da4e968b949045cc99f02a2c395ce8ea28bc7aa290437f8c8f28e54019"
+    },
+    {
+      "path": "src/platform.rs",
+      "pinned_sha256": "76b444a8e443c63f5d821fcd34f38a7beb41241b21209360493ad078b3720af6",
+      "final_sha256": "f287d4b3ea6253ec73b667df7700151688cf14942680ce788a11e8edbf72fd53"
+    },
+    {
+      "path": "src/process_group.rs",
+      "pinned_sha256": "3dc104c643e3c6bec9b559b6ed8876f1ca8df802132a78fc585305b1b00740ca",
+      "final_sha256": "5f78248cde8883ad0a8ca52863713d2a9b2fa68980f1fbe453db901c7d430a11"
+    },
+    {
+      "path": "src/process_records.rs",
+      "pinned_sha256": "312f485144500c518d4e0cefd6c5ad1e0170510559ea74e071a1b81edd44c9ca",
+      "final_sha256": "60b3c91709464fc2326bf46267ac6558928d2e3ccaf7001e29583d2517164e5e"
+    },
+    {
+      "path": "src/process_spawn.rs",
+      "pinned_sha256": null,
+      "final_sha256": "32db15f7259fcfb979044dc2629429d363149f4e42455dbac295eedd68297a39"
+    },
+    {
+      "path": "src/remote_objects_tests.rs",
+      "pinned_sha256": "42803a4e7bc5ec16bb3781a101f21303b276ad711aee3ac89d4fe0dee3549a84",
+      "final_sha256": "f6a9572c7f8b3fb2c89d9437ed44c8a8c81632d5966c9eaa17efb1f09d12387b"
+    },
+    {
+      "path": "src/runtime_delivery_worker_fixture.rs",
+      "pinned_sha256": "7dd0267cb612ceea4e2c1ba5f61e0fecb925613aa336e2423b2c5f7cf3b4fea0",
+      "final_sha256": "504f3674e34ee56c83fd6137e71b696659e98d767b52560fc2a6a56e7c65f812"
+    },
+    {
+      "path": "src/transport.rs",
+      "pinned_sha256": "b768902d7e57e1b0182fb1a142b2c377b2789d3fcf6142f4d574ccaae35338c0",
+      "final_sha256": "81f130c0090743670286fbc7e894152133cf3f51819f4554e76bd87fb1f150f1"
+    },
+    {
+      "path": "tests/delivery.rs",
+      "pinned_sha256": "1cac4773c62e4072b1af2230af30daebe04810b9495ce7a3d425d9969ee709fb",
+      "final_sha256": "1ea531e281d3acdec2cfee9bdd0458347e80c27aa90b7ed7a1e9412a5f0d8ab1"
+    },
+    {
+      "path": "tests/execution.rs",
+      "pinned_sha256": "2dd74ad03122036d1897dae92300845fc3baf257c33b5f911d966f7ed7604d1a",
+      "final_sha256": "f27d0b8e6a981ff52a95a0910d2bc0179a5efe40b89b9a58973b14d3ed276b3c"
+    },
+    {
+      "path": "tests/git_delivery.rs",
+      "pinned_sha256": "a84c48048a7e364905b59211dfec56cd8b84bd7b59badfeb9abca0372853cabe",
+      "final_sha256": "c7ed6049f93123065da84265b02343d60494d96454e01f7d3b3bf78c02e42d18"
+    },
+    {
+      "path": "tests/host_process.rs",
+      "pinned_sha256": "d2bfa4ded0eba1d302c3ff87b4c9ca0dba5cca4698cf484579c54846e5a63bf2",
+      "final_sha256": "e5476266c42dde8fa41b6136fbff1a7611fd5c7afb43a9d23fc08015cad1b958"
+    },
+    {
+      "path": "tests/housekeeping.rs",
+      "pinned_sha256": "85c53772de73ee4806531f4082fa6e4c136a2ea2d3144bb558ea68bd7d4ffb81",
+      "final_sha256": "708ea68e1d8775a4d11fcbe3705ac87255fd2e6e22a802068f0a616d878a6748"
+    },
+    {
+      "path": "tests/support/lineage_wire.rs",
+      "pinned_sha256": "93535b050fc6ee29cbb44c3d56add240a28ca20bc710534866168b7199ea71c8",
+      "final_sha256": "aa16741388bef71f6d3b8336beb13cd976a773c1f9feb052e3c3d20acbfe7687"
+    },
+    {
+      "path": "tests/support/parent_evidence.rs",
+      "pinned_sha256": "9aa3262e7a0eff609b3b7ae02e9499b78be3ba9a74c1c1b17ebcff7fe3ced5ef",
+      "final_sha256": "4b45ffc8df86140d4aba8461b18f9da8b31f9d56ca43d07f4d7123a93cd921af"
+    },
+    {
+      "path": "tests/support/release_wire.rs",
+      "pinned_sha256": "8a452fe64051d22c9dddb4695a025f180edb88cefea862c750b9671129c1afd4",
+      "final_sha256": "1520bf6565905baafdaa59a63d4a7b75077ce210e2416eb00d2cce68897df440"
+    },
+    {
+      "path": "tests/support/worker_fixture.rs",
+      "pinned_sha256": "626b223c4499cecb156f0b430cbd7a95c3d29111c10f934186a7b90373ab1dca",
+      "final_sha256": "735b02384d226778431f0d23f55b6822d27a54a3fdd1601f86c25a9db0629d6b"
+    }
+  ],
+  "limits": [
+    "Synthetic disposable worker lease; no authenticated runtime admission or profile qualification was issued.",
+    "This pin predates the final host spawn/guard-retirement interlock and timeout correction; it is not final-source native qualification.",
+    "The selected test covers fixed foreground Bash output/file checks, Bash exit 7 and owned sleep timeout only when all assertions pass.",
+    "No registered-service, Rust/Cargo, provider, setup, Keychain, installation or full-descendant qualification is established.",
+    "No NQ-01B execution is included. NQ-02A remains a distinct retained failed attempt."
+  ],
+  "observed": {
+    "case": 0,
+    "exit_code": null,
+    "termination_signal": 6,
+    "timed_out": false,
+    "elapsed_ms": 46,
+    "stdout_empty": true,
+    "stderr_empty": true,
+    "output_truncated": false,
+    "cancellation_exited": true,
+    "journal_state": "owned_group_exit_recorded",
+    "owned_group_exited": true,
+    "all_descendants_exited": false,
+    "subsequent_cases": "not_run",
+    "scratch_empty": true,
+    "protected_sentinel_unchanged": true
+  },
+  "retained_diagnostics": {
+    "seatbelt.sb": {
+      "path": "/private/tmp/kegari-nq02b-8944rt1y/.tmpOxKZ33/seatbelt.sb",
+      "sha256": "f3b35847dc4a1696892eeb5a49477f335859751f7af78875aa6c1fddc03c926a"
+    },
+    "case-0-launch.json": {
+      "path": "/private/tmp/kegari-nq02b-8944rt1y/.tmpOxKZ33/case-0-launch.json",
+      "sha256": "14c1a69e3186005fc8eb8bd7c210dc4b772519f89890b739058721627a3749a6"
+    },
+    "case-0-wait.json": {
+      "path": "/private/tmp/kegari-nq02b-8944rt1y/.tmpOxKZ33/case-0-wait.json",
+      "sha256": "43cd155a56863951420536c1f3e96872655e9668f5e3f216d0749dcef0e013b1"
+    }
+  },
+  "crash_summary": {
+    "path": "/Users/lgr/Development/com.kegari/com.kegari.rust/target/native-qualification/nq-02b-ac6cf23ac60b/crash-summary.json",
+    "sha256": "73fb3e06f67615986660b6617be4d80994f74a61e082414ff1d84d8e969fea1c",
+    "observations": {
+      "source_path": "/Users/lgr/Library/Logs/DiagnosticReports/bash-2026-10-26-204451.ips",
+      "source_sha256": "302ff607cdadd9b4025c11efff8ac2ba7ec62575f7ef3c673c8bd061ee299b3b",
+      "owned_pid_matches": true,
+      "owned_parent_pid_matches": true,
+      "proc_name": "bash",
+      "proc_path": "/bin/bash",
+      "capture_time": "2026-10-26 20:44:51.2678 +0100",
+      "exception": {
+        "codes": "0x0000000000000000, 0x0000000000000000",
+        "rawCodes": [
+          0,
+          0
+        ],
+        "type": "EXC_CRASH",
+        "signal": "SIGABRT"
+      },
+      "termination": {
+        "namespace": "<0x23>",
+        "flags": 582,
+        "code": 2
+      },
+      "faulting_symbols": [
+        "__abort_with_payload",
+        "abort_with_payload_wrapper_internal",
+        "abort_with_reason",
+        "ignition_halt",
+        "boot_boot",
+        "ignite",
+        "dyld4::CacheFinder::CacheFinder(dyld4::ProcessConfig::Process const&, dyld4::ProcessConfig::Logging const&, dyld4::SyscallDelegate&)",
+        "dyld4::ProcessConfig::DyldCache::DyldCache(dyld4::ProcessConfig::Process&, dyld4::ProcessConfig::Security const&, dyld4::ProcessConfig::Logging const&, dyld4::SyscallDelegate&, lsl::Allocator&, dyld4::ProcessConfig const&)",
+        "dyld4::ProcessConfig::ProcessConfig(dyld4::KernelArgs const*, dyld4::SyscallDelegate&, lsl::Allocator&)",
+        "dyld4::start(dyld4::KernelArgs*, void*, void*, unsigned long long)::$_1::operator()() const",
+        "start"
+      ],
+      "limit": "Correlates the abort with loader/libignition bootstrap; does not identify an exact denied operation."
+    }
+  },
+  "next_candidate": "Documented literal-root/Cryptex-ancestor bootstrap reads are absent. Correct narrow profile rules, retain forbidden-root constraints and request fresh pinned native approval; exact denial remains unproven."
+}

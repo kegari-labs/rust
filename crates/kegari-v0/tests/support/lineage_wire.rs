@@ -852,23 +852,24 @@ fn git_bytes(binary: &Path, root: &Path, args: &[&str], input: Option<&[u8]>) ->
         io::Write,
         process::{Command, Stdio},
     };
-    let mut child = Command::new(binary)
-        .current_dir(root)
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("HOME", root)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_PROTOCOL", "version=2")
-        .env("GIT_AUTHOR_NAME", "Fixture Human")
-        .env("GIT_COMMITTER_NAME", "Fixture Human")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let (mut child, _group) = kegari_v0::process_group::OwnedGroup::spawn_std(
+        Command::new(binary)
+            .current_dir(root)
+            .args(args)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", root)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_PROTOCOL", "version=2")
+            .env("GIT_AUTHOR_NAME", "Fixture Human")
+            .env("GIT_COMMITTER_NAME", "Fixture Human")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .unwrap();
     if let Some(bytes) = input {
         child.stdin.take().unwrap().write_all(bytes).unwrap();
     } else {

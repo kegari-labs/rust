@@ -18,31 +18,32 @@ use std::{
     },
 };
 fn fixture_git(binary: &Path, cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Vec<u8> {
-    let mut child = Command::new(binary)
-        .current_dir(cwd)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_PROTOCOL", "version=2")
-        .env("GIT_AUTHOR_NAME", "Disposable Fixture")
-        .env("GIT_COMMITTER_NAME", "Disposable Fixture")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgSign=false",
-        ])
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let (mut child, _group) = crate::process_group::OwnedGroup::spawn_std(
+        Command::new(binary)
+            .current_dir(cwd)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_PROTOCOL", "version=2")
+            .env("GIT_AUTHOR_NAME", "Disposable Fixture")
+            .env("GIT_COMMITTER_NAME", "Disposable Fixture")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+            .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgSign=false",
+            ])
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .unwrap();
     if let Some(input) = input {
         child.stdin.take().unwrap().write_all(input).unwrap();
     }

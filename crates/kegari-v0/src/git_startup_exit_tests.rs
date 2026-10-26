@@ -85,6 +85,7 @@ impl JournalFixture {
                 owner_generation: 1,
             }),
             control_owner: None,
+            check_bundle: None,
             work_key: bytes_digest(b"owned startup fixture"),
             scope_digest: bytes_digest(b"owned startup fixture scope"),
             cwd: path,
@@ -557,4 +558,115 @@ fn git_journal_retry_retains_the_actual_owned_exit_token() {
     assert!(active.guard.is_none());
     assert!(active.observe().unwrap().unwrap().success());
     fixture.assert_closed_without_running_identity();
+}
+
+#[test]
+fn guard_retirement_waits_for_unrelated_pre_exec_but_not_its_process_exit() {
+    use std::io::Read;
+    use std::os::{fd::AsRawFd, unix::process::CommandExt};
+    struct ReapOnDrop(std::process::Child);
+    impl Drop for ReapOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let fixture = JournalFixture::new();
+    let mut original = GatedChild::start(&fixture);
+    let (mut pre_parent, pre_child) = UnixStream::pair().unwrap();
+    pre_parent
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    pre_parent
+        .set_write_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let (mut after_parent, after_child) = UnixStream::pair().unwrap();
+    let (retiring, entered_retirement) = std::sync::mpsc::sync_channel(1);
+    let (retired, retirement_result) = std::sync::mpsc::sync_channel(1);
+
+    // This actual unrelated host child inherits the guard only until exec. Its
+    // pre-exec rendezvous uses only async-signal-safe syscalls and has a finite
+    // fallback. No post-fork Rust lock, allocation or process capability is used.
+    let launcher = std::thread::spawn(move || {
+        let fd = pre_child.as_raw_fd();
+        let mut command = Command::new("/bin/bash");
+        command
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                "IFS= read -r -t 10 release; test \"$release\" = done",
+            ])
+            .env_clear()
+            .stdin(Stdio::from(OwnedFd::from(after_child)))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(move || {
+                if libc::write(fd, b"R".as_ptr().cast(), 1) != 1 {
+                    libc::_exit(111);
+                }
+                let mut poll = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if libc::poll(&mut poll, 1, 10_000) != 1 {
+                    libc::_exit(112);
+                }
+                let mut byte = 0_u8;
+                if libc::read(fd, (&mut byte as *mut u8).cast(), 1) != 1 || byte != b'G' {
+                    libc::_exit(113);
+                }
+                Ok(())
+            });
+        }
+        let (child, _) = OwnedGroup::spawn_std(&mut command).unwrap();
+        drop(pre_child);
+        ReapOnDrop(child)
+    });
+    let mut byte = [0];
+    pre_parent.read_exact(&mut byte).unwrap();
+    assert_eq!(byte, [b'R']);
+
+    original.release.write_all(b"released\n").unwrap();
+    assert!(
+        original
+            .group
+            .await_exit_before_reap(Instant::now() + Duration::from_secs(2), || Ok(()))
+            .unwrap()
+    );
+    let exit = original
+        .group
+        .try_reap_std(original.child.as_mut().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(exit.status().success());
+    original.child.take();
+    let mut guard = original.guard.take().unwrap();
+    let retirement = std::thread::spawn(move || {
+        retiring.send(()).unwrap();
+        let result = guard.group_exited(&exit);
+        retired.send(result.clone()).unwrap();
+        result
+    });
+    entered_retirement
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+    assert!(matches!(
+        retirement_result.recv_timeout(Duration::from_millis(50)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    pre_parent.write_all(b"G").unwrap();
+    let mut unrelated = launcher.join().unwrap();
+    retirement_result
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    retirement.join().unwrap().unwrap();
+    assert!(unrelated.0.try_wait().unwrap().is_none());
+    fixture.assert_closed_without_running_identity();
+    after_parent.write_all(b"done\n").unwrap();
+    assert!(unrelated.0.wait().unwrap().success());
 }
