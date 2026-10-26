@@ -1896,6 +1896,30 @@ pub async fn run_live_trial(
     authority: &mut dyn LiveAuthority,
     remaining: Duration,
 ) -> Result<TrialReport> {
+    let deadline = tokio::time::Instant::now()
+        .checked_add(remaining)
+        .ok_or_else(|| Error::invalid("evaluation observation deadline overflows"))?;
+    run_live_trial_until(
+        suite, variant, trial, operation, authority, remaining, deadline,
+    )
+    .await
+}
+pub(crate) async fn run_live_trial_until(
+    suite: &SuiteManifest,
+    variant: &Variant,
+    trial: TrialKey,
+    operation: TrialOperation<'_>,
+    authority: &mut dyn LiveAuthority,
+    remaining: Duration,
+    deadline: tokio::time::Instant,
+) -> Result<TrialReport> {
+    let collection_deadline = deadline.min(
+        tokio::time::Instant::now()
+            .checked_add(Duration::from_secs(variant.bounds.max_seconds))
+            .ok_or_else(|| Error::invalid("evaluation observation deadline overflows"))?,
+    );
+    // Keep remaining unchanged for the exact original LiveRequest budget.
+    // The separate absolute cutoff cannot renew that budget after setup.
     suite.validate()?;
     verify_trial_declaration(suite, variant, &trial)?;
     let mut report = TrialReport::unrun(
@@ -2119,7 +2143,7 @@ pub async fn run_live_trial(
         lease: lease.as_ref(),
         trace: vec![],
     };
-    let operation_deadline = tokio::time::Instant::now() + limit;
+    let operation_deadline = collection_deadline;
     let mut core = Box::pin(async {
         operation.fixture.verify_initial_scratch()?;
         verify_grader_instructions(
@@ -2135,26 +2159,33 @@ pub async fn run_live_trial(
         let client = client
             .as_mut()
             .ok_or_else(|| Error::invalid("adapter unavailable"))?;
-        client.initialize().await?;
-        client.verify_account(&profile.account_id).await?;
+        client.initialize_observed(&mut audited).await?;
+        client
+            .verify_account_observed(&profile.account_id, &mut audited)
+            .await?;
         state
             .binding
             .profile
-            .validate_catalog(&client.discover_models().await?)?;
-        let limits = client.rate_limits().await?;
+            .validate_catalog(&client.discover_models_observed(&mut audited).await?)?;
+        let limits = client.rate_limits_observed(&mut audited).await?;
         audited.host.rate_limits(&limits)?;
         lease.check()?;
         client
-            .verify_execution_configuration(operation.permissions, &operation.fixture.repository)
+            .verify_execution_configuration_observed(
+                operation.permissions,
+                &operation.fixture.repository,
+                &mut audited,
+            )
             .await?;
         audited.host.checkpoint(&state, Some("thread/start"))?;
         client
-            .start_thread(
+            .start_thread_observed(
                 &mut state,
                 operation.isolation,
                 operation.permissions,
                 &operation.assembled.prompt,
                 operation.tools.definitions().to_vec(),
+                &mut audited,
             )
             .await?;
         audited.host.checkpoint(&state, None)?;
@@ -2271,7 +2302,7 @@ pub async fn run_live_trial(
             }
         }
     });
-    let timed = tokio::time::timeout(limit, &mut core).await;
+    let timed = tokio::time::timeout_at(collection_deadline, &mut core).await;
     let timed_out = timed.is_err();
     let cancel_error = if !matches!(&timed, Ok(Ok(()))) {
         operation.provider.cancel().err()
@@ -2287,7 +2318,7 @@ pub async fn run_live_trial(
     } else {
         true
     };
-    let execution = match timed {
+    let mut execution = match timed {
         Ok(result) => result,
         Err(_) => Err(Error::new(
             "timeout",
@@ -2304,6 +2335,43 @@ pub async fn run_live_trial(
         });
     if interrupted {
         state.interruption("evaluation_interruption");
+    }
+    // Preserve the original reader through actual owned termination. EOF is
+    // diagnostic only and cannot replace provider.finish/registry/lifecycle.
+    let termination_error = if let Some(client) = client.as_mut() {
+        let error = client.terminate().await.err();
+        if callback_drained {
+            let end = client
+                .observe_declared_tail(&mut state, &mut *audited.host, collection_deadline)
+                .await;
+            audited
+                .host
+                .observe_protocol(crate::codex::ProtocolObservation::TransportEnd {
+                    state: &state,
+                    end: &end,
+                });
+            if tokio::time::Instant::now() >= collection_deadline {
+                audited
+                    .host
+                    .observe_protocol(crate::codex::ProtocolObservation::Issue {
+                        state: Some(&state),
+                        issue: crate::codex::ProtocolCaptureIssue::CollectionDeadline,
+                    });
+            }
+        }
+        error
+    } else {
+        None
+    };
+    if execution.is_ok() && (state.intervention.is_some() || state.input_required) {
+        execution = Err(Error::new(
+            if state.intervention.is_some() {
+                "provider_intervention"
+            } else {
+                "input_required"
+            },
+            "late same-bound provider hold observed during shutdown",
+        ));
     }
     let pending = audited
         .host
@@ -2368,12 +2436,11 @@ pub async fn run_live_trial(
                 status: format!("{:?}", event.kind),
             });
         }
-        // Terminate only our owned adapter process; unknown remote effects stay unknown.
-        if client.terminate().await.is_err() {
-            report.unresolved_remote_effects = true;
-            report.outcome = TrialOutcome::Interrupted;
-            report.reason = "owned adapter termination was not confirmed".into();
-        }
+    }
+    if termination_error.is_some() {
+        report.unresolved_remote_effects = true;
+        report.outcome = TrialOutcome::Interrupted;
+        report.reason = "owned adapter termination was not confirmed".into();
     }
     if let Err(error) = operation.provider.finish() {
         let cancellation_error = operation.provider.cancel().err();

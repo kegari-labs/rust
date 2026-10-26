@@ -6,7 +6,7 @@ use crate::{
     config::Config,
     configuration::{ConfigurationInputs, NativeConfigurationInputs},
     connections::ConnectionRegistry,
-    control::{ControlHost, ReceiptPhase},
+    control::{ControlHost, Receipt, ReceiptPhase},
     digest::canonical_digest,
     error::{Error, Result},
     evidence::{AttestationKey, Publication, decode_signed_publication},
@@ -353,7 +353,11 @@ impl ObservationCache {
             .await?;
         let authority_revision = publication_revision(&projection)?;
         let previous_host_ids = host_comment_revision(&retained)?;
-        restore_host_comment_ids(&projection, &mut retained, &self.control)?;
+        // Capture one receipt epoch against actual serialized replacements.
+        // Reconstruction below and active reads consume these owned bytes; no
+        // provider I/O runs while the Control gate is held.
+        let receipts = reconstruction_receipts(&self.control)?;
+        restore_host_comment_ids(&projection, &mut retained, &receipts)?;
         let (changed, mut publication_errors) =
             restore_publications(&config, &projection, &mut retained, self.key.as_ref())?;
         let (explicit_changed, explicit_errors) =
@@ -364,7 +368,7 @@ impl ObservationCache {
             &projection,
             &mut retained,
             &self.key,
-            &self.control,
+            &receipts,
         )?;
         publication_errors.extend(classified_errors);
         if changed
@@ -410,7 +414,9 @@ impl ObservationCache {
                 }
             }
         }
-        let mut active = self.refresh_active(&config, &workflows, &retained).await?;
+        let mut active = self
+            .refresh_active(&config, &workflows, &retained, &receipts)
+            .await?;
         self.control.serialize_observation(|_| {
         if self.configuration.snapshot()?.revision()? != config.revision()? {
             return Err(Error::new(
@@ -479,12 +485,17 @@ fn host_comment_revision(refs: &ReconcileRefs) -> Result<String> {
         .collect();
     canonical_digest(1, &records)
 }
+/// Only call outside an existing Control gate. The returned records are data,
+/// not authority, and remain immutable while read-only reconstruction runs.
+fn reconstruction_receipts(control: &ControlHost) -> Result<Vec<Receipt>> {
+    control.serialize_observation(|_| control.operations())
+}
+
 fn restore_host_comment_ids(
     projection: &RuntimeProjection,
     refs: &mut ReconcileRefs,
-    control: &ControlHost,
+    receipts: &[Receipt],
 ) -> Result<()> {
-    let receipts = control.operations()?;
     for workspace in projection.workspaces.values().filter(|w| w.complete) {
         for parent in workspace.parents.values() {
             let prior = refs
@@ -495,7 +506,7 @@ fn restore_host_comment_ids(
             // Rebuild this exception from current native records. Edited text must
             // re-enter classification; ownership of an old ID does not freeze it.
             prior.host_comment_ids.clear();
-            for receipt in &receipts {
+            for receipt in receipts {
                 if receipt.runtime_id != projection.runtime_id
                     || receipt.kind != "linear_comment"
                     || !matches!(
@@ -1043,6 +1054,7 @@ impl ObservationCache {
         current: &Config,
         workflows: &BTreeMap<Uuid, Workflow>,
         retained: &ReconcileRefs,
+        receipts: &[Receipt],
     ) -> Result<Vec<(Arc<ActiveSnapshotInner>, Result<RuntimeProjection>)>> {
         let active: Vec<_> = self
             .active
@@ -1082,18 +1094,14 @@ impl ObservationCache {
                     .refresh(&adjusted, clients.clients(&adjusted)?, &pinned, &refs)
                     .await?;
                 let before = publication_revision(&observed)?;
-                restore_host_comment_ids(&observed, &mut refs, &self.control)?;
+                restore_host_comment_ids(&observed, &mut refs, receipts)?;
                 let (_, mut errors) =
                     restore_publications(&adjusted, &observed, &mut refs, &self.key)?;
                 let (_, explicit) =
                     restore_explicit_corrections(&adjusted, &observed, &mut refs, &self.key)?;
                 errors.extend(explicit);
                 let (_, classified) = crate::corrections::restore_classifications(
-                    &adjusted,
-                    &observed,
-                    &mut refs,
-                    &self.key,
-                    &self.control,
+                    &adjusted, &observed, &mut refs, &self.key, receipts,
                 )?;
                 errors.extend(classified);
                 observed = Reconciler::default()
@@ -1395,3 +1403,7 @@ fn add_corrective_blocker(projection: &mut RuntimeProjection, entry: &Corrective
         });
     }
 }
+
+#[cfg(test)]
+#[path = "observations_receipt_tests.rs"]
+mod receipt_tests;

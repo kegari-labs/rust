@@ -704,6 +704,14 @@ fn declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence() 
         observed_server_requests: 2,
         processed_server_requests: Some(3),
         terminal_turns: 1,
+        transport_end: Some(
+            kegari_v0::codex::ProtocolTransportEndDiagnostic::Incomplete {
+                frames: 3,
+                decoded_bytes: 120,
+                wire_bytes: 160,
+                error: kegari_v0::error::Error::new("timeout", "data-only original cutoff"),
+            },
+        ),
         records: vec![],
     };
     observation.validate().unwrap();
@@ -721,6 +729,8 @@ fn declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence() 
     assert_eq!(actual["state"], "incomplete");
     assert_eq!(actual["observed_server_requests"], 2);
     assert_eq!(actual["processed_server_requests"], 3);
+    assert_eq!(actual["transport_end"]["state"], "incomplete");
+    assert_eq!(actual["transport_end"]["wire_bytes"], 160);
     assert!(
         actual["issues"]
             .as_array()

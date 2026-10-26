@@ -269,16 +269,20 @@ pub(super) fn complete_second(
         );
         manifest.integrated_results[0].candidate_vector_digest =
             manifest.candidate_vector_digest().unwrap();
-        let (manifest, accepted, references) = Box::pin(publish_origin_with_slices(
-            f.delivery,
-            &workspace,
-            f.gate,
-            f.lease,
-            manifest,
-            &[&slice, &auxiliary.slice],
-            &[],
-        ))
-        .await;
+        let (manifest, accepted, references) = {
+            let _publication =
+                origin_publication_window(f.delivery, f.gate, f.observation_barrier).await;
+            Box::pin(publish_origin_with_slices(
+                f.delivery,
+                &workspace,
+                f.gate,
+                f.lease,
+                manifest,
+                &[&slice, &auxiliary.slice],
+                &[],
+            ))
+            .await
+        };
         let mut plan = f.first.attempt.plan.clone();
         plan.operation_id = Uuid::new_v4();
         plan.generation = f.gate.work().generation.clone();

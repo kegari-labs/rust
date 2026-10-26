@@ -281,6 +281,39 @@ pub(super) fn fixture_phase<'a>(
             .unwrap()
     })
 }
+/// The synthetic accepted-origin setup is one declared fixture interval.
+/// Wait for the existing poller's in-flight read, then obtain a real complete
+/// observation before its unchanged admission/mutation gates. This prevents a
+/// publication from splitting the poller's two strict reconstruction reads.
+/// The guard is held only for this sequence, never for assembly or release work.
+pub(super) fn origin_publication_window<'a>(
+    delivery: &'a RuntimeDelivery,
+    gate: &'a FreshGate,
+    barrier: &'a Arc<tokio::sync::Mutex<()>>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = tokio::sync::MutexGuard<'a, ()>> + 'a>> {
+    Box::pin(async move {
+        let guard = barrier.lock().await;
+        delivery
+            .runtime
+            .observations
+            .refresh()
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "origin publication window refresh failed: {error:?}; health={:?}",
+                    delivery.runtime.observations.health()
+                )
+            });
+        delivery.current_gate()(gate).unwrap_or_else(|error| {
+            panic!(
+                "origin publication window current gate failed: {error:?}; health={:?}",
+                delivery.runtime.observations.health()
+            )
+        });
+        guard
+    })
+}
+
 pub(super) async fn publish_origin(
     delivery: &RuntimeDelivery,
     workspace: &WorkspaceDelivery,
@@ -355,15 +388,18 @@ pub(super) async fn publish_origin_with_slices(
         .fixture_original_manifest_body_with_slices(&manifest, slices, targets, lease.runtime_id)
         .unwrap();
     let mut refs = Vec::new();
-    for (id, body) in [
-        (Uuid::new_v4(), body),
+    for (kind, id, body) in [
+        ("parent_result", Uuid::new_v4(), body),
         (
+            "human_acceptance",
             accepted.payload.operation_id,
             evidence::encode_signed_publication("human_acceptance", &accepted).unwrap(),
         ),
     ] {
         let current_gate = delivery.current_gate();
         let admitted_gate = gate.clone();
+        let observations = delivery.runtime.observations.clone();
+        let publication = manifest.publication_operation;
         let r = delivery
             .provider_broker(&workspace.configuration, gate.workspace_id())
             .unwrap()
@@ -388,10 +424,20 @@ pub(super) async fn publish_origin_with_slices(
                     issue: gate.work().parent,
                     body: body.clone(),
                 },
-                move || current_gate(&admitted_gate),
+                move || {
+                    current_gate(&admitted_gate).map_err(|error| {
+                        // Called inside the provider's existing Control gate; only
+                        // read cache health here, never reacquire Control or refresh.
+                        let original_details = error.details.clone();
+                        error.detail(
+                            json!({"publication_kind":kind,"effect":id,"publication":publication,
+                        "health":observations.health().ok(),"original_details":original_details}),
+                        )
+                    })
+                },
             )
             .await
-            .unwrap();
+            .unwrap_or_else(|error| panic!("origin {kind} mutation failed for {id}: {error:?}"));
         refs.push(PublicationRef {
             id: r.remote_ids["comment_id"].parse().unwrap(),
             body_digest: crate::digest::bytes_digest(body.as_bytes()),
@@ -485,16 +531,20 @@ pub(super) fn chained_after_merge(
             .collect();
         manifest.integrated_results[0].candidate_vector_digest =
             manifest.candidate_vector_digest().unwrap();
-        let (manifest, acceptance, refs) = publish_origin(
-            f.delivery,
-            &workspace,
-            f.gate,
-            f.lease,
-            manifest,
-            &slice,
-            baseline.targets(),
-        )
-        .await;
+        let (manifest, acceptance, refs) = {
+            let _publication =
+                origin_publication_window(f.delivery, f.gate, f.observation_barrier).await;
+            publish_origin(
+                f.delivery,
+                &workspace,
+                f.gate,
+                f.lease,
+                manifest,
+                &slice,
+                baseline.targets(),
+            )
+            .await
+        };
         let route = fixture_deployment_route(&workspace.contracts[0]);
         let mut plan = f.held.attempt.plan.clone();
         plan.operation_id = Uuid::new_v4();
@@ -742,16 +792,20 @@ pub(super) fn chained_after_merge(
             .collect();
         c_manifest.integrated_results[0].candidate_vector_digest =
             c_manifest.candidate_vector_digest().unwrap();
-        let (c_manifest, c_acceptance, c_refs) = publish_origin(
-            &fresh,
-            &workspace,
-            &corrected,
-            f.lease,
-            c_manifest,
-            &slice,
-            baseline.targets(),
-        )
-        .await;
+        let (c_manifest, c_acceptance, c_refs) = {
+            let _publication =
+                origin_publication_window(&fresh, &corrected, f.observation_barrier).await;
+            publish_origin(
+                &fresh,
+                &workspace,
+                &corrected,
+                f.lease,
+                c_manifest,
+                &slice,
+                baseline.targets(),
+            )
+            .await
+        };
         let mut c = held.clone();
         c.work = corrected.work().clone();
         c.attempt.plan.operation_id = Uuid::new_v4();

@@ -197,6 +197,7 @@ mod tests {
                     observed_server_requests: 0,
                     processed_server_requests: None,
                     terminal_turns: 0,
+                    transport_end: None,
                     records: vec![],
                 }),
                 evidence_references: vec!["data-only:collected-host-observation".into()],

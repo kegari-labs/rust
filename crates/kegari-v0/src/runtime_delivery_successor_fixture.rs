@@ -330,6 +330,7 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
             .collect();
         manifest.integrated_results[0].candidate_vector_digest =
             manifest.candidate_vector_digest().unwrap();
+        let _publication = origin_publication_window(&delivery, &gate, &observation_barrier).await;
         Box::pin(publish_origin_with_slices(
             &delivery,
             &workspace,

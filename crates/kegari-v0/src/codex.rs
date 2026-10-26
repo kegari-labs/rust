@@ -19,11 +19,15 @@ mod history;
 pub use history::RecordedThreadHistory;
 #[path = "codex_observation.rs"]
 mod observation;
+#[path = "codex_transport_observation.rs"]
+mod transport_observation;
 pub use observation::{
     DeclaredProtocolObservation, ProtocolCaptureIssue, ProtocolCaptureState, ProtocolObservation,
-    ProtocolRecordReference,
+    ProtocolRecordReference, ProtocolTransportEndDiagnostic,
 };
 pub(crate) use observation::{ProtocolCapture, ProtocolOperationBinding};
+pub use transport_observation::ProtocolTransportEnd;
+use transport_observation::{ObservationOnlyDeny, TransportRead};
 #[path = "codex_resume.rs"]
 mod resume;
 pub use resume::{
@@ -1211,6 +1215,9 @@ pub struct RpcClient {
     events: VecDeque<SessionEvent>,
     next_id: u64,
     server_request_count: u64,
+    clean_read_eof: bool,
+    transport_read_bytes: u64,
+    tail_observation_started: bool,
     request_timeout: Duration,
     child: Option<std::sync::Arc<OwnedProviderProcess>>,
     diagnostic_task: Option<tokio::task::JoinHandle<()>>,
@@ -1244,6 +1251,9 @@ impl RpcClient {
             events: VecDeque::new(),
             next_id: 1,
             server_request_count: 0,
+            clean_read_eof: false,
+            transport_read_bytes: 0,
+            tail_observation_started: false,
             request_timeout,
             child: None,
             diagnostic_task: None,
@@ -1533,22 +1543,61 @@ impl RpcClient {
             .map_err(|e| Error::io("flush app-server protocol", e))
     }
     async fn read_message(&mut self) -> Result<RpcMessage> {
+        match self.read_transport().await? {
+            TransportRead::Message(message) => Ok(message),
+            TransportRead::CleanEof => Err(Error::new(
+                "process_exit",
+                "app-server exited; no terminal work result is implied",
+            )),
+        }
+    }
+    async fn read_transport(&mut self) -> Result<TransportRead> {
+        self.read_transport_bounded(None).await
+    }
+    async fn read_transport_bounded(
+        &mut self,
+        new_byte_bound: Option<u64>,
+    ) -> Result<TransportRead> {
+        let before = self.transport_read_bytes;
         loop {
             if let Some(message) = self.messages.pop_front() {
-                return Ok(message);
+                return Ok(TransportRead::Message(message));
+            }
+            if self.clean_read_eof {
+                return Ok(TransportRead::CleanEof);
             }
             let mut bytes = [0; 8192];
+            let read_limit = new_byte_bound
+                .map(|bound| {
+                    bound
+                        .saturating_sub(self.transport_read_bytes.saturating_sub(before))
+                        .saturating_add(1)
+                        .min(bytes.len() as u64) as usize
+                })
+                .unwrap_or(bytes.len());
             let n = self
                 .reader
-                .read(&mut bytes)
+                .read(&mut bytes[..read_limit])
                 .await
                 .map_err(|e| Error::io("read app-server protocol", e))?;
+            self.transport_read_bytes = self
+                .transport_read_bytes
+                .checked_add(n as u64)
+                .ok_or_else(|| Error::new("bounded_input", "transport byte count overflow"))?;
+            if new_byte_bound.is_some_and(|bound| self.transport_read_bytes - before > bound) {
+                // The just-consumed byte cannot be silently skipped on a later
+                // read. This observation stream is irreversibly incomplete.
+                self.decoder.poisoned = true;
+                self.decoder.pending.clear();
+                return Err(Error::new(
+                    "bounded_input",
+                    "declared tail wire byte bound exceeded",
+                ));
+            }
             if n == 0 {
                 self.decoder.finish()?;
-                return Err(Error::new(
-                    "process_exit",
-                    "app-server exited; no terminal work result is implied",
-                ));
+                self.clean_read_eof = true;
+                return Ok(TransportRead::CleanEof);
             }
             let messages = self.decoder.push(&bytes[..n])?;
             if !messages.is_empty() {
@@ -1761,7 +1810,17 @@ impl RpcClient {
                     RpcMessage::Response {
                         id: response,
                         result,
-                    } if response == id => return Ok(result),
+                    } if response == id => {
+                        broker.observe_protocol(ProtocolObservation::MatchedResponse {
+                            state: state.as_deref(),
+                            rpc_id: &response,
+                            method,
+                            request_thread: request_thread.as_deref(),
+                            inline_review,
+                            response: &result,
+                        });
+                        return Ok(result);
+                    }
                     RpcMessage::Failure {
                         id: response,
                         error,
@@ -1782,6 +1841,10 @@ impl RpcClient {
                         let event = if let Some(s) = state.as_deref_mut() {
                             checkpoint_notification(s, broker, &method, &params)?
                         } else {
+                            broker.observe_protocol(ProtocolObservation::UnboundNotification {
+                                method: &method,
+                                params: &params,
+                            });
                             SessionEvent::new(
                                 EventKind::Notification,
                                 &method,
@@ -1873,13 +1936,20 @@ impl RpcClient {
         }
     }
     pub async fn initialize(&mut self) -> Result<Value> {
+        self.initialize_observed(&mut DenyTools).await
+    }
+    pub(crate) async fn initialize_observed(
+        &mut self,
+        observer: &mut dyn ToolBroker,
+    ) -> Result<Value> {
+        let mut denied = ObservationOnlyDeny::new(observer);
         if self.initialized {
             return Err(Error::new(
                 "protocol_error",
                 "initialize may run once per transport",
             ));
         }
-        let response=self.request("initialize",json!({"clientInfo":{"name":"kegari-v0","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),None,&mut DenyTools).await?;
+        let response=self.request("initialize",json!({"clientInfo":{"name":"kegari-v0","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),None,&mut denied).await?;
         required_str(&response, "userAgent")?;
         required_str(&response, "platformFamily")?;
         required_str(&response, "platformOs")?;
@@ -1899,12 +1969,20 @@ impl RpcClient {
         Ok(response)
     }
     pub async fn verify_account(&mut self, expected: &str) -> Result<Value> {
+        self.verify_account_observed(expected, &mut DenyTools).await
+    }
+    pub(crate) async fn verify_account_observed(
+        &mut self,
+        expected: &str,
+        observer: &mut dyn ToolBroker,
+    ) -> Result<Value> {
+        let mut denied = ObservationOnlyDeny::new(observer);
         let response = self
             .request(
                 "account/read",
                 json!({"refreshToken":false}),
                 None,
-                &mut DenyTools,
+                &mut denied,
             )
             .await?;
         if response.pointer("/account/type").and_then(Value::as_str) != Some("chatgpt") {
@@ -1933,6 +2011,13 @@ impl RpcClient {
         Ok(response)
     }
     pub async fn discover_models(&mut self) -> Result<Vec<Value>> {
+        self.discover_models_observed(&mut DenyTools).await
+    }
+    pub(crate) async fn discover_models_observed(
+        &mut self,
+        observer: &mut dyn ToolBroker,
+    ) -> Result<Vec<Value>> {
+        let mut denied = ObservationOnlyDeny::new(observer);
         if self.account_id.is_none() {
             return Err(Error::new(
                 "authentication_required",
@@ -1948,7 +2033,7 @@ impl RpcClient {
                     "model/list",
                     json!({"cursor":cursor,"limit":100,"includeHidden":false}),
                     None,
-                    &mut DenyTools,
+                    &mut denied,
                 )
                 .await?;
             let data = response
@@ -1982,6 +2067,13 @@ impl RpcClient {
         Ok(models)
     }
     pub async fn rate_limits(&mut self) -> Result<Value> {
+        self.rate_limits_observed(&mut DenyTools).await
+    }
+    pub(crate) async fn rate_limits_observed(
+        &mut self,
+        observer: &mut dyn ToolBroker,
+    ) -> Result<Value> {
+        let mut denied = ObservationOnlyDeny::new(observer);
         let account = self.account_id.clone().ok_or_else(|| {
             Error::new(
                 "authentication_required",
@@ -1989,7 +2081,7 @@ impl RpcClient {
             )
         })?;
         let response = self
-            .request("account/rateLimits/read", json!({}), None, &mut DenyTools)
+            .request("account/rateLimits/read", json!({}), None, &mut denied)
             .await?;
         Ok(
             json!({"account_id":account,"observed_at":chrono::Utc::now().to_rfc3339(),"snapshot":response}),
@@ -2002,12 +2094,22 @@ impl RpcClient {
         permissions: &PermissionConfiguration,
         cwd: &Path,
     ) -> Result<()> {
+        self.verify_execution_configuration_observed(permissions, cwd, &mut DenyTools)
+            .await
+    }
+    pub(crate) async fn verify_execution_configuration_observed(
+        &mut self,
+        permissions: &PermissionConfiguration,
+        cwd: &Path,
+        observer: &mut dyn ToolBroker,
+    ) -> Result<()> {
+        let mut denied = ObservationOnlyDeny::new(observer);
         let response = self
             .request(
                 "config/read",
                 json!({"includeLayers":true,"cwd":cwd}),
                 None,
-                &mut DenyTools,
+                &mut denied,
             )
             .await?;
         self.validate_execution_configuration(permissions, &response)
@@ -2133,6 +2235,26 @@ impl RpcClient {
         instructions: &str,
         tools: Vec<Value>,
     ) -> Result<()> {
+        self.start_thread_observed(
+            state,
+            isolation,
+            permissions,
+            instructions,
+            tools,
+            &mut DenyTools,
+        )
+        .await
+    }
+    pub(crate) async fn start_thread_observed(
+        &mut self,
+        state: &mut SessionState,
+        isolation: &ValidatedIsolation,
+        permissions: &PermissionConfiguration,
+        instructions: &str,
+        tools: Vec<Value>,
+        observer: &mut dyn ToolBroker,
+    ) -> Result<()> {
+        let mut denied = ObservationOnlyDeny::new(observer);
         self.validate_session(state, isolation, permissions)?;
         state.next_turn_allowed()?;
         if state.thread_id.is_some() {
@@ -2158,7 +2280,7 @@ impl RpcClient {
         let mut config = permissions.settings.clone();
         config["model_reasoning_effort"] = json!(state.binding.profile.reasoning);
         config["review_model"] = json!(state.binding.profile.model);
-        let response=self.request("thread/start",json!({"cwd":state.binding.cwd,"model":state.binding.profile.model,"modelProvider":"openai","serviceTier":state.binding.profile.service_tier()?,"approvalPolicy":"never","approvalsReviewer":"user","permissions":permissions.profile_id,"developerInstructions":instructions,"config":config,"dynamicTools":tools,"runtimeWorkspaceRoots":[state.binding.cwd],"allowProviderModelFallback":false,"historyMode":"paginated"}),Some(state),&mut DenyTools).await?;
+        let response=self.request("thread/start",json!({"cwd":state.binding.cwd,"model":state.binding.profile.model,"modelProvider":"openai","serviceTier":state.binding.profile.service_tier()?,"approvalPolicy":"never","approvalsReviewer":"user","permissions":permissions.profile_id,"developerInstructions":instructions,"config":config,"dynamicTools":tools,"runtimeWorkspaceRoots":[state.binding.cwd],"allowProviderModelFallback":false,"historyMode":"paginated"}),Some(state),&mut denied).await?;
         validate_thread_response(&response, state, permissions)?;
         let id = required_str(
             response
@@ -2175,6 +2297,7 @@ impl RpcClient {
         state.provider_instruction_sources = instruction_sources(&response)?;
         state.advertised_tools = names.clone();
         self.allowed_tools = names;
+        denied.observe_protocol(ProtocolObservation::ThreadEstablished { state });
         self.emit(SessionEvent::new(
             EventKind::SessionStarted,
             "thread/start",
@@ -2462,6 +2585,14 @@ impl RpcClient {
         // Accepted delivery is not proof the worker processed the watermark.
     }
     pub async fn interrupt(&mut self, state: &mut SessionState) -> Result<()> {
+        self.interrupt_observed(state, &mut DenyTools).await
+    }
+    pub(crate) async fn interrupt_observed(
+        &mut self,
+        state: &mut SessionState,
+        observer: &mut dyn ToolBroker,
+    ) -> Result<()> {
+        let mut denied = ObservationOnlyDeny::new(observer);
         let Some(turn) = state.turn_id.clone() else {
             return Ok(());
         };
@@ -2473,7 +2604,7 @@ impl RpcClient {
             "turn/interrupt",
             json!({"threadId":thread,"turnId":turn}),
             Some(state),
-            &mut DenyTools,
+            &mut denied,
         )
         .await?;
         Ok(())
@@ -2585,7 +2716,7 @@ impl RpcClient {
         };
         match incoming {
             Err(_) => {
-                let _ = self.interrupt(state).await;
+                let _ = self.interrupt_observed(state, broker).await;
                 Ok(Some(state.interruption("watchdog_expired")))
             }
             Ok(Err(e)) if e.code == "process_exit" => Ok(Some(state.interruption("process_exit"))),

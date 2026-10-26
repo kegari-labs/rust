@@ -236,10 +236,25 @@ journal references with digests and lengths. Capture is limited to 4,096 records
 remain visible. Hidden reasoning and message deltas are not retained as final
 output. Collected diagnostics survive scorer-load and grading errors.
 
-There is currently no complete protocol-capture state. Bootstrap helpers and
-unread trailing frames are not fully observed, and a processed-request count or
-terminal message cannot prove the end of the stream. Enabled capture therefore
-remains incomplete or reports a stronger conflict, overflow or unavailable state.
+Bootstrap and watchdog helpers retain declared observations while continuing to
+deny tool calls. Output received before thread establishment is operation-bound
+and is never retroactively attributed to a thread. Matched turn responses retain
+declared messages without adopting a completion.
+
+After owned termination, one bounded observation pass uses the original reader,
+decoder and queued frames within the original absolute trial deadline. It writes
+no responses and dispatches no tools. Late policy and input-required holds remain
+effective. `transport_end` distinguishes an actual clean read EOF from incomplete
+collection, including decoder errors, expiry and overflow. The pass permits at
+most 4,096 frames and 8 MiB of re-encoded decoded frames; a separate 8 MiB bound
+covers residual partial-frame bytes plus new wire bytes. Queued decoded frames
+no longer retain their original wire whitespace, so those counts remain distinct.
+
+There is currently no complete protocol-capture state. A clean EOF diagnostic is
+not native process-exit proof or proof of all output channels. A processed-request
+count or terminal message alone cannot prove the end of the stream. Enabled
+capture therefore remains incomplete or reports a stronger conflict, overflow or
+unavailable state.
 These observations do not establish a full read/effect/output inventory, canary
 non-disclosure, E07 success or native containment. Existing rubric results retain
 their existing scope; no fixture or scoring version changes through capture.

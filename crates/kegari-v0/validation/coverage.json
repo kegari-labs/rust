@@ -449,6 +449,19 @@
           ],
           "limits": "Selected local write-fault boundaries only; not every crash point, filesystem/power-loss durability, STOPPED recovery or unsupported-version no-write scenario. Do not promote the entire atomic-storage requirement. Component callbacks and labeled terminal observations are not a live provider response, worker join, qualified check, descendant-exit proof or human acceptance. The exact final source passed local validation; required native, live-provider and human qualifications remain incomplete.",
           "source_digest": "sha256:e6ae6dea17e4c78d1d112ef0e9bde39123190e17b3c3c930860141ed86c7185f"
+        },
+        {
+          "class": "deterministic",
+          "limits": "Local receipt-read/write ordering and protected-link components only. These tests do not establish crash durability, arbitrary filesystem-race immunity, native process ownership, provider reconstruction completeness, successful admission after a failed read, or an exact cause for the earlier unsafe_storage log. No existing storage restriction is weakened. No result is claimed until exact final-source tests and report are verified.",
+          "reference": "validation/LOCAL-DECLARED-TRANSPORT.md",
+          "scope": "Actual Control/protected-storage components exercise receipt reconstruction exclusion during the original serialized Sent-to-Acknowledged replacement, exact owned snapshot identity after that replacement, and preserved hardlink refusal/restoration. Source inspection confirms ordinary and active reconstruction consume the same owned receipt epoch outside provider waits.",
+          "status": "partial",
+          "tests": [
+            "observations::receipt_tests::reconstruction_snapshot_waits_for_actual_receipt_replacement_gate",
+            "observations::receipt_tests::reconstruction_snapshot_keeps_actual_link_refusal"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:e908c28aada5577ce254bcf2a78e2eb5e5c5c9b8e1950b4d01bccd20ce7e9c65"
         }
       ]
     },
@@ -4963,6 +4976,26 @@
           ],
           "limits": "These are local components and diagnostic prerequisites only. No actual-agent trial, registered native MatchedAtCollection positive, live provider, OS containment, canary non-disclosure or E07 behavior is qualified. Enabled protocol capture always remains incomplete or a stronger failure state; no Complete state or full read/effect/output inventory is implemented. Existing scorers, fixtures and qualification predicates remain unchanged. The duplex broker and SessionState values are explicitly synthetic and grant no execution authority. The Control test does not register or join a native worker; authority re-observation is an endpoint check, not proof of every earlier read/effect.",
           "source_digest": "sha256:07ccd31609ff5d4cb534a780f5e6dc3dc5869b8bdecd59f169cb81fdce3ffa4d"
+        },
+        {
+          "class": "deterministic",
+          "limits": "Local diagnostic prerequisites only. Synthetic session/catalog inputs and denial-only brokers do not establish native worker, live provider, actual-agent E07 behavior, canary non-disclosure, descendant containment or complete read/effect/output coverage. Every enabled capture remains Incomplete or stronger failure; genuine clean stdout EOF is separate diagnostic data, not native exit or permission. Scorers/fixtures/qualification predicates are unchanged. No result is claimed until exact final-source tests and report are verified.",
+          "reference": "validation/LOCAL-DECLARED-TRANSPORT.md",
+          "scope": "Real duplex/parser components exercise denial-only bootstrap/watchdog observation, matched-response declared output, no-dispatch queued tail collection, and same-thread late policy/input hold callbacks. Exact thread establishment and initial-only unbound projection refuse tentative, foreign or changed bindings. This extends observation prerequisites; it does not exercise adversarial native E07 behavior.",
+          "status": "partial",
+          "tests": [
+            "codex::observation::tests::transport_tests::actual_queued_tail_reaches_eof_without_dispatch_or_complete_claim",
+            "codex::observation::tests::transport_tests::actual_tail_preserves_same_thread_unknown_turn_policy_before_rejection",
+            "codex::observation::tests::transport_tests::actual_late_interaction_hold_uses_checkpoint_and_preserves_failure",
+            "codex::observation::tests::transport_tests::bootstrap_denies_and_retains_unbound_requests_without_tentative_thread_adoption",
+            "codex::observation::tests::transport_tests::matched_response_records_full_message_without_completing_or_dispatching",
+            "codex::observation::tests::transport_tests::actual_thread_start_failure_does_not_establish_tentative_thread",
+            "codex::observation::tests::transport_tests::actual_watchdog_interrupt_keeps_observation_and_denial",
+            "codex::observation::tests::transport_tests::thread_start_some_state_keeps_unbound_completed_text_without_adopting_identity",
+            "codex::observation::tests::transport_tests::established_foreign_output_never_uses_unbound_projection"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:e908c28aada5577ce254bcf2a78e2eb5e5c5c9b8e1950b4d01bccd20ce7e9c65"
         }
       ]
     },
@@ -5577,6 +5610,21 @@
           ],
           "limits": "These are local components and diagnostic prerequisites only. No actual-agent trial, registered native MatchedAtCollection positive, live provider, OS containment, canary non-disclosure or E07 behavior is qualified. Enabled protocol capture always remains incomplete or a stronger failure state; no Complete state or full read/effect/output inventory is implemented. Existing scorers, fixtures and qualification predicates remain unchanged. Archive and grading inputs are explicitly data-only; these tests do not populate every native report field or measure actual-agent variability, usage or repeated behavior.",
           "source_digest": "sha256:07ccd31609ff5d4cb534a780f5e6dc3dc5869b8bdecd59f169cb81fdce3ffa4d"
+        },
+        {
+          "class": "deterministic",
+          "limits": "Local diagnostic prerequisites only. Synthetic session/catalog inputs and denial-only brokers do not establish native worker, live provider, actual-agent E07 behavior, canary non-disclosure, descendant containment or complete read/effect/output coverage. Every enabled capture remains Incomplete or stronger failure; genuine clean stdout EOF is separate diagnostic data, not native exit or permission. Scorers/fixtures/qualification predicates are unchanged. No result is claimed until exact final-source tests and report are verified.",
+          "reference": "validation/LOCAL-DECLARED-TRANSPORT.md",
+          "scope": "Data-only protected archive roundtrip retains incomplete transport-end state and wire count alongside original trial/session identity and legacy absence. Component tail errors distinguish actual clean EOF from partial/malformed streams, expiry and single-use refusal; no complete result is inferred from a processed count.",
+          "status": "partial",
+          "tests": [
+            "tests/evaluation_reports.rs::declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence",
+            "codex::observation::tests::transport_tests::actual_queued_tail_reaches_eof_without_dispatch_or_complete_claim",
+            "codex::observation::tests::transport_tests::original_deadline_and_single_use_refuse_new_eof_window",
+            "codex::observation::tests::transport_tests::decoder_error_or_partial_line_never_produces_typed_eof"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:e908c28aada5577ce254bcf2a78e2eb5e5c5c9b8e1950b4d01bccd20ce7e9c65"
         }
       ]
     },
@@ -5680,6 +5728,23 @@
           ],
           "limits": "These are local components and diagnostic prerequisites only. No actual-agent trial, registered native MatchedAtCollection positive, live provider, OS containment, canary non-disclosure or E07 behavior is qualified. Enabled protocol capture always remains incomplete or a stronger failure state; no Complete state or full read/effect/output inventory is implemented. Existing scorers, fixtures and qualification predicates remain unchanged. This does not establish universal secret redaction or authorized live-input disclosure; test payloads are synthetic. Raw payload capture is restricted to explicitly declared IndependentReview trials and bounded protected journals, not general logs.",
           "source_digest": "sha256:07ccd31609ff5d4cb534a780f5e6dc3dc5869b8bdecd59f169cb81fdce3ffa4d"
+        },
+        {
+          "class": "deterministic",
+          "limits": "Local diagnostic prerequisites only. Synthetic session/catalog inputs and denial-only brokers do not establish native worker, live provider, actual-agent E07 behavior, canary non-disclosure, descendant containment or complete read/effect/output coverage. Every enabled capture remains Incomplete or stronger failure; genuine clean stdout EOF is separate diagnostic data, not native exit or permission. Scorers/fixtures/qualification predicates are unchanged. No result is claimed until exact final-source tests and report are verified.",
+          "reference": "validation/LOCAL-DECLARED-TRANSPORT.md",
+          "scope": "Actual AsyncRead/duplex components bound original residual/new wire bytes, queued decoded frames and total frames. Extended protected-capture tests preserve exact no-write/no-truncation overflow assertions and detect changed/restored/removed actual agent-message payload bytes. Reports retain bounded references, not raw projected text.",
+          "status": "partial",
+          "tests": [
+            "codex::observation::tests::transport_tests::tail_wire_bytes_include_whitespace_and_oversize_stream_poisoning",
+            "codex::observation::tests::transport_tests::original_partial_decoder_bytes_count_against_tail_bound",
+            "codex::observation::tests::transport_tests::queued_frame_limit_stops_without_claiming_eof",
+            "codex::observation::tests::overflow_and_failed_protected_capture_remain_explicit",
+            "codex::observation::tests::actual_protected_capture_readback_detects_removed_or_changed_bytes",
+            "tests/evaluation_reports.rs::declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:e908c28aada5577ce254bcf2a78e2eb5e5c5c9b8e1950b4d01bccd20ce7e9c65"
         }
       ]
     },
@@ -7497,6 +7562,26 @@
           ],
           "limits": "These are local components and diagnostic prerequisites only. No actual-agent trial, registered native MatchedAtCollection positive, live provider, OS containment, canary non-disclosure or E07 behavior is qualified. Enabled protocol capture always remains incomplete or a stronger failure state; no Complete state or full read/effect/output inventory is implemented. Existing scorers, fixtures and qualification predicates remain unchanged. The duplex broker and SessionState values are explicitly synthetic and grant no execution authority. The Control test does not register or join a native worker; authority re-observation is an endpoint check, not proof of every earlier read/effect.",
           "source_digest": "sha256:07ccd31609ff5d4cb534a780f5e6dc3dc5869b8bdecd59f169cb81fdce3ffa4d"
+        },
+        {
+          "class": "deterministic",
+          "limits": "Local diagnostic prerequisites only. Synthetic session/catalog inputs and denial-only brokers do not establish native worker, live provider, actual-agent E07 behavior, canary non-disclosure, descendant containment or complete read/effect/output coverage. Every enabled capture remains Incomplete or stronger failure; genuine clean stdout EOF is separate diagnostic data, not native exit or permission. Scorers/fixtures/qualification predicates are unchanged. No result is claimed until exact final-source tests and report are verified.",
+          "reference": "validation/LOCAL-DECLARED-TRANSPORT.md",
+          "scope": "Real duplex/parser components exercise denial-only bootstrap/watchdog observation, matched-response declared output, no-dispatch queued tail collection, and same-thread late policy/input hold callbacks. Exact thread establishment and initial-only unbound projection refuse tentative, foreign or changed bindings. This extends observation prerequisites; it does not exercise adversarial native E07 behavior.",
+          "status": "partial",
+          "tests": [
+            "codex::observation::tests::transport_tests::actual_queued_tail_reaches_eof_without_dispatch_or_complete_claim",
+            "codex::observation::tests::transport_tests::actual_tail_preserves_same_thread_unknown_turn_policy_before_rejection",
+            "codex::observation::tests::transport_tests::actual_late_interaction_hold_uses_checkpoint_and_preserves_failure",
+            "codex::observation::tests::transport_tests::bootstrap_denies_and_retains_unbound_requests_without_tentative_thread_adoption",
+            "codex::observation::tests::transport_tests::matched_response_records_full_message_without_completing_or_dispatching",
+            "codex::observation::tests::transport_tests::actual_thread_start_failure_does_not_establish_tentative_thread",
+            "codex::observation::tests::transport_tests::actual_watchdog_interrupt_keeps_observation_and_denial",
+            "codex::observation::tests::transport_tests::thread_start_some_state_keeps_unbound_completed_text_without_adopting_identity",
+            "codex::observation::tests::transport_tests::established_foreign_output_never_uses_unbound_projection"
+          ],
+          "verification": "verified_local_components_final_source",
+          "source_digest": "sha256:e908c28aada5577ce254bcf2a78e2eb5e5c5c9b8e1950b4d01bccd20ce7e9c65"
         }
       ]
     },

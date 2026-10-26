@@ -23,6 +23,9 @@ impl EvaluationDeadline {
                 .ok_or_else(|| Error::invalid("evaluation deadline overflows"))?,
         })
     }
+    pub(super) fn instant(&self) -> Instant {
+        self.at
+    }
     pub(super) fn expired(&self) -> bool {
         Instant::now() >= self.at
     }

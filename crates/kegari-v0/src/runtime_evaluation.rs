@@ -614,13 +614,14 @@ impl RuntimeCoordinator {
         // End the operation's mutable borrow before moving the real trial into
         // the cleanup slot on an operation-construction failure.
         let observed = match admitted.operation(&fixture, &report_root) {
-            Ok(operation) => Ok(crate::evaluation::run_live_trial(
+            Ok(operation) => Ok(crate::evaluation::run_live_trial_until(
                 &proof.suite,
                 &proof.variant,
                 proof.trial.clone(),
                 operation,
                 &mut live,
                 remaining,
+                proof.deadline.instant(),
             )
             .await),
             Err(error) => Err(error),

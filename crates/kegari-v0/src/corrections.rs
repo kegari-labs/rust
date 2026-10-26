@@ -568,9 +568,8 @@ pub(crate) fn restore_classifications(
     projection: &RuntimeProjection,
     refs: &mut ReconcileRefs,
     key: &AttestationKey,
-    control: &ControlHost,
+    receipts: &[Receipt],
 ) -> Result<(bool, BTreeMap<IssueKey, Error>)> {
-    let receipts = control.operations()?;
     let mut changed = false;
     let mut errors = BTreeMap::new();
     for workspace in projection.workspaces.values().filter(|w| w.complete) {
@@ -591,7 +590,7 @@ pub(crate) fn restore_classifications(
             invalidations.pending.retain(|id, _| {
                 !prior.host_comment_ids.contains(id) || prior.explicit_corrections.contains_key(id)
             });
-            let chain = read_chain(config, configured, parent, key, &receipts);
+            let chain = read_chain(config, configured, parent, key, receipts);
             if let Ok(chain) = &chain {
                 for intake in chain {
                     invalidations
@@ -647,7 +646,7 @@ pub(crate) fn restore_classifications(
                                 item,
                                 route,
                                 key,
-                                &receipts,
+                                receipts,
                             )?;
                         }
                         latest.insert(item.source.comment, (intake, item));

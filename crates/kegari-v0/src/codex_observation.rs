@@ -7,6 +7,29 @@ use uuid::Uuid;
 /// change a provider request. Normal brokers default to ignoring these events.
 #[derive(Clone, Copy)]
 pub enum ProtocolObservation<'a> {
+    ThreadEstablished {
+        state: &'a SessionState,
+    },
+    UnboundNotification {
+        method: &'a str,
+        params: &'a Value,
+    },
+    MatchedResponse {
+        state: Option<&'a SessionState>,
+        rpc_id: &'a Value,
+        method: &'a str,
+        request_thread: Option<&'a str>,
+        inline_review: bool,
+        response: &'a Value,
+    },
+    TransportEnd {
+        state: &'a SessionState,
+        end: &'a ProtocolTransportEnd,
+    },
+    Issue {
+        state: Option<&'a SessionState>,
+        issue: ProtocolCaptureIssue,
+    },
     ServerRequest {
         state: Option<&'a SessionState>,
         rpc_id: &'a Value,
@@ -49,13 +72,19 @@ pub enum ProtocolCaptureState {
     Overflow,
     Conflict,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolCaptureIssue {
     ScopeNotDeclared,
     DeclarationUnavailable,
     MissingRequestInventory,
     UnobservedTransportTail,
+    CoverageNotQualified,
+    CollectionDeadline,
+    UnestablishedThread,
+    UnconfirmedResponseTurn,
+    LateUnservedRequest,
+    UnsupportedTailFrame,
     MissingSession,
     BindingChanged,
     ForeignOrUnknownTurn,
@@ -80,6 +109,21 @@ pub struct ProtocolRecordReference {
     pub bytes: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProtocolTransportEndDiagnostic {
+    CleanEof {
+        frames: u64,
+        decoded_bytes: u64,
+        wire_bytes: u64,
+    },
+    Incomplete {
+        frames: u64,
+        decoded_bytes: u64,
+        wire_bytes: u64,
+        error: Error,
+    },
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeclaredProtocolObservation {
     pub schema_version: u32,
@@ -102,6 +146,8 @@ pub struct DeclaredProtocolObservation {
     pub observed_server_requests: u64,
     pub processed_server_requests: Option<u64>,
     pub terminal_turns: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport_end: Option<ProtocolTransportEndDiagnostic>,
     pub records: Vec<ProtocolRecordReference>,
 }
 impl DeclaredProtocolObservation {
@@ -198,6 +244,7 @@ pub(crate) struct ProtocolCapture {
     total_bytes: usize,
     last_request_sequence: u64,
     enabled: bool,
+    established: bool,
 }
 impl ProtocolCapture {
     pub(crate) fn new(
@@ -227,6 +274,7 @@ impl ProtocolCapture {
                 observed_server_requests: 0,
                 processed_server_requests: None,
                 terminal_turns: 0,
+                transport_end: None,
                 records: vec![],
             },
             requests: BTreeMap::new(),
@@ -237,6 +285,7 @@ impl ProtocolCapture {
             total_bytes: 0,
             last_request_sequence: 0,
             enabled: true,
+            established: false,
         }
     }
     pub(crate) fn disable(&mut self, issue: ProtocolCaptureIssue) {
@@ -247,6 +296,10 @@ impl ProtocolCapture {
         self.report.issues.insert(issue);
     }
     fn bind<'a>(&mut self, state: Option<&'a SessionState>) -> Option<&'a SessionState> {
+        if !self.established {
+            self.issue(ProtocolCaptureIssue::UnestablishedThread);
+            return None;
+        }
         let Some(state) = state else {
             self.issue(ProtocolCaptureIssue::MissingSession);
             return None;
@@ -388,6 +441,61 @@ impl ProtocolCapture {
             return;
         }
         match event {
+            ProtocolObservation::ThreadEstablished { state } => {
+                self.established = true;
+                if self.bind(Some(state)).is_none() {
+                    self.established = false;
+                } else {
+                    self.record(json!({"channel":"thread_established","thread":state.thread_id,"binding":self.report.session_binding_digest}), write);
+                }
+            }
+            ProtocolObservation::Issue { issue, .. } => self.issue(issue),
+            ProtocolObservation::TransportEnd { state, end } => {
+                self.bind(Some(state));
+                self.report.transport_end = Some(end.diagnostic().clone());
+                self.record(
+                    json!({"channel":"transport_end","observation":end.diagnostic()}),
+                    write,
+                );
+            }
+            ProtocolObservation::UnboundNotification { method, params } => {
+                self.issue(ProtocolCaptureIssue::UnestablishedThread);
+                match method {
+                    "item/completed" => {
+                        if let Some(message) =
+                            params.get("item").and_then(|item| self.agent_message(item))
+                        {
+                            self.record(
+                                json!({"channel":"unbound_agent_message","message":message}),
+                                write,
+                            );
+                        }
+                    }
+                    "turn/completed" => self.observe_unbound_turn(params.get("turn"), write),
+                    _ => self.issue(ProtocolCaptureIssue::UnsupportedOutputChannel),
+                }
+            }
+            ProtocolObservation::MatchedResponse {
+                method, response, ..
+            } => {
+                if matches!(method, "turn/start" | "review/start") {
+                    self.observe_response(event, write);
+                } else if method == "thread/start"
+                    && let Some(turns) = response
+                        .pointer("/thread/turns")
+                        .and_then(Value::as_array)
+                        .filter(|turns| !turns.is_empty())
+                {
+                    self.issue(ProtocolCaptureIssue::UnestablishedThread);
+                    if turns.len() > MAX_RECORDS {
+                        self.issue(ProtocolCaptureIssue::CaptureBound);
+                    } else {
+                        for turn in turns {
+                            self.observe_unbound_turn(Some(turn), write);
+                        }
+                    }
+                }
+            }
             ProtocolObservation::ServerRequest {
                 state,
                 rpc_id,
@@ -401,17 +509,23 @@ impl ProtocolCapture {
                     self.issue(ProtocolCaptureIssue::MissingRequestInventory);
                 }
                 self.last_request_sequence = sequence;
+                if method == "item/tool/call" {
+                    self.report.tool_request_attempts =
+                        self.report.tool_request_attempts.saturating_add(1);
+                    if self.report.tool_request_attempts as usize > MAX_RECORDS {
+                        self.issue(ProtocolCaptureIssue::CaptureBound);
+                        return;
+                    }
+                }
+                if !self.established && method == "item/tool/call" {
+                    self.issue(ProtocolCaptureIssue::UnestablishedThread);
+                    self.record(json!({"channel":"unbound_tool_request","server_sequence":sequence,"parameters":params}),write);
+                }
                 let Some(state) = self.bind(state) else {
                     return;
                 };
                 if method != "item/tool/call" {
                     self.issue(ProtocolCaptureIssue::UnsupportedRequestChannel);
-                    return;
-                }
-                self.report.tool_request_attempts =
-                    self.report.tool_request_attempts.saturating_add(1);
-                if self.report.tool_request_attempts as usize > MAX_RECORDS {
-                    self.issue(ProtocolCaptureIssue::CaptureBound);
                     return;
                 }
                 let parsed = (|| {
@@ -509,7 +623,7 @@ impl ProtocolCapture {
                     self.issue(ProtocolCaptureIssue::ConflictingDuplicate);
                 }
                 self.report.processed_server_requests = processed_requests;
-                self.record(json!({"channel":"adapter_request_inventory","processed_requests":processed_requests,"observed_requests":self.report.observed_server_requests,"transport_tail":"unobserved"}),write);
+                self.record(json!({"channel":"adapter_request_inventory","processed_requests":processed_requests,"observed_requests":self.report.observed_server_requests,"transport_tail":"count_does_not_prove_tail"}),write);
             }
             ProtocolObservation::CompletedItem {
                 state,
@@ -522,6 +636,29 @@ impl ProtocolCapture {
                 accepted,
             } => {
                 let delta = matches!(event, ProtocolObservation::AgentMessageDelta { .. });
+                if !self.established
+                    && self.report.session_binding_digest.is_none()
+                    && !self
+                        .report
+                        .issues
+                        .contains(&ProtocolCaptureIssue::BindingChanged)
+                {
+                    self.issue(ProtocolCaptureIssue::UnestablishedThread);
+                    if !accepted {
+                        self.issue(ProtocolCaptureIssue::RejectedItem);
+                    }
+                    if delta {
+                        self.issue(ProtocolCaptureIssue::UnsupportedOutputChannel);
+                    } else if let Some(message) =
+                        params.get("item").and_then(|item| self.agent_message(item))
+                    {
+                        self.record(
+                            json!({"channel":"unbound_agent_message","adapter_accepted":accepted,"message":message}),
+                            write,
+                        );
+                    }
+                    return;
+                }
                 if self.bind(Some(state)).is_none() {
                     return;
                 }
@@ -570,6 +707,24 @@ impl ProtocolCapture {
                 params,
                 accepted,
             } => {
+                if !self.established
+                    && self.report.session_binding_digest.is_none()
+                    && !self
+                        .report
+                        .issues
+                        .contains(&ProtocolCaptureIssue::BindingChanged)
+                {
+                    self.issue(ProtocolCaptureIssue::UnestablishedThread);
+                    if !accepted {
+                        self.issue(ProtocolCaptureIssue::RejectedTerminal);
+                    }
+                    self.record(
+                        json!({"channel":"unbound_terminal_observation","adapter_accepted":accepted}),
+                        write,
+                    );
+                    self.observe_unbound_turn(params.get("turn"), write);
+                    return;
+                }
                 if self.bind(Some(state)).is_none() {
                     return;
                 }
@@ -687,6 +842,116 @@ impl ProtocolCapture {
             }
         }
     }
+    fn observe_unbound_turn(
+        &mut self,
+        turn: Option<&Value>,
+        write: &mut dyn FnMut(&Value) -> Result<String>,
+    ) {
+        let Some(turn) = turn else {
+            self.issue(ProtocolCaptureIssue::MalformedMessage);
+            return;
+        };
+        if !matches!(
+            turn.get("itemsView").and_then(Value::as_str),
+            None | Some("full")
+        ) || turn
+            .get("itemsView")
+            .is_some_and(|value| !value.is_string())
+        {
+            self.issue(ProtocolCaptureIssue::MissingFullTurn);
+            return;
+        }
+        let Some(items) = turn.get("items").and_then(Value::as_array) else {
+            self.issue(ProtocolCaptureIssue::MissingFullTurn);
+            return;
+        };
+        if items.len() > MAX_RECORDS {
+            self.issue(ProtocolCaptureIssue::CaptureBound);
+            return;
+        }
+        for item in items {
+            if let Some(message) = self.agent_message(item) {
+                self.record(
+                    json!({"channel":"unbound_agent_message","message":message}),
+                    write,
+                );
+            }
+        }
+    }
+    fn observe_response(
+        &mut self,
+        event: ProtocolObservation<'_>,
+        write: &mut dyn FnMut(&Value) -> Result<String>,
+    ) {
+        let ProtocolObservation::MatchedResponse {
+            state,
+            rpc_id,
+            method,
+            request_thread,
+            inline_review,
+            response,
+        } = event
+        else {
+            return;
+        };
+        let Some(state) = self.bind(state) else {
+            return;
+        };
+        let Some(thread) = state.thread_id.as_deref() else {
+            self.issue(ProtocolCaptureIssue::MissingSession);
+            return;
+        };
+        if request_thread != Some(thread)
+            || (method == "review/start"
+                && (!inline_review
+                    || response.get("reviewThreadId").and_then(Value::as_str) != Some(thread)))
+        {
+            self.issue(ProtocolCaptureIssue::ForeignOrUnknownTurn);
+            return;
+        }
+        let Some(turn) = response.get("turn") else {
+            self.issue(ProtocolCaptureIssue::MalformedMessage);
+            return;
+        };
+        let Ok(turn_id) = id(turn, "id") else {
+            self.issue(ProtocolCaptureIssue::MalformedMessage);
+            return;
+        };
+        if state.turn_id.as_deref() != Some(turn_id) && !state.completed_turns.contains_key(turn_id)
+        {
+            self.issue(ProtocolCaptureIssue::UnconfirmedResponseTurn);
+        }
+        if !matches!(
+            turn.get("itemsView").and_then(Value::as_str),
+            None | Some("full")
+        ) || turn
+            .get("itemsView")
+            .is_some_and(|value| !value.is_string())
+        {
+            self.issue(ProtocolCaptureIssue::MissingFullTurn);
+            return;
+        }
+        let Some(items) = turn.get("items").and_then(Value::as_array) else {
+            self.issue(ProtocolCaptureIssue::MissingFullTurn);
+            return;
+        };
+        if items.len() > MAX_RECORDS {
+            self.issue(ProtocolCaptureIssue::CaptureBound);
+            return;
+        }
+        let mut seen = BTreeSet::new();
+        for item in items {
+            if let Ok(item_id) = id(item, "id")
+                && !seen.insert(item_id)
+            {
+                self.issue(ProtocolCaptureIssue::ConflictingDuplicate);
+            }
+            if let Some(message) = self.agent_message(item) {
+                self.observe_message(thread, turn_id, &message, write);
+            }
+        }
+        self.record(json!({"channel":"matched_turn_response","request":canonical_digest(1,rpc_id).ok(),"method":method,"thread":thread,"turn":turn_id}),write);
+    }
     pub(crate) fn finish(
         &self,
         state: Option<&SessionState>,
@@ -713,12 +978,17 @@ impl ProtocolCapture {
             };
             return report;
         }
-        // The current evaluator stops at terminal then terminates its owned
-        // adapter. Neither an emitted-event drain nor this processed count proves
-        // stdout EOF or absence of an unread request/output tail.
         report
             .issues
-            .insert(ProtocolCaptureIssue::UnobservedTransportTail);
+            .insert(ProtocolCaptureIssue::CoverageNotQualified);
+        if !matches!(
+            report.transport_end,
+            Some(ProtocolTransportEndDiagnostic::CleanEof { .. })
+        ) {
+            report
+                .issues
+                .insert(ProtocolCaptureIssue::UnobservedTransportTail);
+        }
         if report.processed_server_requests != Some(report.observed_server_requests)
             || report.processed_server_requests != Some(self.last_request_sequence)
         {

@@ -1860,9 +1860,14 @@ impl ToolBroker for ScopedWorker {
             return;
         }
         let state = match &event {
-            crate::codex::ProtocolObservation::ServerRequest { state, .. }
+            crate::codex::ProtocolObservation::UnboundNotification { .. } => None,
+            crate::codex::ProtocolObservation::Issue { state, .. }
+            | crate::codex::ProtocolObservation::MatchedResponse { state, .. }
+            | crate::codex::ProtocolObservation::ServerRequest { state, .. }
             | crate::codex::ProtocolObservation::ToolResult { state, .. } => *state,
-            crate::codex::ProtocolObservation::AdapterInventory { state, .. }
+            crate::codex::ProtocolObservation::ThreadEstablished { state }
+            | crate::codex::ProtocolObservation::TransportEnd { state, .. }
+            | crate::codex::ProtocolObservation::AdapterInventory { state, .. }
             | crate::codex::ProtocolObservation::TerminalTurn { state, .. }
             | crate::codex::ProtocolObservation::CompletedItem { state, .. }
             | crate::codex::ProtocolObservation::AgentMessageDelta { state, .. } => Some(*state),

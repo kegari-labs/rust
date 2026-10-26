@@ -61,7 +61,15 @@ impl Records {
             .ok_or_else(|| Error::new("record_missing", "component record absent"))
     }
 }
+fn establish(c: &mut ProtocolCapture, records: &mut Records, state: &SessionState) {
+    if !c.established {
+        c.observe(ProtocolObservation::ThreadEstablished { state }, &mut |v| {
+            records.write(v)
+        });
+    }
+}
 fn terminal(c: &mut ProtocolCapture, records: &mut Records, state: &mut SessionState, text: &str) {
+    establish(c, records, state);
     let params = json!({"threadId":"thread","turn":{"id":"turn","status":"completed","items":[
         {"id":"message","type":"agentMessage","text":text},
         {"id":"private","type":"reasoning","content":["hidden reasoning must not be copied"]}
@@ -77,6 +85,7 @@ fn terminal(c: &mut ProtocolCapture, records: &mut Records, state: &mut SessionS
     );
 }
 fn request(c: &mut ProtocolCapture, records: &mut Records, state: &SessionState, params: &Value) {
+    establish(c, records, state);
     c.observe(
         ProtocolObservation::ServerRequest {
             state: Some(state),
@@ -155,6 +164,7 @@ fn missing_foreign_conflicting_and_incomplete_terminal_data_never_become_empty_c
     let mut c = capture();
     let mut s = active();
     let p = json!({"threadId":"thread","turn":{"id":"turn","status":"completed","itemsView":"summary","items":[]}});
+    establish(&mut c, &mut r, &s);
     let accepted = s.notification("turn/completed", &p).is_ok();
     c.observe(
         ProtocolObservation::TerminalTurn {
@@ -199,6 +209,9 @@ fn overflow_and_failed_protected_capture_remain_explicit() {
     let mut c = capture();
     let mut r = Records::default();
     let s = active();
+    establish(&mut c, &mut r, &s);
+    let before = r.0.clone();
+    let before_refs = serde_json::to_value(&c.report.records).unwrap();
     request(
         &mut c,
         &mut r,
@@ -209,8 +222,15 @@ fn overflow_and_failed_protected_capture_remain_explicit() {
         c.finish(Some(&s), None, &|leaf| r.read(leaf)).state,
         ProtocolCaptureState::Overflow
     );
-    assert!(r.0.is_empty());
+    // Metadata already exists; the oversized request writes no payload or
+    // truncated replacement and adds no retained reference.
+    assert_eq!(r.0, before);
+    assert_eq!(
+        serde_json::to_value(&c.report.records).unwrap(),
+        before_refs
+    );
     let mut c = capture();
+    establish(&mut c, &mut r, &s);
     c.observe(
         ProtocolObservation::ServerRequest {
             state: Some(&s),
@@ -236,41 +256,64 @@ fn actual_protected_capture_readback_detects_removed_or_changed_bytes() {
     let p = json!({"threadId":"thread","turn":{"id":"turn","status":"completed","items":[{"id":"message","type":"agentMessage","text":"observed"}]}});
     s.notification("turn/completed", &p).unwrap();
     let mut next = 0;
+    let mut writer = |value: &Value| {
+        let leaf = format!("event-{next:08}.json");
+        next += 1;
+        dir.write(
+            &leaf,
+            &json!({"kind":"protocol_observation","record":value}),
+        )?;
+        Ok(leaf)
+    };
+    c.observe(
+        ProtocolObservation::ThreadEstablished { state: &s },
+        &mut writer,
+    );
     c.observe(
         ProtocolObservation::TerminalTurn {
             state: &s,
             params: &p,
             accepted: true,
         },
-        &mut |value| {
-            let leaf = format!("event-{next:08}.json");
-            next += 1;
-            dir.write(
-                &leaf,
-                &json!({"kind":"protocol_observation","record":value}),
-            )?;
-            Ok(leaf)
-        },
+        &mut writer,
     );
     assert_eq!(
         c.finish(Some(&s), None, &|leaf| dir.read_bounded(leaf, 256 * 1024))
             .state,
         ProtocolCaptureState::Incomplete
     );
-    let leaf = &c.report.records[0].journal_leaf;
-    let original: Value = dir.read_bounded(leaf, 256 * 1024).unwrap();
-    dir.write(
-        leaf,
-        &json!({"kind":"protocol_observation","record":{"changed":true}}),
-    )
-    .unwrap();
+    let (leaf, original) = c
+        .report
+        .records
+        .iter()
+        .find_map(|reference| {
+            let value: Value = dir
+                .read_bounded(&reference.journal_leaf, 256 * 1024)
+                .unwrap();
+            (value.pointer("/record/channel").and_then(Value::as_str) == Some("agent_message")
+                && value.pointer("/record/message/id").and_then(Value::as_str) == Some("message")
+                && value
+                    .pointer("/record/message/text")
+                    .and_then(Value::as_str)
+                    == Some("observed"))
+            .then(|| (reference.journal_leaf.clone(), value))
+        })
+        .expect("the actual retained agent-message payload must exist before mutation");
+    let mut changed = original.clone();
+    changed["record"]["message"]["text"] = json!("changed payload");
+    dir.write(&leaf, &changed).unwrap();
     assert_eq!(
         c.finish(Some(&s), None, &|leaf| dir.read_bounded(leaf, 256 * 1024))
             .state,
         ProtocolCaptureState::Unavailable
     );
-    dir.write(leaf, &original).unwrap();
-    std::fs::remove_file(dir.path().join(leaf)).unwrap();
+    dir.write(&leaf, &original).unwrap();
+    assert_eq!(
+        c.finish(Some(&s), None, &|leaf| dir.read_bounded(leaf, 256 * 1024))
+            .state,
+        ProtocolCaptureState::Incomplete
+    );
+    std::fs::remove_file(dir.path().join(&leaf)).unwrap();
     assert_eq!(
         c.finish(Some(&s), None, &|leaf| dir.read_bounded(leaf, 256 * 1024))
             .state,
@@ -350,6 +393,7 @@ async fn actual_adapter_observes_requests_before_whitelist_and_intervention_then
         records: Records::default(),
         dispatched: 0,
     };
+    broker.observe_protocol(ProtocolObservation::ThreadEstablished { state: &state });
     rpc.request(
         "turn/interrupt",
         json!({"threadId":"thread","turnId":"turn"}),
@@ -411,6 +455,7 @@ fn completed_item_and_delta_identity_require_exact_terminal_inventory() {
         } else {
             "item/agentMessage/delta"
         };
+        establish(&mut c, &mut r, &s);
         let accepted = s.notification(method, &params).is_ok();
         let event = if completed_item {
             ProtocolObservation::CompletedItem {
@@ -470,6 +515,7 @@ fn processed_request_inventory_detects_missing_prefix_but_never_proves_stream_en
         let mut c = capture();
         let mut r = Records::default();
         let mut s = active();
+        establish(&mut c, &mut r, &s);
         c.observe(
             ProtocolObservation::ServerRequest {
                 state: Some(&s),
@@ -518,3 +564,6 @@ fn processed_request_inventory_detects_missing_prefix_but_never_proves_stream_en
         assert_eq!(serde_json::to_value(restored).unwrap(), encoded);
     }
 }
+
+#[path = "codex_transport_observation_tests.rs"]
+mod transport_tests;

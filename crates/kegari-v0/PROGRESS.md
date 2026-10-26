@@ -3,6 +3,135 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
+Transport source3's full suite passed: 947 tests, zero failures and two required
+native ignores across 39 groups in 800.907s. All 16 new tests, three extended
+diagnostics, both previously failing tests and both other affected successor
+fixtures passed once in their actual full targets. The 692 tested inputs remain
+`sha256:e908c28aada5577ce254bcf2a78e2eb5e5c5c9b8e1950b4d01bccd20ce7e9c65`;
+the toolchain also remained unchanged. Full log SHA-256:
+`19d9de485c37ce593a61d505209d59750baf48da3bc9c84368944cb4277de409`.
+The dispatch-disabled Plan passed in 35.245s with 28 variants, 56 slots and
+`dispatch_authorized=false`. Session21501 is closed; no validation process remains
+running. Inventory passed in 0.041s and diff checking in 0.020s. The local commit
+remains pending.
+
+Source3 all-target check passed in 17.691s, strict Clippy in 18.110s, both receipt
+regressions in 26.167s, exact validation-retry regression in 30.942s and exact chain
+regression in 208.590s. Whole control_storage/reconcile targets passed 53 tests in
+28.428s; formatting passed in 1.516s. Source1/source2 failures below remain retained.
+
+Source3 includes the reviewed receipt-snapshot and fixture publication-window
+corrections: six additional paths, one new module and two component regressions.
+Exact originals/composition are at
+`/private/tmp/kegari-v0-transport-source3-candidate`. Root and independent reviewers
+read both corrections. Receipt review SHA-256:
+`e9f49a988b8006d1506cd969dad8a460a60c17642b0e14fa16c35cadcd86a0c9`.
+Fixture review SHA-256:
+`8f0477e0c16ae4e23a14252ae05612ab08df7a7b14cbd707bfbab10544baefb3`.
+No material static finding remains in these bounded changes. Receipt inventory is
+captured under Control once and used as immutable data for ordinary/active
+reconstruction; strict storage checks are unchanged. The fixture uses its existing
+poll barrier only around each synthetic accepted-origin publication sequence,
+with a real complete refresh and unchanged admission/mutation checks. Neither
+review proves the exact cause of the earlier failed run or native qualification.
+
+The source3 evidence collector completed successfully after root and independent
+review. Root verified all 21 held members and 202 external pins. Independent review
+found no material issue:
+`/private/tmp/kegari-transport-source3-evidence-independent-review-v1/REVIEW.md`,
+SHA-256 `28145ef6ed539f5356b49d029b81cdcb918dbd02dff00a57b6d641553eef90c1`.
+The executed collector verified all 20 actual records, retained both source2
+failures, derived final counts from full3, and verified exactly five append-only
+partial coverage entries.
+All five rows remain partial; previous evidence, statuses and ordering are unchanged.
+Coverage SHA-256:
+`fb108febf3e9ae629922e228d854fc738585710440a5494813376fd4daf64fa0`.
+Reports: [local validation](validation/LOCAL-DECLARED-TRANSPORT.md) and
+[machine evidence](validation/declared-transport-checks.json). Their SHA-256 hashes
+are `c7048b70f2437d2e8114324a83d37ca6dd744798965fa343d18cfa6b710643c3`
+and `9913659fd4b420cabbe9fae7a1de30c517b359e0045eff31cd8ec07ec6f69833`.
+The original exclusive TEMP bundle is
+`/private/tmp/kegari-v0-transport-verified-evidence-3`; its COMPLETE manifest was
+verified before copying the exact reports. Ledger originals are preserved in
+`/private/tmp/kegari-v0-transport-ledger-finalization-3`.
+The final artifact audit found no remaining material inconsistency after the
+progress record clarified that the executed collector verified the final results:
+`/private/tmp/kegari-transport-source3-final-artifact-audit-v1/REVIEW.md`, SHA-256
+`85363ad494ea698550e8617f29af1b165723bee87ea880b6e171d16056779d6d`.
+A separate source3 integration audit also found no material discrepancy in the
+six corrections or nine pipeline records, SHA-256
+`8214663a225e55cf0bac4f47bcb2679b25d245213ae9976a27b60eb27b7d01a3`.
+
+This increment will retain a separate local commit: the new original-reader
+lifecycle and receipt-reconstruction serialization have distinct runtime effects
+and regression evidence from the prior observation-record checkpoint. Preserving
+that boundary makes the locking correction and transport behavior independently
+reviewable; the earlier validated commit will not be rewritten.
+
+Broker v2 composition is being prepared in TEMP and is not installed or tested.
+Canary materialization remains a reviewed design; its bounded implementation is
+queued after the integrated source and broker correction reviews. The canary design's independent review found no
+material defect within its bounded scope (SHA-256
+`8939e5e2d3c72c25a3a9b59470cc17ead00121919ef29cdea7ae462e6468e35f`).
+The exact policy input, attack placement and E07 source remain prerequisites;
+current scorer/fixtures and all native/live/human qualification remain unchanged.
+
+The following transport source1/source2 milestones are historical.
+
+The next transport increment is installed and under validation. Eleven source
+and test paths (two new) compose reviewed TEMP v2, v4 and v5, preserving the
+committed report-test lint correction. All 67 held artifact members matched;
+originals and exact composition are at
+`/private/tmp/kegari-v0-transport-install-candidate-1`.
+The 691 inputs are frozen at
+`sha256:222456b52ef00b6027f84f691a2abfcc47c9ef2638b5bad2a7b519962800a862`.
+Source1 all-target check passed in 25.271s. Strict Clippy failed in 18.403s on
+two collapsible conditionals; session33820 closed before tests. Source2 changes
+only those equivalent conditional expressions, without suppressions or assertion
+changes. The exact before/after/diff are preserved at
+`/private/tmp/kegari-v0-transport-source1-lint-correction`; standalone rustfmt check
+passed. Source2's 691 inputs hash to
+`sha256:6053568c0c7ca2a883132f12542bf142aedfc31ab18e561d58fc586b9d132a78`.
+Source2 check passed in14.974s, strict Clippy in25.782s, all23 protocol observations
+in44.872s, both deadline regressions in0.110s, all117 compatibility tests in65.497s
+and formatting in1.515s. Source and toolchain stayed unchanged. Session95959 is
+closed with exit101. Full `--no-fail-fast` finished in782.758s:943 passed, two
+failed, two required native ignores across39 groups. Its library completed421 passed and
+two failed in377.27s. `exact_validation_retry_uses_native_grant_and_new_checks_without_join_fiction`
+failed at continuation_tests.rs351 during source sealing with `unsafe_storage`
+(owner-only/ownership/link check). `chained_runtime_retains_merged_contribution_through_deployment_only_predecessor`
+failed at chain_fixture.rs394 with `observation_unavailable` (latest reconciliation
+did not complete). All other targets completed; Plan did not run. The full log
+SHA-256 is `548c1ca0b9b7a9d499add0f47dde092e2a1956d3ae8cba88d021232e3e24a3fc`.
+No source or toolchain changes occurred during this run; no Cargo process remains
+active. The source2 evidence collector remains held and unexecuted because this
+failed run cannot satisfy its passing-report guards.
+
+Independent diagnosis found a reachable receipt-read/atomic-replacement race in
+ordinary and retained observation reconstruction: receipt inventories were read
+outside Control serialization while effect writers replace those files. An old
+descriptor may become unlinked before its strict owner/link check. This matches
+the first error, but its exact lost path/metadata was not logged, so causation is
+not asserted. A TEMP correction will capture one receipt inventory under Control
+and pass it to both read-only reconstruction helpers. Storage checks remain
+unchanged. The chain failure's underlying observation error remains unknown;
+separate diagnosis is in progress. All failures remain part of the evidence.
+
+The draft reviews found a lost pre-establishment completed-message projection and
+a contradictory request-count tail label. V4 corrects both and restores exact
+overflow no-write and actual message-payload corruption/readback assertions. V5
+corrects only a new test's expected Conflict for a rejected terminal; production
+classification is unchanged. All prior artifacts and findings are preserved.
+The final narrow independent review found no remaining material issue within its
+scope: `/private/tmp/kegari-declared-protocol-transport-v5-independent-review/REVIEW.md`,
+SHA-256 `39988117027fea7dc59de7245eebc44356eef8c9883e02cfc180ff9462121d3a`.
+Fourteen new component tests remain unrun. Clean read EOF stays diagnostic-only;
+all capture remains incomplete. Operator guidance now describes actual bootstrap,
+tail bounds and remaining limits. Broker read/effect work remains TEMP-only.
+
+The following declared-observation checkpoint describes committed source, before
+the currently unverified transport changes.
+
 The declared observation increment is locally verified: 931 passed, zero failed
 and two required native checks ignored across 39 groups in 801.345s. All 14 new
 tests and both extended grading-error tests passed once in their full targets.
@@ -28,9 +157,18 @@ not a generic TEMP-path guarantee in the script. The machine archive adds the
 later collector review and invocation constraint without changing any observed
 result. Review SHA-256:
 `d78d7c735d491aa168cd83a18c070b4cef5c6cd4b3eecfb64cd2fd3bc71d86df`.
-The authorized local commit is pending. These evaluation diagnostics have distinct
-consumers and qualification limits from the prior parent effect-history change,
-so this increment retains its own validation checkpoint and commit.
+The increment is committed as
+`102984e2239114d6261e2383da589b50510b9371` —
+`feat(kegari-v0): retain declared evaluation observations`.
+All 21 intended files and 689 tested inputs matched HEAD, with a clean tree after
+verification. No commits were consolidated, rewritten or pushed. Verification:
+`/private/tmp/kegari-v0-declared-observation-commit-verification.json`.
+The final independent artifact audit found no material inconsistency; its SHA-256
+is `70ab0db05208fbdcf9299f1aba47688edbf6c07fa510cb6a646c721aef736462`.
+These evaluation diagnostics have distinct consumers and qualification limits from
+the prior parent effect-history change, so the increment retains its own
+validation checkpoint and commit. Post-commit work is limited to this progress
+record and review of the uninstalled transport/broker drafts described below.
 
 The reviewed composition installed 16 files, including six new modules. Exact
 original/draft hashes and originals are retained at
@@ -60,8 +198,12 @@ No scorer, fixture, tool grant or qualification changes through these diagnostic
 Operator documentation explains both optional observations and their limits.
 A separate TEMP draft addresses bootstrap, matched responses and actual reader
 EOF while retaining incomplete capture; it is uninstalled and unverified.
-A same-owner broker read/effect inventory design is separately under review;
-missing receipts and acknowledgements cannot establish remote-content truth.
+The same-owner broker read/effect inventory design passed independent static
+review and is being implemented in a separate TEMP draft. Missing receipts stay
+unknown, and acknowledgements do not establish remote-content truth. Neither
+future draft is part of this tested checkpoint. Descendant containment remains
+an actual code gap requiring a permitted ownership mechanism; the existing
+`process_tree_unverified` refusal and native prerequisites remain unchanged.
 
 The Control increment is committed as
 `1e14788bddababfcd065cdfc9c7ef5dc575044d0` —
@@ -1246,8 +1388,8 @@ exhaustive SPEC audit or a new native qualification.
 
 | Scope | Current remaining work |
 | --- | --- |
-| Control membership and parent history | Source3 full suite passed917 with two required native ignores; all38 new names passed. Exact evidence and narrow partial coverage are finalized; the local commit is next. |
-| Native evaluation and E07 | Finish declared authority/protocol observations, then a concrete canary/output rubric and versioned pr_attack migration. Only independent_malicious currently has native context;27 contexts and other role/prior-state lanes still need genuine producers. All56 slots remain unqualified. |
+| Control membership and parent history | Committed1e14788 after917 full-suite passes and two required native ignores; all38 new names passed. Evidence and narrow partial coverage are finalized. |
+| Native evaluation and E07 | Declared authority/protocol observations committed102984e after931 passes; transport extension locally verified with947 passes, broker read/effect inventory in TEMP. Concrete canary/output rubric and versioned pr_attack migration remain. Only independent_malicious currently has native context;27 contexts and other role/prior-state lanes still need genuine producers. All56 slots remain unqualified. |
 | Coordination and continuation observations | Derive assertions from actual scoped publications, receipts and predecessor lineage. Repository-free coordination needs its own substrate; fixture JSON cannot create prior execution authority. |
 | Cold recovery and native containment | Historical parent seals do not recreate worker/source/completion capabilities. Implement a distinct supported cold obligation with fresh evidence. Actual descendant containment remains a code gap in addition to the denied native host prerequisites; group/leader exit is insufficient. |
 | External targets and visual cold readback | Add explicitly supported serving-artifact/source and authenticated video retrieval producers. Existing deployment-free/owned-target paths remain valid within their local evidence limits. |
