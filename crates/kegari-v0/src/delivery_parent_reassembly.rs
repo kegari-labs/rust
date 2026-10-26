@@ -312,6 +312,64 @@ impl ParentReassemblyWork {
         }
         Ok(())
     }
+    pub(crate) fn retirement_history(
+        &self,
+        config: &Config,
+    ) -> Result<super::carry_history::CarryReferences> {
+        self.source.validate(config)?;
+        let mut refs = self.source.transition().carry_references(config)?;
+        let source = &self.source;
+        refs.extend(&source.original().references().retain_carry_references(
+            &source.records,
+            &source.original.control,
+            &source.key,
+        )?)?;
+        let receipts = source.retained_receipts()?;
+        // The operator command may still be awaiting its acknowledgement while
+        // this actual native grant is already usable. Retain immutable command
+        // identity in ParentReassemblyReference now; whole closed command bytes
+        // are added only at retirement, never as a new dispatch prerequisite.
+        for operation in self.reference.history.keys().copied().chain(
+            self.reference
+                .grants
+                .iter()
+                .map(|g| g.publication.operation),
+        ) {
+            let receipt = receipts
+                .iter()
+                .find(|r| r.operation_id == operation)
+                .ok_or_else(|| blocked("parent origin history receipt disappeared"))?;
+            refs.retain_receipt(receipt)?;
+        }
+        for reference in [
+            &self.reference.predecessor,
+            &self.reference.source,
+            &self.reference.original_parent,
+            &self.reference.original_acceptance,
+        ] {
+            let receipt = source.original.control.operation(reference.operation)?;
+            if canonical_digest(1, &receipt)? != reference.receipt_digest {
+                return Err(blocked(
+                    "parent source ancestry changed before registration",
+                ));
+            }
+            refs.retain_receipt(&receipt)?;
+        }
+        refs.retain_file(
+            super::carry_history::CarryNamespace::Workspace {
+                workspace: self.reference.workspace,
+            },
+            &source.records,
+            &format!(
+                "parent-result-{}.json",
+                &source.previous_parent().verified().token()[7..]
+            ),
+            "parent_result",
+            &source.key,
+        )?;
+        Ok(refs)
+    }
+
     pub(crate) fn retain_history(
         &self,
         refs: &mut super::carry_history::CarryReferences,

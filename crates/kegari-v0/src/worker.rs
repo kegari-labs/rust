@@ -1,5 +1,9 @@
 //! Scoped production tools shared by orchestration and the actual-agent evaluator.
 //! Worker output is a proposal. Only host observations can establish delivery gates.
+#[path = "worker_retirement.rs"]
+mod retirement;
+pub(crate) use retirement::{ParentJournalHistory, capture_parent_journal};
+
 use crate::codex::{SessionState, ToolBroker, ToolCall};
 use crate::control::{Actor, ControlHost, Lease, MutationRequest, Permit};
 use crate::digest::{bytes_digest, canonical_digest};

@@ -320,6 +320,35 @@ impl ProcessJournal {
         }
         Ok(observed)
     }
+    /// Historical data only. No PID probe, adoption, signal or exit inference.
+    pub(crate) fn retained_records(&self, operation_id: Uuid) -> Result<Vec<ProcessRecord>> {
+        let path = self.directory.path().join(operation_id.to_string());
+        match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(error) => return Err(Error::io("inspect retained process directory", error)),
+            Ok(_) => {}
+        }
+        let directory = PrivateDir::open(&path)?;
+        let mut result = Vec::new();
+        for leaf in bounded_records(&directory)? {
+            let record: ProcessRecord = directory.read_bounded(&leaf, 64 * 1024)?;
+            if record.schema_version != 1
+                || record.binding.runtime_id()? != self.runtime
+                || record.binding.operation_id != operation_id
+                || leaf != format!("{}.json", record.binding.effect_id)
+                || record.guard != format!("{}.guard", record.binding.effect_id)
+            {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "retained process identity changed",
+                ));
+            }
+            let _guard =
+                directory.lock_existing(&record.guard, record.guard_device, record.guard_inode)?;
+            result.push(record);
+        }
+        Ok(result)
+    }
     pub fn operations(&self) -> Result<Vec<Uuid>> {
         let mut operations = Vec::new();
         for entry in std::fs::read_dir(self.directory.path())

@@ -646,7 +646,13 @@ impl DeliveryFixture {
             DeliveryServices {
                 host: host.clone(),
                 broker,
-                records: Arc::new(PrivateDir::create(&directory.join("records")).unwrap()),
+                // Match RuntimeDelivery's per-workspace protected record namespace.
+                records: Arc::new(
+                    PrivateDir::create(&directory.join("records"))
+                        .unwrap()
+                        .child(&workspace.id.to_string())
+                        .unwrap(),
+                ),
                 key: key.clone(),
                 git: Arc::new(Git::new(pinned_git::prepare(&directory)).unwrap()),
                 retained_git_sources: BTreeMap::new(),

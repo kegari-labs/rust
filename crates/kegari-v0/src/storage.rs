@@ -42,6 +42,31 @@ struct Record<T> {
     payload: T,
 }
 
+/// Decode an already captured protected record without another filesystem read.
+/// The caller retains the actual storage/size checks; this is data validation,
+/// not an ownership, admission, or execution capability.
+pub(crate) fn decode_record<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T> {
+    let record: Record<T> = serde_json::from_slice(bytes).map_err(|_| {
+        Error::new(
+            "record_corrupt",
+            "control record is invalid JSON or has unknown fields",
+        )
+    })?;
+    if record.schema_version != 1 {
+        return Err(Error::new(
+            "incompatible_version",
+            "unsupported control record version; preserved unchanged",
+        ));
+    }
+    if canonical_digest(1, &record.payload)? != record.digest {
+        return Err(Error::new(
+            "record_corrupt",
+            "control record digest does not match",
+        ));
+    }
+    Ok(record.payload)
+}
+
 fn name(value: &str) -> Result<CString> {
     if value.is_empty() || value == "." || value == ".." || value.contains('/') {
         return Err(Error::invalid(
@@ -214,25 +239,7 @@ impl PrivateDir {
         maximum: u64,
     ) -> Result<T> {
         let bytes = self.read_bytes(leaf, maximum)?;
-        let record: Record<T> = serde_json::from_slice(&bytes).map_err(|_| {
-            Error::new(
-                "record_corrupt",
-                "control record is invalid JSON or has unknown fields",
-            )
-        })?;
-        if record.schema_version != 1 {
-            return Err(Error::new(
-                "incompatible_version",
-                "unsupported control record version; preserved unchanged",
-            ));
-        }
-        if canonical_digest(1, &record.payload)? != record.digest {
-            return Err(Error::new(
-                "record_corrupt",
-                "control record digest does not match",
-            ));
-        }
-        Ok(record.payload)
+        decode_record(&bytes)
     }
 
     /// Non-secret configuration/client preferences use their native TOML format.

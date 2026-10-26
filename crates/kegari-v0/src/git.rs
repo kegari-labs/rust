@@ -3197,7 +3197,18 @@ impl GitOperationState {
         use std::io::Read;
         use std::os::fd::AsRawFd;
         use std::os::unix::process::CommandExt;
-        self.current()?;
+        let started = std::time::Instant::now();
+        let command_deadline = started + self.limits.command_timeout;
+        // This is only a local deadline/cancellation predicate. In particular,
+        // invoking it inside the caller's start gate never reacquires Control.
+        let check_current = || -> Result<()> {
+            self.current()?;
+            if std::time::Instant::now() >= command_deadline {
+                return Err(Error::new("timeout", "Git command exceeded finite timeout"));
+            }
+            Ok(())
+        };
+        check_current()?;
         let input = input.unwrap_or(&[]);
         if input.len() > self.limits.input_bytes {
             return Err(Error::new(
@@ -3212,7 +3223,7 @@ impl GitOperationState {
             .process_group(0);
         let mut pipes = None;
         let mut start = || -> Result<()> {
-            self.current()?;
+            check_current()?;
             let mut active = self
                 .active
                 .lock()
@@ -3223,7 +3234,7 @@ impl GitOperationState {
                     "one owned Git sequence cannot run parallel subprocesses",
                 ));
             }
-            self.current()?;
+            check_current()?;
             let mut guard = self
                 .journal
                 .as_ref()
@@ -3276,11 +3287,30 @@ impl GitOperationState {
             if let Some(guard) = &guard {
                 guard.configure_std(&mut command)?;
             }
+            // The start gate and durable guard preparation may consume the
+            // remaining budget. Never launch after either deadline has expired.
+            check_current()?;
             let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_std(&mut command)?;
             let capture_error = guard
                 .as_mut()
                 .and_then(|guard| guard.spawned_std(&child).err());
             let capture_error = match capture_error {
+                Some(error) if error.code == "operation_uncertain" => {
+                    // The original identity snapshot may race a short child's exit.
+                    // Observe only this actual unreaped Child's terminal/group state;
+                    // do not retry process enumeration, spawn again or deliver stdin.
+                    let deadline = (std::time::Instant::now()
+                        + std::time::Duration::from_millis(100))
+                    .min(command_deadline)
+                    .min(self.deadline);
+                    match group.await_exit_before_reap(deadline, check_current) {
+                        Ok(true) => None,
+                        Ok(false) => Some(error),
+                        Err(error) => Some(error),
+                    }
+                }
+                // Preserve the existing immediate terminal fallback for other
+                // probe/storage errors; do not extend their observation window.
                 Some(error) => match group.observe_exit_before_reap() {
                     Ok(true) => None,
                     Ok(false) => Some(error),
@@ -3345,7 +3375,6 @@ impl GitOperationState {
         let mut err = Vec::new();
         let mut out_eof = false;
         let mut err_eof = false;
-        let started = std::time::Instant::now();
         let mut terminal_at = None;
         let mut cancelled_at = None;
         let drain = |stream: &mut dyn Read, bytes: &mut Vec<u8>| -> Result<bool> {
@@ -4203,3 +4232,7 @@ mod exact_object_presence_tests {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "git_startup_exit_tests.rs"]
+mod startup_exit_tests;

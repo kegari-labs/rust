@@ -200,6 +200,33 @@ impl OwnedGroup {
             Ok(true)
         }
     }
+    /// Wait only for terminal/group closure of the original unreaped Child.
+    /// A false result retains the existing owner and grants no live identity.
+    /// The callback is local cancellation/deadline checking, not a new admission.
+    pub(crate) fn await_exit_before_reap(
+        &mut self,
+        deadline: std::time::Instant,
+        mut current: impl FnMut() -> Result<()>,
+    ) -> Result<bool> {
+        loop {
+            current()?;
+            if std::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            let terminal = self.observe_exit_before_reap()?;
+            current()?;
+            if std::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            if terminal {
+                return Ok(true);
+            }
+            std::thread::sleep(
+                std::time::Duration::from_millis(1)
+                    .min(deadline.saturating_duration_since(std::time::Instant::now())),
+            );
+        }
+    }
     pub fn terminate(&mut self, signal: Termination) -> Result<()> {
         if self.ready_to_reap {
             return Ok(());

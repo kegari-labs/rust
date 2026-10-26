@@ -3,7 +3,230 @@
 Local implementation and validation remain in progress; the Goal is incomplete.
 Unattended mode remains in effect. No live trial or remote mutation is authorized.
 
-Current source14 installs the reviewed native evaluator caller, literal PR text,
+Current parent-retirement source8 is locally verified: 879 passed, zero failed,
+two required native checks ignored across 39 groups (716.047s). All-target check,
+strict Clippy, formatting, all 21 delivery tests, inventory, diff and the
+56-slot dispatch-disabled Plan passed. All 679 tested inputs remained unchanged.
+The final collector verified 38 invocations, preserved every earlier failure,
+and installed only eight reviewed partial coverage rows with eleven added entries.
+Reports: [local validation](validation/LOCAL-PARENT-RETIREMENT.md) and
+[machine evidence](validation/parent-retirement-checks.json).
+Session75488 is closed; no validation process remains running. This increment
+awaits the authorized local commit. Native/live/human qualification is incomplete.
+The reviewed Control membership index/consumer and authority-boundary observer
+remain uninstalled TEMP work; they contribute no evidence to this checkpoint.
+
+The verified native evaluator checkpoint is
+`ddc44eaf35d3865640c8ba615c3d0877292c917a` —
+`feat(kegari-v0): run explicit owned native evaluation trials`.
+All 61 changed files and 672 tested inputs matched the commit; the working tree
+was clean afterward. No commits were consolidated, rewritten or pushed.
+Verification: `/private/tmp/kegari-v0-native-evaluation-commit-verification.json`.
+
+Parent-retirement source1 is now installed from the independently reviewed
+15-file composition, manifest
+`59a386b092e23e6b31c593fc77f29e24ae4b1f0d31a1ca932505b917bd24aae0`.
+Exact current bases/new paths and copied bytes were verified. Originals are at
+`/private/tmp/kegari-v0-parent-retirement-installed-source1`. Three clean merges
+preserve all native evaluator changes; two separate reviewed corrections validate
+ordered artifact bytes and hash/decode each journal event from the same read.
+Source1 all-target compile failed in 14.677s: the carry-history import pointed
+one module too high and three new test vectors inferred unsized strings. Source2
+corrects the import path and adds explicit Vec<String> types; production behavior
+and assertions are unchanged. Original bytes and exact four-line correction are
+retained at `/private/tmp/kegari-v0-parent-retirement-source1-compile-correction`.
+All-target check then passed in 25.492s. Sessions86718 and16454 are closed.
+The 678 current source2 inputs are at
+`sha256:82931aec917dc5015df556a790998b1038b7e18af916a832367a9d5a9a190271`.
+Source2 strict Clippy failed in 20.451s on a needless clone in a one-element test
+slice. Source3 uses slice::from_ref; all-target check passed in 13.891s and strict
+Clippy in 18.964s. Three origin regressions passed in 40.411s. The retirement
+filter passed ten tests and failed one protected-file inventory test in 12.539s.
+That test exposed a production mismatch: both new history modules requested16MiB
+reads from PrivateDir, whose existing maximum is8MiB. The rejection occurred even
+for small or absent files. Source4 lowers both call-site limits to8MiB, preserving
+all storage checks, and formats the new test assertion. Original source3 bytes,
+runner and exact diff are at
+`/private/tmp/kegari-v0-parent-retirement-source3-bound-correction`.
+An independent bounds audit found no further incompatible bound in either module
+or its adjacent chunk/journal paths. Sessions47919 and70952 are closed; no full
+source3 run occurred. Source4 has678 inputs at
+`sha256:6f46bf53dd1a8ded600f8a00b29d952cf63f1b074a8a9b927532a3eef3b867d7`.
+Source4 all-target check passed in14.036s, strict Clippy in14.943s, all3 origin
+regressions in7.964s and all11 retirement-filter tests in12.451s. The nine new
+regressions are included in those filters; five existing related tests also ran.
+Formatting passed in1.446s. Full source4 failed after353 library passes and one
+failure in450.256s (unchanged source digest). The existing corrected runtime
+assembly fixture failed during integrated_worker_assignment: new provenance
+capture requires the delta's merge receipt, but its synthetic upstream fixture
+hard-coded merge_request818 without producing that receipt. Production validation
+must remain strict; a genuine Control/provider-fixture effect correction is being
+prepared and independently reviewed. The full failure log and result remain at
+`/private/tmp/kegari-v0-parent-retirement-full-4{.log,-result.json}`; log SHA-256
+`b015309204b29c3bc5160cf8f2267c79607dc719a4a966d5f08283734ed8ea32`.
+Session67031 is closed. Later full-suite groups and Plan did not run. The report
+collector correctly refuses qualification; no current full-suite or native
+qualification is claimed.
+Source5 installs only the two independently reviewed fixture corrections from
+`/private/tmp/kegari-parent-retirement-merge-fixture-correction-v1`, manifest
+`2eb5064fc0e1c9e58b1dfd078f669b7442ddd68e8d7004d694c2cfd16dd3cf75`.
+The real typed merge broker/Control path supplies the actual receipt through the
+synthetic provider; upstream review/check/staging qualification stays synthetic.
+The existing corrected assignment test additionally deletes that receipt, restores
+its exact envelope, and requires refusal plus unchanged Control inventory before
+its original positive assertions. No production guard or test assertion was weakened.
+Originals, exact diff and coordinator review are retained at
+`/private/tmp/kegari-v0-parent-retirement-source4-fixture-correction`.
+All678 source5 inputs hash to
+`sha256:5e0cbd876b4b666c723b4ea9fdd4b4c0b94a2a5a49312b0f217e7dbc4783fa4b`.
+All-target compilation passed15.664s and strict Clippy16.461s. All three successor
+scenarios passed250.528s, all three origin tests passed0.343s, all eleven retirement
+filter tests passed12.975s, and formatting passed1.542s. The full suite failed after353 library passes/one failure in415.778s on unchanged
+source5. The corrected assembly regression passed. The chained successor failed
+at release_wire.rs2006 during actual capture_delta: owned child OS identity could
+not be established. Its focused run had passed; this is not accepted as a lucky
+rerun. Full5 log SHA-256 is
+`2ab5384bd433baf02e2bc8129c777744b6e3782746b5c77355504631841af4b4`.
+Session69270 is closed. Later integration groups and Plan did not run. Root and
+an independent agent are tracing the existing immediate identity/terminal fallback.
+The one-shot retained-child scan can lack an exact identity; the existing Git
+fallback accepts only immediately observed actual terminal/group closure. A bounded
+wait on the same unreaped owned child is under review; exact OS failure cause is
+not established by the generic error. No denied native/global probe was retried,
+production guard weakened or unmodified lucky rerun started at that diagnosis.
+Source6 now integrates the independently reviewed three-file startupv3 correction
+from `/private/tmp/kegari-owned-child-startup-exit-v3`, manifest
+`f3e417a09a9ad8a766e5bc9773ba25732474cef9e727272fcbcae58b9832598b`.
+It waits only for the same unreaped owned Child's actual terminal/group closure,
+at most100ms capped by original command/operation deadlines, after identity
+unavailability. It retries no ProcessProbe and sends no stdin during uncertainty.
+Other capture errors retain their existing immediate fallback. A review finding
+was corrected before integration: the command clock begins before startup and is
+also enforced at entry/start/after ownership lock/immediately before spawn. Seven
+actual-owned-child component tests distinguish missed capture, timeout/cancellation,
+no-spawn expiry, post-spawn deadline and withheld input without a Running identity.
+Native boot identity and detached containment remain unqualified. Originalsource5,
+exactpatch and artifact provenance are retained at
+`/private/tmp/kegari-v0-parent-retirement-source5-startup-correction`.
+All679 source6 inputs are
+`sha256:98fb015e79d1af187df46edc39a67585499ba3b83e03b0995bebb06ef977c9c2`.
+Source6 all-target check passed15.781s; strict Clippy failed9.319s on an
+unnecessary mut at git_startup_exit_tests.rs133. No later source6 tests ran.
+Session90899 is closed. Source7 removes only that mut; original bytes and exact
+diff are at `/private/tmp/kegari-v0-parent-retirement-source6-lint-correction`.
+Its679 inputs hash to
+`sha256:fb7ed9a0872dac4f823c704b4712f05c280a8aa934c659aaacf9e5f785e77d89`.
+Source7 all-target check passed14.411s, strict Clippy15.415s, all seven startup
+regressions24.881s, and all46 Git/process tests across three complete groups
+108.964s with no ignores. Origin passed3 in0.340s; retirement passed11 in12.702s;
+formatting passed1.470s. All recorded source/toolchain snapshots are unchanged.
+Full source7 failed in491.551s on unchanged source/toolchain. All361 library
+tests passed, including all three successor fixtures. Later tests/delivery.rs
+passed20 and failed parent_slice_uses_actual_production_and_preserves_dirty_operator_checkout
+at1785: new origin capture requires the exact workspace namespace, but the
+fixture constructs its protected delivery directory with the generic leaf records.
+Root and independent review are comparing that fixture to production construction;
+namespace validation remains strict. Full7 log SHA-256
+`8e3791f47f0045663904a61d6632fdffc469b271f531bd9f0ca5853495a30326`.
+Session42895 is closed; later groups and Plan did not run. No source7 collector,
+finalizer, coverage update or final report ran. Existing source7 success templates
+are now obsolete and remain contingent/unpublished.
+Source8 installs only the reviewed delivery fixture namespace correction from
+`/private/tmp/kegari-parent-retirement-workspace-fixture-correction-v1`, manifest
+`eff38a2b48fa6289ce4caeb9672c5f8ca13b46256ff314a4d0bcdc6435b86fdf`.
+The constructor now uses PrivateDir.child(actual workspace UUID), exactly as
+production RuntimeDelivery does. All dirty-index/source/candidate/admission
+assertions and production guards are unchanged. Root and independent caller audit
+found no other affected integration caller. Original bytes, patch and reviews are
+at `/private/tmp/kegari-v0-parent-retirement-source7-fixture-correction`.
+Its679 inputs hash to
+`sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1`;
+independent comparison verified only tests/delivery.rs changed from source7.
+Source8 check passed in 1.199s, strict Clippy in 0.828s, all 21 delivery
+integration tests in 19.664s, and formatting in 1.422s. The previous namespace
+failure now passes with its original assertions. Session75488 completed: the full
+suite passed 879 tests with zero failures and two required native ignores across
+39 groups in716.047s; the 56-slot dispatch-disabled Plan passed in31.104s.
+All sixteen new tests, three successor fixtures and the delivery regression passed
+on source8. Unchanged focused source7 passes remain historical evidence.
+Final source8 remains frozen; its local report is now published. Native, live
+integration and human qualification remain incomplete. The evidence
+collector's exact auxiliary key requirement now binds SPEC, contract_inventory.py
+and coverage.json. Independent source5 evidence review found no remaining material
+issue within its scope; the final source8 success claims now rest on actual full
+results and independently reviewed source8 evidence collection.
+The source5 finalizer remains unexecuted and obsolete. Source7 collector/render
+drafts are independently reviewed at
+`/private/tmp/kegari-parent-retirement-evidence-source7-independent-review-v1`;
+no additional material finding was confirmed. Root prepared finalizer7, whose
+independent review found that a later failure could leave prematurely finalized
+coverage. The unexecuted corrected
+`/private/tmp/kegari-v0-parent-retirement-finalize-7-v2.py` validates exact commands,
+snapshots/logs and rendering before writes, then restores its own ledger and
+preserves unpublished outputs if a subsequent step fails. Independent v2 rereview
+confirmed the original finding resolved; crash-atomic publication is not claimed.
+Source8's separately reviewed guarded finalizer subsequently completed. It
+installed the final report, machine evidence and only the eight approved partial
+coverage rows; inventory and diff checks passed. All38 invocation records and
+all earlier failures remain archived. The producer records actual assignment, preparation and
+original joined parent-run provenance; it cannot reconstruct worker/exit/current
+authority from historical JSON. Its retained receipt-scan
+schema explicitly cannot prove completeness before first capture. A separate
+bounded Control index implementation is held at
+`/private/tmp/kegari-control-owner-effect-index-v1`; it remains uninstalled.
+Independent review found an effect-owner-field removal could bypass membership
+validation at async launch/ACK (including an absent-marker cold downgrade), and
+a late effect settlement after a retirement-save failure could prevent cleanup
+retry. Both findings are recorded in
+`/private/tmp/kegari-control-owner-effect-index-independent-review-v1/REVIEW.md`;
+v2 corrections are held at `/private/tmp/kegari-control-owner-effect-index-v2`,
+manifest `35d713adf0393e624870c6169b5e1582602a9990606180df8299797b9d7e6b0d`.
+Root read both complete layers and verified all bases; independent rereview found
+the earlier two defects corrected but a further same-host remint seam: deleting a
+known owner's receipt/index files could allow its UUID to be readmitted, replacing
+retained anchors. A v3 pre-write known-identity guard corrected that remint. Its rereview found an
+error path narrowed existing resource holds; v4 unions all prior targets across
+four error-only sites and tests actual pending-A/already-active-B exclusion after
+exact receipt restoration without ACK. V5 fixes two test usize→u64 arguments.
+Latest held composition is `/private/tmp/kegari-control-owner-effect-index-v5`,
+manifest `e867c1ac51b8f8e9dd677f8a5a728ea6230365d947d82f3560c8286127fd058d`.
+All30 authored tests remain unrun. Root read every layer; independent v5 review
+found no remaining material issue in scope. No Control-index layer is installed
+or Cargo-tested.
+The boundary observer's12-file implementation is separately held at
+`/private/tmp/kegari-independent-boundary-observation-v1`, manifest
+`026b8e7a77badc46f3743e9e6a4fb3da7d4285e876f68093f97baac8dbcd8bff`;
+it is uninstalled; independent review found no additional material defect, and
+compilation/execution remain pending. The parent
+report/collector independent review is retained at
+`/private/tmp/kegari-parent-retirement-evidence-independent-review-v1`. Its two
+unsupported lifecycle coverage mappings (§8.3 retention and §11.5 preservation)
+remain unchanged from the base ledger. The corrected proposal at
+`/private/tmp/kegari-parent-retirement-coverage-correction-v2` (eight rows, eleven
+new partial entries) is now installed and verified. Next: commit this verified
+parent-retirement increment, then integrate and validate the held Control index
+and consumer. A paired Control-index consumer design
+was read in full at
+`/private/tmp/kegari-parent-retirement-effect-index-consumer-design-v1/PLAN.md`.
+The independent design review found no material gap. The six-file implementation
+is held at `/private/tmp/kegari-parent-retirement-effect-index-consumer-v1`,
+manifest `1771532aad9e71bdd15e43a13cb60411f270e50498138478633dcf40e5f5ebc2`.
+Root read the full patch and verified all held/current bases: one serialized batch,
+strict indexed membership, explicit legacy/mixed provenance, unchanged unresolved
+owner/join/process guards, and preservation of existing schema-1 signed bytes.
+Eight authored component/schema tests are unrun. Independent implementation review
+found no additional material issue at
+`/private/tmp/kegari-parent-retirement-effect-index-consumer-independent-review-v1`.
+The source8 collector/render and guarded finalizer also passed separate static
+reviews; finalization completed only after full8 and Plan passed with unchanged
+source/toolchain identities. No Control index or consumer is installed or
+contributes current evidence. The PR-attack observation design at
+`/private/tmp/kegari-native-pr-attack-observation-design-v1/DESIGN.md` was read in
+full; independent review and a first actual authority-boundary observation slice
+are proceeding in TEMP. Scorers, fixtures, grader versions and native qualification
+are unchanged.
+
+Native source14 installs the reviewed native evaluator caller, literal PR text,
 exact trial subjects, owned failure cleanup, grading-error evidence, first native
 E05 context fixture, source-preparation tool and operator guidance. Its 672 build
 inputs are unchanged at
@@ -26,9 +249,9 @@ The ledger appends partial local evidence to 18 clauses and eight named items;
 not_assessed/15 partial. No requirement is passed. Coverage SHA-256:
 `71790c6b2e3f6445b093c0a4d47f3c61fc7f654e03851a32b4e32ed3868a1c5b`.
 Actual-agent/provider/native containment and human qualification remain incomplete.
-The coherent native evaluator increment is ready for the authorized local commit;
-its separate scope from prior carry recovery warrants a distinct commit. No
-history rewrite, consolidation or remote action is planned.
+The native evaluator increment was committed separately from prior carry
+recovery because they affect distinct runtime paths. Its exact verification is
+recorded above; actual-agent/native and human qualification remain incomplete.
 
 Source13 only rustfmt-formatted the exact-TrialKey test assertion; its intentional
 source transition from source12 and original bytes remain retained. Source12
@@ -54,9 +277,9 @@ No claim is derived from a label alone. The next-fixture data proposal is held a
 `independent_eligible` needs coordination and `clean_review` needs product review;
 neither is relabeled. PR-attack migration preserves three currently unavailable
 host-observation assertions and has no invented base/head OIDs or runnable manifest.
-The separate 15-file
-retired-parent producer composition remains uninstalled in TEMP; it explicitly
-cannot prove receipt-set completeness from retained receipt scans alone.
+At that earlier native checkpoint, the separate15-file retired-parent producer
+composition was uninstalled in TEMP. It is now installed as recorded above, and
+still cannot prove receipt-set completeness from retained receipt scans alone.
 
 The 28-file native evaluator source1 is installed from the reviewed caller-v4,
 subject-v2 and terminal-report layers, rebased on current main. Exact composition:
@@ -197,15 +420,15 @@ linking committed deterministic evidence and explicit native not_run. It contain
 no requirement is marked passed. Coverage hash:
 `e7ff810b945b9008a405ed835be980b833aad1bf82b433ca0f786419990f016c`.
 
-Next useful work is to commit the verified source14 native caller increment.
-Then integrate the separately reviewed retired
-parent-run producer and complete the remaining native fixture/observation paths.
+Next useful work is to verify the installed retired parent-run producer, then
+complete the owner-emitted receipt membership and remaining native fixture/observation paths.
 The exact 15-file retired composition is
 `/private/tmp/kegari-retired-parent-run-on-native-source13-v1`, manifest
 `59a386b092e23e6b31c593fc77f29e24ae4b1f0d31a1ca932505b917bd24aae0`.
 Root and independent review verified all three clean merges preserve evaluator
 ownership, exact identity, completion retries and existing cold-carry behavior.
-Its source bases match source14; it remains uninstalled and uncompiled. Receipt
+Its source bases match source14; it is now installed as parent-retirement source1
+and awaits compilation. Receipt
 completeness still needs an actual dispatch-time effect index; retained scans
 alone cannot supply it. Native model/provider/containment execution and human
 calibration remain incomplete. Root owns repository changes/checks/commits;

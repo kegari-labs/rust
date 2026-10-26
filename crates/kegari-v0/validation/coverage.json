@@ -342,8 +342,36 @@
       "line": 81,
       "sha256": "9cf3086198ac687147c144741e2135844af79935c70719fdcd06e61b4f5446e8",
       "excerpt": "Digests MUST be SHA-256 over explicitly versioned, canonical UTF-8 JSON (sorted object keys, ordered arrays where meaningful, no insignificant whitespace), or over exact artifact b",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed protected-file component regressions check original ordered delta/evidence chunk bytes against the retained aggregate digest and declared length, reject mutation before first capture, wrong order, duplicate or missing chunks, excessive bounds and conflicting shared chunks, and preserve the prior reference map on refusal.",
+          "tests": [
+            "src/delivery_parent_run_origin_tests.rs::original_digest_refuses_chunk_mutation_before_first_history_capture",
+            "src/delivery_parent_run_origin_tests.rs::original_artifact_order_length_duplicates_and_missing_chunks_fail_closed",
+            "src/delivery_parent_run_origin_tests.rs::chunk_byte_bound_and_conflicting_shared_chunk_cannot_replace_prior_capture"
+          ],
+          "limits": "These are exact-byte capture tests, not genuine child validation, staging squash/ancestry, canonical Git diff generation, binary/mode semantics, or a qualified parent run.",
+          "class": "deterministic",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        },
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed protected-file component regressions decode and hash the same captured journal bytes even when the file is replaced afterward, and retain corrupt/unknown-field/unsupported-envelope and 256 KiB event-size refusals.",
+          "tests": [
+            "src/worker_retirement_tests.rs::captured_journal_event_and_hash_use_same_bytes_after_file_replacement",
+            "src/worker_retirement_tests.rs::captured_journal_decoder_preserves_envelope_and_event_size_refusals"
+          ],
+          "limits": "Events are plain fixture data; no native session, check, hook, exit or completion capability is constructed. This does not test every atomic-write/crash boundary, STOPPED recovery or unsupported-version no-write behavior.",
+          "class": "deterministic",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        }
+      ]
     },
     {
       "id": "clause:2.3:0ecde74168e4",
@@ -378,8 +406,34 @@
       "line": 91,
       "sha256": "cc8fdcacf6dfd2987585c39b3cc78f04a0f445b612545462bd1fda5009a40e16",
       "excerpt": "Durable control and recovery records MUST be written atomically using a same-directory temporary file, file flush, atomic rename and containing-directory flush before acknowledgeme",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed protected-file component regressions decode and hash the same captured journal bytes even when the file is replaced afterward, and retain corrupt/unknown-field/unsupported-envelope and 256 KiB event-size refusals.",
+          "tests": [
+            "src/worker_retirement_tests.rs::captured_journal_event_and_hash_use_same_bytes_after_file_replacement",
+            "src/worker_retirement_tests.rs::captured_journal_decoder_preserves_envelope_and_event_size_refusals"
+          ],
+          "limits": "Events are plain fixture data; no native session, check, hook, exit or completion capability is constructed. This does not test every atomic-write/crash boundary, STOPPED recovery or unsupported-version no-write behavior.",
+          "class": "deterministic",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        },
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "A passed protected-file component regression detects changed hook-ledger bytes and refuses a missing required preparation record when collecting retained worker references.",
+          "tests": [
+            "src/runtime_parent_retirement_tests.rs::protected_worker_record_inventory_detects_deletion_and_changed_hook_bytes"
+          ],
+          "limits": "Stored values are explicitly unsigned fixture data; this is not a worker origin/retirement capability, native process exit, complete cleanup lifecycle or Git object retention qualification.",
+          "class": "deterministic",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        }
+      ]
     },
     {
       "id": "clause:2.3:2f81bc15d893",
@@ -1888,8 +1942,19 @@
       "line": 423,
       "sha256": "9b6744b5258a0689133b2e79ac179f3461c7420c66139885bab4b0d52af47ba6",
       "excerpt": "Each agent operation/session MUST retain an instruction manifest referencing the runtime/build and generic-asset versions/digests, configured workflow digest, relevant repository r",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "source_inspection_only",
+          "scope": "Source inspection shows the two parent worker phases retaining the original assignment/vector/contract and instruction manifest, exact successful preparation reference, protected prompt/context/workflow/tool artifacts and source descriptors. The same-process retirement producer requires the actual registered contract Arc and owned-task join, then rechecks local exit, registry/Control ownership, referenced receipts, files and journal before retaining historical evidence.",
+          "tests": [],
+          "limits": "Source inspection only; the new component tests do not execute a genuine qualified parent worker. The reader constructs no worker/run/check capability. There is no cold current reconstruction, complete emitted-effect index, native/provider-discovery qualification, cleanup authorization or release/no-release success claim.",
+          "class": "implementation",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        }
+      ]
     },
     {
       "id": "clause:7.5:345a6e35457d",
@@ -2023,8 +2088,23 @@
       "line": 465,
       "sha256": "1f29f806ab209d2233461c0bc5007024950c4b7bf8fca7cb1bf417c15854b7ba",
       "excerpt": "The recorded child delta MUST be captured from the validated change and linked to the observed staging squash. Its identity contains repository, child and generation, validated bas",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed protected-file component regressions check original ordered delta/evidence chunk bytes against the retained aggregate digest and declared length, reject mutation before first capture, wrong order, duplicate or missing chunks, excessive bounds and conflicting shared chunks, and preserve the prior reference map on refusal.",
+          "tests": [
+            "src/delivery_parent_run_origin_tests.rs::original_digest_refuses_chunk_mutation_before_first_history_capture",
+            "src/delivery_parent_run_origin_tests.rs::original_artifact_order_length_duplicates_and_missing_chunks_fail_closed",
+            "src/delivery_parent_run_origin_tests.rs::chunk_byte_bound_and_conflicting_shared_chunk_cannot_replace_prior_capture"
+          ],
+          "limits": "These are exact-byte capture tests, not genuine child validation, staging squash/ancestry, canonical Git diff generation, binary/mode semantics, or a qualified parent run.",
+          "class": "deterministic",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        }
+      ]
     },
     {
       "id": "clause:8.3:7cc5a9decf1c",
@@ -3181,6 +3261,30 @@
           "reference": "validation/LOCAL-PAIRED-RECOVERY.md",
           "status": "not_run",
           "scope": "Genuine resumed repair followed by qualified failed checks, cold current reconstruction and complete provider/host qualification remain incomplete."
+        },
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "source_inspection_only",
+          "scope": "Source inspection shows the two parent worker phases retaining the original assignment/vector/contract and instruction manifest, exact successful preparation reference, protected prompt/context/workflow/tool artifacts and source descriptors. The same-process retirement producer requires the actual registered contract Arc and owned-task join, then rechecks local exit, registry/Control ownership, referenced receipts, files and journal before retaining historical evidence.",
+          "tests": [],
+          "limits": "Source inspection only; the new component tests do not execute a genuine qualified parent worker. The reader constructs no worker/run/check capability. There is no cold current reconstruction, complete emitted-effect index, native/provider-discovery qualification, cleanup authorization or release/no-release success claim.",
+          "class": "implementation",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        },
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed receipt-data regressions reject unresolved or nonretired owner shapes and scope/owner/phase drift, retain known failed terminal results, and require the explicit retained_receipt_scan_without_emitted_index discriminator.",
+          "tests": [
+            "src/runtime_parent_retirement_tests.rs::terminal_receipt_data_does_not_hide_unresolved_or_nonretired_ownership",
+            "src/runtime_parent_retirement_tests.rs::complete_effect_inventory_retains_failed_results_and_refuses_scope_owner_or_phase_drift",
+            "src/runtime_parent_retirement_tests.rs::retained_receipt_scan_never_decodes_as_complete_emitted_effect_history"
+          ],
+          "limits": "Receipts are data fixtures, not actual joined workers. Despite one test name containing complete_effect_inventory, the scan cannot establish that no effect receipt was deleted before first capture; complete emitted-effect history and cold reconstruction remain unsupported.",
+          "class": "deterministic",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
         }
       ]
     },
@@ -3657,8 +3761,22 @@
       "line": 792,
       "sha256": "e43578b109b2981fe836573f89353358de69a561314d0a4d9089ba42a999570d",
       "excerpt": "| V0-T08 | Crash at each intent/receipt durability boundary. Recovery uses a valid old/new record or blocks corruption, never fabricates permission. STOPPED persisted before crash ",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed protected-file component regressions decode and hash the same captured journal bytes even when the file is replaced afterward, and retain corrupt/unknown-field/unsupported-envelope and 256 KiB event-size refusals.",
+          "tests": [
+            "src/worker_retirement_tests.rs::captured_journal_event_and_hash_use_same_bytes_after_file_replacement",
+            "src/worker_retirement_tests.rs::captured_journal_decoder_preserves_envelope_and_event_size_refusals"
+          ],
+          "limits": "Events are plain fixture data; no native session, check, hook, exit or completion capability is constructed. This does not test every atomic-write/crash boundary, STOPPED recovery or unsupported-version no-write behavior.",
+          "class": "deterministic",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        }
+      ]
     },
     {
       "id": "clause:12.2:2e5909ab1722",
@@ -6568,8 +6686,22 @@
     },
     {
       "id": "V0-T08",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "verified_local_components_final_source",
+          "scope": "Passed protected-file component regressions decode and hash the same captured journal bytes even when the file is replaced afterward, and retain corrupt/unknown-field/unsupported-envelope and 256 KiB event-size refusals.",
+          "tests": [
+            "src/worker_retirement_tests.rs::captured_journal_event_and_hash_use_same_bytes_after_file_replacement",
+            "src/worker_retirement_tests.rs::captured_journal_decoder_preserves_envelope_and_event_size_refusals"
+          ],
+          "limits": "Events are plain fixture data; no native session, check, hook, exit or completion capability is constructed. This does not test every atomic-write/crash boundary, STOPPED recovery or unsupported-version no-write behavior.",
+          "class": "deterministic",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        }
+      ]
     },
     {
       "id": "V0-T09",
@@ -7179,8 +7311,19 @@
     },
     {
       "id": "V0-H02",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-PARENT-RETIREMENT.md",
+          "status": "partial",
+          "verification": "source_inspection_only",
+          "scope": "Source inspection shows the two parent worker phases retaining the original assignment/vector/contract and instruction manifest, exact successful preparation reference, protected prompt/context/workflow/tool artifacts and source descriptors. The same-process retirement producer requires the actual registered contract Arc and owned-task join, then rechecks local exit, registry/Control ownership, referenced receipts, files and journal before retaining historical evidence.",
+          "tests": [],
+          "limits": "Source inspection only; the new component tests do not execute a genuine qualified parent worker. The reader constructs no worker/run/check capability. There is no cold current reconstruction, complete emitted-effect index, native/provider-discovery qualification, cleanup authorization or release/no-release success claim.",
+          "class": "implementation",
+          "source_digest": "sha256:581ef09275d7b370bbfc4dba4382e1e69cca75f3cb112fc5ffd4282193eaecb1"
+        }
+      ]
     },
     {
       "id": "V0-H03",

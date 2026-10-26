@@ -757,7 +757,26 @@ async fn prepare_admitted_inner(
         trace.admitted(&permit, &contract, admitted_budget, &runtime.control)?;
     }
     let start: Result<AdmittedWorker> = (|| {
-        runtime.register_run(permit.clone(), contract.clone())?;
+        if let Some(assignment) = &plan.request.delivery
+            && matches!(
+                assignment.phase(),
+                "parent_integrated_validation" | "parent_evidence_review"
+            )
+        {
+            let preparation = runtime.control.operation(prep_id)?;
+            runtime.register_parent_run(
+                permit.clone(),
+                contract.clone(),
+                crate::runtime::ParentRunRegistrationInput {
+                    assignment,
+                    configuration: &plan.config,
+                    preparation: &preparation,
+                    records: &prepared.records,
+                },
+            )?;
+        } else {
+            runtime.register_run(permit.clone(), contract.clone())?;
+        }
         if let Some(round) = &plan.request.review_round {
             runtime.register_review_round(&permit, &contract, round.clone())?;
         }

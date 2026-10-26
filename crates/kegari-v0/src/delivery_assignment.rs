@@ -62,6 +62,23 @@ impl DeliverySource {
         };
         git.verify_execution_tree(&self.root, &self.revision, &outputs)
     }
+    pub(crate) fn retirement_descriptor(&self) -> Result<Value> {
+        self.revalidate_filesystem()?;
+        let ownership = match &self.ownership {
+            SourceOwnership::Candidate(root) => {
+                json!({"kind":"candidate", "identity":root.digest()?})
+            }
+            SourceOwnership::Child {
+                execution,
+                isolation,
+            } => {
+                json!({"kind":"child", "owned":execution.ownership.digest(), "binding":execution.binding, "isolation":isolation.digest()})
+            }
+        };
+        Ok(
+            json!({"repository":self.repository,"root":self.root,"revision":self.revision,"digest":self.digest()?,"ownership":ownership}),
+        )
+    }
     pub fn digest(&self) -> Result<String> {
         let ownership = match &self.ownership {
             SourceOwnership::Child {
@@ -89,8 +106,21 @@ pub struct DeliveryWorkerAssignment {
     candidate_vector_digest: Option<String>,
     contract_digest: String,
     parent_reassembly: Option<Arc<ParentReassemblyWork>>,
+    parent_origin: Option<super::parent::ParentAssignmentOrigin>,
 }
 impl DeliveryWorkerAssignment {
+    pub(crate) fn prepare_parent_origin(
+        &self,
+        config: &crate::config::Config,
+        contract: &Arc<crate::worker::WorkerContract>,
+        preparation: &Receipt,
+        records: &PrivateDir,
+    ) -> Result<Option<super::parent::PreparedParentRunOrigin>> {
+        self.parent_origin
+            .as_ref()
+            .map(|origin| origin.prepare(self, config, contract, preparation, records))
+            .transpose()
+    }
     pub fn authority(&self) -> &FreshGate {
         &self.authority
     }
@@ -327,6 +357,7 @@ pub fn repair_worker_assignment(
         candidate_vector_digest: None,
         contract_digest: unfinished.contract_digest().into(),
         parent_reassembly: None,
+        parent_origin: None,
     })
 }
 pub fn retried_repair_worker_assignment(
@@ -371,6 +402,7 @@ impl DeliveryCoordinator {
             candidate_vector_digest: None,
             contract_digest: admission.scope.contract_digest.clone(),
             parent_reassembly: None,
+            parent_origin: None,
         })
     }
     pub fn child_review_worker_assignment(
@@ -396,6 +428,7 @@ impl DeliveryCoordinator {
             candidate_vector_digest: None,
             contract_digest: admission.scope.contract_digest.clone(),
             parent_reassembly: None,
+            parent_origin: None,
         })
     }
     pub fn parent_review_worker_assignment(
@@ -415,6 +448,12 @@ impl DeliveryCoordinator {
             candidate_vector_digest: Some(assignment.vector_digest().into()),
             contract_digest: contract.digest()?,
             parent_reassembly: None,
+            parent_origin: Some(super::parent::ParentAssignmentOrigin::capture(
+                self,
+                contract,
+                assignment.retirement_vector(),
+                Some(assignment),
+            )?),
         })
     }
     pub async fn integrated_worker_assignment(
@@ -507,6 +546,9 @@ impl DeliveryCoordinator {
             candidate_vector_digest: Some(vector.digest().into()),
             contract_digest: contract.digest()?,
             parent_reassembly: None,
+            parent_origin: Some(super::parent::ParentAssignmentOrigin::capture(
+                self, contract, vector, None,
+            )?),
         })
     }
 }

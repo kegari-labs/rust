@@ -395,6 +395,20 @@ impl HttpTransport for Wire {
                     "/repos/fixture/repo/pulls/8" => {
                         f.prs.iter().find(|pr| pr["number"] == 8).unwrap().clone()
                     }
+                    "/repos/fixture/repo/pulls/8/merge" => {
+                        // Synthetic upstream provider behavior, transmitted by
+                        // the actual scoped broker/Control effect lifecycle.
+                        assert_eq!(request.method, Method::Put);
+                        assert_eq!(body["merge_method"], "squash");
+                        let pr = f.prs.iter_mut().find(|pr| pr["number"] == 8).unwrap();
+                        assert_eq!(pr["state"], "open");
+                        assert_eq!(pr["base"]["ref"], "staging");
+                        assert_eq!(body["sha"], pr["head"]["sha"]);
+                        let commit = pr["merge_commit_sha"].as_str().unwrap().to_owned();
+                        pr["merged"] = json!(true);
+                        pr["state"] = json!("closed");
+                        json!({"merged":true,"sha":commit,"message":"synthetic upstream staging merge"})
+                    }
                     "/repos/fixture/repo/pulls/17/merge" => {
                         assert_eq!(body["merge_method"], "squash");
                         assert_eq!(body["sha"], f.prs[0]["head"]["sha"]);
@@ -1789,9 +1803,59 @@ async fn assemble_wire_slice(
     delta: &crate::git::DeltaArtifact,
     root: &std::path::Path,
 ) -> IsolatedSlice {
-    // The reviewed staging source is explicit synthetic upstream input. The
-    // candidate itself must be created by the real bounded/journaled adapter.
+    // The reviewed staging source remains explicit synthetic upstream input;
+    // there is no genuine LocalPassed/HostedPassed/review capability here. The
+    // real broker and Control record the exact synthetic merge acknowledgement
+    // under this actual fixture admission. Candidate assembly still uses the
+    // real bounded/journaled Git adapter, and no arbitrary receipt is inserted.
     let digest = delta.manifest.digest().unwrap();
+    let pr = json!({"id":80,"number":8,"user":{"id":7},"state":"open","draft":false,
+        "head":{"sha":delta.manifest.validated_head.commit,"ref":"fixture-child","repo":{"id":42}},
+        "base":{"sha":delta.manifest.staging_parent.commit,"ref":"staging","repo":{"id":42}},
+        "merged":false,"merge_commit_sha":delta.manifest.staging_commit.commit,
+        "html_url":"https://github.invalid/fixture/repo/pull/8"});
+    {
+        let mut current = wire.lock().unwrap();
+        current.prs.retain(|p| p["number"] != 8);
+        current.prs.push(pr);
+    }
+    let merge = coordinator
+        .effect(
+            admission,
+            &format!("fixture-upstream-staging-{}", &digest[7..]),
+            ProviderMutation::GithubMerge {
+                repository: coordinator.contract(admission).unwrap().provider.clone(),
+                pr: 8,
+                expected_head: delta.manifest.validated_head.commit.clone(),
+                expected_base: delta.manifest.staging_parent.commit.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(merge.kind, "github_merge");
+    assert_eq!(merge.phase, crate::control::ReceiptPhase::Acknowledged);
+    assert_eq!(merge.operation_id, merge.request_id);
+    assert_eq!(
+        merge.expected["admission_operation"],
+        admission.operation_id().to_string()
+    );
+    assert_eq!(
+        merge.expected["delivery_scope"],
+        admission.scope().digest().unwrap()
+    );
+    assert_eq!(
+        merge.remote_ids["acknowledged_merge_sha"],
+        delta.manifest.staging_commit.commit
+    );
+    assert_eq!(
+        merge.observed_result.as_ref().unwrap()["provenance_verified"],
+        json!(false),
+        "a provider acknowledgement is not qualified staging provenance"
+    );
+    assert_eq!(
+        canonical_digest(1, &coordinator.host.operation(merge.operation_id).unwrap()).unwrap(),
+        canonical_digest(1, &merge).unwrap()
+    );
     let chunk = format!("delta-{}-0.bin", &digest[7..]);
     coordinator
         .records
@@ -1799,22 +1863,12 @@ async fn assemble_wire_slice(
         .unwrap();
     coordinator.records.write(
         &format!("delta-{}.json", &digest[7..]),
-        &coordinator.key.sign("staged_delta", &json!({"manifest":delta.manifest,"patch_chunks":[chunk],"merge_request":id(818)})).unwrap(),
+        &coordinator.key.sign("staged_delta", &json!({"manifest":delta.manifest,"patch_chunks":[chunk],"merge_request":merge.request_id})).unwrap(),
     ).unwrap();
-    let pr = json!({"id":80,"number":8,"user":{"id":7},"state":"closed","draft":false,
-        "head":{"sha":delta.manifest.validated_head.commit,"ref":"fixture-child","repo":{"id":42}},
-        "base":{"sha":delta.manifest.staging_parent.commit,"ref":"staging","repo":{"id":42}},
-        "merged":true,"merge_commit_sha":delta.manifest.staging_commit.commit,
-        "html_url":"https://github.invalid/fixture/repo/pull/8"});
-    {
-        let mut current = wire.lock().unwrap();
-        current.prs.retain(|p| p["number"] != 8);
-        current.prs.push(pr);
-    }
     let staged = StagedDelta {
         delta: delta.clone(),
         pull_request: 8,
-        merge_receipt: id(818),
+        merge_receipt: merge.request_id,
         protection: crate::evidence::RepositoryProtection {
             repository: delta.manifest.repository.clone(),
             branch: "staging".into(),

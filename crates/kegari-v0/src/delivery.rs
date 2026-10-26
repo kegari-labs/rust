@@ -4632,6 +4632,7 @@ impl DeliveryCoordinator {
 #[path = "delivery_parent.rs"]
 mod parent;
 pub use parent::*;
+pub(crate) use parent::{ParentOriginRecord, PreparedParentRunOrigin, read_parent_run_origin};
 #[path = "delivery_child.rs"]
 mod child;
 pub use child::*;

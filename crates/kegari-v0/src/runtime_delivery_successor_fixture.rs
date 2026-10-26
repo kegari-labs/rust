@@ -837,6 +837,56 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
         .observer
         .with_successor(predecessor.clone())
         .unwrap();
+    // The origin must retain the actual upstream broker receipt. Removing its
+    // protected bytes blocks assignment creation; restoring the exact bytes
+    // permits the existing path without minting a new upstream effect.
+    let delta_digest = &corrected_slice.manifest().ordered_delta_digests[0];
+    let delta: crate::evidence::Signed<Value> = current_workspace
+        .records
+        .read(&format!("delta-{}.json", &delta_digest[7..]))
+        .unwrap();
+    let merge_operation: Uuid =
+        serde_json::from_value(delta.payload["merge_request"].clone()).unwrap();
+    let merge = built.runtime.control.operation(merge_operation).unwrap();
+    assert_eq!(merge.kind, "github_merge");
+    assert_eq!(merge.phase, ReceiptPhase::Acknowledged);
+    assert_eq!(
+        merge.expected["admission_operation"],
+        corrected_phase.permit.operation_id.to_string()
+    );
+    let receipts = canonical_digest(1, &built.runtime.control.operations().unwrap()).unwrap();
+    let receipt_dir = crate::storage::PrivateDir::open(
+        &built.runtime.registration.root().path().join("receipts"),
+    )
+    .unwrap();
+    let merge_leaf = format!("{merge_operation}.json");
+    let merge_bytes = receipt_dir.read_bytes(&merge_leaf, 256 * 1024).unwrap();
+    let tamper_window = observation_barrier.lock().await;
+    std::fs::remove_file(receipt_dir.path().join(&merge_leaf)).unwrap();
+    let refused = current_workspace
+        .coordinator
+        .integrated_worker_assignment(
+            &current_contract,
+            &e2e,
+            &vector,
+            &observer,
+            &[&corrected_slice],
+            json!({"purpose":"validate the exact corrected vector"}),
+        )
+        .await;
+    receipt_dir.write_bytes(&merge_leaf, &merge_bytes).unwrap();
+    assert_eq!(
+        refused
+            .err()
+            .expect("missing upstream receipt must block parent origin")
+            .code,
+        "record_missing"
+    );
+    assert_eq!(
+        canonical_digest(1, &built.runtime.control.operations().unwrap()).unwrap(),
+        receipts
+    );
+    drop(tamper_window);
     let assignment = current_workspace
         .coordinator
         .integrated_worker_assignment(

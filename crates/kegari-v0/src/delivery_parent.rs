@@ -9,6 +9,13 @@ use crate::execution::{ArtifactProof, CheckExecutionRecord};
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 
+#[path = "delivery_parent_run_origin.rs"]
+mod run_origin;
+pub(crate) use run_origin::{
+    ParentAssignmentOrigin, ParentOriginRecord, PreparedParentRunOrigin,
+    read_origin as read_parent_run_origin,
+};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VectorRecord {
@@ -740,6 +747,9 @@ pub struct ParentReviewAssignment {
     context: Value,
 }
 impl ParentReviewAssignment {
+    pub(super) fn retirement_vector(&self) -> &ParentCandidateVector {
+        &self.vector
+    }
     pub fn vector_digest(&self) -> &str {
         self.vector.digest()
     }

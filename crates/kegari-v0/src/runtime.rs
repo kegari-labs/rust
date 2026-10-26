@@ -33,6 +33,9 @@ pub(crate) use evaluation::{VerifiedEvaluationExit, VerifiedEvaluationSource};
 mod correction_transitions;
 #[path = "runtime_paired_recovery.rs"]
 mod paired_recovery;
+#[path = "runtime_parent_retirement.rs"]
+mod parent_retirement;
+pub(crate) use parent_retirement::ParentRunRegistrationInput;
 #[path = "runtime_parent_reassembly.rs"]
 mod parent_reassembly;
 #[path = "runtime_released.rs"]
@@ -52,6 +55,8 @@ struct RegisteredRun {
     _active: Option<crate::observations::ActiveSnapshot>,
     last_observation: Option<Value>,
     joined: bool,
+    parent_origin: Option<Arc<crate::delivery::PreparedParentRunOrigin>>,
+    parent_joined: Option<parent_retirement::JoinedParentRetirementCandidate>,
 }
 #[derive(Default)]
 struct State {
@@ -76,6 +81,8 @@ struct State {
     retry_errors: BTreeMap<String, Error>,
     schedule_blockers: BTreeMap<String, Error>,
     completion_errors: BTreeMap<Uuid, Error>,
+    parent_retirement_errors: BTreeMap<Uuid, Error>,
+    parent_retirement_seals: BTreeMap<Uuid, String>,
     claim_errors: BTreeMap<Uuid, Error>,
     delivery_errors: BTreeMap<String, Error>,
     outcomes: DependencyOutcomes,
@@ -2159,6 +2166,14 @@ impl RuntimeCoordinator {
         Ok(permit)
     }
     pub fn register_run(&self, permit: Permit, contract: Arc<WorkerContract>) -> Result<()> {
+        self.register_run_inner(permit, contract, None)
+    }
+    fn register_run_inner(
+        &self,
+        permit: Permit,
+        contract: Arc<WorkerContract>,
+        parent_origin: Option<Arc<crate::delivery::PreparedParentRunOrigin>>,
+    ) -> Result<()> {
         let budget = RunReference::from_receipt(&self.control.operation(permit.operation_id)?)?
             .ok_or_else(|| {
                 Error::new(
@@ -2219,6 +2234,8 @@ impl RuntimeCoordinator {
                 _active: Some(active),
                 last_observation: None,
                 joined: false,
+                parent_origin,
+                parent_joined: None,
             },
         );
         Ok(())
@@ -2287,10 +2304,53 @@ impl RuntimeCoordinator {
                             "joined worker registration disappeared",
                         )
                     })?;
+                    let parent_join = tracked
+                        .parent_origin
+                        .as_ref()
+                        .map(|origin| {
+                            Self::parent_join_candidate(
+                                origin,
+                                &tracked.contract,
+                                &tracked.permit,
+                                &tracked.budget,
+                                &completion,
+                            )
+                        })
+                        .transpose();
+                    let parent_error = match parent_join {
+                        Ok(candidate) => {
+                            tracked.parent_joined = candidate;
+                            None
+                        }
+                        Err(error) => Some(error),
+                    };
                     tracked.last_observation = Some(observed.clone());
                     tracked.joined = true;
                     state.completions.insert(id, completion.clone());
+                    if let Some(error) = &parent_error {
+                        state.parent_retirement_errors.insert(id, error.clone());
+                    }
                     drop(state);
+                    if parent_error.is_some() {
+                        // Preserve the actual join for diagnostics, but never
+                        // retire a registration using a differently bound result.
+                        if let Err(error) = self.control.fence(id).and_then(|()| {
+                            self.executions.cancel_fenced(&self.control, id).map(|_| ())
+                        }) {
+                            self.state
+                                .lock()
+                                .map_err(|_| {
+                                    Error::new(
+                                        "runtime_unavailable",
+                                        "parent join fence diagnostics failed",
+                                    )
+                                })?
+                                .completion_errors
+                                .insert(id, error);
+                        }
+                        completed.push(completion);
+                        continue;
+                    }
                     // Persist/retain the actual joined capabilities first. A
                     // failed receipt retirement must not drop this result or
                     // prevent collection of other already finished workers.
@@ -2357,6 +2417,7 @@ impl RuntimeCoordinator {
                 }
             }
         }
+        self.observe_parent_retirements()?;
         Ok(completed)
     }
     /// Accept only the same admitted trial's final broker checkpoint and actual
@@ -2517,13 +2578,18 @@ impl RuntimeCoordinator {
     /// complete local exit. Empty registries or group-only observations cannot
     /// upgrade an uncertain completion into descendant-exit proof.
     pub fn observe_local_exits(&self) -> Result<()> {
+        // Already-retired history writes retry independently of another run
+        // whose receipt retirement may still fail later in this loop.
+        self.observe_parent_retirements()?;
         let candidates: Vec<_> = self
             .state
             .lock()
             .map_err(|_| Error::new("runtime_unavailable", "worker state lock failed"))?
             .runs
             .iter()
-            .filter(|(_, run)| run.joined)
+            .filter(|(_, run)| {
+                run.joined && (run.parent_origin.is_none() || run.parent_joined.is_some())
+            })
             .map(|(id, run)| (*id, run.last_observation.clone()))
             .collect();
         for (id, observation) in candidates {
@@ -2561,6 +2627,7 @@ impl RuntimeCoordinator {
                 }
             }
         }
+        self.observe_parent_retirements()?;
         Ok(())
     }
     /// New sessions never inherit another operation's permission to drain.
@@ -2666,7 +2733,7 @@ impl RuntimeCoordinator {
             released::effective_no_release_outcomes(&state, &config, observed, &fences);
         let holds=state.provider_holds.iter().map(|(id,session)| json!({"operation_id":id,"account":session.binding.account_id,"work":session.binding.work_identity,"intervention":session.intervention,"input_required":session.input_required})).collect::<Vec<_>>();
         Ok(
-            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"session_recovery":state.session_recovery_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors,"released_dependencies":released_errors,"no_release_dependencies":no_release_errors,"no_release_inventory":state.no_release_inventory_error}),
+            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"session_recovery":state.session_recovery_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"parent_retirement":state.parent_retirement_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors,"released_dependencies":released_errors,"no_release_dependencies":no_release_errors,"no_release_inventory":state.no_release_inventory_error}),
         )
     }
     pub fn execution_registry(&self) -> Arc<ExecutionRegistry> {
