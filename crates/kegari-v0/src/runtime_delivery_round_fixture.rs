@@ -32,6 +32,7 @@ pub(super) async fn run(
             &f.built.runtime,
             phase.coordinator.initial_review_round(
                 ReviewRoundSource {
+                    paired_completion: None,
                     admission: &phase.admission,
                     claim: f.original_claim.clone(),
                     source: f.source_proof,
@@ -165,6 +166,7 @@ pub(super) async fn run(
                 observed.coordinator.unfinished_completed_round(
                     ReviewRepairRequest {
                         source: RepairSource {
+                            paired_completion: None,
                             admission: &observed.admission,
                             original: current_claim.clone(),
                             source: current_source.as_ref().unwrap_or(f.source_proof),
@@ -320,6 +322,7 @@ pub(super) async fn run(
                 downstream.coordinator.source_advanced_retried_review(
                     SourceAdvancedRequest {
                         source: RepairSource {
+                            paired_completion: None,
                             admission: &downstream.admission,
                             original: claim.clone(),
                             source: &changed,
@@ -352,6 +355,7 @@ pub(super) async fn run(
             &f.built.runtime,
             downstream.coordinator.after_repair_review_round(
                 ReviewRoundSource {
+                    paired_completion: None,
                     admission: &downstream.admission,
                     claim: claim.clone(),
                     source: &changed,
@@ -714,6 +718,7 @@ pub(super) async fn marked_retry(f: ReviewFixture<'_>) {
             &f.built.runtime,
             phase.coordinator.initial_review_round(
                 ReviewRoundSource {
+                    paired_completion: None,
                     admission: &phase.admission,
                     claim: f.original_claim.clone(),
                     source: f.source_proof,
@@ -843,6 +848,7 @@ pub(super) async fn marked_retry(f: ReviewFixture<'_>) {
             &f.built.runtime,
             phase.coordinator.granted_review_round(
                 ReviewRoundSource {
+                    paired_completion: None,
                     admission: &phase.admission,
                     claim: f.original_claim.clone(),
                     source: f.source_proof,

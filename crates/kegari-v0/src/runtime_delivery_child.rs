@@ -118,6 +118,10 @@ struct ChildReference {
     review_round_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     paired_round_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paired_completion_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paired_completion_origin: Option<Uuid>,
     observed_at: chrono::DateTime<Utc>,
     error: Option<Error>,
 }
@@ -156,6 +160,7 @@ struct ChildPipeline {
     review_retry: Option<Arc<ReviewRetryWork>>,
     review_round: Option<Arc<VerifiedReviewRoundPlan>>,
     paired_round: Option<Arc<VerifiedReviewRoundPlan>>,
+    paired_completion: Option<Arc<VerifiedCompletedPairedResume>>,
 }
 pub(super) struct CandidateChild {
     pub(super) child: Uuid,
@@ -314,6 +319,39 @@ impl RuntimeDelivery {
                         .verify("runtime_child_pipeline", &prior)?;
                     return Err(Error::new("reconciliation_required","retained child progression requires exact phase recovery before another mutation").detail(json!({"operation":receipt.operation_id,"stage":prior.payload.stage})));
                 }
+                let paired_completion =
+                    if crate::control::ReviewRoundResumeReference::from_model_receipt(&receipt)?
+                        .is_some()
+                    {
+                        let plan = self
+                            .runtime
+                            .retained_review_round(receipt.operation_id)?
+                            .ok_or_else(|| {
+                                Error::new(
+                                    "reconciliation_required",
+                                    "resumed repair lost its actual registered round",
+                                )
+                            })?;
+                        let current = self.current_gate();
+                        let joined = |id| self.runtime.retained_completion(id);
+                        let resumed = |id| self.runtime.retained_session_resume(id);
+                        let readers = PairedRecoveryReaders {
+                            current_gate: &*current,
+                            joined: &joined,
+                            resumed: &resumed,
+                        };
+                        Some(Arc::new(VerifiedCompletedPairedResume::observe(
+                            &self.runtime.control,
+                            &plan,
+                            &completion,
+                            &gate,
+                            &self.runtime.configuration.snapshot()?,
+                            &self.current_review_grants(work)?,
+                            &readers,
+                        )?))
+                    } else {
+                        None
+                    };
                 let pipeline = ChildPipeline {
                     reference: ChildReference {
                         schema_version: 1,
@@ -342,6 +380,12 @@ impl RuntimeDelivery {
                         review_history: vec![],
                         review_round_digest: None,
                         paired_round_digest: None,
+                        paired_completion_digest: paired_completion
+                            .as_ref()
+                            .map(|p| p.digest().into()),
+                        paired_completion_origin: paired_completion
+                            .as_ref()
+                            .map(|p| p.origin_operation()),
                         observed_at: Utc::now(),
                         error: None,
                     },
@@ -372,6 +416,7 @@ impl RuntimeDelivery {
                     review_retry: None,
                     review_round: None,
                     paired_round: None,
+                    paired_completion,
                 };
                 self.persist_child(&pipeline)?;
                 self.children
@@ -521,6 +566,18 @@ impl RuntimeDelivery {
                 "completed validation reference changed",
             ));
         }
+        let extra = if let Some(proof) = &child.paired_completion {
+            self.paired_source_origin(child)?;
+            let paired = self.paired_completion_check(proof.clone());
+            Some(Arc::new(move |gate: &FreshGate| {
+                if let Some(prior) = &extra {
+                    prior(gate)?;
+                }
+                paired(gate)
+            }) as GateCheck)
+        } else {
+            extra
+        };
         child.phase = Some(
             self.admit_delivery_phase_checked(
                 workspace,
@@ -870,7 +927,8 @@ impl RuntimeDelivery {
                 &runtime.services.key,
             )?;
             proof.verify_current(&receipts, &grants)?;
-            proof.verify_joined(&|id| runtime.retained_completion(id))
+            proof.verify_joined(&|id| runtime.retained_completion(id))?;
+            proof.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))
         })
     }
     fn passed_validation_check(&self, proof: Arc<VerifiedPassedValidation>) -> GateCheck {
@@ -891,7 +949,8 @@ impl RuntimeDelivery {
                 &runtime.services.key,
             )?;
             proof.verify_current(&receipts, &grants)?;
-            proof.verify_joined(&|id| runtime.retained_completion(id))
+            proof.verify_joined(&|id| runtime.retained_completion(id))?;
+            proof.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))
         })
     }
     fn consumed_validation_check(&self, proof: Arc<ConsumedValidationSuccessor>) -> GateCheck {
@@ -912,7 +971,8 @@ impl RuntimeDelivery {
                 &runtime.services.key,
             )?;
             proof.verify_current(&receipts, &grants)?;
-            proof.verify_joined(&|id| runtime.retained_completion(id))
+            proof.verify_joined(&|id| runtime.retained_completion(id))?;
+            proof.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))
         })
     }
     fn consumed_validation_retry_check(
@@ -953,7 +1013,8 @@ impl RuntimeDelivery {
             )?;
             crate::runtime_workflow::require_current_grant(&grant, &grants)?;
             proof.verify_retry_preparation(&receipts, &grants, &grant, &failed)?;
-            proof.verify_joined(&|id| runtime.retained_completion(id))
+            proof.verify_joined(&|id| runtime.retained_completion(id))?;
+            proof.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))
         })
     }
     fn observe_validation_successor(
@@ -1029,6 +1090,7 @@ impl RuntimeDelivery {
         let receipts = self.runtime.control.operations()?;
         let grants = self.current_review_grants(&child.reference.work)?;
         proof.verify_joined(&|id| self.runtime.retained_completion(id))?;
+        proof.verify_resumed_bridges(&|id| self.runtime.retained_session_resume(id))?;
         if admitted {
             // A saved launch is observed, never replayed. Its exact actual run
             // must be the one bounded next admission of this opaque cause.
@@ -1285,6 +1347,7 @@ impl RuntimeDelivery {
                 .source_advanced_validated_repair(
                     SourceAdvancedRequest {
                         source: RepairSource {
+                            paired_completion: child.paired_completion.clone(),
                             admission,
                             original: child.claim.clone(),
                             source: required(&child.source, "sealed source")?,
@@ -1323,6 +1386,7 @@ impl RuntimeDelivery {
                 .source_advanced_retried_review(
                     SourceAdvancedRequest {
                         source: RepairSource {
+                            paired_completion: child.paired_completion.clone(),
                             admission,
                             original: child.claim.clone(),
                             source: required(&child.source, "sealed source")?,
@@ -1366,6 +1430,7 @@ impl RuntimeDelivery {
         })?;
         let request = SourceAdvancedRequest {
             source: RepairSource {
+                paired_completion: child.paired_completion.clone(),
                 admission,
                 original: child.claim.clone(),
                 source: required(&child.source, "sealed source")?,
@@ -1416,7 +1481,7 @@ impl RuntimeDelivery {
         let mut selected = None;
         for candidate in candidates {
             let candidate = candidate.lock().await;
-            if candidate.reference.repair_operation != Some(child.reference.operation) {
+            if candidate.reference.repair_operation != Some(self.paired_source_origin(child)?) {
                 continue;
             }
             if candidate.reference.work != child.reference.work {
@@ -1522,7 +1587,7 @@ impl RuntimeDelivery {
         let mut found = None;
         for candidate in candidates {
             let candidate = candidate.lock().await;
-            if candidate.reference.repair_operation != Some(child.reference.operation) {
+            if candidate.reference.repair_operation != Some(self.paired_source_origin(child)?) {
                 continue;
             }
             let repair = required(&candidate.unfinished, "original repair capability")?;
@@ -1559,7 +1624,7 @@ impl RuntimeDelivery {
         let mut result = None;
         for candidate in candidates {
             let candidate = candidate.lock().await;
-            if candidate.reference.repair_operation != Some(child.reference.operation) {
+            if candidate.reference.repair_operation != Some(self.paired_source_origin(child)?) {
                 continue;
             }
             if let Some(plan) = &candidate.paired_round
@@ -2293,6 +2358,7 @@ impl RuntimeDelivery {
                     Err(error) if terminal_gate_failure(&error) => {
                         let request = ValidationRepairRequest {
                             source: RepairSource {
+                                paired_completion: child.paired_completion.clone(),
                                 admission: &admission,
                                 original: child.claim.clone(),
                                 source: required(&child.source, "sealed source")?,
@@ -2372,6 +2438,7 @@ impl RuntimeDelivery {
                         coordinator
                             .passed_granted_validation(
                                 RepairSource {
+                                    paired_completion: child.paired_completion.clone(),
                                     admission: &admission,
                                     original: child.claim.clone(),
                                     source: required(&child.source, "sealed source")?,
@@ -2393,6 +2460,7 @@ impl RuntimeDelivery {
                         coordinator
                             .passed_source_validation(
                                 RepairSource {
+                                    paired_completion: child.paired_completion.clone(),
                                     admission: &admission,
                                     original: child.claim.clone(),
                                     source: required(&child.source, "sealed source")?,
@@ -2550,6 +2618,7 @@ impl RuntimeDelivery {
                 child.source_advanced = advanced;
                 let grants = self.current_review_grants(&child.reference.work)?;
                 let input = ReviewRoundSource {
+                    paired_completion: child.paired_completion.clone(),
                     admission: &admission,
                     claim: child.claim.clone(),
                     source: required(&child.source, "sealed source")?,
@@ -2662,6 +2731,7 @@ impl RuntimeDelivery {
                     &self.current_review_grants(&child.reference.work)?,
                 )?;
                 proof.verify_joined(&|id| self.runtime.retained_completion(id))?;
+                proof.verify_resumed_bridges(&|id| self.runtime.retained_session_resume(id))?;
                 child.reference.validation_retry_digest = Some(proof.digest().into());
                 child.validation_retry = Some(Arc::new(proof));
                 self.finish_child_phase(child, Stage::LaunchValidationRetry)?;
@@ -2697,6 +2767,7 @@ impl RuntimeDelivery {
                         let plan = coordinator
                             .granted_review_round(
                                 ReviewRoundSource {
+                                    paired_completion: child.paired_completion.clone(),
                                     admission: &admission,
                                     claim: child.claim.clone(),
                                     source: required(&child.source, "sealed source")?,
@@ -2760,7 +2831,8 @@ impl RuntimeDelivery {
                         &runtime.services.key,
                     )?;
                     checked.verify_current(&receipts, &grants)?;
-                    checked.verify_joined(&|id| runtime.retained_completion(id))
+                    checked.verify_joined(&|id| runtime.retained_completion(id))?;
+                    checked.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))
                 });
                 let published = coordinator
                     .publish_completed_round(
@@ -2775,6 +2847,7 @@ impl RuntimeDelivery {
                     Err(error) if terminal_gate_failure(&error) => {
                         let request = ReviewRepairRequest {
                             source: RepairSource {
+                                paired_completion: child.paired_completion.clone(),
                                 admission: &admission,
                                 original: child.claim.clone(),
                                 source: required(&child.source, "sealed source")?,
@@ -3183,6 +3256,8 @@ mod retention_tests {
                 review_history: vec![],
                 review_round_digest: None,
                 paired_round_digest: None,
+                paired_completion_digest: None,
+                paired_completion_origin: None,
                 observed_at: Utc::now(),
                 error: None,
             },
@@ -3213,6 +3288,7 @@ mod retention_tests {
             review_retry: None,
             review_round: None,
             paired_round: None,
+            paired_completion: None,
         }));
         service
             .children
@@ -3267,3 +3343,58 @@ mod retention_tests {
 #[cfg(test)]
 #[path = "runtime_delivery_continuation_tests.rs"]
 mod continuation_tests;
+
+impl RuntimeDelivery {
+    fn paired_source_origin(&self, child: &ChildPipeline) -> Result<Uuid> {
+        match &child.paired_completion {
+            Some(proof) => {
+                if child.reference.paired_completion_digest.as_deref() != Some(proof.digest())
+                    || child.reference.paired_completion_origin != Some(proof.origin_operation())
+                    || proof.reference().terminal.operation != child.reference.operation
+                {
+                    return Err(Error::new(
+                        "record_corrupt",
+                        "paired completed source reference changed",
+                    ));
+                }
+                proof.verify_completion(&child.completion)?;
+                proof.verify_joined_completions(&|id| self.runtime.retained_completion(id))?;
+                proof.verify_resumed_bridges(&|id| self.runtime.retained_session_resume(id))?;
+                proof.verify_immutable(
+                    &self.runtime.control.operations()?,
+                    &self.current_review_grants(&child.reference.work)?,
+                )?;
+                Ok(proof.origin_operation())
+            }
+            None if child.reference.paired_completion_digest.is_none()
+                && child.reference.paired_completion_origin.is_none() =>
+            {
+                Ok(child.reference.operation)
+            }
+            None => Err(Error::new(
+                "reconciliation_required",
+                "resumed source requires its actual same-process capability",
+            )),
+        }
+    }
+    fn paired_completion_check(&self, proof: Arc<VerifiedCompletedPairedResume>) -> GateCheck {
+        let runtime = self.runtime.clone();
+        Arc::new(move |gate| {
+            let current = runtime
+                .observations
+                .active_gate(gate, &runtime.dependency_outcomes()?)?;
+            gate.compare_current(&current, Utc::now(), Duration::seconds(30))?;
+            let receipts = runtime.control.operations()?;
+            let grants = crate::runtime_workflow::current_retry_grants(
+                &runtime.configuration.snapshot()?,
+                &runtime.observations.admission_snapshot()?,
+                gate.work(),
+                &receipts,
+                &runtime.services.key,
+            )?;
+            proof.verify_immutable(&receipts, &grants)?;
+            proof.verify_joined_completions(&|id| runtime.retained_completion(id))?;
+            proof.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))
+        })
+    }
+}

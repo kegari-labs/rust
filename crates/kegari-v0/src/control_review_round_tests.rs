@@ -34,6 +34,7 @@ fn base(granted: bool) -> ReviewRoundReference {
         ordinal: 1,
         round_limit: 3,
         source: ReviewedSourceReference {
+            paired_resume: None,
             implementation_phase,
             implementation: reference(10),
             claim_digest: digest("claim"),

@@ -44,6 +44,7 @@ use std::{
 use uuid::Uuid;
 #[path = "runtime_workers_resume.rs"]
 mod session_resume;
+pub(crate) use session_resume::prepare_paired_resumed;
 pub use session_resume::prepare_resumed;
 
 /// Selected by the host from the actual configured repository/provider phase.
@@ -657,6 +658,9 @@ pub async fn prepare_admitted(
     };
     let start: Result<AdmittedWorker> = (|| {
         runtime.register_run(permit.clone(), contract.clone())?;
+        if let Some(round) = &plan.request.review_round {
+            runtime.register_review_round(&permit, &contract, round.clone())?;
+        }
         // Preparation and model execution have distinct permits. Reusing an
         // owned checkout never transfers the preparation process authority.
         prepared.execution = prepared

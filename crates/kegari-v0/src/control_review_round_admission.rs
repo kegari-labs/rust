@@ -2,7 +2,11 @@
 //! never replace the required opaque/current-authority callback. No provider I/O
 //! or public permit reconstruction occurs while Control is locked.
 use super::*;
+#[path = "control_review_round_recovery_admission.rs"]
+mod recovery;
 use crate::scheduler::PhaseKey;
+pub(super) use recovery::{RoundRecoveryContext, RoundResumeCheck};
+pub(crate) use recovery::{RoundRecoveryProvenance, RoundResumeProvenance};
 
 const MAX_ROUND_RECEIPTS: usize = 65_536;
 const PREPARATION_LINK: &str = "review_round_preparation";
@@ -375,11 +379,12 @@ fn verify_subject(
     }
     Ok(())
 }
-fn verify_source(
+/// Read only the exact passed-check reference closure. This does not recurse
+/// through source/round readers or mint a check, grant or execution capability.
+fn verify_passed_validation(
     snapshot: &ControlSnapshot,
     round: &ReviewRoundReference,
     receipts: &[Receipt],
-    current: bool,
 ) -> Result<()> {
     if let Some(passed) = &round.passed_validation {
         passed.validate_for_round(round)?;
@@ -412,6 +417,15 @@ fn verify_source(
             ));
         }
     }
+    Ok(())
+}
+fn verify_source(
+    snapshot: &ControlSnapshot,
+    round: &ReviewRoundReference,
+    receipts: &[Receipt],
+    current: bool,
+) -> Result<()> {
+    verify_passed_validation(snapshot, round, receipts)?;
     // Original reviewed source remains authenticated historical provenance.
     // Only the exact latest repaired source can justify another implementation.
     if round.dispatch_source() != &round.source {
@@ -420,6 +434,28 @@ fn verify_source(
     verify_source_reference(snapshot, round, round.dispatch_source(), receipts, current)
 }
 fn verify_source_reference(
+    snapshot: &ControlSnapshot,
+    round: &ReviewRoundReference,
+    reference: &ReviewedSourceReference,
+    receipts: &[Receipt],
+    current: bool,
+) -> Result<()> {
+    verify_source_reference_fields(snapshot, round, reference, receipts, current)?;
+    let actual = exact_receipt(receipts, &reference.implementation)?;
+    match (
+        &reference.paired_resume,
+        ReviewRoundResumeReference::from_model_receipt(actual)?,
+    ) {
+        (Some(proof), Some(_)) => {
+            recovery::verify_completed_paired_result(snapshot, round, proof, receipts)
+        }
+        (None, None) => Ok(()),
+        _ => Err(round_error(
+            "source omits or invents its exact admitted paired resume lineage",
+        )),
+    }
+}
+fn verify_source_reference_fields(
     snapshot: &ControlSnapshot,
     round: &ReviewRoundReference,
     reference: &ReviewedSourceReference,
@@ -621,6 +657,7 @@ fn verify_candidate(
                 round,
                 &current_source.implementation,
                 receipts,
+                current_source.paired_resume.as_ref(),
             )?;
             pair_chain::verify_validation(
                 snapshot,
@@ -716,8 +753,16 @@ fn verify_review_transition(
             require_spacing(repair_receipt)?;
             let paired = ReviewRoundReference::from_receipt(repair_receipt)?
                 .ok_or_else(|| round_error("repair lacks exact paired round marker"))?;
-            verify_persisted_preparation(receipts, repair_receipt, &paired)?;
-            pair_chain::verify_repair_chain(snapshot, &paired, repair, receipts)?;
+            if next.source.paired_resume.is_none() {
+                verify_persisted_preparation(receipts, repair_receipt, &paired)?;
+            }
+            pair_chain::verify_repair_chain(
+                snapshot,
+                &paired,
+                repair,
+                receipts,
+                next.source.paired_resume.as_ref(),
+            )?;
             if pair_chain::findings(&paired) != Some(findings)
                 || paired.runtime != next.runtime
                 || paired.workspace != next.workspace

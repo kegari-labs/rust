@@ -213,3 +213,12 @@ impl DeliveryCoordinator {
         Ok(result)
     }
 }
+
+impl RetriedUnfinishedWork {
+    pub(crate) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        self.original.verify_resumed_bridges(reader)
+    }
+}

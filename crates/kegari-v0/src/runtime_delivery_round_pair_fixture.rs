@@ -36,6 +36,41 @@ pub(super) async fn continued_pair_component(input: PairFixture<'_, '_>) {
         (1, 1)
     );
     let host = &f.built.runtime.control;
+    // Actual existing paired source/Control closure remains accepted. The
+    // completion is the fixture's explicitly synthetic protocol observation;
+    // no native joined/resume capability is manufactured here.
+    let repaired_receipt = host.operation(repaired.operation_id).unwrap();
+    let records = host.operations().unwrap();
+    let before = canonical_digest(1, &records).unwrap();
+    paired
+        .verify_completed_repair_result(&records, &[], &repaired_receipt, None)
+        .unwrap();
+    // A raw resumed marker cannot select the retained-capability branch or
+    // silently fall back to the ordinary paired preparation/attempt decoder.
+    let mut missing_cap = repaired_receipt.clone();
+    missing_cap
+        .expected
+        .insert("review_round_resume".into(), "{}".into());
+    let denied = paired
+        .verify_completed_repair_result(&records, &[], &missing_cap, None)
+        .unwrap_err();
+    assert_eq!(denied.code, "reconciliation_required");
+    assert_eq!(
+        denied.message,
+        "resumed repair requires its actual retained completed capability"
+    );
+    let mut changed_receipt = repaired_receipt.clone();
+    changed_receipt.observed_result = Some(json!({"different":"whole retained terminal"}));
+    assert!(
+        paired
+            .verify_completed_repair_result(&records, &[], &changed_receipt, None)
+            .is_err()
+    );
+    assert_eq!(
+        canonical_digest(1, &host.operations().unwrap()).unwrap(),
+        before
+    );
+
     let mut scope = f.scope.clone();
     scope.phase = DeliveryPhase::LocalValidation;
     scope.revision = changed.revision().clone();
@@ -56,6 +91,7 @@ pub(super) async fn continued_pair_component(input: PairFixture<'_, '_>) {
             phase.coordinator.source_advanced_paired_validation(
                 SourceAdvancedRequest {
                     source: RepairSource {
+                        paired_completion: None,
                         admission: &phase.admission,
                         original: claim.clone(),
                         source: changed,
@@ -215,6 +251,7 @@ pub(super) async fn continued_pair_component(input: PairFixture<'_, '_>) {
         phase.coordinator.continue_paired_repair(
             crate::delivery::ValidationRepairRequest {
                 source: RepairSource {
+                    paired_completion: None,
                     admission: &phase.admission,
                     original: claim.clone(),
                     source: changed,

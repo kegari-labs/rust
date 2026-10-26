@@ -229,35 +229,6 @@ impl ValidationSourceLineage {
         self.advanced
             .verify_consumed_validation_prefix(&prefix, grants, origin)
     }
-    pub(super) fn verify_joined(
-        &self,
-        retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
-    ) -> Result<()> {
-        require_joined(&self.origin_completion, retained)?;
-        self.advanced.verify_joined(retained)?;
-        let source = retained(self.advanced.source_operation())?.ok_or_else(|| {
-            Error::new(
-                "reconciliation_required",
-                "original repaired source completion is unavailable",
-            )
-        })?;
-        if !source.local_exit_confirmed
-            || !matches!(source.outcome, RunOutcome::Completed)
-            || source.operation_id != self.source_receipt.operation_id
-            || self
-                .source_receipt
-                .observed_result
-                .as_ref()
-                .and_then(|v| v.get("observation"))
-                != Some(&source.observation())
-        {
-            return Err(Error::new(
-                "worker_binding",
-                "retained repaired source differs from actual completed receipt",
-            ));
-        }
-        Ok(())
-    }
 }
 fn source_reference(advanced: &VerifiedSourceAdvanced) -> SourceAdvancedReference {
     SourceAdvancedReference {
@@ -331,4 +302,49 @@ pub(super) fn require_joined(
         ));
     }
     Ok(())
+}
+
+impl crate::delivery::lineage::Node for ValidationSourceLineage {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        children.push(self.advanced.as_ref());
+        leaves.joined(2)
+    }
+    fn verify_joined_leaf(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        require_joined(&self.origin_completion, &|id| reader(id))?;
+        let source = reader(self.advanced.source_operation())?.ok_or_else(|| {
+            Error::new(
+                "reconciliation_required",
+                "original repaired source completion is unavailable",
+            )
+        })?;
+        if !source.local_exit_confirmed
+            || !matches!(source.outcome, RunOutcome::Completed)
+            || source.operation_id != self.source_receipt.operation_id
+            || self
+                .source_receipt
+                .observed_result
+                .as_ref()
+                .and_then(|v| v.get("observation"))
+                != Some(&source.observation())
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "retained repaired source differs from actual completed receipt",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl crate::delivery::lineage_drop::Release for ValidationSourceLineage {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        pending.push(self.advanced);
+    }
 }

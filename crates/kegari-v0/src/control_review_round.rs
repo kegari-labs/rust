@@ -39,6 +39,10 @@ pub struct ReviewedSourceReference {
     pub(crate) repository_id: String,
     pub(crate) commit: String,
     pub(crate) tree: String,
+    /// Present only for an actual completed admitted paired resume. Omission
+    /// preserves the original direct-source canonical bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) paired_resume: Option<super::PairedResumeResultReference>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +282,15 @@ impl ReviewReceiptReference {
 }
 impl ReviewedSourceReference {
     fn validate(&self, review: &PhaseKey) -> Result<()> {
+        if let Some(reference) = &self.paired_resume {
+            reference.validate()?;
+            if reference.terminal != self.implementation {
+                return Err(invalid(
+                    "resumed source changes its actual terminal implementation",
+                ));
+            }
+        }
+
         phase(&self.implementation_phase, "implementation")?;
         self.implementation.validate()?;
         self.seal.validate()?;
@@ -597,6 +610,9 @@ impl ReviewRoundReference {
     /// source-advanced decoders. Those readers may safely use this when selecting
     /// legacy versus versioned accounting, then validate cross-links separately.
     pub(crate) fn decode_admission(receipt: &Receipt) -> Result<Option<Self>> {
+        if let Some(round) = super::round_recovery::paired_round(receipt)? {
+            return Ok(Some(round));
+        }
         let Some(encoded) = receipt.expected.get(KEY) else {
             if receipt.expected.contains_key(PREPARATION_LINK) {
                 return Err(invalid("preparation link lacks its review round marker"));
@@ -700,6 +716,11 @@ impl ReviewRoundReference {
         let Some(value) = Self::decode_admission(receipt)? else {
             return Ok(None);
         };
+        if receipt.expected.contains_key("review_round_recovery")
+            || receipt.expected.contains_key("review_round_resume")
+        {
+            return Ok(Some(value));
+        }
         if receipt.expected.contains_key("run") {
             // Parse structural links directly, never recurse through their
             // future round-aware readers. Budget/whole-receipt/closure checks

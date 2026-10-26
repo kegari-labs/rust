@@ -20,6 +20,7 @@ pub(super) fn verify_repair_chain(
     expected: &ReviewRoundReference,
     last: &ReviewReceiptReference,
     receipts: &[Receipt],
+    completed_resume: Option<&PairedResumeResultReference>,
 ) -> Result<()> {
     if receipts.len() > MAX_ROUND_RECEIPTS {
         return Err(Error::new(
@@ -65,21 +66,83 @@ pub(super) fn verify_repair_chain(
             ));
         }
     }
+    let mut resume_results = BTreeMap::new();
+    if let Some(reference) = &expected.dispatch_source().paired_resume {
+        resume_results.insert(reference.terminal.operation, reference.clone());
+    }
+    if let Some(reference) = completed_resume
+        && resume_results
+            .insert(reference.terminal.operation, reference.clone())
+            .is_some_and(|old| old != *reference)
+    {
+        return Err(round_error(
+            "pair chain has conflicting resumed-source identity",
+        ));
+    }
+    for (receipt, _) in selected.values() {
+        let marker = ReviewRoundReference::from_receipt(receipt)?
+            .ok_or_else(|| round_error("pair chain loses typed round ancestry"))?;
+        if let Some(reference) = &marker.dispatch_source().paired_resume
+            && resume_results
+                .insert(reference.terminal.operation, reference.clone())
+                .is_some_and(|old| old != *reference)
+        {
+            return Err(round_error(
+                "pair chain has conflicting resumed-source identity",
+            ));
+        }
+    }
+    let mut pending_origin: Option<&Receipt> = None;
     let mut previous = original;
     let mut previous_run = original_run;
     let mut previous_marker: Option<ReviewRoundReference> = None;
     for (receipt, run) in selected.values() {
-        let marker = ReviewRoundReference::from_receipt(receipt)?
-            .ok_or_else(|| round_error("pair chain loses typed round ancestry"))?;
+        let outcome = receipt
+            .observed_result
+            .as_ref()
+            .and_then(|v| v.pointer("/observation/outcome"))
+            .and_then(Value::as_str);
+        if outcome == Some("failed") {
+            closed_worker(receipt, "failed")?;
+            require_not_held(snapshot, receipt)?;
+            if pending_origin.is_none() {
+                pending_origin = Some(receipt);
+            }
+            continue;
+        }
         let actual_run = closed_worker(receipt, "completed")?;
         require_not_held(snapshot, receipt)?;
-        verify_persisted_preparation(receipts, receipt, &marker)?;
+        let logical = if ReviewRoundResumeReference::from_model_receipt(receipt)?.is_some() {
+            let reference = resume_results.get(&receipt.operation_id).ok_or_else(|| {
+                round_error("completed resumed repair lacks its exact descendant source reference")
+            })?;
+            reference.terminal.matches_observation(receipt)?;
+            recovery::verify_completed_paired_result(snapshot, expected, reference, receipts)?;
+            let origin = exact_receipt(receipts, &reference.origin)?;
+            if pending_origin
+                .take()
+                .is_none_or(|pending| pending.operation_id != origin.operation_id)
+            {
+                return Err(round_error("completed resume omits failed repair prefix"));
+            }
+            origin
+        } else {
+            if pending_origin.is_some() {
+                return Err(round_error("failed pair lacks an actual completed resume"));
+            }
+            *receipt
+        };
+        let logical_run = RunReference::from_receipt(logical)?
+            .ok_or_else(|| round_error("paired logical origin has no run"))?;
+        let marker = ReviewRoundReference::from_receipt(logical)?
+            .ok_or_else(|| round_error("pair chain loses typed round ancestry"))?;
+        verify_persisted_preparation(receipts, logical, &marker)?;
         if canonical_digest(1, &actual_run)? != canonical_digest(1, run)?
             || receipt.runtime_id != expected.runtime
             || run.workspace != expected.workspace
             || run.account != expected.account
             || run.phase != expected.source.implementation_phase
-            || Some(run.attempt) != previous_run.attempt.checked_add(1)
+            || Some(logical_run.attempt) != previous_run.attempt.checked_add(1)
             || run.max_attempts > previous_run.max_attempts
             || run.max_turns > previous_run.max_turns
             || run.max_review_rounds > previous_run.max_review_rounds
@@ -145,6 +208,9 @@ pub(super) fn verify_repair_chain(
         previous = receipt;
         previous_run = run.clone();
         previous_marker = Some(marker);
+    }
+    if pending_origin.is_some() {
+        return Err(round_error("pair chain ends with unresolved failed repair"));
     }
     last.matches_observation(previous)?;
     let prior = previous_marker.ok_or_else(|| round_error("pair chain is empty"))?;

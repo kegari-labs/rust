@@ -10,10 +10,53 @@ pub async fn prepare_resumed(
     recovery: worker_run::VerifiedProviderRecovery,
     source: crate::git::VerifiedReusableSource,
 ) -> Result<AdmittedWorker> {
+    prepare_resumed_inner(runtime, request, predecessor, recovery, source, None).await
+}
+
+pub(crate) async fn prepare_paired_resumed(
+    runtime: Arc<RuntimeCoordinator>,
+    request: LaunchRequest,
+    recovery: worker_run::VerifiedProviderRecovery,
+    source: crate::git::VerifiedReusableSource,
+    candidate: Arc<crate::delivery::VerifiedPairedRecoveryCandidate>,
+) -> Result<AdmittedWorker> {
+    if request.phase != *candidate.phase()
+        || request
+            .delivery
+            .as_ref()
+            .is_none_or(|assignment| candidate.plan().verify_assignment(assignment).is_err())
+    {
+        return Err(Error::new(
+            "paired_recovery_lineage",
+            "paired resume changed its actual retained assignment or phase",
+        ));
+    }
+    let predecessor = candidate.failed().operation_id;
+    prepare_resumed_inner(
+        runtime,
+        request,
+        predecessor,
+        recovery,
+        source,
+        Some(candidate),
+    )
+    .await
+}
+
+async fn prepare_resumed_inner(
+    runtime: Arc<RuntimeCoordinator>,
+    request: LaunchRequest,
+    predecessor: Uuid,
+    recovery: worker_run::VerifiedProviderRecovery,
+    source: crate::git::VerifiedReusableSource,
+    paired: Option<Arc<crate::delivery::VerifiedPairedRecoveryCandidate>>,
+) -> Result<AdmittedWorker> {
     if request.unfinished.is_some()
         || request.source_advanced.is_some()
         || request.retried_unfinished.is_some()
         || request.review_retry.is_some()
+        || request.validation_retry.is_some()
+        || request.review_round.is_some()
     {
         return Err(Error::new(
             "resume_incompatible",
@@ -95,36 +138,51 @@ pub async fn prepare_resumed(
         &prepared,
     )?);
     let contract = prepared.contract().clone();
-    let schedule = runtime.next_attempt_for_session_resume(&contract, &bridge, &directory)?;
+    let schedule = match &paired {
+        Some(candidate) => runtime
+            .next_attempt_for_paired_session_resume(&contract, &bridge, &directory, candidate)?,
+        None => runtime.next_attempt_for_session_resume(&contract, &bridge, &directory)?,
+    };
     if plan.request.max_turns > schedule.max_turns {
         return Err(Error::new(
             "turns_exhausted",
             "resumed session exceeds original turn cap",
         ));
     }
-    let permit = runtime.admit_resumed_worker(
-        &plan.request.lease,
-        RunAdmission {
-            request_id: plan.request.operation_id,
-            work_key: contract.work_key()?,
-            scope_digest: contract.scope_digest().into(),
-            reference: RunReference {
-                workspace: plan.workspace.id,
-                account: plan.account.clone(),
-                normalized_state: Some(plan.normalized_state.clone()),
-                phase: plan.request.phase.clone(),
-                profile_digest: canonical_digest(1, &contract.instructions().manifest.profile)?,
-                instruction_digest: contract.instructions().manifest_digest.clone(),
-                max_attempts: schedule.max_attempts,
-                max_turns: schedule.max_turns,
-                max_review_rounds: schedule.max_review_rounds,
-                attempt: schedule.attempt,
-            },
+    let admission = RunAdmission {
+        request_id: plan.request.operation_id,
+        work_key: contract.work_key()?,
+        scope_digest: contract.scope_digest().into(),
+        reference: RunReference {
+            workspace: plan.workspace.id,
+            account: plan.account.clone(),
+            normalized_state: Some(plan.normalized_state.clone()),
+            phase: plan.request.phase.clone(),
+            profile_digest: canonical_digest(1, &contract.instructions().manifest.profile)?,
+            instruction_digest: contract.instructions().manifest_digest.clone(),
+            max_attempts: schedule.max_attempts,
+            max_turns: schedule.max_turns,
+            max_review_rounds: schedule.max_review_rounds,
+            attempt: schedule.attempt,
         },
-        &contract,
-        &bridge,
-        &directory,
-    )?;
+    };
+    let permit = match &paired {
+        Some(candidate) => runtime.admit_paired_resumed_worker(
+            &plan.request.lease,
+            admission,
+            &contract,
+            &bridge,
+            &directory,
+            candidate,
+        )?,
+        None => runtime.admit_resumed_worker(
+            &plan.request.lease,
+            admission,
+            &contract,
+            &bridge,
+            &directory,
+        )?,
+    };
     let start: Result<AdmittedWorker> = (|| {
         let mut binding = old_execution.binding.clone();
         binding.operation_id = permit.operation_id;
@@ -208,6 +266,9 @@ pub async fn prepare_resumed(
         };
         let admitted = bridge.admitted(&permit, &runtime.control, enrollment)?;
         runtime.register_session_resume(&permit, &admitted)?;
+        if let Some(candidate) = &paired {
+            runtime.register_paired_resume_round(&permit, &contract, candidate, &admitted)?;
+        }
         let services = RunServices {
             processes,
             worker: WorkerServices {

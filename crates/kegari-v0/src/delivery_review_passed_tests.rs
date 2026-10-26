@@ -22,6 +22,7 @@ fn fixture() -> (Vec<Receipt>, Uuid, PassedValidationReference) {
         retry_grant: None,
     };
     let source = ReviewedSourceReference {
+        paired_resume: None,
         implementation_phase: phase.clone(),
         implementation: reference(10),
         claim_digest: hash("claim"),

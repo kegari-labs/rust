@@ -30,6 +30,8 @@ impl PreparationReference {
             || receipt.request_id != receipt.operation_id
             || receipt.canonical_targets != [value.phase.work.clone()]
             || [
+                "review_round_recovery",
+                "review_round_resume",
                 "run",
                 "metadata",
                 "continuation",

@@ -42,6 +42,7 @@ struct UnfinishedProof {
     paired_repair: Option<Arc<VerifiedReviewRoundPlan>>,
     granted_validation: Option<Arc<CompletedGrantedValidation>>,
     source_validation: Option<Arc<VerifiedSourceAdvanced>>,
+    paired_completion: Option<Arc<VerifiedCompletedPairedResume>>,
 }
 impl UnfinishedChildWork {
     pub fn predecessor(&self) -> Uuid {
@@ -100,6 +101,9 @@ impl UnfinishedChildWork {
         grants: &[crate::decisions::VerifiedRetryGrant],
     ) -> Result<()> {
         self.verify_failure_inventory(receipts)?;
+        if let Some(proof) = &self.inner.paired_completion {
+            proof.verify_immutable(receipts, grants)?;
+        }
         if let Some(review) = &self.inner.granted_review {
             review.verify_current(receipts, grants)?;
         }
@@ -110,7 +114,12 @@ impl UnfinishedChildWork {
             source.verify_completed_inventory(receipts, grants, self.failure_operation())?;
         }
         if let Some(pair) = &self.inner.paired_repair {
-            pair.verify_completed_repair(receipts, grants, &self.inner.predecessor_receipt)?;
+            pair.verify_completed_repair_result(
+                receipts,
+                grants,
+                &self.inner.predecessor_receipt,
+                self.inner.paired_completion.as_ref(),
+            )?;
         }
         Ok(())
     }
@@ -223,6 +232,7 @@ enum RepairReview {
 }
 
 pub struct RepairSource<'a> {
+    pub(crate) paired_completion: Option<Arc<VerifiedCompletedPairedResume>>,
     pub admission: &'a DeliveryAdmission,
     pub original: Arc<CompletedChildClaim>,
     pub source: &'a SealedChildSource,
@@ -259,7 +269,12 @@ impl DeliveryCoordinator {
         let actual = self
             .host
             .operation(request.source.original.operation_id())?;
-        previous.verify_completed_repair(&self.host.operations()?, grants, &actual)?;
+        previous.verify_completed_repair_result(
+            &self.host.operations()?,
+            grants,
+            &actual,
+            request.source.paired_completion.as_ref(),
+        )?;
         validation_source.verify_completed_inventory(
             &self.host.operations()?,
             grants,
@@ -577,6 +592,7 @@ impl DeliveryCoordinator {
             }
         };
         self.current_child_claim(input.admission, &input.original)?;
+        input.verify_paired_resume(&self.host.operations()?)?;
         let original = input.original.outcome();
         let original_contract = input
             .completion
@@ -608,6 +624,7 @@ impl DeliveryCoordinator {
                     "repair source verification task was lost",
                 )
             })??;
+        input.verify_paired_resume(&self.host.operations()?)?;
         let predecessor_receipt = closed_run(&self.host, input.original.operation_id())?;
         let failure_receipt = closed_run(&self.host, failure.operation_id)?;
         let reference = RunReference::from_receipt(&predecessor_receipt)?.ok_or_else(|| {
@@ -781,6 +798,9 @@ impl DeliveryCoordinator {
         {
             identity["source_validation"] = json!(source.digest());
         }
+        if let Some(proof) = &input.paired_completion {
+            identity["paired_completion"] = json!(proof.digest());
+        }
         let digest = canonical_digest(1, &identity)?;
         let role = original.outcome().instructions.role;
         Ok(UnfinishedChildWork {
@@ -807,6 +827,7 @@ impl DeliveryCoordinator {
                 paired_repair,
                 granted_validation,
                 source_validation,
+                paired_completion: input.paired_completion,
             }),
         })
     }
@@ -925,12 +946,16 @@ pub struct VerifiedSourceAdvanced {
     source_completion: Arc<RunCompletion>,
     granted_review: Option<CompletedReviewLineage>,
     validation_budget: Option<Arc<ValidationBudgetLineage>>,
+    paired_completion: Option<Arc<VerifiedCompletedPairedResume>>,
 }
 impl VerifiedSourceAdvanced {
     /// Observation-only exact closure captured by the actual opaque source.
     /// A caller must still verify current source/grants before capturing it.
     pub(crate) fn retained_receipt_references(&self) -> Result<BTreeMap<Uuid, String>> {
         let mut refs = BTreeMap::new();
+        if let Some(proof) = &self.paired_completion {
+            refs = proof.retained_receipts()?;
+        }
         refs.insert(self.predecessor(), self.predecessor_receipt_digest().into());
         if let Some(old) = refs.insert(self.source_operation(), self.source_receipt_digest().into())
             && old != self.source_receipt_digest()
@@ -984,23 +1009,7 @@ impl VerifiedSourceAdvanced {
         &self,
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
     ) -> Result<()> {
-        for expected in [&self._previous_completion, &self.source_completion] {
-            if retained(expected.operation_id)?.is_none_or(|actual| {
-                !Arc::ptr_eq(&actual, expected) || !actual.local_exit_confirmed
-            }) {
-                return Err(Error::new(
-                    "reconciliation_required",
-                    "source advancement lost actual joined ancestor",
-                ));
-            }
-        }
-        if let Some(budget) = &self.validation_budget {
-            budget.verify_joined(retained)?;
-        }
-        if let Some(CompletedReviewLineage::Round(review)) = &self.granted_review {
-            review.verify_joined(retained)?;
-        }
-        Ok(())
+        crate::delivery::lineage::verify_joined(self, retained)
     }
     pub(crate) fn retained_validation_grants(&self) -> Vec<crate::decisions::VerifiedRetryGrant> {
         self.validation_budget
@@ -1058,6 +1067,10 @@ impl VerifiedSourceAdvanced {
         receipts: &[Receipt],
         grants: &[crate::decisions::VerifiedRetryGrant],
     ) -> Result<()> {
+        if let Some(proof) = &self.paired_completion {
+            proof.verify_immutable(receipts, grants)?;
+        }
+
         self.verify_predecessor_inventory(receipts)?;
         if let Some(review) = &self.granted_review {
             review.verify_current(receipts, grants)?;
@@ -1306,13 +1319,21 @@ impl DeliveryCoordinator {
         let source_receipt = self
             .host
             .operation(request.source.original.operation_id())?;
-        let continuation = crate::control::RunContinuationReference::from_receipt(&source_receipt)?
-            .ok_or_else(|| {
-                Error::new(
-                    "worker_binding",
-                    "changed source lacks its actual scoped repair admission",
-                )
-            })?;
+        let continuation_origin = if let Some(proof) = &request.source.paired_completion {
+            proof.verify_completion(&request.source.completion)?;
+            proof.verify_immutable(&self.host.operations()?, grants)?;
+            self.host.operation(proof.origin_operation())?
+        } else {
+            source_receipt.clone()
+        };
+        let continuation =
+            crate::control::RunContinuationReference::from_receipt(&continuation_origin)?
+                .ok_or_else(|| {
+                    Error::new(
+                        "worker_binding",
+                        "changed source lacks its actual scoped repair admission",
+                    )
+                })?;
         if continuation.predecessor != repair.predecessor()
             || continuation.predecessor_receipt_digest != repair.predecessor_receipt_digest()
             || continuation.failure_operation != repair.failure_operation()
@@ -1364,8 +1385,15 @@ impl DeliveryCoordinator {
         let actual = self
             .host
             .operation(request.source.original.operation_id())?;
-        let link =
-            crate::control::RunContinuationReference::from_receipt(&actual)?.ok_or_else(|| {
+        let continuation_origin = if let Some(proof) = &request.source.paired_completion {
+            proof.verify_completion(&request.source.completion)?;
+            proof.verify_immutable(&self.host.operations()?, grants)?;
+            self.host.operation(proof.origin_operation())?
+        } else {
+            actual.clone()
+        };
+        let link = crate::control::RunContinuationReference::from_receipt(&continuation_origin)?
+            .ok_or_else(|| {
                 Error::new(
                     "worker_binding",
                     "validation source is not the exact paired repair",
@@ -1467,6 +1495,9 @@ impl DeliveryCoordinator {
     ) -> Result<VerifiedSourceAdvanced> {
         let admission = request.source.admission;
         self.current_child_claim(admission, &request.source.original)?;
+        request
+            .source
+            .verify_paired_resume(&self.host.operations()?)?;
         let role = match request.assignment.phase() {
             "child_local_validation" => AgentRole::Validation,
             "child_codex_review" => AgentRole::Review,
@@ -1548,6 +1579,9 @@ impl DeliveryCoordinator {
             ));
         }
         let predecessor = closed_run(&self.host, old.operation_id)?;
+        request
+            .source
+            .verify_paired_resume(&self.host.operations()?)?;
         let source_operation = request.source.original.operation_id();
         let source_receipt = closed_run(&self.host, source_operation)?;
         let reference = RunReference::from_receipt(&predecessor)?
@@ -1624,6 +1658,9 @@ impl DeliveryCoordinator {
         if let Some(budget) = &validation_budget {
             identity["validation_budget"] = json!(budget.digest());
         }
+        if let Some(proof) = &request.source.paired_completion {
+            identity["paired_completion"] = json!(proof.digest());
+        }
         let digest = canonical_digest(1, &identity)?;
         Ok(VerifiedSourceAdvanced {
             assignment: request.assignment.clone(),
@@ -1647,6 +1684,7 @@ impl DeliveryCoordinator {
                 granted_review
             },
             validation_budget,
+            paired_completion: request.source.paired_completion,
         })
     }
 }
@@ -1723,6 +1761,165 @@ fn retained_round_scalar_floor(receipts: &[Receipt], subject: &RunReference) -> 
         }
     }
     Ok(floor)
+}
+
+impl UnfinishedChildWork {
+    pub(crate) fn resumed_bridge_inventory(
+        &self,
+    ) -> Result<BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>> {
+        Ok(crate::delivery::lineage::collect(self)?.bridges)
+    }
+    pub(crate) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        review_round::verify_resumed_inventory(self.resumed_bridge_inventory()?, reader)
+    }
+}
+impl VerifiedSourceAdvanced {
+    pub(crate) fn resumed_bridge_inventory(
+        &self,
+    ) -> Result<BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>> {
+        Ok(crate::delivery::lineage::collect(self)?.bridges)
+    }
+    pub(crate) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        review_round::verify_resumed_inventory(self.resumed_bridge_inventory()?, reader)
+    }
+}
+
+impl RepairSource<'_> {
+    fn verify_paired_resume(&self, receipts: &[Receipt]) -> Result<()> {
+        let actual = receipts
+            .iter()
+            .find(|r| r.operation_id == self.completion.operation_id)
+            .ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "repair source receipt unavailable",
+                )
+            })?;
+        match (
+            &self.paired_completion,
+            crate::control::ReviewRoundResumeReference::from_model_receipt(actual)?,
+        ) {
+            (Some(proof), Some(_)) => {
+                proof.verify_completion(&self.completion)?;
+                proof.verify_receipts(receipts)
+            }
+            (None, None) => Ok(()),
+            _ => Err(Error::new(
+                "paired_recovery_lineage",
+                "source omits or invents its completed paired resume capability",
+            )),
+        }
+    }
+}
+
+impl VerifiedSourceAdvanced {
+    pub(crate) fn retained_native_grants(
+        &self,
+    ) -> Result<BTreeMap<Uuid, crate::decisions::VerifiedRetryGrant>> {
+        crate::delivery::lineage::collect(self)?.into_grants()
+    }
+}
+
+impl crate::delivery::lineage::Node for UnfinishedChildWork {
+    fn key(&self) -> crate::delivery::lineage::Key {
+        crate::delivery::lineage::Key::of(self.inner.as_ref())
+    }
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        leaves.sources([self.source().clone()])?;
+        if let Some(p) = &self.inner.paired_completion {
+            children.push(p.as_ref());
+        }
+        if let Some(p) = &self.inner.granted_review {
+            children.push(p);
+        }
+        if let Some(p) = &self.inner.paired_repair {
+            children.push(p.as_ref());
+        }
+        if let Some(p) = &self.inner.granted_validation {
+            children.push(p.as_ref());
+        }
+        if let Some(p) = &self.inner.source_validation {
+            children.push(p.as_ref());
+        }
+        Ok(())
+    }
+}
+impl crate::delivery::lineage::Node for VerifiedSourceAdvanced {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        leaves.sources([self.source().clone()])?;
+        leaves.joined(2)?;
+        if let Some(p) = &self.paired_completion {
+            children.push(p.as_ref());
+        }
+        if let Some(p) = &self.granted_review {
+            children.push(p);
+        }
+        if let Some(p) = &self.validation_budget {
+            children.push(p.as_ref());
+        }
+        Ok(())
+    }
+    fn verify_joined_leaf(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        for expected in [&self._previous_completion, &self.source_completion] {
+            if reader(expected.operation_id)?.is_none_or(|actual| {
+                !Arc::ptr_eq(&actual, expected) || !actual.local_exit_confirmed
+            }) {
+                return Err(Error::new(
+                    "reconciliation_required",
+                    "source advancement lost actual joined ancestor",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl crate::delivery::lineage_drop::Release for UnfinishedChildWork {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        pending.push(self.inner);
+    }
+}
+impl crate::delivery::lineage_drop::Release for UnfinishedProof {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        if let Some(p) = self.granted_review {
+            crate::delivery::lineage_drop::Release::release(p, pending);
+        }
+        if let Some(p) = self.paired_repair {
+            pending.push(p);
+        }
+        if let Some(p) = self.granted_validation {
+            pending.push(p);
+        }
+        if let Some(p) = self.source_validation {
+            pending.push(p);
+        }
+        // Paired completion and all other fields are flat leaf ownership.
+    }
+}
+impl crate::delivery::lineage_drop::Release for VerifiedSourceAdvanced {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        if let Some(p) = self.granted_review {
+            crate::delivery::lineage_drop::Release::release(p, pending);
+        }
+        // validation_budget/paired_completion contain flat maps, not old plans.
+    }
 }
 
 #[cfg(test)]

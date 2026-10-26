@@ -22,6 +22,17 @@ pub(crate) struct VerifiedPassedValidation {
     control: Arc<crate::control::ControlHost>,
 }
 impl VerifiedPassedValidation {
+    pub(crate) fn resumed_bridge_inventory(
+        &self,
+    ) -> Result<BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>> {
+        Ok(crate::delivery::lineage::collect(self)?.bridges)
+    }
+    pub(crate) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        self.completed.verify_resumed_bridges(reader)
+    }
     pub(crate) fn reference(&self) -> &PassedValidationReference {
         &self.reference
     }
@@ -122,8 +133,7 @@ impl VerifiedPassedValidation {
         &self,
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
     ) -> Result<()> {
-        self.completed.verify_joined(retained)?;
-        source_lineage::require_joined(&self.source_completion, retained)
+        crate::delivery::lineage::verify_joined(self, retained)
     }
 }
 
@@ -138,6 +148,17 @@ pub(crate) struct ConsumedValidationSuccessor {
     digest: String,
 }
 impl ConsumedValidationSuccessor {
+    pub(crate) fn resumed_bridge_inventory(
+        &self,
+    ) -> Result<BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>> {
+        Ok(crate::delivery::lineage::collect(self)?.bridges)
+    }
+    pub(crate) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        verify_resumed_bridge_inventory(self.resumed_bridge_inventory()?, reader)
+    }
     pub(crate) fn digest(&self) -> &str {
         &self.digest
     }
@@ -192,8 +213,7 @@ impl ConsumedValidationSuccessor {
         &self,
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
     ) -> Result<()> {
-        self.passed.verify_joined(retained)?;
-        self.round.verify_joined(retained)
+        crate::delivery::lineage::verify_joined(self, retained)
     }
 }
 
@@ -236,6 +256,7 @@ impl DeliveryCoordinator {
         let (receipts, grants) = current_inputs(runtime, completed.authority())?;
         completed.verify_current(&receipts, &grants)?;
         completed.verify_joined(&|id| runtime.retained_completion(id))?;
+        completed.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))?;
         source_lineage::require_joined(&source.completion, &|id| runtime.retained_completion(id))?;
         // This helper performs the same actual source/claim/seal/Git observation
         // as round construction; it cannot convert a raw source reference to proof.
@@ -278,6 +299,7 @@ impl DeliveryCoordinator {
         let (receipts, current_grants) = current_inputs(runtime, completed.authority())?;
         completed.verify_current(&receipts, &current_grants)?;
         completed.verify_joined(&|id| runtime.retained_completion(id))?;
+        completed.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))?;
         self.current(source.admission, &[DeliveryPhase::LocalValidation])?;
         let (retained_receipts, retained_grants) =
             completed.retained_receipts(&receipts, &current_grants)?;
@@ -324,6 +346,7 @@ impl DeliveryCoordinator {
         };
         proof.verify_current(&receipts, &current_grants)?;
         proof.verify_joined(&|id| runtime.retained_completion(id))?;
+        proof.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))?;
         Ok(proof)
     }
 }
@@ -361,6 +384,7 @@ impl VerifiedPassedValidation {
         };
         proof.verify_current(&receipts, &grants)?;
         proof.verify_joined(&|id| runtime.retained_completion(id))?;
+        proof.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))?;
         Ok(proof)
     }
 }
@@ -514,6 +538,48 @@ fn retain_reference(retained: &mut BTreeMap<Uuid, String>, id: Uuid, digest: Str
 }
 fn passed_error(message: &str) -> Error {
     Error::new("validation_successor", message)
+}
+
+impl VerifiedPassedValidation {
+    pub(crate) fn retained_native_grants(&self) -> Result<BTreeMap<Uuid, VerifiedRetryGrant>> {
+        crate::delivery::lineage::collect(self)?.into_grants()
+    }
+}
+
+impl crate::delivery::lineage::Node for VerifiedPassedValidation {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        children.push(&self.completed);
+        leaves.sources([self.source().clone()])?;
+        leaves.grants(self.grants.iter().cloned())?;
+        leaves.joined(1)
+    }
+    fn verify_joined_leaf(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        source_lineage::require_joined(&self.source_completion, &|id| reader(id))
+    }
+}
+impl crate::delivery::lineage::Node for ConsumedValidationSuccessor {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        _leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        children.push(self.passed.as_ref());
+        children.push(self.round.as_ref());
+        Ok(())
+    }
+}
+
+impl crate::delivery::lineage_drop::Release for VerifiedPassedValidation {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        crate::delivery::lineage_drop::Release::release(self.completed, pending);
+    }
 }
 
 #[cfg(test)]

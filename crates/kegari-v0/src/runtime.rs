@@ -28,6 +28,8 @@ use std::{
 use uuid::Uuid;
 #[path = "runtime_corrections.rs"]
 mod correction_transitions;
+#[path = "runtime_paired_recovery.rs"]
+mod paired_recovery;
 #[path = "runtime_released.rs"]
 mod released;
 #[path = "runtime_recovery.rs"]
@@ -77,6 +79,8 @@ struct State {
     quotas: BTreeMap<String, Quota>,
     rate_observations: BTreeMap<String, Value>,
     resume_proofs: BTreeMap<Uuid, String>,
+    admitted_resumes: BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>,
+    admitted_rounds: BTreeMap<Uuid, Arc<crate::delivery::VerifiedReviewRoundPlan>>,
     correction_inputs: BTreeMap<(Uuid, u64), (String, String)>,
     correction_transitions: BTreeMap<Uuid, Arc<crate::corrections::VerifiedCorrectionTransition>>,
     correction_errors: BTreeMap<Uuid, Error>,
@@ -567,6 +571,7 @@ impl RuntimeCoordinator {
             &self.services.key,
         )?;
         round.verify_joined(&|operation| self.retained_completion(operation))?;
+        round.verify_resumed_bridges(&|operation| self.retained_session_resume(operation))?;
         let cause = round_run_cause(readmission)?;
         crate::runtime_schedule::plan_review_round(crate::runtime_schedule::RoundScheduleInput {
             runtime: limits,
@@ -799,16 +804,20 @@ impl RuntimeCoordinator {
                 WorkerReadmission::ValidationRetry(proof) => {
                     proof.verify_current(&receipts, &current_grants)?;
                     proof.verify_joined(&|id| self.retained_completion(id))?;
+                    proof.verify_resumed_bridges(&|id| self.retained_session_resume(id))?;
                 }
                 WorkerReadmission::Unfinished(proof) => {
-                    proof.verify_current(&receipts, &current_grants)?
+                    proof.verify_current(&receipts, &current_grants)?;
+                    proof.verify_resumed_bridges(&|id| self.retained_session_resume(id))?;
                 }
                 WorkerReadmission::SourceAdvanced(proof) => {
                     proof.verify_current(&receipts, &current_grants)?;
                     proof.verify_joined(&|id| self.retained_completion(id))?;
+                    proof.verify_resumed_bridges(&|id| self.retained_session_resume(id))?;
                 }
                 WorkerReadmission::Retried(proof) => {
-                    proof.verify_current(&receipts, &current_grants)?
+                    proof.verify_current(&receipts, &current_grants)?;
+                    proof.verify_resumed_bridges(&|id| self.retained_session_resume(id))?;
                 }
             }
             if proof.phase() != phase
@@ -1653,6 +1662,7 @@ impl RuntimeCoordinator {
                     round: None,
                 },
                 session_resume,
+                paired_resume: None,
                 preparation: None,
             },
         )
@@ -1688,6 +1698,7 @@ impl RuntimeCoordinator {
                     round: Some(round),
                 },
                 session_resume: None,
+                paired_resume: None,
                 preparation: Some(crate::control::ReviewReceiptReference {
                     operation: preparation.operation_id,
                     receipt_digest: canonical_digest(1, preparation)?,
@@ -1705,6 +1716,7 @@ impl RuntimeCoordinator {
         let WorkerAdmissionContext {
             planning,
             session_resume,
+            paired_resume,
             preparation,
         } = context;
         let WorkerPlanning { readmission, round } = planning;
@@ -1726,9 +1738,28 @@ impl RuntimeCoordinator {
                 "conflicting session admission causes",
             ));
         }
+        if paired_resume.is_some()
+            && (session_resume.is_none()
+                || round.is_some()
+                || readmission.is_some()
+                || preparation.is_some())
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "paired resume must retain only its actual admitted bridge cause",
+            ));
+        }
         let reference = input.reference.clone();
         let resume_reference = session_resume
-            .map(|(proof, directory)| self.session_resume_reference(proof, directory))
+            .map(|(proof, directory)| {
+                let mut reference = self.session_resume_reference(proof, directory)?;
+                if let Some(paired) = paired_resume {
+                    reference.review_rounds_consumed = reference
+                        .review_rounds_consumed
+                        .max(paired.plan().reference().ordinal);
+                }
+                Ok(reference)
+            })
             .transpose()?;
         if input.work_key != contract.work_key()?
             || input.scope_digest != contract.scope_digest()
@@ -1793,7 +1824,11 @@ impl RuntimeCoordinator {
                 }
             }
             if let Some((proof, directory)) = session_resume {
-                let schedule = self.plan_session_resume(contract, proof, directory, snapshot)?;
+                let schedule = match paired_resume {
+                    Some(paired) => self
+                        .plan_paired_session_resume(contract, proof, directory, paired, snapshot)?,
+                    None => self.plan_session_resume(contract, proof, directory, snapshot)?,
+                };
                 if reference.phase != proof.recovery().observation().retained().reference().phase
                     || reference.attempt != schedule.attempt
                     || reference.max_attempts > schedule.max_attempts
@@ -1870,6 +1905,7 @@ impl RuntimeCoordinator {
                         &reference.phase,
                         &self.control.operations()?,
                     )? && !matches!(readmission, Some(WorkerReadmission::Retried(_)))
+                        && paired_resume.is_none()
                     {
                         return Err(Error::new(
                             "unfinished_retry_required",
@@ -1939,7 +1975,23 @@ impl RuntimeCoordinator {
                 .cloned();
             crate::runtime_schedule::ensure_capacity(&config, &active, &reference, quota.as_ref())
         };
-        let permit = if let Some(round) = round {
+        let permit = if let Some(paired) = paired_resume {
+            let (proof, directory) = session_resume
+                .ok_or_else(|| paired_recovery::paired_error("paired bridge disappeared"))?;
+            let provenance = crate::control::RoundResumeProvenance {
+                round: paired.plan().reference().clone(),
+                resume: paired.resume_reference(proof, directory, &self.control.operations()?)?,
+            };
+            self.control.admit_round_run_resumed_observed(
+                lease,
+                input,
+                resume_reference.ok_or_else(|| {
+                    paired_recovery::paired_error("paired resume reference disappeared")
+                })?,
+                provenance,
+                final_gate,
+            )?
+        } else if let Some(round) = round {
             self.control.admit_round_run_observed(
                 lease,
                 input,
@@ -3079,6 +3131,7 @@ struct WorkerAdmissionContext<'a> {
         &'a crate::worker_run::VerifiedSessionResume,
         &'a crate::housekeeping::VerifiedDirectoryReuse,
     )>,
+    paired_resume: Option<&'a crate::delivery::VerifiedPairedRecoveryCandidate>,
     preparation: Option<crate::control::ReviewReceiptReference>,
 }
 fn request_readmission(

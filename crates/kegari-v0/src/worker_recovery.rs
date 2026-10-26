@@ -60,6 +60,23 @@ impl RecoveryProviderLaunch {
         input: RecoveryPreparation,
         fresh: impl FnOnce(&crate::control::ControlSnapshot) -> Result<()>,
     ) -> Result<Self> {
+        Self::admit_inner(input, None, fresh)
+    }
+    /// Metadata-only paired recovery retains its exact original round. The
+    /// native caller must supply actual joined/current candidate validation;
+    /// typed Control provenance is data, never a replacement for that callback.
+    pub(crate) fn admit_round_checked(
+        input: RecoveryPreparation,
+        provenance: crate::control::RoundRecoveryProvenance,
+        fresh: impl FnOnce(&crate::control::ControlSnapshot) -> Result<()>,
+    ) -> Result<Self> {
+        Self::admit_inner(input, Some(provenance), fresh)
+    }
+    fn admit_inner(
+        input: RecoveryPreparation,
+        paired: Option<crate::control::RoundRecoveryProvenance>,
+        fresh: impl FnOnce(&crate::control::ControlSnapshot) -> Result<()>,
+    ) -> Result<Self> {
         input.config.validate()?;
         let contract = &input.contract;
         let candidate = &input.candidate;
@@ -141,21 +158,40 @@ impl RecoveryProviderLaunch {
             1,
             &json!({"kind":"session_recovery_metadata","candidate":candidate.digest(),"thread":candidate.state().thread_id,"cwd":candidate.state().binding.cwd,"executable":executable,"auth_home":auth_home,"permissions":permissions,"methods":["initialize","account/read","config/read","thread/read"],"protocol":crate::codex::PROTOCOL_PROFILE}),
         )?;
-        let permit = input.control.admit_session_recovery_preparation(
-            &input.lease,
-            recovery,
-            scope,
-            |snapshot| {
-                fresh(snapshot)?;
-                candidate.verify_prior_receipts(&input.control.operations()?)?;
-                input.host.verify_owner(&input.lease)?;
-                contract
-                    .authority()
-                    .compare(&input.host.current_authority(contract.authority())?)?;
-                contract.isolation().revalidate()?;
-                executable.revalidate(false)
-            },
-        )?;
+        // Ordinary scope bytes remain unchanged. Paired readback additionally
+        // binds its exact immutable round/candidate metadata in the scope.
+        let scope = match &paired {
+            Some(provenance) => canonical_digest(
+                1,
+                &json!({"ordinary_scope":scope,"round":provenance.round,"recovery":provenance.recovery}),
+            )?,
+            None => scope,
+        };
+        let predicate = |snapshot: &crate::control::ControlSnapshot| {
+            fresh(snapshot)?;
+            candidate.verify_prior_receipts(&input.control.operations()?)?;
+            input.host.verify_owner(&input.lease)?;
+            contract
+                .authority()
+                .compare(&input.host.current_authority(contract.authority())?)?;
+            contract.isolation().revalidate()?;
+            executable.revalidate(false)
+        };
+        let permit = match paired {
+            Some(provenance) => input.control.admit_round_session_recovery_preparation(
+                &input.lease,
+                recovery,
+                provenance,
+                scope,
+                predicate,
+            ),
+            None => input.control.admit_session_recovery_preparation(
+                &input.lease,
+                recovery,
+                scope,
+                predicate,
+            ),
+        }?;
         let gate = Arc::new(ProtocolGate {
             control: input.control.clone(),
             permit: permit.clone(),
@@ -541,6 +577,7 @@ impl VerifiedSessionResume {
 /// Opaque model-launch mode obtained only after actual typed Control admission
 /// and immutable directory-family enrollment. A raw prior-session JSON value
 /// cannot select this mode.
+#[derive(Clone)]
 pub struct AdmittedSessionResume {
     bridge: Arc<VerifiedSessionResume>,
     enrollment: crate::housekeeping::EnrolledDirectoryReuse,
@@ -561,6 +598,132 @@ impl VerifiedSessionResume {
     }
 }
 impl AdmittedSessionResume {
+    /// Verify the retained result of this actual admitted bridge. The caller
+    /// separately proves pointer identity through the native joined registry.
+    /// Historical enrollment identity is distinct from fresh clean-source reuse.
+    pub(crate) fn verify_completed_record(
+        &self,
+        receipt: &crate::control::Receipt,
+        completion: &Arc<RunCompletion>,
+    ) -> Result<()> {
+        self.enrollment.verify_retained_admission(receipt)?;
+        let contract = completion.contract.as_ref().ok_or_else(|| {
+            Error::new(
+                "resume_incompatible",
+                "completed resume lost its actual contract",
+            )
+        })?;
+        let execution = completion.execution.as_ref().ok_or_else(|| {
+            Error::new(
+                "resume_incompatible",
+                "completed resume lost its actual execution",
+            )
+        })?;
+        self.bridge.verify_contract(contract)?;
+        let run = crate::control::RunReference::from_receipt(receipt)?.ok_or_else(|| {
+            Error::new(
+                "resume_incompatible",
+                "completed resume lost its run admission",
+            )
+        })?;
+        let reference =
+            crate::control::RunResumeReference::from_receipt(receipt)?.ok_or_else(|| {
+                Error::new(
+                    "resume_incompatible",
+                    "completed resume lost its typed bridge",
+                )
+            })?;
+        let old = self.bridge.previous.execution.as_ref().ok_or_else(|| {
+            Error::new(
+                "resume_incompatible",
+                "original resume execution disappeared",
+            )
+        })?;
+        let expected = self
+            .bridge
+            .new_session(completion.state.binding.clone(), completion.state.max_turns)?;
+        let origin = completion.state.resume_origin.as_ref().ok_or_else(|| {
+            Error::new(
+                "resume_incompatible",
+                "completed resume lost its historical prefix",
+            )
+        })?;
+        origin.preserves(expected.resume_origin.as_ref().ok_or_else(|| {
+            Error::new(
+                "resume_incompatible",
+                "actual bridge has no historical prefix",
+            )
+        })?)?;
+        let observed = receipt.observed_result.as_ref();
+        if completion.operation_id != self.bridge.next_operation
+            || receipt.operation_id != completion.operation_id
+            || self.enrollment.operation_id() != completion.operation_id
+            || !completion.local_exit_confirmed
+            || !matches!(
+                completion.outcome,
+                RunOutcome::Completed | RunOutcome::Failed
+            )
+            || completion.hook_error.is_some()
+            || completion.state.max_turns > run.max_turns
+            || completion.state.binding.operation_id != completion.operation_id.to_string()
+            || completion.state.binding.instruction_digest
+                != contract.instructions().manifest_digest
+            || observed.is_none_or(|value| {
+                value["local_execution"] != "exited"
+                    || value["unresolved_effects"]
+                        .as_array()
+                        .is_none_or(|effects| !effects.is_empty())
+                    || value["observation"] != completion.observation()
+            })
+            || run.phase
+                != self
+                    .bridge
+                    .recovery
+                    .observation()
+                    .retained()
+                    .reference()
+                    .phase
+            || run.workspace != contract.instructions().manifest.workspace_id
+            || run.account != contract.account_id()
+            || run.profile_digest != canonical_digest(1, &contract.instructions().manifest.profile)?
+            || run.instruction_digest != contract.instructions().manifest_digest
+            || reference.predecessor != self.bridge.predecessor()
+            || reference.predecessor_receipt_digest
+                != self
+                    .bridge
+                    .recovery
+                    .observation()
+                    .retained()
+                    .admission_digest()
+            || reference.recovery_digest != self.bridge.recovery.digest()
+            || reference.instruction_compatibility_digest != self.bridge.instructions.digest()
+            || &execution.binding != self.enrollment.binding()
+            || execution.ownership.digest() != old.ownership.digest()
+            || execution.binding.operation_id != completion.operation_id
+            || contract.isolation().digest()
+                != self
+                    .bridge
+                    .previous
+                    .contract
+                    .as_ref()
+                    .ok_or_else(|| {
+                        Error::new(
+                            "resume_incompatible",
+                            "original resume contract disappeared",
+                        )
+                    })?
+                    .isolation()
+                    .digest()
+        {
+            return Err(Error::new(
+                "resume_incompatible",
+                "completed resume changed its actual bridge, result, contract or execution",
+            ));
+        }
+        execution
+            .ownership
+            .verify(&execution.binding, contract.isolation())
+    }
     pub(crate) fn startup_source(&self) -> ResumeStartupSource {
         ResumeStartupSource::new(self.enrollment.clone())
     }

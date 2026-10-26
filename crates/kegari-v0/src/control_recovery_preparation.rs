@@ -45,7 +45,7 @@ impl SessionRecoveryPreparationReference {
         id[8] = (id[8] & 0x3f) | 0x80;
         Ok(Uuid::from_bytes(id))
     }
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if self.predecessor.is_nil()
             || self.workspace.is_nil()
             || self.account.trim().is_empty()
@@ -78,17 +78,23 @@ impl SessionRecoveryPreparationReference {
         Ok(())
     }
     pub fn from_receipt(receipt: &Receipt) -> Result<Option<Self>> {
+        let paired = ReviewRoundRecoveryReference::from_metadata_receipt(receipt)?;
         let Some(encoded) = receipt.expected.get("session_recovery_preparation") else {
             return Ok(None);
         };
         let value: Self = serde_json::from_str(encoded)
             .map_err(|_| Error::new("record_corrupt", "invalid recovery preparation reference"))?;
         value.validate()?;
+        if paired.is_some() {
+            return Ok(Some(value));
+        }
         if receipt.kind != "admission"
             || receipt.operation_id != value.operation_id()?
             || receipt.request_id != receipt.operation_id
             || receipt.canonical_targets != [value.phase.work.clone()]
             || [
+                "review_round_recovery",
+                "review_round_resume",
                 "review_round",
                 "review_round_preparation",
                 "run",
@@ -140,6 +146,14 @@ impl ControlHost {
         snapshot: &ControlSnapshot,
         reference: &SessionRecoveryPreparationReference,
     ) -> Result<()> {
+        self.verify_session_recovery_preparation_accounting(snapshot, reference, None)
+    }
+    pub(super) fn verify_session_recovery_preparation_accounting(
+        &self,
+        snapshot: &ControlSnapshot,
+        reference: &SessionRecoveryPreparationReference,
+        paired: Option<&RoundRecoveryContext>,
+    ) -> Result<()> {
         let receipts = self.receipts.all()?;
         let mut runs = BTreeMap::new();
         let mut preparations = BTreeMap::new();
@@ -176,6 +190,9 @@ impl ControlHost {
                         "recovery preparation history changed identity",
                     ));
                 }
+                if let Some(paired) = paired {
+                    paired.verify_metadata(receipt)?;
+                }
                 cap = cap.min(old.max_attempts);
             }
         }
@@ -191,9 +208,10 @@ impl ControlHost {
                 "session recovery predecessor is not the exact latest phase receipt",
             ));
         }
-        if runs
-            .values()
-            .any(|(receipt, _)| receipt.expected.contains_key("review_round"))
+        if paired.is_none()
+            && runs
+                .values()
+                .any(|(receipt, _)| receipt.expected.contains_key("review_round"))
         {
             return Err(Error::new(
                 "review_round_required",

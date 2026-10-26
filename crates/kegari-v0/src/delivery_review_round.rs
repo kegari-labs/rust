@@ -21,6 +21,13 @@ use crate::{
 #[path = "delivery_review_validation.rs"]
 mod validation_lineage;
 use validation_lineage::ValidationEvidence;
+#[path = "delivery_paired_recovery.rs"]
+mod paired_recovery;
+use paired_recovery::PairedCompletionEvidence;
+pub(crate) use paired_recovery::{
+    PairedRecoveryInput, PairedRecoveryReaders, VerifiedCompletedPairedResume,
+    VerifiedPairedRecoveryCandidate,
+};
 #[path = "delivery_review_passed.rs"]
 mod passed_lineage;
 pub(crate) use passed_lineage::{PassedValidationSuccessor, verify_validation_successor_admission};
@@ -37,6 +44,7 @@ pub(crate) struct ReviewRoundSource<'a> {
     pub completion: Arc<RunCompletion>,
     pub assignment: &'a ChildReviewAssignment,
     pub validated_retry: Option<Arc<VerifiedPassedValidation>>,
+    pub paired_completion: Option<Arc<VerifiedCompletedPairedResume>>,
 }
 #[derive(Clone)]
 struct SourceEvidence {
@@ -44,6 +52,7 @@ struct SourceEvidence {
     source: DeliverySource,
     claim: Arc<CompletedChildClaim>,
     completion: Arc<RunCompletion>,
+    paired_completion: PairedCompletionEvidence,
 }
 #[derive(Clone)]
 enum RoundBasis {
@@ -135,6 +144,9 @@ impl VerifiedReviewRoundPlan {
         grants: &[VerifiedRetryGrant],
     ) -> Result<()> {
         self.reference.validate()?;
+        self.source
+            .paired_completion
+            .verify_immutable(receipts, grants)?;
         self.verify_passed_current(receipts, grants)?;
         if inventory(receipts, &self.reference)? != self.inventory_digest {
             return Err(blocked("review/source admission inventory changed"));
@@ -199,7 +211,9 @@ impl VerifiedReviewRoundPlan {
             } => {
                 let repair =
                     actual_receipt(receipts, self.source.reference.implementation.operation)?;
-                previous.verify_completed_repair(receipts, grants, repair)?;
+                self.source
+                    .paired_completion
+                    .verify(previous, receipts, grants, repair)?;
                 unfinished.verify_current(receipts, grants)?;
                 validation_source.verify_current(receipts, grants, validation_completion)?;
                 let validation = actual_receipt(receipts, validation_completion.operation_id)?;
@@ -248,8 +262,9 @@ impl VerifiedReviewRoundPlan {
                 repair,
                 advanced,
             } => {
-                paired.verify_terminal_header(receipts, repair, "completed")?;
-                paired.verify_retained_history(receipts, grants)?;
+                self.source
+                    .paired_completion
+                    .verify(paired, receipts, grants, repair)?;
                 advanced.verify_current(receipts, grants)?;
                 if advanced.source_operation() != self.reference.source.implementation.operation
                     || advanced.source_receipt_digest()
@@ -356,6 +371,7 @@ impl VerifiedReviewRoundPlan {
         receipts: &[Receipt],
         grants: &[VerifiedRetryGrant],
         completion: &Arc<RunCompletion>,
+        resumed: Option<&Arc<VerifiedCompletedPairedResume>>,
     ) -> Result<Arc<CompletedReviewRound>> {
         if !self.reference.is_repair() {
             return Err(blocked(
@@ -363,6 +379,11 @@ impl VerifiedReviewRoundPlan {
             ));
         }
         let receipt = actual_receipt(receipts, completion.operation_id)?;
+        if let Some(proof) = resumed {
+            proof.verify_completion(completion)?;
+            proof.verify_retained(self, receipts, grants)?;
+            return self.completed_findings();
+        }
         self.verify_terminal(receipts, grants, receipt, "completed")?;
         require_recorded_session(receipt, completion)?;
         self.verify_contract(
@@ -377,7 +398,19 @@ impl VerifiedReviewRoundPlan {
         &self,
         receipts: &[Receipt],
         operation: Uuid,
+        resumed: Option<&Arc<VerifiedCompletedPairedResume>>,
     ) -> Result<BTreeMap<Uuid, String>> {
+        if let Some(proof) = resumed {
+            if proof.reference().terminal.operation != operation
+                || proof.reference().round_plan_digest != self.digest()
+            {
+                return Err(blocked(
+                    "resumed repair receipt closure changes original plan",
+                ));
+            }
+            proof.verify_receipts(receipts)?;
+            return proof.retained_receipts();
+        }
         let actual = actual_receipt(receipts, operation)?;
         self.verify_terminal_header(receipts, actual, "completed")?;
         let mut retained = self.retained.clone();
@@ -505,6 +538,28 @@ impl VerifiedReviewRoundPlan {
         self.verify_terminal_header(receipts, actual, "completed")?;
         self.verify_retained_history(receipts, grants)
     }
+    /// Verify the actual completed implementation consumed by another scoped
+    /// fix. A resumed implementation retains its real terminal/metadata chain;
+    /// it must not be reinterpreted as the original ordinary paired admission.
+    pub(crate) fn verify_completed_repair_result(
+        &self,
+        receipts: &[Receipt],
+        grants: &[VerifiedRetryGrant],
+        actual: &Receipt,
+        resumed: Option<&Arc<VerifiedCompletedPairedResume>>,
+    ) -> Result<()> {
+        if let Some(proof) = resumed {
+            proof.reference().terminal.matches_observation(actual)?;
+            proof.verify_retained(self, receipts, grants)
+        } else if actual.expected.contains_key("review_round_resume") {
+            Err(Error::new(
+                "reconciliation_required",
+                "resumed repair requires its actual retained completed capability",
+            ))
+        } else {
+            self.verify_completed_repair(receipts, grants, actual)
+        }
+    }
     pub(super) fn completed_findings(&self) -> Result<Arc<CompletedReviewRound>> {
         let mut current = self;
         let mut seen = BTreeSet::new();
@@ -529,50 +584,7 @@ impl VerifiedReviewRoundPlan {
         &self,
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
     ) -> Result<()> {
-        let mut pending = vec![self];
-        let mut seen = BTreeSet::new();
-        while let Some(plan) = pending.pop() {
-            if !seen.insert(plan.digest()) {
-                continue;
-            }
-            if seen.len() > MAX_RECEIPTS {
-                return Err(history_limit());
-            }
-            require_joined(&plan.source.completion, retained)?;
-            if let Some(passed) = &plan.passed_validation {
-                passed.verify_joined(retained)?;
-            }
-            match &plan.basis {
-                RoundBasis::Initial => (),
-                RoundBasis::ExplicitGrant(proof) => {
-                    let actual = retained(proof.predecessor())?
-                        .ok_or_else(|| blocked("grant predecessor is absent from joined cache"))?;
-                    proof.verify_completion(&actual)?;
-                }
-                RoundBasis::Transient {
-                    previous, failed, ..
-                } => {
-                    require_joined(failed, retained)?;
-                    pending.push(previous);
-                }
-                RoundBasis::PairedRepair { findings, .. } => {
-                    require_joined(&findings.completion, retained)?;
-                    pending.push(&findings.plan);
-                }
-                RoundBasis::RepairContinuation {
-                    previous,
-                    validation_source,
-                    validation_completion,
-                    ..
-                } => {
-                    require_joined(validation_completion, retained)?;
-                    validation_source.verify_joined(retained)?;
-                    pending.push(previous);
-                }
-                RoundBasis::AfterRepair { paired, .. } => pending.push(paired),
-            }
-        }
-        Ok(())
+        crate::delivery::lineage::verify_joined(self, retained)
     }
 }
 
@@ -654,13 +666,6 @@ impl CompletedReviewRound {
                 .as_ref()
                 .ok_or_else(|| blocked("completed round lost its actual contract"))?,
         )
-    }
-    pub(crate) fn verify_joined(
-        &self,
-        retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
-    ) -> Result<()> {
-        require_joined(&self.completion, retained)?;
-        self.plan.verify_joined(retained)
     }
     pub(super) fn findings(&self) -> Result<FindingsReference> {
         if self.claim.verdict != evidence::Verdict::Findings
@@ -963,7 +968,9 @@ impl DeliveryCoordinator {
         let source = self.repair_round_source(&request.source).await?;
         let receipts = self.host.operations()?;
         let actual_repair = actual_receipt(&receipts, source.reference.implementation.operation)?;
-        previous.verify_completed_repair(&receipts, grants, actual_repair)?;
+        source
+            .paired_completion
+            .verify(&previous, &receipts, grants, actual_repair)?;
         validation_source.verify_completed_inventory(
             &receipts,
             grants,
@@ -1061,7 +1068,13 @@ impl DeliveryCoordinator {
         {
             return Err(blocked("latest repair differs from actual source receipts"));
         }
+        let paired_completion = PairedCompletionEvidence::from_actual(
+            input.paired_completion.as_ref(),
+            &input.completion,
+            &self.host.operations()?,
+        )?;
         let reference = ReviewedSourceReference {
+            paired_resume: paired_completion.reference(),
             implementation_phase: run.phase,
             implementation: receipt_reference(&implementation)?,
             claim_digest: input.original.digest().into(),
@@ -1085,6 +1098,7 @@ impl DeliveryCoordinator {
             source,
             claim: input.original.clone(),
             completion: input.completion.clone(),
+            paired_completion,
         }))
     }
     pub(crate) async fn after_repair_review_round(
@@ -1105,7 +1119,9 @@ impl DeliveryCoordinator {
         // must not invalidate the earlier failed-validation obligation already
         // consumed by that run. The new source/advanced proof supplies current
         // dispatch freshness, with joined identity retained through the chain.
-        paired.verify_completed_repair(&self.host.operations()?, grants, &repair)?;
+        source
+            .paired_completion
+            .verify(&paired, &self.host.operations()?, grants, &repair)?;
         advanced.verify_assignment(&assignment)?;
         if source.reference.implementation_phase != paired.reference.source.implementation_phase
             || source.reference.tree == paired.reference.source.tree
@@ -1191,7 +1207,13 @@ impl DeliveryCoordinator {
                 "source claim/seal differs from actual protected receipts",
             ));
         }
+        let paired_completion = PairedCompletionEvidence::from_actual(
+            input.paired_completion.as_ref(),
+            &input.completion,
+            &self.host.operations()?,
+        )?;
         let reference = ReviewedSourceReference {
+            paired_resume: paired_completion.reference(),
             implementation_phase: run.phase,
             implementation: receipt_reference(&implementation)?,
             claim_digest: input.claim.digest().into(),
@@ -1216,6 +1238,7 @@ impl DeliveryCoordinator {
                 source,
                 claim: input.claim.clone(),
                 completion: input.completion.clone(),
+                paired_completion,
             }),
             assignment,
         ))
@@ -1323,7 +1346,7 @@ impl DeliveryCoordinator {
                     }
                     retain_exact(&mut retained, id, digest)?;
                 }
-                retain_terminal(
+                source.paired_completion.retain(
                     &mut retained,
                     &receipts,
                     actual_receipt(&receipts, source.reference.implementation.operation)?,
@@ -1354,7 +1377,9 @@ impl DeliveryCoordinator {
             }
             RoundBasis::AfterRepair { paired, repair, .. } => {
                 let mut retained = paired.retained.clone();
-                retain_terminal(&mut retained, &receipts, repair)?;
+                source
+                    .paired_completion
+                    .retain(&mut retained, &receipts, repair)?;
                 (retained, paired.grant.clone())
             }
         };
@@ -1809,5 +1834,436 @@ impl CompletedReviewLineage {
             Self::Legacy(p) => p.verify_current(receipts, grants),
             Self::Round(p) => p.verify_current(receipts, grants),
         }
+    }
+}
+
+impl CompletedReviewRound {
+    pub(crate) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        self.plan.verify_resumed_bridges(reader)
+    }
+}
+pub(super) fn merge_resumed_bridges(
+    result: &mut BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>,
+    values: BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>,
+) -> Result<()> {
+    for (id, value) in values {
+        if id.is_nil() || id != value.bridge().next_operation() {
+            return Err(blocked("resumed bridge operation changed"));
+        }
+        if let Some(old) = result.get(&id) {
+            if !Arc::ptr_eq(old, &value) {
+                return Err(blocked(
+                    "resumed bridge identity conflicts across actual ancestors",
+                ));
+            }
+        } else {
+            result.insert(id, value);
+        }
+        if result.len() > MAX_RECEIPTS {
+            return Err(history_limit());
+        }
+    }
+    Ok(())
+}
+pub(super) fn verify_resumed_inventory(
+    values: BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>,
+    reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+) -> Result<()> {
+    for (id, expected) in values {
+        if reader(id)?
+            .as_ref()
+            .is_none_or(|actual| !Arc::ptr_eq(actual, &expected))
+        {
+            return Err(blocked("actual admitted resumed bridge is unavailable"));
+        }
+    }
+    Ok(())
+}
+
+impl VerifiedReviewRoundPlan {
+    pub(crate) fn retained_source_inventory(&self) -> Result<Vec<DeliverySource>> {
+        Ok(crate::delivery::lineage::collect(self)?
+            .sources
+            .into_values()
+            .collect())
+    }
+}
+pub(super) fn merge_source_inventory(
+    into: &mut BTreeMap<String, DeliverySource>,
+    sources: Vec<DeliverySource>,
+) -> Result<()> {
+    for source in sources {
+        into.entry(source.digest()?).or_insert(source);
+        if into.len() > MAX_RECEIPTS {
+            return Err(history_limit());
+        }
+    }
+    Ok(())
+}
+
+// Native grants are actual retained capabilities. Whole local receipt hashes
+// alone cannot preserve their current native publication and unique namespace.
+pub(super) fn merge_native_grants(
+    into: &mut BTreeMap<Uuid, VerifiedRetryGrant>,
+    values: impl IntoIterator<Item = VerifiedRetryGrant>,
+) -> Result<()> {
+    for grant in values {
+        let operation = grant.record().operation_id;
+        if operation.is_nil() {
+            return Err(blocked("retained native grant has no operation"));
+        }
+        if let Some(prior) = into.get(&operation) {
+            if native_grant_identity(prior)? != native_grant_identity(&grant)? {
+                return Err(blocked(
+                    "one native grant operation has conflicting retained identities",
+                ));
+            }
+        } else {
+            into.insert(operation, grant);
+            if into.len() > MAX_RECEIPTS {
+                return Err(history_limit());
+            }
+        }
+    }
+    Ok(())
+}
+fn native_grant_identity(grant: &VerifiedRetryGrant) -> Result<String> {
+    let publication = grant.provenance();
+    canonical_digest(
+        1,
+        &json!({"record":grant.record(),"signed_digest":grant.digest(),
+        "provider":publication.provider,"record_id":publication.record_id,
+        "writer":publication.writer_account_id,"payload":publication.payload_digest}),
+    )
+}
+/// Complete only actual predecessor namespaces named by authentic opaque seeds.
+/// This captures prior explicit grants rather than silently trusting the latest
+/// grant's reference to an operation after the original plan is flattened.
+pub(super) fn close_native_grants(
+    seeds: BTreeMap<Uuid, VerifiedRetryGrant>,
+    current: &[VerifiedRetryGrant],
+) -> Result<BTreeMap<Uuid, VerifiedRetryGrant>> {
+    if current.len() > MAX_RECEIPTS || seeds.len() > MAX_RECEIPTS {
+        return Err(history_limit());
+    }
+    let mut result = seeds;
+    let mut pending = result.keys().copied().collect::<Vec<_>>();
+    let mut seen = BTreeSet::new();
+    let mut namespaces = BTreeMap::<PhaseKey, usize>::new();
+    let mut operations = BTreeMap::<Uuid, Vec<&VerifiedRetryGrant>>::new();
+    for grant in current {
+        *namespaces.entry(grant.phase().clone()).or_default() += 1;
+        operations
+            .entry(grant.record().operation_id)
+            .or_default()
+            .push(grant);
+    }
+    while let Some(operation) = pending.pop() {
+        if !seen.insert(operation) {
+            continue;
+        }
+        if seen.len() > MAX_RECEIPTS {
+            return Err(history_limit());
+        }
+        let grant = result.get(&operation).expect("queued actual grant").clone();
+        let observed = operations
+            .get(&operation)
+            .filter(|values| values.len() == 1)
+            .and_then(|values| values.first())
+            .copied()
+            .ok_or_else(|| blocked("retained native grant publication is missing or ambiguous"))?;
+        crate::runtime_workflow::require_current_grant(&grant, std::slice::from_ref(observed))?;
+        if native_grant_identity(&grant)? != native_grant_identity(observed)? {
+            return Err(blocked(
+                "retained native grant publication changed its exact identity",
+            ));
+        }
+        if namespaces.get(grant.phase()) != Some(&1) {
+            return Err(blocked("retained native grant namespace is ambiguous"));
+        }
+        let Some(prior_operation) = grant.phase().retry_grant else {
+            continue;
+        };
+        let prior = operations
+            .get(&prior_operation)
+            .filter(|values| values.len() == 1)
+            .and_then(|values| values.first())
+            .copied()
+            .ok_or_else(|| blocked("retained native grant predecessor is missing or ambiguous"))?;
+        if prior.phase_key() != *grant.phase()
+            || prior.work() != grant.work()
+            || prior.record().runtime_id != grant.record().runtime_id
+            || prior.record().workspace_id != grant.record().workspace_id
+        {
+            return Err(blocked(
+                "retained native grants cross exact work or predecessor namespace",
+            ));
+        }
+        let new = !result.contains_key(&prior_operation);
+        merge_native_grants(&mut result, [prior.clone()])?;
+        if new {
+            pending.push(prior_operation);
+        }
+    }
+    validate_native_grant_edges(
+        &result
+            .iter()
+            .map(|(id, grant)| (*id, grant.phase().retry_grant))
+            .collect(),
+    )?;
+    Ok(result)
+}
+
+/// Data-only graph validation shared with the actual opaque collector. Complete
+/// paths are memoized, so shared tails and long histories remain iterative.
+fn validate_native_grant_edges(edges: &BTreeMap<Uuid, Option<Uuid>>) -> Result<()> {
+    if edges.len() > MAX_RECEIPTS {
+        return Err(history_limit());
+    }
+    let mut settled = BTreeSet::new();
+    for start in edges.keys() {
+        if settled.contains(start) {
+            continue;
+        }
+        let mut path = BTreeSet::new();
+        let mut cursor = Some(*start);
+        while let Some(operation) = cursor {
+            if settled.contains(&operation) {
+                break;
+            }
+            if !path.insert(operation) {
+                return Err(blocked("retained native grant ancestry cycles"));
+            }
+            cursor = *edges.get(&operation).ok_or_else(|| {
+                blocked("retained native grant ancestry omits a referenced operation")
+            })?;
+        }
+        settled.extend(path);
+    }
+    Ok(())
+}
+
+impl crate::delivery::lineage::Node for VerifiedReviewRoundPlan {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        leaves.sources([self.source.source.clone()])?;
+        leaves.grants(
+            self.grant
+                .iter()
+                .cloned()
+                .chain(self.validation_grants.values().cloned()),
+        )?;
+        leaves.joined(1)?;
+        children.push(&self.source.paired_completion);
+        if let Some(passed) = &self.passed_validation {
+            children.push(passed.as_ref());
+        }
+        match &self.basis {
+            RoundBasis::Initial => (),
+            RoundBasis::ExplicitGrant(proof) => {
+                leaves.grants([proof.grant().clone()])?;
+                leaves.joined(1)?;
+            }
+            RoundBasis::Transient { previous, .. } => {
+                children.push(previous.as_ref());
+                leaves.joined(1)?;
+            }
+            RoundBasis::PairedRepair {
+                findings,
+                unfinished,
+            } => {
+                children.push(findings.as_ref());
+                children.push(unfinished.as_ref());
+            }
+            RoundBasis::RepairContinuation {
+                previous,
+                unfinished,
+                validation_source,
+                ..
+            } => {
+                children.push(previous.as_ref());
+                children.push(unfinished.as_ref());
+                children.push(validation_source);
+                leaves.joined(1)?;
+            }
+            RoundBasis::AfterRepair {
+                paired, advanced, ..
+            } => {
+                children.push(paired.as_ref());
+                children.push(advanced.as_ref());
+            }
+        }
+        Ok(())
+    }
+    fn verify_joined_leaf(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        require_joined(&self.source.completion, &|id| reader(id))?;
+        match &self.basis {
+            RoundBasis::ExplicitGrant(proof) => {
+                let actual = reader(proof.predecessor())?
+                    .ok_or_else(|| blocked("grant predecessor is absent from joined cache"))?;
+                proof.verify_completion(&actual)?;
+            }
+            RoundBasis::Transient { failed, .. } => require_joined(failed, &|id| reader(id))?,
+            RoundBasis::RepairContinuation {
+                validation_completion,
+                ..
+            } => require_joined(validation_completion, &|id| reader(id))?,
+            _ => (),
+        }
+        Ok(())
+    }
+}
+impl crate::delivery::lineage::Node for CompletedReviewRound {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        children.push(self.plan.as_ref());
+        leaves.joined(1)
+    }
+    fn verify_joined_leaf(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        require_joined(&self.completion, &|id| reader(id))
+    }
+}
+impl crate::delivery::lineage::Node for CompletedReviewLineage {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        _leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        match self {
+            Self::Round(p) => children.push(p.as_ref()),
+            #[cfg(test)]
+            Self::Legacy(_) => _leaves.legacy_grant_missing = true,
+        }
+        Ok(())
+    }
+}
+
+impl VerifiedReviewRoundPlan {
+    pub(crate) fn resumed_bridge_inventory(
+        &self,
+    ) -> Result<BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>> {
+        Ok(crate::delivery::lineage::collect(self)?.bridges)
+    }
+    pub(crate) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        verify_resumed_inventory(self.resumed_bridge_inventory()?, reader)
+    }
+    pub(crate) fn retained_native_grants(&self) -> Result<BTreeMap<Uuid, VerifiedRetryGrant>> {
+        crate::delivery::lineage::collect(self)?.into_grants()
+    }
+}
+impl CompletedReviewRound {
+    pub(crate) fn verify_joined(
+        &self,
+        retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        crate::delivery::lineage::verify_joined(self, retained)
+    }
+}
+
+impl VerifiedReviewRoundPlan {
+    fn detach_lineage_for_drop(&mut self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        if let Some(passed) = self.passed_validation.take() {
+            pending.push(passed);
+        }
+        // Inert only during destruction; no caller can observe this replacement
+        // or obtain a newly usable Initial capability from it.
+        match std::mem::replace(&mut self.basis, RoundBasis::Initial) {
+            RoundBasis::Initial | RoundBasis::ExplicitGrant(_) => (),
+            RoundBasis::Transient { previous, .. } => pending.push(previous),
+            RoundBasis::PairedRepair {
+                findings,
+                unfinished,
+            } => {
+                pending.push(findings);
+                pending.push(unfinished);
+            }
+            RoundBasis::RepairContinuation {
+                previous,
+                unfinished,
+                validation_source,
+                ..
+            } => {
+                pending.push(previous);
+                pending.push(unfinished);
+                crate::delivery::lineage_drop::Release::release(validation_source, pending);
+            }
+            RoundBasis::AfterRepair {
+                paired, advanced, ..
+            } => {
+                pending.push(paired);
+                pending.push(advanced);
+            }
+        }
+    }
+}
+impl Drop for VerifiedReviewRoundPlan {
+    fn drop(&mut self) {
+        crate::delivery::lineage_drop::drain(|pending| self.detach_lineage_for_drop(pending));
+    }
+}
+impl crate::delivery::lineage_drop::Release for VerifiedReviewRoundPlan {
+    fn release(mut self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        self.detach_lineage_for_drop(pending);
+        // Drop now observes only the inert basis and detached optional edge.
+    }
+}
+impl crate::delivery::lineage_drop::Release for CompletedReviewRound {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        pending.push(self.plan);
+    }
+}
+impl crate::delivery::lineage_drop::Release for CompletedReviewLineage {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        match self {
+            Self::Round(p) => pending.push(p),
+            #[cfg(test)]
+            Self::Legacy(_) => (),
+        }
+    }
+}
+
+#[cfg(test)]
+mod retained_grant_edges_tests {
+    use super::*;
+    #[test]
+    fn retained_native_grant_edges_are_bounded_iterative_and_complete() {
+        // Plain dependency edges only; this creates no VerifiedRetryGrant.
+        let mut edges = BTreeMap::new();
+        for ordinal in 1..=MAX_RECEIPTS {
+            edges.insert(
+                Uuid::from_u128(ordinal as u128),
+                (ordinal > 1).then(|| Uuid::from_u128((ordinal - 1) as u128)),
+            );
+        }
+        validate_native_grant_edges(&edges).unwrap();
+        edges.insert(Uuid::from_u128((MAX_RECEIPTS + 1) as u128), None);
+        assert!(validate_native_grant_edges(&edges).is_err());
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        validate_native_grant_edges(&BTreeMap::from([(a, None), (b, Some(a)), (c, Some(a))]))
+            .unwrap();
+        assert!(
+            validate_native_grant_edges(&BTreeMap::from([(a, Some(b)), (b, Some(a))])).is_err()
+        );
+        assert!(validate_native_grant_edges(&BTreeMap::from([(a, Some(b))])).is_err());
     }
 }

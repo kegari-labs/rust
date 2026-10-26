@@ -50,6 +50,7 @@ struct Candidate {
     records: PathBuf,
     key: String,
     model_operation: Uuid,
+    paired: Option<Arc<crate::delivery::VerifiedPairedRecoveryCandidate>>,
 }
 pub(super) struct RecoveryEntry {
     candidate: Candidate,
@@ -89,8 +90,8 @@ struct RecoveryStageContext<'a> {
 }
 
 impl RuntimeCoordinator {
-    /// Only the normal implementation selector participates. Delivery-owned
-    /// validation/review/parent phases require their own stage-aware integration.
+    /// Implementation recovery preserves ordinary or actual registered paired
+    /// causes. Validation/review/parent phases require their own stage integration.
     pub(crate) fn ready_session_recoveries(&self) -> Result<Vec<SessionRecoveryAction>> {
         let completed = self
             .state
@@ -241,16 +242,65 @@ impl RuntimeCoordinator {
             ));
         }
         let config = Arc::new(self.configuration.snapshot()?);
-        let key = canonical_digest(
-            1,
-            &json!({"predecessor":previous.operation_id,"candidate":retained.digest(),"receipt":retained.admission_digest(),"config":config.revision()?,"contract":contract.scope_digest()}),
-        )?;
+        let paired = if let Some(plan) = self.retained_review_round(previous.operation_id)? {
+            let current = self.current_admission_authority(contract.authority())?;
+            let WorkerAuthority::Authorized(current) = &current else {
+                return Err(incompatible(
+                    "paired recovery requires current child authority",
+                ));
+            };
+            let receipts = self.control.operations()?;
+            let grants = crate::runtime_workflow::current_retry_grants(
+                &config,
+                &self.observations.admission_snapshot()?,
+                current.work(),
+                &receipts,
+                &self.services.key,
+            )?;
+            let current_gate = |gate: &crate::reconcile::FreshGate| {
+                let expected = WorkerAuthority::Authorized(gate.clone());
+                expected.compare(&self.current_admission_authority(&expected)?)
+            };
+            let joined = |id| self.retained_completion(id);
+            let resumed = |id| self.retained_session_resume(id);
+            Some(Arc::new(
+                crate::delivery::VerifiedPairedRecoveryCandidate::observe(
+                    &self.control,
+                    crate::delivery::PairedRecoveryInput {
+                        plan,
+                        failed: previous.clone(),
+                        protected: retained.clone(),
+                        current,
+                        config: &config,
+                        grants: &grants,
+                    },
+                    &crate::delivery::PairedRecoveryReaders {
+                        current_gate: &current_gate,
+                        joined: &joined,
+                        resumed: &resumed,
+                    },
+                )?,
+            ))
+        } else {
+            if receipt.expected.contains_key("review_round") {
+                return Err(incompatible(
+                    "round recovery lost its actual registered plan",
+                ));
+            }
+            None
+        };
+        let mut identity = json!({"predecessor":previous.operation_id,"candidate":retained.digest(),"receipt":retained.admission_digest(),"config":config.revision()?,"contract":contract.scope_digest()});
+        if let Some(paired) = &paired {
+            identity["paired_recovery"] = json!(paired.digest());
+        }
+        let key = canonical_digest(1, &identity)?;
         Ok(Candidate {
             previous,
             retained,
             config,
             records,
             model_operation: recovery_id(&key, "model")?,
+            paired,
             key,
         })
     }
@@ -341,6 +391,12 @@ impl RuntimeCoordinator {
             limits.max_review_rounds = limits
                 .max_review_rounds
                 .min(grant.new_budget().max_review_rounds);
+        }
+        if let Some(paired) = &candidate.paired {
+            self.verify_paired_recovery(paired, gate, &config, &receipts, &grants)?;
+            if let Some(provider) = provider {
+                paired.verify_provider(provider, &receipts)?;
+            }
         }
         let model = recovery_model_plan(
             self.runtime_id,
@@ -501,31 +557,40 @@ impl RuntimeCoordinator {
                 if provider.is_some() || attempt != plan.metadata_attempt {
                     return Err(incompatible("provider metadata stage changed"));
                 }
-                let launch = RecoveryProviderLaunch::admit_checked(
-                    RecoveryPreparation {
-                        config: candidate.config.clone(),
-                        contract: contract.clone(),
-                        candidate: candidate.retained.clone(),
-                        records: PrivateDir::open(&candidate.records)?,
-                        lease: lease.clone(),
-                        control: self.control.clone(),
-                        host: self.clone(),
-                        processes,
-                        executions: self.executions.clone(),
-                        timeout: std::time::Duration::from_millis(
-                            candidate.config.runtime.request_timeout_ms.min(300_000),
-                        ),
-                        attempt,
-                        max_attempts: plan.metadata_cap,
-                    },
-                    |snapshot| {
-                        running(snapshot)?;
-                        self.verify_owner(lease)?;
-                        let current = self.plan_recovery_candidate(candidate, None, snapshot)?;
-                        require_plan(&plan, &current)?;
-                        Ok(())
-                    },
-                )?;
+                let preparation = RecoveryPreparation {
+                    config: candidate.config.clone(),
+                    contract: contract.clone(),
+                    candidate: candidate.retained.clone(),
+                    records: PrivateDir::open(&candidate.records)?,
+                    lease: lease.clone(),
+                    control: self.control.clone(),
+                    host: self.clone(),
+                    processes,
+                    executions: self.executions.clone(),
+                    timeout: std::time::Duration::from_millis(
+                        candidate.config.runtime.request_timeout_ms.min(300_000),
+                    ),
+                    attempt,
+                    max_attempts: plan.metadata_cap,
+                };
+                let current = |snapshot: &ControlSnapshot| {
+                    running(snapshot)?;
+                    self.verify_owner(lease)?;
+                    let current = self.plan_recovery_candidate(candidate, None, snapshot)?;
+                    require_plan(&plan, &current)?;
+                    Ok(())
+                };
+                let launch = match &candidate.paired {
+                    Some(paired) => RecoveryProviderLaunch::admit_round_checked(
+                        preparation,
+                        crate::control::RoundRecoveryProvenance {
+                            round: paired.plan().reference().clone(),
+                            recovery: paired.provenance().clone(),
+                        },
+                        current,
+                    )?,
+                    None => RecoveryProviderLaunch::admit_checked(preparation, current)?,
+                };
                 if launch.operation_id() != action.operation {
                     return Err(incompatible("metadata preparation identity changed"));
                 }
@@ -598,33 +663,51 @@ impl RuntimeCoordinator {
                     source.ok_or_else(|| incompatible("resume has no actual source proof"))?;
                 source.revalidate_filesystem()?;
                 let reference = candidate.retained.reference();
-                crate::runtime_workers::prepare_resumed(
-                    self.clone(),
-                    LaunchRequest {
-                        lease: lease.clone(),
-                        operation_id: candidate.model_operation,
-                        authority: plan.authority,
-                        phase: reference.phase.clone(),
-                        source: Some(SourceSelection {
-                            repository: execution.binding.repository.id.clone(),
-                            revision: execution.binding.revision.clone(),
-                        }),
-                        delivery: None,
-                        unfinished: None,
-                        source_advanced: None,
-                        retried_unfinished: None,
-                        validation_retry: None,
-                        review_retry: None,
-                        review_round: None,
-                        max_seconds: worker_seconds,
-                        max_turns: plan.model.max_turns,
-                    },
-                    candidate.previous.operation_id,
-                    provider.clone(),
-                    source.clone(),
-                )
-                .await?
-                .run()?;
+                let request = LaunchRequest {
+                    lease: lease.clone(),
+                    operation_id: candidate.model_operation,
+                    authority: plan.authority,
+                    phase: reference.phase.clone(),
+                    source: Some(SourceSelection {
+                        repository: execution.binding.repository.id.clone(),
+                        revision: execution.binding.revision.clone(),
+                    }),
+                    delivery: candidate
+                        .paired
+                        .as_ref()
+                        .map(|paired| paired.plan().assignment().clone()),
+                    unfinished: None,
+                    source_advanced: None,
+                    retried_unfinished: None,
+                    validation_retry: None,
+                    review_retry: None,
+                    review_round: None,
+                    max_seconds: worker_seconds,
+                    max_turns: plan.model.max_turns,
+                };
+                let worker = match &candidate.paired {
+                    Some(paired) => {
+                        crate::runtime_workers::prepare_paired_resumed(
+                            self.clone(),
+                            request,
+                            provider.clone(),
+                            source.clone(),
+                            paired.clone(),
+                        )
+                        .await?
+                    }
+                    None => {
+                        crate::runtime_workers::prepare_resumed(
+                            self.clone(),
+                            request,
+                            candidate.previous.operation_id,
+                            provider.clone(),
+                            source.clone(),
+                        )
+                        .await?
+                    }
+                };
+                worker.run()?;
                 Ok(StageProof::Model)
             }
         }

@@ -40,7 +40,19 @@ impl RuntimeCoordinator {
                     "worker already has another resume origin",
                 ));
             }
+            if state.admitted_resumes.len() >= 65_536
+                && !state.admitted_resumes.contains_key(&permit.operation_id)
+            {
+                return Err(Error::new(
+                    "record_limit",
+                    "retained admitted resume inventory exceeds its bound",
+                ));
+            }
             state.resume_proofs.insert(permit.operation_id, digest);
+            state
+                .admitted_resumes
+                .entry(permit.operation_id)
+                .or_insert_with(|| Arc::new(resume.clone()));
             Ok(())
         })
     }

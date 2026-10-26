@@ -24,7 +24,7 @@ impl RunResumeReference {
     pub fn recovery_digest(&self) -> &str {
         &self.recovery_digest
     }
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if self.predecessor.is_nil() {
             return Err(Error::new(
                 "record_corrupt",
@@ -42,18 +42,24 @@ impl RunResumeReference {
         Ok(())
     }
     pub fn from_receipt(receipt: &Receipt) -> Result<Option<Self>> {
+        let paired = ReviewRoundResumeReference::from_model_receipt(receipt)?;
         let Some(encoded) = receipt.expected.get("session_resume") else {
             return Ok(None);
         };
         let value: Self = serde_json::from_str(encoded)
             .map_err(|_| Error::new("record_corrupt", "invalid session resume reference"))?;
         value.validate()?;
+        if paired.is_some() {
+            return Ok(Some(value));
+        }
         let run = RunReference::from_receipt(receipt)?
             .ok_or_else(|| Error::new("record_corrupt", "session resume is not an admitted run"))?;
         if run.attempt < 2
             || receipt.operation_id == value.predecessor
             || value.review_rounds_consumed > run.max_review_rounds
             || [
+                "review_round_recovery",
+                "review_round_resume",
                 "review_round",
                 "review_round_preparation",
                 "metadata",
@@ -111,9 +117,20 @@ impl ControlHost {
         resume: &RunResumeReference,
         history: &BTreeMap<u32, Receipt>,
     ) -> Result<()> {
-        if history
-            .values()
-            .any(|receipt| receipt.expected.contains_key("review_round"))
+        self.verify_run_resume_accounting(snapshot, run, resume, history, None)
+    }
+    pub(super) fn verify_run_resume_accounting(
+        &self,
+        snapshot: &ControlSnapshot,
+        run: &RunReference,
+        resume: &RunResumeReference,
+        history: &BTreeMap<u32, Receipt>,
+        paired: Option<&RoundRecoveryContext>,
+    ) -> Result<()> {
+        if paired.is_none()
+            && history
+                .values()
+                .any(|receipt| receipt.expected.contains_key("review_round"))
         {
             return Err(Error::new(
                 "review_round_required",
@@ -173,7 +190,7 @@ impl ControlHost {
             || run.max_turns > caps.1
             || run.max_review_rounds > caps.2
             || resume.review_rounds_consumed < consumed_rounds
-            || resume.review_rounds_consumed > caps.2
+            || (paired.is_none() && resume.review_rounds_consumed > caps.2)
         {
             return Err(Error::new(
                 "attempts_exhausted",

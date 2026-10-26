@@ -4656,6 +4656,12 @@ pub(crate) use production_release::tests::{
 #[path = "delivery_objects.rs"]
 mod objects;
 
+#[path = "delivery_lineage_drop.rs"]
+mod lineage_drop;
+
+#[path = "delivery_lineage.rs"]
+mod lineage;
+
 #[path = "delivery_continuation.rs"]
 mod continuation;
 pub use continuation::*;
@@ -4678,6 +4684,7 @@ pub use review_retry::{ReviewRetryRequest, ReviewRetryWork};
 mod review_round;
 pub use review_round::VerifiedReviewRoundPlan;
 pub(crate) use review_round::{
-    CompletedReviewLineage, CompletedReviewRound, PassedValidationSuccessor, ReviewRoundSource,
-    verify_validation_successor_admission,
+    CompletedReviewLineage, CompletedReviewRound, PairedRecoveryInput, PairedRecoveryReaders,
+    PassedValidationSuccessor, ReviewRoundSource, VerifiedCompletedPairedResume,
+    VerifiedPairedRecoveryCandidate, verify_validation_successor_admission,
 };

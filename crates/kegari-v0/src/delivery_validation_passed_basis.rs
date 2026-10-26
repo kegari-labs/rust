@@ -18,6 +18,17 @@ pub(super) struct CompletedSourceValidation {
     digest: String,
 }
 impl PassedValidationBasis {
+    pub(super) fn resumed_bridge_inventory(
+        &self,
+    ) -> Result<BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>> {
+        Ok(crate::delivery::lineage::collect(self)?.bridges)
+    }
+    pub(super) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        verify_resumed_bridge_inventory(self.resumed_bridge_inventory()?, reader)
+    }
     pub(super) fn digest(&self) -> &str {
         match self {
             Self::Retried(p) => p.digest(),
@@ -116,13 +127,7 @@ impl PassedValidationBasis {
         &self,
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
     ) -> Result<()> {
-        match self {
-            Self::Retried(p) => p.verify_joined(retained),
-            Self::SourceAdvanced(p) => {
-                p.advanced.verify_joined(retained)?;
-                source_lineage::require_joined(&p.completion, retained)
-            }
-        }
+        crate::delivery::lineage::verify_joined(self, retained)
     }
     pub(super) fn retained_receipts(
         &self,
@@ -209,6 +214,7 @@ impl DeliveryCoordinator {
         let (receipts, grants) = current_inputs(runtime, advanced.authority())?;
         advanced.verify_completed_inventory(&receipts, &grants, completion.operation_id)?;
         advanced.verify_joined(&|id| runtime.retained_completion(id))?;
+        advanced.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))?;
         source_lineage::require_joined(&completion, &|id| runtime.retained_completion(id))?;
         let receipt = unique_receipt(&receipts, completion.operation_id)?;
         let reference = RunReference::from_receipt(receipt)?
@@ -239,5 +245,49 @@ impl DeliveryCoordinator {
         }));
         self.passed_validation(source, workflow, basis, local, runtime)
             .await
+    }
+}
+
+impl crate::delivery::lineage::Node for PassedValidationBasis {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        _leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        match self {
+            Self::Retried(p) => children.push(p.as_ref()),
+            Self::SourceAdvanced(p) => children.push(p.as_ref()),
+        }
+        Ok(())
+    }
+}
+impl crate::delivery::lineage::Node for CompletedSourceValidation {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        children.push(self.advanced.as_ref());
+        leaves.joined(1)
+    }
+    fn verify_joined_leaf(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        source_lineage::require_joined(&self.completion, &|id| reader(id))
+    }
+}
+
+impl crate::delivery::lineage_drop::Release for PassedValidationBasis {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        match self {
+            Self::Retried(p) => pending.push(p),
+            Self::SourceAdvanced(p) => pending.push(p),
+        }
+    }
+}
+impl crate::delivery::lineage_drop::Release for CompletedSourceValidation {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        pending.push(self.advanced);
     }
 }

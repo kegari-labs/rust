@@ -458,6 +458,8 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
             review_history: vec![],
             review_round_digest: None,
             paired_round_digest: None,
+            paired_completion_digest: None,
+            paired_completion_origin: None,
             observed_at: Utc::now(),
             error: None,
         },
@@ -488,6 +490,7 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
         review_retry: Some(proof.clone()),
         review_round: None,
         paired_round: None,
+        paired_completion: None,
     };
     f.service.persist_child(&child).unwrap();
     let operations_before =

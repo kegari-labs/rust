@@ -182,6 +182,52 @@ impl EnrolledDirectoryReuse {
         }
         Ok(())
     }
+    /// Observe an already completed enrollment after legitimate source edits or
+    /// later family enrollment. This grants no source reuse or launch authority;
+    /// the ordinary revalidate path above still requires its exact clean snapshot.
+    pub(crate) fn verify_retained_admission(
+        &self,
+        observed: &crate::control::Receipt,
+    ) -> Result<()> {
+        let current = self.housekeeping.registration(self.operation_id())?;
+        let family = self
+            .housekeeping
+            .directory_family(&current)?
+            .ok_or_else(|| Error::new("record_corrupt", "retained enrollment lost its family"))?;
+        let actual = self.housekeeping.control.operation(self.operation_id())?;
+        let resume =
+            crate::control::RunResumeReference::from_receipt(&actual)?.ok_or_else(|| {
+                Error::new(
+                    "record_corrupt",
+                    "retained enrollment lost its resume admission",
+                )
+            })?;
+        let members = family
+            .registrations
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if actual.phase != crate::control::ReceiptPhase::Reconciled
+            || canonical_digest(1, &actual)? != canonical_digest(1, observed)?
+            || current.binding != self.registration.binding
+            || current.family_id != self.registration.family_id
+            || current.marker != self.registration.marker
+            || current.directory_digest != self.registration.directory_digest
+            || current.workflow_path != self.registration.workflow_path
+            || current.workflow_digest != self.registration.workflow_digest
+            || canonical_digest(1, &current.isolation)?
+                != canonical_digest(1, &self.registration.isolation)?
+            || !self.members.is_subset(&members)
+            || canonical_digest(1, &actual.expected)? != self.admission_digest
+            || canonical_digest(1, &resume)? != self.resume_digest
+        {
+            return Err(Error::new(
+                "stale_result",
+                "retained enrollment identity, membership or admission changed",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for VerifiedDirectoryReuse {

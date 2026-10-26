@@ -25,6 +25,7 @@ fn repair_request<'a>(
 ) -> ReviewRepairRequest<'a> {
     ReviewRepairRequest {
         source: RepairSource {
+            paired_completion: None,
             admission: &phase.admission,
             original: f.original_claim.clone(),
             source: f.source_proof,
@@ -302,6 +303,7 @@ pub(super) async fn run(
     let lineage = proof.granted_review().unwrap();
     let request = || SourceAdvancedRequest {
         source: RepairSource {
+            paired_completion: None,
             admission: &review_phase.admission,
             original: claim.clone(),
             source: &changed,

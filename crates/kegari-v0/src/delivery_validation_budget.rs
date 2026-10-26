@@ -24,6 +24,7 @@ pub(super) struct ValidationBudgetLineage {
     reference: RunReference,
     retained: BTreeMap<Uuid, String>,
     joined: BTreeMap<Uuid, Arc<RunCompletion>>,
+    bridges: BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>,
     sources: Vec<DeliverySource>,
     grants: Vec<VerifiedRetryGrant>,
     implementation_inventory: String,
@@ -180,6 +181,7 @@ impl DeliveryCoordinator {
             &receipts,
             grants,
             &request.source.completion,
+            request.source.paired_completion.as_ref(),
         )?;
         paired.verify_joined(&|id| runtime.retained_completion(id))?;
         require_joined(&request.source.completion, runtime)?;
@@ -195,6 +197,36 @@ impl DeliveryCoordinator {
                 "changed-source validation has no existing granted budget",
             ));
         }
+        let mut bridges = paired.resumed_bridge_inventory()?;
+        if let Some(proof) = &request.source.paired_completion {
+            review_round::merge_resumed_bridges(&mut bridges, proof.resumed_bridge_inventory()?)?;
+        }
+        let prior_bridges = match &basis {
+            ValidationAdvanceBasis::Passed(p) => p.resumed_bridge_inventory()?,
+            ValidationAdvanceBasis::FailedChecks(p) => p.resumed_bridge_inventory()?,
+            ValidationAdvanceBasis::Advanced { previous, .. } => {
+                previous.resumed_bridge_inventory()?
+            }
+        };
+        review_round::merge_resumed_bridges(&mut bridges, prior_bridges)?;
+        review_round::verify_resumed_inventory(bridges.clone(), &|id| {
+            runtime.retained_session_resume(id)
+        })?;
+        let mut native = paired.retained_native_grants()?;
+        if let Some(proof) = &request.source.paired_completion {
+            review_round::merge_native_grants(
+                &mut native,
+                proof.retained_native_grants()?.into_values(),
+            )?;
+        }
+        let prior_native = match &basis {
+            ValidationAdvanceBasis::Passed(p) => p.retained_native_grants()?,
+            ValidationAdvanceBasis::FailedChecks(p) => p.retained_native_grants()?,
+            ValidationAdvanceBasis::Advanced { previous, .. } => {
+                previous.retained_native_grants()?
+            }
+        };
+        review_round::merge_native_grants(&mut native, prior_native.into_values())?;
         let (evidence_digest, passed_checks, mut retained, mut sources) = match basis {
             ValidationAdvanceBasis::Passed(passed) => {
                 if paired.reference().passed_validation.as_ref() != Some(passed.reference())
@@ -338,9 +370,11 @@ impl DeliveryCoordinator {
             &mut retained,
             actual(&receipts, current_grant.record().operation_id)?,
         )?;
-        for (id, digest) in
-            paired.retained_repair_receipts(&receipts, request.source.completion.operation_id)?
-        {
+        for (id, digest) in paired.retained_repair_receipts(
+            &receipts,
+            request.source.completion.operation_id,
+            request.source.paired_completion.as_ref(),
+        )? {
             insert(&mut retained, id, digest)?;
         }
         let seal = actual(&receipts, request.source.source.receipt().operation_id)?;
@@ -358,12 +392,12 @@ impl DeliveryCoordinator {
             &reference,
             &retained,
         )?;
-        let mut native = Vec::new();
-        for grant in grants {
-            if retained.contains_key(&grant.record().operation_id) {
-                native.push(grant.clone());
-            }
+        review_round::merge_native_grants(&mut native, [current_grant.clone()])?;
+        let native = review_round::close_native_grants(native, grants)?;
+        for id in native.keys() {
+            retain(&mut retained, actual(&receipts, *id)?)?;
         }
+        let native = native.into_values().collect::<Vec<_>>();
         let mut joined = BTreeMap::new();
         for id in retained.keys() {
             let receipt = actual(&receipts, *id)?;
@@ -408,6 +442,7 @@ impl DeliveryCoordinator {
             reference,
             retained,
             joined,
+            bridges,
             sources,
             grants: native,
             implementation_inventory,
@@ -415,6 +450,7 @@ impl DeliveryCoordinator {
             digest,
         });
         lineage.verify_current(&receipts, grants, false)?;
+        lineage.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))?;
         let proof = self
             .source_advanced_inner(
                 request,
@@ -433,6 +469,7 @@ impl DeliveryCoordinator {
         (self.current_gate)(proof.authority())?;
         proof.verify_current(&fresh_receipts, &fresh_grants)?;
         proof.verify_joined(&|id| runtime.retained_completion(id))?;
+        proof.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))?;
         Ok(proof)
     }
 }
@@ -567,3 +604,32 @@ fn verify_accounted_validation_history(
 #[cfg(test)]
 #[path = "delivery_validation_budget_tests.rs"]
 mod tests;
+
+impl crate::delivery::lineage::Node for ValidationBudgetLineage {
+    fn expand<'a>(
+        &'a self,
+        _children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        leaves.sources(self.sources.iter().cloned())?;
+        leaves.grants(self.grants.iter().cloned())?;
+        leaves.bridges(&self.bridges)?;
+        leaves.joined(self.joined.len())
+    }
+    fn verify_joined_leaf(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        // This capability is deliberately flat: this method reads no other node.
+        self.verify_joined(&|id| reader(id))
+    }
+}
+
+impl ValidationBudgetLineage {
+    pub(super) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        review_round::verify_resumed_inventory(self.bridges.clone(), reader)
+    }
+}

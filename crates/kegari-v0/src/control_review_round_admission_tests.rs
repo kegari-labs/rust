@@ -40,6 +40,13 @@ fn setup_with_review_limit(round_limit: u32) -> Fixture {
     setup_with_bounds(round_limit, 2)
 }
 fn setup_with_bounds(round_limit: u32, implementation_attempts: u32) -> Fixture {
+    setup_with_implementation_limits(round_limit, implementation_attempts, 1)
+}
+fn setup_with_implementation_limits(
+    round_limit: u32,
+    implementation_attempts: u32,
+    implementation_round_limit: u32,
+) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let runtime = Uuid::new_v4();
     let host = Arc::new(
@@ -88,7 +95,7 @@ fn setup_with_bounds(round_limit: u32, implementation_attempts: u32) -> Fixture 
         instruction_digest: digest("instructions"),
         max_attempts: implementation_attempts,
         max_turns: 4,
-        max_review_rounds: 1,
+        max_review_rounds: implementation_round_limit,
         attempt: 1,
     };
     let permit = host
@@ -115,6 +122,7 @@ fn setup_with_bounds(round_limit: u32, implementation_attempts: u32) -> Fixture 
         round_limit,
         passed_validation: None,
         source: ReviewedSourceReference {
+            paired_resume: None,
             implementation_phase: implementation.phase.clone(),
             implementation: exact(&source),
             claim_digest: digest("protected claim component reference"),
@@ -987,6 +995,79 @@ fn continued_final_round_pair_uses_latest_validation_and_original_attempt_cap() 
     f.host
         .retire_local(permit.operation_id, observation())
         .unwrap();
+    // Actual protected prior pair and validation records. This helper is the
+    // same nonrecursive prefix reader used by completed resumed-result recovery;
+    // it creates no joined/provider/check capability from these observations.
+    let records = f.host.operations().unwrap();
+    let snapshot = f.host.snapshot().unwrap();
+    recovery::verify_prior_repair_sources(
+        &snapshot,
+        &continued,
+        &terminal,
+        &records,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    for missing in [
+        validation.operation_id,
+        old_validation.operation_id,
+        repaired.operation_id,
+        crate::control::preparation_operation(repaired.operation_id).unwrap(),
+    ] {
+        let reduced = records
+            .iter()
+            .filter(|r| r.operation_id != missing)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            recovery::verify_prior_repair_sources(
+                &snapshot,
+                &continued,
+                &terminal,
+                &reduced,
+                &mut Vec::new()
+            )
+            .is_err()
+        );
+    }
+    let mut changed_marker = continued.clone();
+    let ReviewRoundCause::RepairContinuation {
+        previous_round_reference_digest,
+        ..
+    } = &mut changed_marker.cause
+    else {
+        unreachable!()
+    };
+    *previous_round_reference_digest = digest("changed historical paired marker");
+    assert!(
+        recovery::verify_prior_repair_sources(
+            &snapshot,
+            &changed_marker,
+            &terminal,
+            &records,
+            &mut Vec::new()
+        )
+        .is_err()
+    );
+    let mut changed_validation = continued.clone();
+    let ReviewRoundCause::RepairContinuation {
+        validation: changed,
+        ..
+    } = &mut changed_validation.cause
+    else {
+        unreachable!()
+    };
+    changed.failure_inventory_digest = digest("changed historical validation inventory");
+    assert!(
+        recovery::verify_prior_repair_sources(
+            &snapshot,
+            &changed_validation,
+            &terminal,
+            &records,
+            &mut Vec::new()
+        )
+        .is_err()
+    );
     // Later validation changes current obligations, not the immutable validity
     // of the exact previous pair chain. This reads actual protected receipts;
     // it does not mint a delivery, joined or failed-check capability.
@@ -995,6 +1076,7 @@ fn continued_final_round_pair_uses_latest_validation_and_original_attempt_cap() 
         &continued,
         &exact(&terminal),
         &f.host.operations().unwrap(),
+        None,
     )
     .unwrap();
     let before = f.host.operations().unwrap().len();
@@ -1349,3 +1431,6 @@ fn advanced_pair_validation_retains_granted_budget_and_complete_consumed_prefix(
         canonical_digest(1, &before).unwrap()
     );
 }
+
+#[path = "control_review_round_recovery_admission_tests.rs"]
+mod recovery_tests;

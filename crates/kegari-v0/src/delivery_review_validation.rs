@@ -28,15 +28,6 @@ impl ValidationEvidence {
             }
         }
     }
-    pub(super) fn verify_joined(
-        &self,
-        retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
-    ) -> Result<()> {
-        match self {
-            Self::Direct(source) => source.verify_joined(retained),
-            Self::Retried(proof) => proof.verify_joined(retained),
-        }
-    }
     pub(super) fn source_receipts(&self) -> Result<BTreeMap<Uuid, String>> {
         match self {
             Self::Direct(source) => source.retained_receipt_references(),
@@ -251,7 +242,9 @@ impl DeliveryCoordinator {
         let receipts = self.host.operations()?;
         validation.verify_current(&receipts, grants)?;
         let actual_repair = actual_receipt(&receipts, source.reference.implementation.operation)?;
-        previous.verify_completed_repair(&receipts, grants, actual_repair)?;
+        source
+            .paired_completion
+            .verify(&previous, &receipts, grants, actual_repair)?;
         let advanced = validation.source_advanced().ok_or_else(|| {
             blocked("paired validation retry omitted original SourceAdvanced capability")
         })?;
@@ -332,5 +325,28 @@ fn source_reference(source: &VerifiedSourceAdvanced) -> SourceAdvancedReference 
         trigger_digest: source.digest().into(),
         progress_digest: source.progress_digest().into(),
         review_rounds_consumed: source.review_rounds_consumed(),
+    }
+}
+
+impl crate::delivery::lineage::Node for ValidationEvidence {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        _leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        match self {
+            Self::Direct(p) => children.push(p.as_ref()),
+            Self::Retried(p) => children.push(p.as_ref()),
+        }
+        Ok(())
+    }
+}
+
+impl crate::delivery::lineage_drop::Release for ValidationEvidence {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        match self {
+            Self::Direct(p) => pending.push(p),
+            Self::Retried(p) => pending.push(p),
+        }
     }
 }

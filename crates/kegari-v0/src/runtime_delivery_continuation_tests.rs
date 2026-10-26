@@ -579,6 +579,7 @@ async fn repair_cycle_inner(
             .coordinator
             .unfinished_review(ReviewRepairRequest {
                 source: RepairSource {
+                    paired_completion: None,
                     admission: &review_phase.admission,
                     original: claim,
                     source: &source_proof,
@@ -996,6 +997,7 @@ async fn repair_cycle_inner(
             .coordinator
             .source_advanced(SourceAdvancedRequest {
                 source: RepairSource {
+                    paired_completion: None,
                     admission: &revalidate.admission,
                     original: repair_claim,
                     source: &changed,

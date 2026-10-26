@@ -65,7 +65,47 @@ impl Drop for ValidationRetryWork {
     }
 }
 
+// These maps retain only actual already-admitted bridges. Neither merging a
+// map nor reading a missing entry can construct native session authority.
+fn verify_resumed_bridge_inventory(
+    inventory: BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>,
+    reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+) -> Result<()> {
+    if inventory.len() > MAX_VALIDATION_HISTORY_RECEIPTS {
+        return Err(Error::new(
+            "bounded_input",
+            "retained bridge inventory exceeds protected bound",
+        ));
+    }
+    for (operation, expected) in inventory {
+        let actual = reader(operation)?.ok_or_else(|| {
+            Error::new(
+                "paired_recovery_lineage",
+                "actual registered resume bridge is unavailable",
+            )
+        })?;
+        if operation != expected.bridge().next_operation() || !Arc::ptr_eq(&actual, &expected) {
+            return Err(Error::new(
+                "paired_recovery_lineage",
+                "actual registered resume bridge was substituted",
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl ValidationRetryWork {
+    pub(crate) fn resumed_bridge_inventory(
+        &self,
+    ) -> Result<BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>> {
+        Ok(crate::delivery::lineage::collect(self)?.bridges)
+    }
+    pub(crate) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        verify_resumed_bridge_inventory(self.resumed_bridge_inventory()?, reader)
+    }
     /// Data-only capacity check before retaining one more validation operation.
     /// Passing this resource check grants no session or retry authority.
     pub(crate) fn require_history_capacity(retained: usize) -> Result<()> {
@@ -103,28 +143,7 @@ impl ValidationRetryWork {
         &self,
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
     ) -> Result<()> {
-        let mut cursor = Some(self);
-        let mut seen = BTreeSet::new();
-        while let Some(proof) = cursor {
-            if seen.len() >= MAX_VALIDATION_HISTORY_RECEIPTS || !seen.insert(proof.digest()) {
-                return Err(Error::new(
-                    "bounded_input",
-                    "validation retry completion chain is cyclic or oversized",
-                ));
-            }
-            let actual = retained(proof.predecessor())?.ok_or_else(|| {
-                Error::new(
-                    "reconciliation_required",
-                    "validation retry lost a joined predecessor",
-                )
-            })?;
-            proof.verify_completion(&actual)?;
-            cursor = proof.previous.as_deref();
-        }
-        if let Some(lineage) = &self.source_lineage {
-            lineage.verify_joined(retained)?;
-        }
-        Ok(())
+        crate::delivery::lineage::verify_joined(self, retained)
     }
     pub fn phase(&self) -> &PhaseKey {
         &self.phase
@@ -460,6 +479,17 @@ pub(crate) struct CompletedGrantedValidation {
     digest: String,
 }
 impl CompletedGrantedValidation {
+    pub(crate) fn resumed_bridge_inventory(
+        &self,
+    ) -> Result<BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>> {
+        Ok(crate::delivery::lineage::collect(self)?.bridges)
+    }
+    pub(crate) fn verify_resumed_bridges(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<crate::worker_run::AdmittedSessionResume>>>,
+    ) -> Result<()> {
+        self.basis.verify_resumed_bridges(reader)
+    }
     pub(crate) fn authority(&self) -> &FreshGate {
         self.basis.authority()
     }
@@ -522,8 +552,7 @@ impl CompletedGrantedValidation {
         &self,
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
     ) -> Result<()> {
-        self.basis.verify_joined(retained)?;
-        source_lineage::require_joined(&self.completion, retained)
+        crate::delivery::lineage::verify_joined(self, retained)
     }
     pub(crate) fn verify_current(
         &self,
@@ -1176,5 +1205,75 @@ mod history_drop_tests {
         );
         assert_eq!(counters.active.load(Ordering::SeqCst), 0);
         assert!(counters.maximum_depth.load(Ordering::SeqCst) <= 2);
+    }
+}
+
+impl CompletedGrantedValidation {
+    pub(crate) fn retained_native_grants(&self) -> Result<BTreeMap<Uuid, VerifiedRetryGrant>> {
+        crate::delivery::lineage::collect(self)?.into_grants()
+    }
+}
+
+impl crate::delivery::lineage::Node for ValidationRetryWork {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        leaves.sources([self.source().clone()])?;
+        leaves.grants([self.grant.clone()])?;
+        leaves.joined(1)?;
+        if let Some(p) = &self.previous {
+            children.push(p.as_ref());
+        }
+        if let Some(p) = &self.source_lineage {
+            children.push(p.as_ref());
+        }
+        Ok(())
+    }
+    fn verify_joined_leaf(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        let actual = reader(self.predecessor())?.ok_or_else(|| {
+            Error::new(
+                "reconciliation_required",
+                "validation retry lost a joined predecessor",
+            )
+        })?;
+        self.verify_completion(&actual)
+    }
+}
+impl crate::delivery::lineage::Node for CompletedGrantedValidation {
+    fn expand<'a>(
+        &'a self,
+        children: &mut Vec<&'a dyn crate::delivery::lineage::Node>,
+        leaves: &mut crate::delivery::lineage::Inventory,
+    ) -> Result<()> {
+        children.push(self.basis.as_ref());
+        leaves.joined(1)
+    }
+    fn verify_joined_leaf(
+        &self,
+        reader: &dyn Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+    ) -> Result<()> {
+        source_lineage::require_joined(&self.completion, &|id| reader(id))
+    }
+}
+
+impl crate::delivery::lineage_drop::Release for ValidationRetryWork {
+    fn release(mut self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        if let Some(p) = self.previous.take() {
+            pending.push(p);
+        }
+        if let Some(p) = self.source_lineage.take() {
+            pending.push(p);
+        }
+        // The existing iterative Drop sees no remaining previous edge.
+    }
+}
+impl crate::delivery::lineage_drop::Release for CompletedGrantedValidation {
+    fn release(self, pending: &mut crate::delivery::lineage_drop::Pending) {
+        pending.push(self.basis);
     }
 }

@@ -170,6 +170,7 @@ impl RunReference {
             .get("run")
             .map(|encoded| {
                 if receipt.kind != "admission"
+                    || receipt.expected.contains_key("review_round_recovery")
                     || receipt.expected.contains_key("worker_preparation")
                     || receipt
                         .expected
@@ -183,6 +184,9 @@ impl RunReference {
                 let value: Self = serde_json::from_str(encoded)
                     .map_err(|_| Error::new("record_corrupt", "run budget reference is invalid"))?;
                 value.validate()?;
+                if receipt.expected.contains_key("review_round_resume") {
+                    ReviewRoundResumeReference::from_model_receipt(receipt)?;
+                }
                 Ok(value)
             })
             .transpose()
@@ -253,6 +257,8 @@ impl MetadataReference {
             .map(|encoded| {
                 if receipt.kind != "admission"
                     || receipt.expected.contains_key("run")
+                    || receipt.expected.contains_key("review_round_recovery")
+                    || receipt.expected.contains_key("review_round_resume")
                     || receipt.expected.contains_key("worker_preparation")
                     || receipt
                         .expected
@@ -297,11 +303,16 @@ enum AdmissionReference {
     Preparation(PreparationReference),
     RoundPreparation(PreparationReference, Box<ReviewRoundReference>),
     SessionRecovery(SessionRecoveryPreparationReference),
+    RoundSessionRecovery(
+        SessionRecoveryPreparationReference,
+        Box<RoundRecoveryProvenance>,
+    ),
     Run(RunReference),
     RoundRun(RunReference, Box<ReviewRoundRunProvenance>),
     ContinuedRun(RunReference, RunContinuationReference),
     SourceAdvancedRun(RunReference, SourceAdvancedReference),
     ResumedRun(RunReference, RunResumeReference),
+    RoundResumedRun(RunReference, RunResumeReference, Box<RoundResumeProvenance>),
     Metadata(MetadataReference),
     ReleaseResume(ReleaseResumeReference),
 }
@@ -1053,7 +1064,12 @@ impl ControlHost {
         }
         let round_receipts = if matches!(
             &reference,
-            Some(AdmissionReference::RoundPreparation(..) | AdmissionReference::RoundRun(..))
+            Some(
+                AdmissionReference::RoundPreparation(..)
+                    | AdmissionReference::RoundRun(..)
+                    | AdmissionReference::RoundSessionRecovery(..)
+                    | AdmissionReference::RoundResumedRun(..)
+            )
         ) {
             Some(self.review_round_receipts()?)
         } else {
@@ -1064,7 +1080,8 @@ impl ControlHost {
             | AdmissionReference::RoundRun(run, _)
             | AdmissionReference::ContinuedRun(run, _)
             | AdmissionReference::SourceAdvancedRun(run, _)
-            | AdmissionReference::ResumedRun(run, _),
+            | AdmissionReference::ResumedRun(run, _)
+            | AdmissionReference::RoundResumedRun(run, _, _),
         ) = &reference
         {
             let mut prior = BTreeMap::new();
@@ -1100,10 +1117,12 @@ impl ControlHost {
                     "admission would reset, duplicate or exceed the durable phase budget",
                 ));
             }
-            if !matches!(&reference, Some(AdmissionReference::RoundRun(..)))
-                && prior
-                    .values()
-                    .any(|receipt| receipt.expected.contains_key("review_round"))
+            if !matches!(
+                &reference,
+                Some(AdmissionReference::RoundRun(..) | AdmissionReference::RoundResumedRun(..))
+            ) && prior
+                .values()
+                .any(|receipt| receipt.expected.contains_key("review_round"))
             {
                 return Err(Error::new(
                     "review_round_required",
@@ -1132,6 +1151,19 @@ impl ControlHost {
             if let Some(AdmissionReference::ResumedRun(_, resume)) = &reference {
                 self.verify_run_resume(&s.snapshot(), run, resume, &prior)?;
             }
+            if let Some(AdmissionReference::RoundResumedRun(_, resume, provenance)) = &reference {
+                self.verify_round_run_resume(RoundResumeCheck {
+                    snapshot: &s.snapshot(),
+                    lease,
+                    run,
+                    resume,
+                    provenance,
+                    history: &prior,
+                    receipts: round_receipts.as_deref().ok_or_else(|| {
+                        Error::new("control_failed", "paired inventory was not loaded")
+                    })?,
+                })?;
+            }
         }
         if let Some(AdmissionReference::Preparation(prep)) = &reference {
             for receipt in self.review_round_receipts()? {
@@ -1159,6 +1191,17 @@ impl ControlHost {
         }
         if let Some(AdmissionReference::SessionRecovery(reference)) = &reference {
             self.verify_session_recovery_preparation(&s.snapshot(), reference)?;
+        }
+        if let Some(AdmissionReference::RoundSessionRecovery(reference, provenance)) = &reference {
+            self.verify_round_session_recovery(
+                &s.snapshot(),
+                lease,
+                reference,
+                provenance,
+                round_receipts.as_deref().ok_or_else(|| {
+                    Error::new("control_failed", "paired inventory was not loaded")
+                })?,
+            )?;
         }
         if let Some(AdmissionReference::Metadata(reference)) = &reference {
             let mut prior = BTreeMap::new();
@@ -1213,7 +1256,8 @@ impl ControlHost {
             | AdmissionReference::RoundRun(reference, _)
             | AdmissionReference::ContinuedRun(reference, _)
             | AdmissionReference::SourceAdvancedRun(reference, _)
-            | AdmissionReference::ResumedRun(reference, _),
+            | AdmissionReference::ResumedRun(reference, _)
+            | AdmissionReference::RoundResumedRun(reference, _, _),
         ) = &reference
         {
             expected.insert(
@@ -1236,7 +1280,11 @@ impl ControlHost {
                     .map_err(|_| Error::invalid("source-advanced reference encoding"))?,
             );
         }
-        if let Some(AdmissionReference::ResumedRun(_, resume)) = &reference {
+        if let Some(
+            AdmissionReference::ResumedRun(_, resume)
+            | AdmissionReference::RoundResumedRun(_, resume, _),
+        ) = &reference
+        {
             expected.insert(
                 "session_resume".into(),
                 serde_json::to_string(resume)
@@ -1254,7 +1302,11 @@ impl ControlHost {
                     .map_err(|_| Error::invalid("worker preparation reference encoding"))?,
             );
         }
-        if let Some(AdmissionReference::SessionRecovery(reference)) = &reference {
+        if let Some(
+            AdmissionReference::SessionRecovery(reference)
+            | AdmissionReference::RoundSessionRecovery(reference, _),
+        ) = &reference
+        {
             expected.insert(
                 "session_recovery_preparation".into(),
                 serde_json::to_string(reference)
@@ -1270,6 +1322,12 @@ impl ControlHost {
                 );
             }
             Some(AdmissionReference::RoundRun(_, provenance)) => {
+                provenance.persist(&mut expected)?
+            }
+            Some(AdmissionReference::RoundSessionRecovery(_, provenance)) => {
+                provenance.persist(&mut expected)?
+            }
+            Some(AdmissionReference::RoundResumedRun(_, _, provenance)) => {
                 provenance.persist(&mut expected)?
             }
             _ => (),
@@ -2559,4 +2617,12 @@ pub(crate) use review_round::{
 #[path = "control_review_round_admission.rs"]
 mod round_admission;
 pub(crate) use round_admission::{ReviewRoundRunCause, ReviewRoundRunProvenance};
-use round_admission::{RoundPreparationCheck, RoundRunCheck};
+use round_admission::{
+    RoundPreparationCheck, RoundRecoveryContext, RoundResumeCheck, RoundRunCheck,
+};
+pub(crate) use round_admission::{RoundRecoveryProvenance, RoundResumeProvenance};
+#[path = "control_review_round_recovery.rs"]
+mod round_recovery;
+pub(crate) use round_recovery::{
+    PairedResumeResultReference, ReviewRoundRecoveryReference, ReviewRoundResumeReference,
+};

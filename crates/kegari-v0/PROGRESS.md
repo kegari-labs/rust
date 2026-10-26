@@ -1,27 +1,111 @@
 # Kegari v0 build progress
 
 Local implementation and validation remain in progress; the Goal is incomplete.
+Unattended mode remains in effect. No live trial or remote mutation is authorized.
+
+Paired recovery source6 passed **798 tests, zero failures and two required native
+ignores across 39 groups** in 809.522s. All-target check, strict Clippy, formatting,
+dispatch-disabled Plan, the 496-block/136-named inventory and diff checks passed.
+All 629 tested inputs stayed unchanged at
+`sha256:ad153d5922671337911480153f8d7d2230847eda3747dae5aae76de2feb7cb84`.
+Session11140 is closed; no root Cargo process remains running. The collector
+verified all 19 invocation artifacts, including compile/lint failures and older
+source results, against their exact source/log/tool hashes. See
+[the paired-recovery report](validation/LOCAL-PAIRED-RECOVERY.md) and
+[machine evidence](validation/paired-recovery-checks.json).
+
+This increment preserves original paired-repair review and implementation
+budgets through actual metadata/model resume, completed-result consumption and
+subsequent failed validation. Independent review corrected omitted grant and
+receipt ancestry, repeated recursive traversal, recursive Arc destruction and
+two direct-only completed-repair checks. Required native positive execution
+remains unrun; no serialized reference manufactures a capability. Earlier
+source1 compilation and source3 Clippy failures are retained in the report.
+The increment is ready for its own local signed-off commit, separate from the
+preceding evaluation-grader change because it changes runtime recovery authority.
+
+Next: install the independently reviewed four-file evaluation terminal-finalization
+change and run its source-bound checks, then integrate the remaining carry layers.
+The combined carry43 TEMP draft is held at
+`/private/tmp/kegari-carry-composed-on-paired-source6-v3`, manifest
+`a8ece743d274e104d4165a1c347744c8c59fb9e35366c75d3a63b868826fdf9d`.
+Its same-grant transient retry and eight-file carried no-release overlays remain
+separate, uninstalled and uncompiled. Carried no-release passed independent
+bounded static review; its qualified native current-to-cold positive remains
+unproven. The granted-parent observer has one confirmed active-drain regression:
+it consults current ordinary admission after harmless workflow reload instead
+of actual retained active authority with pinned configuration. Codex is preparing
+a narrow correction; new work must retain strict current admission checks.
+Config continues the concrete native one-trial caller in TEMP. No evaluator or
+carry draft is included in the paired source's validation claim.
+
+Mandatory actual-agent repeats, native/provider and containment qualification,
+human calibration, cold/current carry and other recorded implementation gaps
+remain incomplete. Coverage remains 476 of 496 clauses and 127 of 136 named
+requirements not assessed; existing partial assessments are not qualification.
+The dated checkpoint narrative below records prior states, including work that
+has since advanced; the current summary and linked source-bound reports govern.
 
 Structured-review evaluation source1 passed96 focused tests (29 evaluation,
 10 report/archive,39 worker,18 module), all-target check, strict Clippy, formatting,
 496-block inventory, diff and dispatch-disabled Plan. Eight invocation artifacts
 retain unchanged616 inputs and before/after Rust/Cargo1.99.1 identities:
 `sha256:19ea8279293431fe4db5cb7c0cbdb162e2f0321062eb4d65e6a1e01fb52d0bfd`.
-Session86937 is closed; root prepares the local checkpoint. The original precise-
+Session86937 is closed. The verified checkpoint is
+`e55ee191ec027c9c8be8f60bccdf1e4f6dad4773` —
+`feat(kegari-v0): grade recorded structured review outcomes`. All45 committed
+files and616 tested inputs match, and the tree was clean afterward. No
+consolidation, history rewrite or push occurred. Verification is retained at
+`/private/tmp/kegari-v0-structured-review-commit-verification.json`. This
+evaluation change remains separate from the preceding runtime admission fix
+because it changes grader semantics and report provenance. The original precise-
 URL false rejection was corrected in v2 and independently reviewed by Config.
 No full crate suite or actual-agent trial is claimed for this increment. See
 [the structured-review report](validation/LOCAL-STRUCTURED-REVIEW.md).
 
 Paired recovery composition remains TEMP at
-`/private/tmp/kegari-paired-recovery-composed-on-51e035e-v1`:41 source files,
-original bases and merge outputs preserved. Two conflicts were end-of-file test
-addition/module alias collisions; all test bodies and existing source4 fixture
-fixes are retained. The original recovery test file is registered once. The
-combined draft is not installed or compiled and still awaits the independent
-review's actual inherited-grant closure correction in Config v2. Native/data
-joined success is not inferred. Carry's33-file vertical draft is held for review,
-with object-acquisition integration separately in progress and cold/no-release
-carry remaining incomplete.
+`/private/tmp/kegari-paired-recovery-composed-on-e55ee19-v3`:41 source files,
+original bases and merge outputs preserved. All616 current source inputs and
+composition bases still match clean e55ee19. The two original end-of-file test
+conflicts retain every test and existing source4 fixture fix. Config v2
+(manifest0e7a8c6abcf7a4d9e1559c0a972f7e03d83883ff08b7d96f184ae8ab20581a12)
+and leaf v2 (70577a55932b9edf4a3dbda4b80a45133eb0399db35ffad4f1b04a44f8da1984)
+merged without conflict; two newer guard literals gain only optional None fields.
+The corrected actual native-grant closure passed independent static review.
+The raw Control reader also now checks earlier repair/failed-validation ancestry,
+but independent review found its passed-validation references still unchecked.
+Control v3 now fixes that through a nonrecursive shared exact-reference reader;
+manifest2ba06ed6b20825def53581991da5300b9949b51a72a24a26d8bf8fb4af5265e5
+merged three files cleanly and includes a first-new-grant Initial source
+regression. Original v1/v2 artifacts remain unchanged. Mandatory opaque maps
+already rejected those missing records, so no native authority bypass is claimed.
+A separate material traversal defect is confirmed: continued repair queues its
+previous plan and calls that same plan recursively through unfinished work with
+a fresh visited set, causing exponential repeated work and linear stack depth.
+This affects the new grant/bridge collectors; source/joined paths are under audit.
+Codex owns a shared bounded traversal correction before installation.
+Rustfmt parsed the combined draft; it is not installed or compiled and no
+native/data joined success is inferred. Carry's33-file vertical draft and its
+11-file object-acquisition overlay passed independent bounded static review with
+three confirmed corrections pending: successful preparation result shape,
+active carried-release configuration pinning, and same-work reassembly markers
+across grant namespaces. Object overlay manifest
+bd64dbb9b06700cfbcc39dbc1ebe139338b02ad8cf20c8a3f8de235078165b42 is held at
+`/private/tmp/kegari-carried-object-acquisition-overlay`; no Cargo or native
+positive is claimed. Root's actual Git2.56 query compatibility fixture is retained
+at `/private/tmp/kegari-carry-object-query-review-4wwn484k/results.json`
+(sha43781a8373cbc9a3d9c26e940792a9e3141ce309a00c290614adb6371431b4cb):
+present object exits0 with exact SHA; missing object exits1 silently; wrong type
+exits1 with stderr. This tests CLI behavior only. No remote requests occurred.
+Cold/current carry recovery, parent granted reassembly, carried no-release and
+qualified integrated/visual/native positive behavior remain incomplete.
+A concrete one-trial native evaluation caller design is
+retained at `/private/tmp/kegari-native-evaluation-one-trial-design/DESIGN.md`;
+it is not implemented and no live trial is authorized or running. Root traced
+the failed-trial retirement prerequisite through actual evaluator/lifecycle/broker
+and runtime code; findings and four exact inputs are retained under
+`/private/tmp/kegari-native-evaluation-finalization-review`. A failed report is
+not an actual joined capability, and no such capability was fabricated.
 
 The isolated first-new-grant review-round omission fix passed all-target check,
 strict Clippy,24 unique child-continuation/scheduler tests, formatting,496-block
