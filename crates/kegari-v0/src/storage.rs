@@ -571,6 +571,10 @@ pub struct ExclusiveLock {
     _file: Arc<File>,
 }
 impl ExclusiveLock {
+    pub(crate) fn raw_fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd;
+        self._file.as_raw_fd()
+    }
     pub(crate) fn identity(&self) -> Result<(u64, u64)> {
         let metadata = self
             ._file

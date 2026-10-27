@@ -7,13 +7,10 @@ use crate::{
     platform::{
         BinaryIdentity, NativeProcessProbe, ProcessIdentity, ProcessObservation, ProcessProbe,
     },
-    storage::{ExclusiveLock, PrivateDir},
+    storage::PrivateDir,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::File,
-    os::fd::AsRawFd,
-    os::unix::process::CommandExt,
     path::PathBuf,
     sync::{
         Arc,
@@ -296,24 +293,25 @@ impl ProcessJournal {
             ));
         }
         let guard_name = format!("{}.guard", binding.effect_id);
-        let lock = operation
-            .lock(&guard_name)
-            .map_err(|error| error.detail(serde_json::json!({"stage":"acquire_guard"})))?;
-        // A previous claimant may have completed between the first read and
-        // acquiring this lock. The durable record is authoritative even after
-        // its process released the guard; an existing effect is never replayed.
-        match operation.read::<ProcessRecord>(&record_name) {
-            Ok(_) => {
-                return Err(Error::new(
-                    "operation_uncertain",
-                    "process effect already has a durable identity record",
-                ));
+        let files = crate::process_spawn::RegisteredGuard::acquire(|| {
+            let lock = operation
+                .lock(&guard_name)
+                .map_err(|error| error.detail(serde_json::json!({"stage":"acquire_guard"})))?;
+            // A previous claimant may have completed before lock acquisition.
+            // The durable record is authoritative even after guard release.
+            match operation.read::<ProcessRecord>(&record_name) {
+                Ok(_) => {
+                    return Err(Error::new(
+                        "operation_uncertain",
+                        "process effect already has a durable identity record",
+                    ));
+                }
+                Err(error) if error.code == "record_missing" => {}
+                Err(error) => return Err(error),
             }
-            Err(error) if error.code == "record_missing" => {}
-            Err(error) => return Err(error),
-        }
-        let (guard_device, guard_inode) = lock.identity()?;
-        let inherited = lock.inherited_file()?;
+            Ok(lock)
+        })?;
+        let (guard_device, guard_inode) = files.identity();
         let host = self.probe.current()?;
         if binding
             .control_owner
@@ -342,8 +340,7 @@ impl ProcessJournal {
             directory: operation,
             record_name,
             record,
-            lock: Some(lock),
-            inherited: Some(inherited),
+            files: Some(files),
             configured: AtomicBool::new(false),
             owned_group: None,
             guard_conflict: false,
@@ -499,8 +496,7 @@ pub struct SpawnGuard {
     directory: PrivateDir,
     record_name: String,
     record: ProcessRecord,
-    lock: Option<ExclusiveLock>,
-    inherited: Option<File>,
+    files: Option<crate::process_spawn::RegisteredGuard>,
     configured: AtomicBool,
     owned_group: Option<(Uuid, u32)>,
     guard_conflict: bool,
@@ -516,24 +512,12 @@ impl SpawnGuard {
                 "process guard was already assigned to a spawn",
             ));
         }
-        let fd = self
-            .inherited
+        self.files
             .as_ref()
             .ok_or_else(|| Error::new("ownership_conflict", "process guard already closed"))?
-            .as_raw_fd();
-        // SAFETY: the descriptor is owned by this capability throughout spawn;
-        // only async-signal-safe fcntl runs after fork. No global FD policy changes.
-        unsafe {
-            command.pre_exec(move || {
-                let flags = libc::fcntl(fd, libc::F_GETFD);
-                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        Ok(())
+            .configure(command)
     }
+
     pub fn configure_tokio(&self, command: &mut tokio::process::Command) -> Result<()> {
         self.configure_std(command.as_std_mut())
     }
@@ -574,6 +558,9 @@ impl SpawnGuard {
         // capture. A quick child still needs a same-spawn exit token; its PID
         // alone, even if later reused, never matches another group's token.
         self.owned_group = Some(group.bind_child(pid)?);
+        if let Some(files) = self.files.as_ref() {
+            files.spawned();
+        }
         let mut observed = Vec::new();
         for binary in std::iter::once(&self.record.binding.executable)
             .chain(self.record.binding.observed_executables.iter())
@@ -681,13 +668,15 @@ impl SpawnGuard {
             }
         }
         // A surviving inherited guard is contrary evidence even after the
-        // owned group closes. First exclude unrelated host fork-to-exec windows:
-        // CLOEXEC does not close their duplicate descriptors until exec itself.
+        // owned group closes. Exclude unrelated host launches until their
+        // pre-exec hook has closed both registered guard copies explicitly.
         // Release the boundary before persistence; never wait for a child here.
         let released = {
-            let _boundary = crate::process_spawn::retirement()?;
-            self.inherited.take();
-            self.lock.take();
+            let mut boundary = crate::process_spawn::retirement()?;
+            if let Some(files) = self.files.as_mut() {
+                files.release(&mut boundary)?;
+            }
+            self.files.take();
             self.directory.observe_lock_existing(
                 &self.record.guard,
                 self.record.guard_device,

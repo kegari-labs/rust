@@ -670,3 +670,91 @@ fn guard_retirement_waits_for_unrelated_pre_exec_but_not_its_process_exit() {
     after_parent.write_all(b"done\n").unwrap();
     assert!(unrelated.0.wait().unwrap().success());
 }
+
+#[test]
+fn reused_guarded_command_does_not_inherit_retained_or_released_original_guard() {
+    struct ReapOnDrop(std::process::Child);
+    impl Drop for ReapOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut fixture = JournalFixture::new();
+    fixture.binding.executable = BinaryIdentity::inspect(Path::new("/bin/bash"), false).unwrap();
+    let (mut release, input) = UnixStream::pair().unwrap();
+    let mut command = Command::new("/bin/bash");
+    command
+        .args([
+            "--noprofile",
+            "--norc",
+            "-c",
+            "IFS= read -r -t 10 release; test \"$release\" = done",
+        ])
+        .env_clear()
+        .current_dir(&fixture.binding.cwd)
+        .stdin(Stdio::from(OwnedFd::from(input)))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut guard = fixture.journal.begin(fixture.binding.clone()).unwrap();
+    guard.configure_std(&mut command).unwrap();
+    let (child, mut group) = OwnedGroup::spawn_std(&mut command).unwrap();
+    let mut original = ReapOnDrop(child);
+    // Actual child/group binding disarms inheritance before this deliberately
+    // missing process metadata result. No native Running identity is invented.
+    assert_eq!(
+        guard.spawned_std(&original.0, &group).unwrap_err().code,
+        "operation_uncertain"
+    );
+    release.write_all(b"done\n").unwrap();
+    assert!(
+        group
+            .await_exit_before_reap(Instant::now() + Duration::from_secs(2), || Ok(()))
+            .unwrap()
+    );
+    let exit = group.try_reap_std(&mut original.0).unwrap().unwrap();
+    assert!(exit.status().success());
+
+    // Reusing the configured command while the original guard is still held
+    // must not extend that guard into this unrelated actual child. Without the
+    // intended-hook disarm, group_exited below deterministically sees a holder.
+    let (child, mut second_group) = OwnedGroup::spawn_std(&mut command).unwrap();
+    let mut second = ReapOnDrop(child);
+    assert!(second.0.try_wait().unwrap().is_none());
+    guard.group_exited(&exit).unwrap();
+    fixture.assert_closed_without_running_identity();
+    drop(guard);
+    release.write_all(b"done\n").unwrap();
+    assert!(
+        second_group
+            .await_exit_before_reap(Instant::now() + Duration::from_secs(2), || Ok(()))
+            .unwrap()
+    );
+    assert!(
+        second_group
+            .try_reap_std(&mut second.0)
+            .unwrap()
+            .unwrap()
+            .status()
+            .success()
+    );
+
+    // The same earlier intended hook is also inert after its descriptors close
+    // (or are recycled). A fresh invocation cannot fail on its stale raw FD.
+    let (child, mut third_group) = OwnedGroup::spawn_std(&mut command).unwrap();
+    let mut third = ReapOnDrop(child);
+    release.write_all(b"done\n").unwrap();
+    assert!(
+        third_group
+            .await_exit_before_reap(Instant::now() + Duration::from_secs(2), || Ok(()))
+            .unwrap()
+    );
+    assert!(
+        third_group
+            .try_reap_std(&mut third.0)
+            .unwrap()
+            .unwrap()
+            .status()
+            .success()
+    );
+}
