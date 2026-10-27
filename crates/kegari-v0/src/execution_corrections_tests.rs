@@ -135,7 +135,7 @@ async fn native_correction_check_keeps_original_marker_and_historical_evidence()
     fs::set_permissions(&repository, fs::Permissions::from_mode(0o700)).unwrap();
     let scratch = execution.join("scratch");
     fs::create_dir(&scratch).unwrap();
-    let isolation = IsolationPlan {
+    let mut plan = IsolationPlan {
         managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::Child,
@@ -153,10 +153,10 @@ async fn native_correction_check_keeps_original_marker_and_historical_evidence()
         }],
         resource_writes: vec![],
         forbidden_roots: vec![operator.clone()],
-        executables: vec![PathBuf::from("/usr/bin/true"), binary.clone()],
-    }
-    .validate()
-    .unwrap();
+    };
+    plan.managed_execution =
+        Some(crate::isolation::BoundManagedExecution::automatic(&plan).unwrap());
+    let isolation = plan.validate().unwrap();
     let git = Git::new(binary).unwrap();
     let original = ExecutionBinding {
         runtime_id: Uuid::from_u128(1),

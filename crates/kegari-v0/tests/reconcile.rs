@@ -2374,7 +2374,6 @@ async fn coordination_preservation_binds_actual_opaque_authority_and_directory_i
         resource_writes: vec![],
         source_writes: vec![],
         forbidden_roots: vec![home.join("control")],
-        executables: vec![],
     }
     .validate()
     .unwrap();

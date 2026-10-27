@@ -492,7 +492,9 @@ impl LaunchRequest {
 }
 struct Plan {
     canary_operand: Option<Arc<crate::evaluation::OwnedCanaryPathOperand>>,
-    managed_execution: Option<BoundManagedExecution>,
+    // Preparation binds the installed backend definition before the owned
+    // repository/scratch exist. Their actual domain is constructed afterward.
+    command_policy_digest: Option<String>,
     config: Arc<Config>,
     workspace: Workspace,
     workflow: Workflow,
@@ -581,10 +583,10 @@ async fn prepare_admitted_inner(
     if let Some(round) = &plan.request.review_round {
         prep_binding["review_round"] = json!(round.digest());
     }
-    if let Some(managed) = &plan.managed_execution {
+    if let Some(policy_digest) = &plan.command_policy_digest {
         prep_binding["managed_execution"] = json!({
-            "policy_digest": managed.policy_digest(),
-            "inventory_digest": canonical_digest(1, managed)?
+            "schema_version": 5,
+            "policy_digest": policy_digest,
         });
     }
     let prep_scope = canonical_digest(1, &prep_binding)?;
@@ -600,25 +602,7 @@ async fn prepare_admitted_inner(
         },
     };
     let prep_gate = |snapshot: &crate::control::ControlSnapshot| {
-        if let Some(managed) = &plan.managed_execution {
-            managed.revalidate_binding()?;
-        }
-        if plan.role.permits_repository_execution() && plan.repository_id.is_some() {
-            let current = runtime.configuration.snapshot()?;
-            let workspace = current
-                .workspaces
-                .values()
-                .find(|value| value.id == plan.workspace.id)
-                .ok_or_else(|| {
-                    Error::new("stale_config", "managed execution workspace disappeared")
-                })?;
-            if workspace.managed_execution != plan.workspace.managed_execution {
-                return Err(Error::new(
-                    "stale_config",
-                    "managed execution policy changed before preparation admission",
-                ));
-            }
-        }
+        plan.revalidate_command_policy()?;
         runtime.check_evaluation_context_operand(
             snapshot,
             &plan.request,
@@ -1039,11 +1023,14 @@ fn require_preparation_schedule(
     Ok(())
 }
 impl Plan {
-    fn revalidate_managed_execution(&self) -> Result<()> {
-        if let Some(managed) = &self.managed_execution {
-            // Called by fresh preparation predicates under Control. Full
-            // resource reads occur in Plan::read and boundary preparation.
-            managed.revalidate_binding()?;
+    fn revalidate_command_policy(&self) -> Result<()> {
+        if let Some(expected) = &self.command_policy_digest
+            && expected != &BoundManagedExecution::automatic_policy_digest()?
+        {
+            return Err(Error::new(
+                "worker_binding",
+                "installed command backend differs from the preparation binding",
+            ));
         }
         Ok(())
     }
@@ -1242,18 +1229,15 @@ impl Plan {
         let account = config.connections[&workspace.codex_connection]
             .account_id
             .clone();
-        let managed_execution = if role.permits_repository_execution() && repository_id.is_some() {
-            workspace
-                .managed_execution
-                .as_ref()
-                .map(BoundManagedExecution::resolve)
-                .transpose()?
-        } else {
-            None
-        };
+        let command_policy_digest =
+            if role.permits_repository_execution() && repository_id.is_some() {
+                Some(BoundManagedExecution::automatic_policy_digest()?)
+            } else {
+                None
+            };
         Ok(Self {
             canary_operand: None,
-            managed_execution,
+            command_policy_digest,
             config,
             workspace,
             workflow,
@@ -1660,42 +1644,7 @@ async fn prepare_owned(
     forbidden.push(records.path().to_path_buf());
     forbidden.sort();
     forbidden.dedup();
-    let mut executables = Vec::new();
-    if let Some(managed) = &plan.managed_execution {
-        managed.revalidate()?;
-        executables = managed.executables();
-    } else if plan.role.permits_repository_execution() && plan.repository_id.is_some() {
-        executables.extend([
-            git_path
-                .clone()
-                .ok_or_else(|| Error::invalid("executable source lacks Git"))?,
-            executable("/bin/sh")?,
-        ]);
-        for check in plan
-            .workflow
-            .front_matter
-            .checks
-            .local
-            .values()
-            .chain(plan.workflow.front_matter.checks.integrated.values())
-        {
-            let command = check
-                .argv
-                .first()
-                .ok_or_else(|| Error::invalid("configured check lacks an executable"))?;
-            executables.push(
-                if Path::new(command).is_absolute() || Path::new(command).components().count() == 1
-                {
-                    executable(command)?
-                } else {
-                    crate::isolation::contained_path(&repository, &repository.join(command))?
-                },
-            );
-        }
-        executables.sort();
-        executables.dedup();
-    }
-    let isolation = IsolationPlan {
+    let mut isolation = IsolationPlan {
         schema_version: 1,
         role: match plan.role {
             AgentRole::Coordination => ExecutionRole::Coordination,
@@ -1712,9 +1661,20 @@ async fn prepare_owned(
         resource_writes: grants.resource_writes,
         source_writes: grants.writes,
         forbidden_roots: forbidden,
-        executables,
-        managed_execution: plan.managed_execution.clone(),
+        managed_execution: None,
     };
+    if let Some(expected) = &plan.command_policy_digest {
+        // Actual roots and admitted resources now exist. This bounded capture
+        // stays outside Control; later effect gates recheck retained identities.
+        let domain = BoundManagedExecution::automatic(&isolation)?;
+        if domain.policy_digest() != expected {
+            return Err(Error::new(
+                "worker_binding",
+                "actual command domain differs from the admitted backend policy",
+            ));
+        }
+        isolation.managed_execution = Some(domain);
+    }
     let boundary = isolation.validate()?;
     if let Some(proof) = &independent_proof {
         records.write(
@@ -2213,7 +2173,7 @@ fn scoped_evidence(
 
 fn fresh_plan_preparation(runtime: &RuntimeCoordinator, plan: &Plan) -> Result<()> {
     fresh_preparation(runtime, &plan.request)?;
-    plan.revalidate_managed_execution()
+    plan.revalidate_command_policy()
 }
 
 fn fresh_preparation(runtime: &RuntimeCoordinator, request: &LaunchRequest) -> Result<()> {

@@ -20,7 +20,6 @@ pub(super) fn configuration(
     auth: &std::path::Path,
     workflow: &std::path::Path,
     source: &std::path::Path,
-    policy: &kegari_v0::config::ManagedExecution,
     profile: kegari_v0::config::Profile,
 ) -> kegari_v0::config::Config {
     use serde_json::json;
@@ -39,7 +38,7 @@ pub(super) fn configuration(
             "linear":{"teams":"all","projects":"all","users":"all","authorization_label_id":id(20),"states":{"team":{"prepared":id(30),"running":id(31),"blocked":id(32),"child_done":id(33),"parent_accepted":id(34),"cancelled":id(35)}}},
             "github":{"repositories":["42"]},"actors":{"authorizers":[id(5)],"correctors":[id(5)],"acceptors":[id(5)]},
             "profiles":{"coordination":profile},"routing_labels":{"tool":{id(40).to_string():"codex"},"model":{id(41).to_string():"fixture-model"},"reasoning":{id(42).to_string():"high"},"speed":{id(43).to_string():"standard"}},
-            "max_agents":2,"release":{"mode":"manual","spacing_seconds":0},"managed_execution":policy,
+            "max_agents":2,"release":{"mode":"manual","spacing_seconds":0},
             "repositories":{"42":{"source":source,"local_checks":["suite"],"integrated_checks":["e2e"],"ci":[{"workflow_id":1,"required_checks":["suite"],"proof":proof}],"production_ci":[{"workflow_id":2,"required_checks":["suite"],"proof":proof}],"no_change_validation":{"workflow_id":1,"workflow_revision":"0123456789012345678901234567890123456789","source_input":"source_sha","operation_input":"operation_id","observed_source_output":"tested_sha","proof":proof},"deployment":"none"}}
         }},"control":{"local_users":{"501":{"id":"fixture-operator","linear_user_id":id(5),"roles":["inspect","configure","lifecycle","correct","accept","release","recover"]}}}
     })).unwrap();

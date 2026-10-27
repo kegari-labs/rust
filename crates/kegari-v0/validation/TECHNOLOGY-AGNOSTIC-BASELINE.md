@@ -1,5 +1,9 @@
 # SPEC 1.4 requirement inventory baseline
 
+The inventory and checks below describe the original reconciliation checkpoint;
+the later automatic-domain source update is recorded separately at the end. Its
+implementation does not alter these historical counts or promote their evidence.
+
 The M02-1 inventory reconciliation is complete. It records **519 current contract
 blocks and 140 named requirements**, with no new implementation, native,
 actual-agent, integration or human qualification claim. The incompatible
@@ -119,3 +123,31 @@ No Cargo test, product binary, provider request, native qualification, actual-ag
 trial, human calibration, installation or commit was performed for this change.
 Independent review and the remaining M02-1 removal/rework audit belong to the
 coordinating agent's integration checkpoint.
+
+## Later automatic-domain source update
+
+After the `97a9d02` checkpoint, the current source replaces the mandatory
+executable/digest/mapping catalog with host-produced managed schema 5. Preparation
+binds a fixed backend-policy digest, then derives the actual command domain from
+owned repository/scratch paths, fixed OS resources and already-admitted generic
+resource grants. Worker contracts and cleanup retain that exact isolation.
+Bounded schema-2 resource observations record original bytes, entry versions and
+link text without claiming link-target or complete dependency closure. Full
+content checks remain outside Control; serialized gates use retained bindings.
+
+Configuration rejects removed catalog fields, including null/empty forms, and
+retained catalog schemas 1–4 are not migrated. Schema 5 binds the exact build
+identity, so a different build also refuses an incompatible retained cleanup
+binding; it does not rewrite the evidence or fall back to deleting owned state.
+Current source behavior and remaining limits are documented in
+[configuration](../docs/configuration.md#generic-execution-migration) and
+[process containment](../docs/process-containment.md#current-automatic-command-domain).
+
+This is a source/contract description, not a new executed validation result.
+The original inventory counts, file hashes and eleven-test result above remain
+their original checkpoint evidence. This documentation update adds no coverage
+assessment or test/native pass. Arbitrary worker-command invocation, the complete
+discovery/validation-obligation flow and generic native qualification remain
+incomplete. External host tooling still needs actual generic resource authority;
+neither discovered paths nor an automatic domain grant new credentials, network
+access or public-PR qualification.

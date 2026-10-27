@@ -196,7 +196,6 @@ pub(crate) fn worker(input: WorkerInput<'_>) -> WorkerFixture {
         resource_writes: vec![],
         source_writes: writes,
         forbidden_roots: vec![source.into(), auth.clone()],
-        executables: vec![],
     }
     .validate()
     .unwrap();

@@ -444,7 +444,6 @@ async fn actual_thread_start_failure_does_not_establish_tentative_thread() {
         resource_writes: vec![],
         source_writes: vec![],
         forbidden_roots: vec![root.join("private")],
-        executables: vec![],
     };
     let isolation = plan.validate().unwrap();
     let permissions =

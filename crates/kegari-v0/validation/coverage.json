@@ -2089,8 +2089,25 @@
       "line": 449,
       "sha256": "478b7bc7db9b130a8c20719d28532388535a183773966955424683bd4057d5c4",
       "excerpt": "Before a command starts, the host MUST bind a generic invocation record to the current operation, role, authority, task/correction generation, repository/baseline identity, actual ",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-GENERIC-COMMAND-DOMAIN.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Host-produced schema-5 command domains replace configured executable/digest/mapping catalogs. Deterministic tests resolve unfamiliar and generated names, preserve ordered PATH and alias spelling, reject canonical escapes and exact-file sibling access, and retain role/forbidden-root boundaries.",
+          "tests": [
+            "src/managed_execution.rs::unfamiliar_and_generated_commands_need_no_predefined_inventory",
+            "src/managed_execution.rs::path_order_and_alias_spelling_are_preserved_without_ambient_expansion",
+            "src/managed_execution.rs::canonical_escape_and_unadmitted_external_programs_are_refused",
+            "src/managed_execution.rs::exact_file_resource_is_not_a_sibling_directory_execution_grant",
+            "src/managed_execution.rs::role_boundaries_and_forbidden_roots_remain_strict"
+          ],
+          "limits": "Domain construction and resolution only, not actual native command qualification. Generic worker argv/cwd invocation, complete non-secret environment discovery/admission, absent/unborn baselines and end-to-end automatically discovered obligations remain incomplete.",
+          "class": "deterministic",
+          "source_digest": "sha256:3a3f50e083b1e6a6785e14e2bbaf9d2906c771ff80473b761ac4ece957758979"
+        }
+      ]
     },
     {
       "id": "clause:7.6:ad83f2c7eee0",
@@ -2107,8 +2124,26 @@
       "line": 453,
       "sha256": "fef549c8a38d7e574194d59fdd09d61656a173b5d0fcdc099b6334ea65d41122",
       "excerpt": "A changed command, source/configuration context, validation obligation or relevant environment MUST receive a new recorded identity. Before launch and before result acceptance, the",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-GENERIC-COMMAND-DOMAIN.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Automatically captured read resources retain no-follow bytes/link text, original filesystem identities and shared finite budgets. Revalidation detects changed resources and substituted roots; mixed immutable-parent/mutable-child scopes refuse rather than losing sibling freshness. Worker binding refuses missing, foreign or nonexecuting domains.",
+          "tests": [
+            "src/managed_execution.rs::mixed_read_parent_and_writable_child_refuses_without_hiding_read_only_siblings",
+            "src/managed_execution.rs::parent_of_owned_scopes_cannot_hide_an_immutable_sibling",
+            "src/managed_execution.rs::retained_domain_rejects_root_replacement_and_forged_or_legacy_bindings",
+            "src/managed_resources.rs::full_content_revalidation_detects_changed_new_and_deleted_files",
+            "src/managed_resources.rs::shared_capture_and_retained_binding_cannot_reset_policy_budgets",
+            "src/worker_managed_binding_tests.rs::automatic_domain_revalidates_original_admitted_resource_identity"
+          ],
+          "limits": "This does not establish an atomic filesystem snapshot, symlink-target closure, native execution or full discovery/invocation recovery. Exact BUILD_ID binding conservatively refuses cross-build domain reuse/cleanup. Full run retained 21 fixture failures; the two corrected test files passed focused reruns without production changes.",
+          "class": "deterministic",
+          "source_digest": "sha256:3a3f50e083b1e6a6785e14e2bbaf9d2906c771ff80473b761ac4ece957758979"
+        }
+      ]
     },
     {
       "id": "clause:7.6:682e6ebc4b7c",

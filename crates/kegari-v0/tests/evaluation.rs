@@ -99,7 +99,6 @@ fn setup_from(
             reports.clone(),
             fixture.codex_home.clone(),
         ],
-        executables: vec![],
     }
     .validate()
     .unwrap();
@@ -1293,26 +1292,14 @@ fn mode_only_changes_are_scored_and_executable_fixture_modes_survive_reset() {
 
 #[cfg(unix)]
 #[test]
-fn private_grading_executable_is_an_exposure_even_without_a_read_grant() {
-    use std::os::unix::fs::PermissionsExt;
+fn legacy_executable_carveout_cannot_expose_private_grading_material() {
     let variant = suite().variants[0].clone();
-    let (_temp, fixture, isolation, reports) = setup(&variant);
+    let (_temp, _fixture, isolation, reports) = setup(&variant);
     let hidden = reports.join("private-grading-control");
-    std::fs::write(&hidden, b"#!/bin/sh\nprintf 'private expected result'\n").unwrap();
-    std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let mut plan = isolation.plan().clone();
-    plan.executables.push(hidden);
-    // Even an independently valid OS profile must not expose a private scorer
-    // through an executable carveout. No command is launched by this check.
-    match plan.validate() {
-        Ok(exposed) => assert_eq!(
-            verify_grader_boundary(&exposed, &[fixture.grader_root, reports])
-                .unwrap_err()
-                .code,
-            "grader_exposed"
-        ),
-        Err(error) => assert_eq!(error.code, "scope_violation"),
-    }
+    std::fs::write(&hidden, b"private expected result").unwrap();
+    let mut retained = serde_json::to_value(isolation.plan()).unwrap();
+    retained["executables"] = serde_json::json!([hidden]);
+    assert!(serde_json::from_value::<kegari_v0::isolation::IsolationPlan>(retained).is_err());
 }
 
 #[test]

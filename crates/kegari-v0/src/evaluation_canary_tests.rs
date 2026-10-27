@@ -490,7 +490,6 @@ fn actual_scorer_load_failure_keeps_materialization_diagnostic_without_native_cl
         source_writes: vec![],
         resource_writes: vec![],
         forbidden_roots: vec![case.grader.path().to_owned(), prepared.codex_home.clone()],
-        executables: vec![],
     }
     .validate()
     .unwrap();

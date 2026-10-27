@@ -150,7 +150,6 @@ mod tests {
                     reports,
                     prepared.codex_home.clone(),
                 ],
-                executables: vec![],
             }
             .validate()
             .unwrap();

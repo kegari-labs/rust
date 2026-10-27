@@ -1,18 +1,77 @@
 # Kegari v0 build progress
 
-**Goal active and incomplete; unattended. Target: 0.2.0 / M02-1.** The user
-resumed the Goal after documentation commit `304cc98` on 2026-10-27. The Goal
-control confirms active. The documentation hold is lifted for implementation;
-earlier paused/available-for-supervision notes below are historical. The prior
-turn made progress by recording the user's unattended instruction.
+**Goal active and incomplete; unattended. Target: 0.2.0 / M02-1–M02-2.**
+The prior turn made verified progress in commits `820a618` (process guards) and
+`97a9d027915e28d95ec8f54c54c89e3d92143759` (installed generic workflow); no
+commits were consolidated. This turn began on `main` with a clean index/tree.
+The approved SPEC 1.4 and action restrictions remain unchanged. No minor
+milestone is complete; follow [MILESTONES.md](MILESTONES.md).
 
-Follow [MILESTONES.md](MILESTONES.md) and SPEC 1.4. First remove/rework the
-incompatible execution design across the repository, including pending alpha.9.
-The current increment removes Cargo-specific orchestration and introduces the
-installed generic workflow path while preserving existing authority/lifecycle
-checks. Mandatory tool inventories, discovered validation obligations, generic
-execution and empty/unborn repository handling remain open until implemented and
-verified. No minor milestone is complete.
+The current increment removes the required configured tool/digest/mapping catalog
+and replaces it with a host-produced generic command domain (managed schema 5).
+Commands resolve within fixed OS resources, owned repository/scratch and actual
+read grants; selected aliases remain distinct from canonical executable
+observations. Immutable inputs are observed automatically without expected hash
+or dependency/mapping catalogs. Legacy configuration and records refuse strictly.
+The public native prerequisite remains closed. See the complete local evidence
+and limits in [LOCAL-GENERIC-COMMAND-DOMAIN.md](validation/LOCAL-GENERIC-COMMAND-DOMAIN.md).
+
+Independent review found two related freshness gaps: broad read parents containing
+narrower writable resources or owned repository/scratch could hide immutable
+sibling changes. Both are corrected using full-containment exemptions and explicit
+mixed-partition refusal; independent rereview and regressions support the fix.
+No additional material finding remains in this increment's bounded reviews.
+The backend deliberately binds BUILD_ID: schema 5 alone does not authorize a later
+build to reuse or clean old domains. Records are retained for explicit recovery.
+
+The full release run (`70634`) completed with **1,104 passed, 21 failed, three
+native ignores and 40 groups**. All 20 execution failures stopped at one
+noncanonical temporary-root fixture; one housekeeping fixture still read the
+removed catalog. Two test-only corrections preserved all assertions. Their focused
+rerun (`39356`) passed **44 tests**. All 327 production/build inputs stayed
+unchanged; independent source correspondence review verified exactly two changed
+fixture files. This is retained full-run evidence plus focused corrections, not
+one all-green full run on the final test source. All-target offline check,
+all-target clippy with `-D warnings`, formatting and inventory consistency passed.
+The one unused-import check warning was removed before the full release run.
+
+Final source digest: `sha256:8db67ada0c4952fd2277c5553b0c5270e8e3fc41a5459b86ac06c47a3d4bf53c`.
+The full run uses `sha256:3a3f50e083b1e6a6785e14e2bbaf9d2906c771ff80473b761ac4ece957758979`.
+Evidence is retained in `target/validation/m02-2-8db67ada0c49` (13 files), checksum
+manifest SHA-256 `2e2c71a883e4e8a3dfe3ed04a44432d2744c96a76b831134a57c08d5fc9999fd`.
+Development executable `target/release/kegari-v0` SHA-256:
+`18e2dbd547406f2c013b9c6b87221b4166f95ba8bc6809ac9158718b67a13eec`;
+source-recomputed build identity:
+`sha256:b5d6f124698346ff07b4cd6a2f0bc8bc53dec82326568177522afc92631fc511`.
+Metadata reports handover 4, managed 5, process 3, workflow-source 1 and instruction
+assets 4. Package version remains `0.2.0-alpha.9`; this is not a new packaged
+release or native qualification. Two SPEC §7.6 clauses gain partial deterministic
+evidence only; named discovery scenarios remain unqualified.
+
+Root owns integration, progress and local commits. All Cargo/test handles are
+terminal; delegated edits/reviews are complete. The domain migration is a separate
+coherent checkpoint from the installed-workflow and guard corrections because it
+changes configuration/persisted compatibility and has distinct review evidence.
+No history rewrite/consolidation, remote mutation or activation is performed.
+
+Next M02-2/M02-3 work: expose generic bounded argv/cwd invocation through the
+existing Control, execution registry, process journal and cancellation ownership;
+record actual command facts separately from validation satisfaction. Then add
+revision-bound discovered obligations and independent adequacy review through the
+delivery gates, retaining prior failures and unknowns. Do not let agent-selected
+output paths exclude source from candidate snapshots or grant repair capabilities
+merely from a failed generic command. Empty/unborn baselines must be observed,
+not fabricated Git SHAs. Recovery must reconcile the original invocation history.
+
+External host environment discovery/admission is also open. Requiring a configured
+test-resource entry for every tool would recreate the prohibited inventory.
+Observe candidates generically, distinguish existence from authority, and preserve
+credential/private-home boundaries; fixed OS tools alone cannot close M02-2.
+Native/live/human gates remain deferred while unattended, and consumed NQ approvals
+permit no additional runs. Continue independent work without permission requests.
+
+The following historical prior-increment evidence remains bound to its recorded
+source; it does not establish a pass for later changes.
 
 Resumption baseline: branch `main`, HEAD `304cc984721787f9148e7c0b246ad28dde60b149`,
 empty staging at that point; pending alpha.9 preserved before correction in

@@ -1154,88 +1154,90 @@ async fn invalid_workspace_update_cannot_preserve_known_actor_repository_or_reso
     }
 }
 
+// User-maintained execution catalogs no longer belong to configuration. Their
+// former mutation tests are replaced by rejection through both actual mutation
+// paths, while real generic scope reductions still latch before parsing fails.
 #[tokio::test]
-async fn managed_policy_changes_fence_even_when_another_field_is_invalid() {
-    let policy: kegari_v0::config::ManagedExecution = serde_json::from_value(json!({
-        "lifecycle":"foreground_v1",
-        "executables":[{"path":"/private/tmp/declared-tool","digest":kegari_v0::digest::bytes_digest(b"fixture declaration only")}]
-    })).unwrap();
-    for change in [
-        "added",
-        "removed",
-        "executable",
-        "read_root",
-        "generated",
-        "unchanged",
-    ] {
-        let f = Fixture::with_configuration(|config| {
-            let fixture = workspace_fixture_config();
-            config.connections = fixture.connections;
-            config.workspaces = fixture.workspaces;
-            if change != "added" {
+async fn obsolete_catalog_rejection_preserves_configuration_and_generic_resource_fences() {
+    for setup in [false, true] {
+        for reduce_resource in [false, true] {
+            let f = Fixture::with_configuration(|config| {
+                let fixture = workspace_fixture_config();
+                config.connections = fixture.connections;
+                config.workspaces = fixture.workspaces;
                 config
                     .workspaces
                     .get_mut("example")
                     .unwrap()
-                    .managed_execution = Some(policy.clone());
+                    .test_resources
+                    .insert(
+                        "data".into(),
+                        kegari_v0::config::TestResource {
+                            path: "/private/tmp/scoped-data".into(),
+                            writable: false,
+                            disposable: false,
+                        },
+                    );
+            });
+            let original = f.manager.snapshot().unwrap();
+            let revision = original.revision().unwrap();
+            let bytes = f
+                .registration
+                .root()
+                .read_bytes("config.toml", 8 * 1024 * 1024)
+                .unwrap();
+            let workspace_id = original.workspaces["example"].id;
+            let mut workspace: toml::Value =
+                toml::from_str(&toml::to_string(&original.workspaces["example"]).unwrap()).unwrap();
+            workspace.as_table_mut().unwrap().insert(
+                "managed_execution".into(),
+                toml::Value::Table(toml::map::Map::from_iter([(
+                    "lifecycle".into(),
+                    toml::Value::String("foreground_v1".into()),
+                )])),
+            );
+            if reduce_resource {
+                workspace["test_resources"].as_table_mut().unwrap().clear();
             }
-        });
-        let before = f.manager.snapshot().unwrap().revision().unwrap();
-        let mut workspace = f.manager.snapshot().unwrap().workspaces["example"].clone();
-        match change {
-            "added" => workspace.managed_execution = Some(policy.clone()),
-            "removed" => workspace.managed_execution = None,
-            "executable" => {
-                workspace.managed_execution.as_mut().unwrap().executables[0].digest =
-                    kegari_v0::digest::bytes_digest(b"different declared tool")
-            }
-            "read_root" => workspace
-                .managed_execution
-                .as_mut()
+            let request = if setup {
+                let mut configuration: toml::Value =
+                    toml::from_str(&toml::to_string(&original).unwrap()).unwrap();
+                configuration["workspaces"]["example"] = workspace;
+                f.request(
+                    CommandName::Setup,
+                    json!({"configuration":toml::to_string(&configuration).unwrap()}),
+                )
+            } else {
+                f.request(CommandName::WorkspaceConfigure, json!({"workspace":"example","workspace_configuration":toml::to_string(&workspace).unwrap()}))
+            };
+            assert!(
+                f.manager
+                    .execute(f.actor.clone(), request, None)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(f.manager.snapshot().unwrap().revision().unwrap(), revision);
+            assert_eq!(f.stored().revision().unwrap(), revision);
+            assert_eq!(
+                f.registration
+                    .root()
+                    .read_bytes("config.toml", 8 * 1024 * 1024)
+                    .unwrap(),
+                bytes
+            );
+            let fence = f
+                .manager
+                .authority_fences()
                 .unwrap()
-                .read_roots
-                .push(kegari_v0::config::ManagedReadRoot {
-                    path: "/private/tmp/declared-sdk".into(),
-                    directory: true,
-                    content: None,
-                }),
-            "generated" => {
-                workspace
-                    .managed_execution
-                    .as_mut()
-                    .unwrap()
-                    .generated_executables =
-                    Some(kegari_v0::config::ManagedGeneratedExecutables::ScratchBuildV1)
+                .check_workspace(workspace_id);
+            if reduce_resource {
+                assert_eq!(fence.unwrap_err().code, "permission_fenced");
+            } else {
+                fence.unwrap();
             }
-            "unchanged" => {}
-            _ => unreachable!(),
+            assert_eq!(f.inputs.wire.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(f.store.writes.load(Ordering::SeqCst), 0);
         }
-        workspace.max_agents = 0;
-        let request = f.request(
-            CommandName::WorkspaceConfigure,
-            json!({"workspace":"example","workspace_configuration":toml::to_string(&workspace).unwrap()}),
-        );
-        assert!(
-            f.manager
-                .execute(f.actor.clone(), request, None)
-                .await
-                .is_err(),
-            "{change}"
-        );
-        let fenced = f
-            .manager
-            .authority_fences()
-            .unwrap()
-            .check_workspace(workspace.id);
-        if change == "unchanged" {
-            fenced.unwrap();
-        } else {
-            assert_eq!(fenced.unwrap_err().code, "permission_fenced", "{change}");
-        }
-        assert_eq!(f.manager.snapshot().unwrap().revision().unwrap(), before);
-        assert_eq!(f.stored().revision().unwrap(), before);
-        assert_eq!(f.inputs.wire.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(f.store.writes.load(Ordering::SeqCst), 0);
     }
 }
 

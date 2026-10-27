@@ -471,7 +471,6 @@ mod tests {
                     directory: false,
                 }],
                 forbidden_roots: vec![fixture.grader_root.clone(), reports.clone(), auth.clone()],
-                executables: vec![],
             }
             .validate()
             .unwrap();

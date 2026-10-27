@@ -788,17 +788,13 @@ pub fn verify_grader_boundary(
         let private = private
             .canonicalize()
             .map_err(|e| Error::io("resolve grader boundary", e))?;
-        for public in [&plan.repository, &plan.scratch]
-            .into_iter()
-            .chain(
-                plan.read_roots
-                    .iter()
-                    .chain(&plan.source_writes)
-                    .chain(&plan.resource_writes)
-                    .map(|g| &g.path),
-            )
-            .chain(plan.executables.iter())
-        {
+        for public in [&plan.repository, &plan.scratch].into_iter().chain(
+            plan.read_roots
+                .iter()
+                .chain(&plan.source_writes)
+                .chain(&plan.resource_writes)
+                .map(|g| &g.path),
+        ) {
             if public.starts_with(&private) || private.starts_with(public) {
                 return Err(Error::new(
                     "grader_exposed",

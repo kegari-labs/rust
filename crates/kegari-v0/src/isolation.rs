@@ -15,16 +15,6 @@ pub use managed_execution::BoundManagedExecution;
 #[path = "managed_resources.rs"]
 mod managed_resources;
 
-/// Observe a bounded canonical SDK/library tree for an explicit managed policy.
-/// This reads content only; it does not execute tools or issue qualification.
-pub fn managed_resource_digest(path: &Path, directory: bool) -> Result<String> {
-    managed_resources::content_digest(
-        path,
-        directory,
-        &mut managed_resources::ResourceBudget::new(),
-    )
-}
-
 #[cfg(all(test, target_os = "macos"))]
 #[path = "isolation_native_tests.rs"]
 mod native_tests;
@@ -62,7 +52,6 @@ pub struct IsolationPlan {
     #[serde(default)]
     pub resource_writes: Vec<PathGrant>,
     pub forbidden_roots: Vec<PathBuf>,
-    pub executables: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_execution: Option<BoundManagedExecution>,
 }
@@ -235,29 +224,6 @@ impl IsolationPlan {
             }
             verify_writable_links(&grant.path, true)?;
         }
-        for executable in &mut plan.executables {
-            *executable = executable
-                .canonicalize()
-                .map_err(|e| Error::io("resolve allowed executable", e))?;
-            if !executable.is_file()
-                || plan
-                    .forbidden_roots
-                    .iter()
-                    .any(|f| executable.starts_with(f))
-            {
-                return Err(Error::new("scope_violation", "invalid executable grant"));
-            }
-        }
-        if matches!(
-            plan.role,
-            ExecutionRole::Coordination | ExecutionRole::IndependentReview
-        ) && !plan.executables.is_empty()
-        {
-            return Err(Error::new(
-                "scope_violation",
-                "coordination and independent review cannot execute commands",
-            ));
-        }
         if let Some(managed) = &plan.managed_execution {
             managed.validate_plan(&plan)?;
         }
@@ -347,58 +313,29 @@ impl ValidatedIsolation {
     /// anchored at cwd. Arguments and script text are never rewritten.
     pub fn resolve_executable(&self, name: &str) -> Result<PathBuf> {
         self.revalidate()?;
-        let path = Path::new(name);
-        let resolved = if path.is_absolute() {
-            path.to_path_buf()
-        } else if name.contains('/') {
-            self.plan.cwd.join(path)
-        } else {
-            let matches: Vec<_> = self
-                .plan
-                .executables
-                .iter()
-                .filter(|p| p.file_name().is_some_and(|n| n == name))
-                .collect();
-            if matches.len() != 1 {
-                return Err(Error::new(
-                    "scope_violation",
-                    "bare executable is absent or ambiguous in the admitted PATH",
-                ));
-            }
-            matches[0].clone()
-        }
-        .canonicalize()
-        .map_err(|e| Error::io("resolve command in execution cwd", e))?;
-        let generated = self
-            .plan
+        self.plan
             .managed_execution
             .as_ref()
-            .map(|profile| profile.generated_root(&self.plan))
-            .transpose()?
-            .flatten();
-        let generated_target = generated.as_ref().is_some_and(|root| {
-            resolved != *root && resolved.starts_with(root) && resolved.is_file()
-        });
-        if !self.plan.executables.contains(&resolved) && !generated_target {
-            return Err(Error::new("scope_violation", "executable is not admitted"));
-        }
-        Ok(resolved)
+            .ok_or_else(|| {
+                Error::new(
+                    "scope_violation",
+                    "operation has no repository command domain",
+                )
+            })?
+            .resolve(&self.plan.cwd, name)
     }
     pub fn command_path(&self) -> Result<String> {
-        let parents: std::collections::BTreeSet<_> = self
-            .plan
-            .executables
-            .iter()
-            .filter_map(|p| p.parent())
-            .collect();
-        Ok(parents
-            .into_iter()
-            .map(|p| {
-                p.to_str()
-                    .ok_or_else(|| Error::invalid("non-UTF-8 executable path"))
-            })
-            .collect::<Result<Vec<_>>>()?
-            .join(":"))
+        self.revalidate()?;
+        self.plan
+            .managed_execution
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    "scope_violation",
+                    "operation has no repository command domain",
+                )
+            })?
+            .command_path()
     }
     pub fn artifact(&self, path: &Path) -> Result<PathBuf> {
         self.revalidate()?;
@@ -466,12 +403,7 @@ impl ValidatedIsolation {
                 quote_path(path)?
             ));
         }
-        let managed_reads = self
-            .plan
-            .managed_execution
-            .as_ref()
-            .map_or_else(Vec::new, |profile| profile.read_grants());
-        for grant in self.plan.read_roots.iter().chain(&managed_reads) {
+        for grant in &self.plan.read_roots {
             profile.push_str(&format!(
                 "(allow file-read* ({} {}))\n",
                 if grant.directory {
@@ -479,7 +411,7 @@ impl ValidatedIsolation {
                 } else {
                     "literal"
                 },
-                quote_path(&grant.path)?
+                quote_path(&grant.path)?,
             ));
         }
         for grant in self
@@ -506,29 +438,18 @@ impl ValidatedIsolation {
             "(deny file-write* (subpath {}))\n",
             quote_path(&self.plan.repository.join(".git"))?
         ));
-        for executable in &self.plan.executables {
-            profile.push_str(&format!(
-                "(allow file-read* file-map-executable (literal {}))\n(allow process-exec (literal {}))\n",
-                quote_path(executable)?,
-                quote_path(executable)?
-            ));
-        }
         if let Some(managed) = &self.plan.managed_execution {
-            for path in managed.executable_mappings() {
+            for grant in managed.execution_grants() {
                 profile.push_str(&format!(
-                    "(allow file-map-executable (literal {}))\n",
-                    quote_path(path)?
+                    "(allow file-read* file-map-executable process-exec ({} {}))\n",
+                    if grant.directory {
+                        "subpath"
+                    } else {
+                        "literal"
+                    },
+                    quote_path(&grant.path)?,
                 ));
             }
-        }
-        if let Some(managed) = &self.plan.managed_execution
-            && let Some(root) = managed.generated_root(&self.plan)?
-        {
-            profile.push_str(&format!(
-                "(allow process-exec (subpath {}))\n(allow file-map-executable (subpath {}))\n",
-                quote_path(&root)?,
-                quote_path(&root)?
-            ));
         }
         for forbidden in &self.plan.forbidden_roots {
             profile.push_str(&format!(
@@ -740,7 +661,13 @@ fn rendered_launch_identity(
             Path::new("/usr/bin/sandbox-exec"),
             false,
         )?,
-        target: crate::platform::BinaryIdentity::inspect(&rendered.executable, false)?,
+        target: crate::platform::BinaryIdentity::inspect(
+            &rendered
+                .executable
+                .canonicalize()
+                .map_err(|error| Error::io("observe actual command target", error))?,
+            false,
+        )?,
         argv_digest: canonical_digest(1, &launch)?,
     })
 }
@@ -1678,7 +1605,6 @@ mod owned_exit_tests {
             source_writes: vec![],
             resource_writes: vec![],
             forbidden_roots: vec![],
-            executables: vec![],
             managed_execution: None,
         }
         .validate()

@@ -1494,7 +1494,7 @@ impl CleanupProcesses for NativeCleanupProcesses {
                     "removal hook isolation differs from its retained execution",
                 ));
             }
-            // Observe library/SDK contents before entering the host effect gate.
+            // Observe admitted resource contents before entering the host effect gate.
             expected.revalidate_resource_contents()?;
             crate::isolation::repository_command_prerequisite(&expected)?;
             let authority = self.scope(request.root, Some(request.proof.clone()))?;
@@ -2195,8 +2195,8 @@ pub struct HandoverInfo {
     /// Explicit process journal compatibility, including schema-3 check members.
     /// Older readers must not silently discard retained bundle ancestry.
     pub process_schema: u32,
-    /// The replacement must understand managed policy fields in configuration
-    /// and retained isolation records; omission cannot imply that capability.
+    /// The replacement must understand automatic command-domain records.
+    /// Schema support alone does not relax their exact-build policy binding.
     pub managed_execution_schema: u32,
     /// Optional file selection and embedded origins in config, instructions and
     /// retained cleanup records. Asset names alone are not a reader contract.
@@ -2214,7 +2214,7 @@ pub fn handover_info() -> Result<HandoverInfo> {
         config_schema: 1,
         receipt_schema: 1,
         process_schema: 3,
-        managed_execution_schema: 3,
+        managed_execution_schema: 5,
         workflow_source_schema: 1,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
         runtime_build: crate::BUILD_ID.into(),
@@ -2453,7 +2453,7 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
         || info.config_schema != 1
         || info.receipt_schema != 1
         || info.process_schema != 3
-        || info.managed_execution_schema != 3
+        || info.managed_execution_schema != 5
         || info.workflow_source_schema != 1
         || info.instruction_schema != crate::instructions::ASSEMBLY_SCHEMA
         || info.runtime_build.is_empty()
@@ -2742,7 +2742,7 @@ impl Housekeeping {
             || input.preparation.work_key != input.authority.work_key()?
             || !plan.source_writes.is_empty()
             || !plan.resource_writes.is_empty()
-            || !plan.executables.is_empty()
+            || plan.managed_execution.is_some()
             || plan.cwd != plan.repository
             || plan.repository.parent() != Some(plan.execution_root.as_path())
         {

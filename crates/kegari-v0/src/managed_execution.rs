@@ -1,111 +1,302 @@
-//! Host-owned managed foreground declarations bound to observed tool identities.
-//! A declaration describes the intended boundary; it is not native qualification.
+//! Host-produced generic command domains. No target-tool catalog or operator
+//! environment manifest is accepted. A bound domain is not native qualification.
 use super::managed_resources::{BoundManagedResource, ResourceBudget};
-use super::{ExecutionRole, IsolationPlan, PathGrant, canonical_target, overlap, safe_absolute};
-use crate::config::{ManagedExecution, ManagedGeneratedExecutables, ManagedLifecycle};
-use crate::digest::canonical_digest;
-use crate::error::{Error, Result};
-use crate::platform::BinaryIdentity;
+use super::{
+    ExecutionRole, IsolationPlan, PathGrant, canonical_target, contained_path, overlap,
+    safe_absolute,
+};
+use crate::{
+    digest::canonical_digest,
+    error::{Error, Result},
+};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::{
+    collections::BTreeSet,
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+};
+
+const SCHEMA: u32 = 5;
+const MAX_GRANTS: usize = 256;
+const MAX_PATH_BYTES: usize = 4096;
+// These are OS backend resources, not target-toolchain inventories. PATH grants
+// no access by itself. Only these fixed roots and actual admitted scopes grant
+// read/exec/map access. Missing OS grafts are never synthesized as observations.
+pub(super) const OS_READ_ROOTS: &[&str] = &[
+    "/usr/lib",
+    "/System/Library",
+    "/System/Volumes/Preboot/Cryptexes/App/System",
+    "/System/Volumes/Preboot/Cryptexes/Incoming/OS",
+    "/System/Volumes/Preboot/Cryptexes/OS",
+    "/System/Volumes/Preboot/Cryptexes/Rosetta",
+    "/System/Cryptexes/App",
+    "/System/Cryptexes/OS",
+    "/System/Cryptexes/Rosetta",
+];
+const OS_COMMAND_ROOTS: &[&str] = &["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/libexec"];
+const OS_PATH: &[&str] = &["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+fn changed() -> Error {
+    Error::new("identity_mismatch", "generic execution domain changed")
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DomainContext {
+    role: ExecutionRole,
+    execution_root: PathBuf,
+    repository: PathBuf,
+    scratch: PathBuf,
+    reads: Vec<PathGrant>,
+    writable_resources: Vec<PathGrant>,
+    forbidden: Vec<PathBuf>,
+}
+impl DomainContext {
+    fn from_plan(plan: &IsolationPlan) -> Self {
+        Self {
+            role: plan.role,
+            execution_root: plan.execution_root.clone(),
+            repository: plan.repository.clone(),
+            scratch: plan.scratch.clone(),
+            reads: plan.read_roots.clone(),
+            writable_resources: plan.resource_writes.clone(),
+            forbidden: plan.forbidden_roots.clone(),
+        }
+    }
+    fn validate(&self) -> Result<()> {
+        if matches!(
+            self.role,
+            ExecutionRole::Coordination | ExecutionRole::IndependentReview
+        ) {
+            return Err(Error::new(
+                "scope_violation",
+                "this role has no repository command domain",
+            ));
+        }
+        if self.reads.len() > MAX_GRANTS
+            || self.writable_resources.len() > MAX_GRANTS
+            || self.forbidden.len() > MAX_GRANTS
+        {
+            return Err(Error::invalid("execution domain exceeds scope bounds"));
+        }
+        for path in std::iter::once(&self.execution_root)
+            .chain([&self.repository, &self.scratch])
+            .chain(self.reads.iter().map(|g| &g.path))
+            .chain(self.writable_resources.iter().map(|g| &g.path))
+            .chain(&self.forbidden)
+        {
+            safe_absolute(path)?;
+            if path.as_os_str().len() > MAX_PATH_BYTES || canonical_target(path)? != *path {
+                return Err(Error::new(
+                    "scope_violation",
+                    "execution domain path is noncanonical or excessive",
+                ));
+            }
+        }
+        for path in [&self.repository, &self.scratch] {
+            if !path.is_dir()
+                || contained_path(&self.execution_root, path)? != *path
+                || self.forbidden.iter().any(|f| overlap(f, path))
+            {
+                return Err(changed());
+            }
+        }
+        if overlap(&self.repository, &self.scratch) {
+            return Err(changed());
+        }
+        for grant in &self.reads {
+            if grant.path.parent().is_none()
+                || self.forbidden.iter().any(|f| overlap(f, &grant.path))
+            {
+                return Err(changed());
+            }
+            observe_root(grant)?;
+        }
+        for write in &self.writable_resources {
+            if !self.reads.contains(write)
+                || overlap(&write.path, &self.repository)
+                || overlap(&write.path, &self.scratch)
+            {
+                return Err(changed());
+            }
+        }
+        for grant in &self.reads {
+            if (overlap(&grant.path, &self.repository) || overlap(&grant.path, &self.scratch))
+                && !self.owned_scope_covers(grant)
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "read-only resource parent contains an owned mutable repository or scratch directory; use disjoint read grants",
+                ));
+            }
+            if !self.owned_scope_covers(grant)
+                && self
+                    .writable_resources
+                    .iter()
+                    .any(|write| overlap(&write.path, &grant.path))
+                && !self
+                    .writable_resources
+                    .iter()
+                    .any(|write| grant_covers(write, grant))
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "read-only resource parent contains a writable subtree; use disjoint read and writable resource grants",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn owned_scope_covers(&self, grant: &PathGrant) -> bool {
+        grant.path.starts_with(&self.repository) || grant.path.starts_with(&self.scratch)
+    }
+    fn immutable_reads(&self) -> Vec<&PathGrant> {
+        self.reads
+            .iter()
+            .filter(|grant| {
+                !self.owned_scope_covers(grant)
+                    && !self
+                        .writable_resources
+                        .iter()
+                        .any(|write| grant_covers(write, grant))
+            })
+            .collect()
+    }
+}
+fn grant_covers(parent: &PathGrant, child: &PathGrant) -> bool {
+    parent.path == child.path || (parent.directory && child.path.starts_with(&parent.path))
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RootObservation {
+    grant: PathGrant,
+    device: u64,
+    inode: u64,
+}
+fn observe_root(grant: &PathGrant) -> Result<RootObservation> {
+    let metadata = std::fs::symlink_metadata(&grant.path)
+        .map_err(|e| Error::io("observe generic execution root", e))?;
+    if metadata.file_type().is_symlink()
+        || (grant.directory && !metadata.is_dir())
+        || (!grant.directory && !metadata.is_file())
+    {
+        return Err(changed());
+    }
+    Ok(RootObservation {
+        grant: grant.clone(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+fn domain_roots(context: &DomainContext) -> Result<Vec<RootObservation>> {
+    let mut roots = Vec::new();
+    let mut seen = BTreeSet::new();
+    for path in OS_READ_ROOTS.iter().chain(OS_COMMAND_ROOTS) {
+        let path = match Path::new(path).canonicalize() {
+            Ok(path) => path,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(Error::io("observe fixed OS resource", e)),
+        };
+        if seen.insert(path.clone()) {
+            roots.push(observe_root(&PathGrant {
+                path,
+                directory: true,
+            })?);
+        }
+    }
+    for grant in [
+        PathGrant {
+            path: context.repository.clone(),
+            directory: true,
+        },
+        PathGrant {
+            path: context.scratch.clone(),
+            directory: true,
+        },
+    ]
+    .iter()
+    .chain(&context.reads)
+    {
+        if seen.insert(grant.path.clone()) {
+            roots.push(observe_root(grant)?);
+        }
+    }
+    for root in &roots {
+        if context
+            .forbidden
+            .iter()
+            .any(|path| overlap(path, &root.grant.path))
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "execution domain overlaps a forbidden root",
+            ));
+        }
+    }
+    Ok(roots)
+}
+fn search_path(context: &DomainContext) -> Vec<PathBuf> {
+    let mut seen = BTreeSet::new();
+    OS_PATH
+        .iter()
+        .map(PathBuf::from)
+        .chain([context.repository.clone(), context.scratch.clone()])
+        .chain(
+            context
+                .reads
+                .iter()
+                .filter(|grant| grant.directory)
+                .map(|grant| grant.path.clone()),
+        )
+        // A colon cannot be encoded as one PATH component. Such a resource
+        // remains available by explicit path; it never splits into extra roots.
+        .filter(|path| path.to_str().is_some_and(|value| !value.contains(':')))
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoundManagedExecution {
     schema_version: u32,
-    policy: ManagedExecution,
     policy_digest: String,
-    tools: Vec<BinaryIdentity>,
-    read_roots: Vec<PathGrant>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    context: DomainContext,
+    roots: Vec<RootObservation>,
+    search_path: Vec<PathBuf>,
     resources: Vec<BoundManagedResource>,
 }
-
 impl BoundManagedExecution {
-    pub fn resolve(policy: &ManagedExecution) -> Result<Self> {
-        Self::resolve_with_resources(policy, None)
+    /// Exact-build compatibility is deliberate: a different backend build must
+    /// not silently adopt a retained schema-5 domain. Such recovery needs a
+    /// separately authorized/revalidated preparation, not a rewritten old digest.
+    pub fn automatic_policy_digest() -> Result<String> {
+        canonical_digest(
+            SCHEMA,
+            &serde_json::json!({
+                "backend":"macos_managed_command_domain_v1", "build":crate::BUILD_ID,
+                "os_read_roots":OS_READ_ROOTS, "os_command_roots":OS_COMMAND_ROOTS,
+                "path":OS_PATH, "scope":"owned_repository_scratch_and_admitted_reads",
+                "lifecycle":"owned_groups_and_registered_check_services",
+                "environment":"private_home_tmp_and_no_inherited_environment_v1"
+            }),
+        )
     }
-    fn resolve_with_resources(
-        policy: &ManagedExecution,
-        retained: Option<&[BoundManagedResource]>,
-    ) -> Result<Self> {
-        policy.validate()?;
+    /// Full resource observation is allowed only in preparation outside Control.
+    pub fn automatic(plan: &IsolationPlan) -> Result<Self> {
+        let context = DomainContext::from_plan(plan);
+        context.validate()?;
+        let roots = domain_roots(&context)?;
         let mut budget = ResourceBudget::new();
-        let mut resources = Vec::new();
-        let mut tools = Vec::new();
-        let mut paths = BTreeSet::new();
-        for tool in &policy.executables {
-            let path = PathBuf::from(&tool.path);
-            safe_absolute(&path)?;
-            let path = path
-                .canonicalize()
-                .map_err(|error| Error::io("resolve managed executable", error))?;
-            if !paths.insert(path.clone()) {
-                return Err(Error::invalid("managed executable aliases another entry"));
-            }
-            let identity = BinaryIdentity::inspect(&path, false)?;
-            if identity.digest != tool.digest {
-                return Err(Error::new(
-                    "identity_mismatch",
-                    "managed executable differs from its configured digest",
-                ));
-            }
-            tools.push(identity);
-        }
-        let mut read_roots = Vec::new();
-        let mut paths = BTreeSet::new();
-        for input in &policy.read_roots {
-            let configured = PathBuf::from(&input.path);
-            safe_absolute(&configured)?;
-            let path = configured
-                .canonicalize()
-                .map_err(|error| Error::io("resolve managed tool read grant", error))?;
-            if path.parent().is_none()
-                || input.directory != path.is_dir()
-                || (!input.directory && !path.is_file())
-                || !paths.insert(path.clone())
-            {
-                return Err(Error::invalid(
-                    "managed tool read grant is invalid or repeated",
-                ));
-            }
-            read_roots.push(PathGrant {
-                path,
-                directory: input.directory,
-            });
-            if input.content.is_some() {
-                let resource = if let Some(retained) = retained {
-                    let bound = retained.get(resources.len()).ok_or_else(|| {
-                        Error::new("identity_mismatch", "managed resource binding is missing")
-                    })?;
-                    bound.validate_binding_with_budget(input, &mut budget)?;
-                    bound.clone()
-                } else {
-                    BoundManagedResource::capture(input, &mut budget)?
-                };
-                resources.push(resource);
-            }
-        }
-        if retained.is_some_and(|retained| retained.len() != resources.len()) {
-            return Err(Error::new(
-                "identity_mismatch",
-                "managed resource bindings differ",
-            ));
-        }
+        let resources = context
+            .immutable_reads()
+            .into_iter()
+            .map(|grant| BoundManagedResource::capture(grant, &mut budget))
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
-            schema_version: if !resources.is_empty() {
-                3
-            } else {
-                match policy.lifecycle {
-                    ManagedLifecycle::ForegroundV1 => 1,
-                    ManagedLifecycle::CheckBundleV1 => 2,
-                }
-            },
-            policy: policy.clone(),
-            policy_digest: canonical_digest(1, policy)?,
-            tools,
-            read_roots,
+            schema_version: SCHEMA,
+            policy_digest: Self::automatic_policy_digest()?,
+            roots,
+            search_path: search_path(&context),
+            context,
             resources,
         })
     }
@@ -113,41 +304,28 @@ impl BoundManagedExecution {
         &self.policy_digest
     }
     pub fn supports_check_bundles(&self) -> bool {
-        matches!(self.schema_version, 2 | 3)
-            && self.policy.lifecycle == ManagedLifecycle::CheckBundleV1
+        self.schema_version == SCHEMA
     }
-    pub fn tools(&self) -> &[BinaryIdentity] {
-        &self.tools
-    }
-    pub fn executables(&self) -> Vec<PathBuf> {
-        self.tools.iter().map(|tool| tool.path.clone()).collect()
-    }
-    pub fn read_roots(&self) -> &[PathGrant] {
-        &self.read_roots
-    }
-    pub(super) fn read_grants(&self) -> Vec<PathGrant> {
-        let mut grants = self
-            .read_roots
-            .iter()
-            .filter(|grant| {
-                !self
-                    .resources
-                    .iter()
-                    .any(|resource| resource.root() == grant.path)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        grants.extend(
-            self.resources
-                .iter()
-                .flat_map(|resource| resource.read_grants()),
-        );
-        grants
-    }
-    pub(super) fn executable_mappings(&self) -> impl Iterator<Item = &std::path::PathBuf> {
-        self.resources
-            .iter()
-            .flat_map(|resource| resource.executable_mappings())
+    /// Bounded structure and metadata checks only; no resource content reads.
+    pub(crate) fn revalidate_binding(&self) -> Result<()> {
+        if self.schema_version != SCHEMA || self.policy_digest != Self::automatic_policy_digest()? {
+            return Err(changed());
+        }
+        self.context.validate()?;
+        if self.roots != domain_roots(&self.context)?
+            || self.search_path != search_path(&self.context)
+        {
+            return Err(changed());
+        }
+        let reads = self.context.immutable_reads();
+        if reads.len() != self.resources.len() {
+            return Err(changed());
+        }
+        let mut budget = ResourceBudget::new();
+        for (grant, resource) in reads.into_iter().zip(&self.resources) {
+            resource.validate_binding_with_budget(grant, &mut budget)?;
+        }
+        Ok(())
     }
     pub fn revalidate(&self) -> Result<()> {
         self.revalidate_binding()?;
@@ -157,565 +335,529 @@ impl BoundManagedExecution {
         }
         Ok(())
     }
-    /// Verify the retained content manifest and current path/tool bindings without
-    /// re-reading SDK/library bytes in a serialized admission callback. Full
-    /// content checks are explicit at preparation/cleanup; qualification stays
-    /// closed until the complete prepared workload contract is implemented.
-    pub(crate) fn revalidate_binding(&self) -> Result<()> {
-        if !matches!(self.schema_version, 1..=3)
-            || Self::resolve_with_resources(&self.policy, Some(&self.resources))? != *self
+    pub(super) fn validate_plan(&self, plan: &IsolationPlan) -> Result<()> {
+        if self.context != DomainContext::from_plan(plan) {
+            return Err(changed());
+        }
+        self.revalidate_binding()
+    }
+    pub(super) fn execution_grants(&self) -> impl Iterator<Item = &PathGrant> {
+        self.roots.iter().map(|root| &root.grant)
+    }
+    pub(super) fn command_path(&self) -> Result<String> {
+        self.search_path
+            .iter()
+            .map(|path| {
+                path.to_str()
+                    .filter(|s| !s.contains(':'))
+                    .ok_or_else(|| Error::invalid("command search path is not representable"))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|parts| parts.join(":"))
+    }
+    pub(super) fn resolve(&self, cwd: &Path, name: &str) -> Result<PathBuf> {
+        if name.is_empty() || name.len() > MAX_PATH_BYTES || name.contains('\0') {
+            return Err(Error::invalid("command executable name is invalid"));
+        }
+        let path = Path::new(name);
+        if path.is_absolute() || name.contains('/') {
+            return self.selected(if path.is_absolute() {
+                path.to_owned()
+            } else {
+                cwd.join(path)
+            });
+        }
+        for directory in &self.search_path {
+            let candidate = directory.join(name);
+            match std::fs::metadata(&candidate) {
+                Ok(metadata) if metadata.is_file() && metadata.mode() & 0o111 != 0 => {
+                    return self.selected(candidate);
+                }
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::io("inspect command search candidate", error)),
+            }
+        }
+        Err(Error::new(
+            "executable_unavailable",
+            "command is absent from the operation's ordered search path",
+        ))
+    }
+    fn selected(&self, path: PathBuf) -> Result<PathBuf> {
+        let resolved = path
+            .canonicalize()
+            .map_err(|e| Error::io("resolve selected command", e))?;
+        let metadata =
+            std::fs::metadata(&resolved).map_err(|e| Error::io("inspect selected command", e))?;
+        if !metadata.is_file()
+            || metadata.mode() & 0o111 == 0
+            || self
+                .context
+                .forbidden
+                .iter()
+                .any(|f| resolved.starts_with(f))
+            || !self.roots.iter().any(|root| {
+                if root.grant.directory {
+                    resolved != root.grant.path && resolved.starts_with(&root.grant.path)
+                } else {
+                    resolved == root.grant.path
+                }
+            })
         {
             return Err(Error::new(
-                "identity_mismatch",
-                "managed inventory binding changed",
-            ));
-        }
-        Ok(())
-    }
-    pub(super) fn generated_root(&self, plan: &IsolationPlan) -> Result<Option<PathBuf>> {
-        match self.policy.generated_executables {
-            None => Ok(None),
-            Some(ManagedGeneratedExecutables::ScratchBuildV1) => {
-                let root = plan.scratch.join("build");
-                match std::fs::symlink_metadata(&root) {
-                    Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                        return Err(Error::new(
-                            "scope_violation",
-                            "managed build root is linked or is not a directory",
-                        ));
-                    }
-                    Ok(_) => (),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                    Err(error) => return Err(Error::io("inspect managed build root", error)),
-                }
-                if canonical_target(&root)? != root {
-                    return Err(Error::new(
-                        "scope_violation",
-                        "managed build root was redirected",
-                    ));
-                }
-                Ok(Some(root))
-            }
-        }
-    }
-    pub(super) fn validate_plan(&self, plan: &IsolationPlan) -> Result<()> {
-        self.revalidate_binding()?;
-        if matches!(
-            plan.role,
-            ExecutionRole::Coordination | ExecutionRole::IndependentReview
-        ) {
-            return Err(Error::new(
                 "scope_violation",
-                "this role cannot select managed execution",
+                "selected command escapes the enforced execution domain",
             ));
         }
-        let declared: BTreeSet<_> = self.tools.iter().map(|tool| &tool.path).collect();
-        let admitted: BTreeSet<_> = plan.executables.iter().collect();
-        if declared != admitted || declared.len() != plan.executables.len() {
-            return Err(Error::new(
-                "scope_violation",
-                "executable grants differ from the managed inventory",
-            ));
-        }
-        for tool in &self.tools {
-            if overlap(&tool.path, &plan.repository)
-                || overlap(&tool.path, &plan.scratch)
-                || plan
-                    .source_writes
-                    .iter()
-                    .chain(&plan.resource_writes)
-                    .any(|grant| overlap(&tool.path, &grant.path))
-            {
-                return Err(Error::new(
-                    "scope_violation",
-                    "pinned tools overlap managed writable code or data",
-                ));
-            }
-        }
-        for grant in &self.read_roots {
-            if plan
-                .forbidden_roots
-                .iter()
-                .any(|path| overlap(path, &grant.path))
-                || overlap(&grant.path, &plan.repository)
-                || overlap(&grant.path, &plan.scratch)
-                || plan
-                    .source_writes
-                    .iter()
-                    .chain(&plan.resource_writes)
-                    .any(|write| overlap(&grant.path, &write.path))
-            {
-                return Err(Error::new(
-                    "scope_violation",
-                    "managed tool read grant overlaps protected context or mutable execution data",
-                ));
-            }
-        }
-        for resource in &self.resources {
-            if plan
-                .read_roots
-                .iter()
-                .any(|grant| overlap(resource.root(), &grant.path))
-            {
-                return Err(Error::new(
-                    "scope_violation",
-                    "ordinary read grants overlap a closed managed content resource",
-                ));
-            }
-        }
-        self.generated_root(plan)?;
-        Ok(())
+        // Normalize dot components but preserve the actual final alias spelling:
+        // argv[0]-sensitive tools must not silently become their symlink target.
+        let parent = path
+            .parent()
+            .ok_or_else(|| Error::invalid("command has no parent"))?
+            .canonicalize()
+            .map_err(|e| Error::io("resolve selected command parent", e))?;
+        Ok(parent.join(
+            path.file_name()
+                .ok_or_else(|| Error::invalid("command has no filename"))?,
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ManagedExecutable, ManagedLifecycle, ManagedReadRoot};
-    use crate::digest::bytes_digest;
-    use crate::isolation::repository_command_prerequisite;
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-
+    use std::{
+        fs,
+        os::unix::fs::{PermissionsExt, symlink},
+    };
     struct Fixture {
         _temp: tempfile::TempDir,
-        policy: ManagedExecution,
         plan: IsolationPlan,
-        tool: PathBuf,
-        sdk: PathBuf,
+        resource: PathBuf,
+        outside: PathBuf,
     }
     impl Fixture {
-        fn new() -> Self {
-            let temp = tempfile::TempDir::new().unwrap();
+        fn new(role: ExecutionRole) -> Self {
+            let temp = tempfile::tempdir().unwrap();
             let root = temp.path().canonicalize().unwrap();
-            let execution = root.join("runs");
-            let repository = execution.join("repository");
-            let scratch = execution.join("scratch");
-            let sdk = root.join("sdk");
-            let auth = root.join("auth");
-            for path in [&repository, &scratch, &sdk, &auth] {
+            let runs = root.join("runs");
+            let repository = runs.join("repository");
+            let scratch = runs.join("scratch");
+            let resource = root.join("resource");
+            let outside = root.join("outside");
+            let protected = root.join("protected");
+            for path in [&repository, &scratch, &resource, &outside, &protected] {
                 fs::create_dir_all(path).unwrap();
             }
-            let tool = root.join("tool");
-            let bytes = b"#!/bin/sh\nexit 0\n";
-            fs::write(&tool, bytes).unwrap();
-            fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
-            let policy = ManagedExecution {
-                lifecycle: ManagedLifecycle::ForegroundV1,
-                executables: vec![ManagedExecutable {
-                    path: tool.to_str().unwrap().into(),
-                    digest: bytes_digest(bytes),
-                }],
-                read_roots: vec![ManagedReadRoot {
-                    path: sdk.to_str().unwrap().into(),
-                    directory: true,
-                    content: None,
-                }],
-                generated_executables: None,
-            };
-            let managed = BoundManagedExecution::resolve(&policy).unwrap();
             let plan = IsolationPlan {
                 schema_version: 1,
-                role: ExecutionRole::Child,
-                execution_root: execution,
-                cwd: repository.clone(),
-                repository,
+                role,
+                execution_root: runs,
+                repository: repository.clone(),
+                cwd: repository,
                 scratch,
-                read_roots: vec![],
+                read_roots: vec![PathGrant {
+                    path: resource.clone(),
+                    directory: true,
+                }],
                 source_writes: vec![],
                 resource_writes: vec![],
-                forbidden_roots: vec![auth],
-                executables: vec![tool.clone()],
-                managed_execution: Some(managed),
+                forbidden_roots: vec![protected],
+                managed_execution: None,
             };
             Self {
                 _temp: temp,
-                policy,
                 plan,
-                tool,
-                sdk,
+                resource,
+                outside,
             }
+        }
+        fn bind(&mut self) -> super::super::ValidatedIsolation {
+            self.plan.managed_execution =
+                Some(BoundManagedExecution::automatic(&self.plan).unwrap());
+            self.plan.validate().unwrap()
+        }
+        fn program(path: &Path, body: &[u8]) {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, body).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
     #[test]
-    fn unpublished_schema_four_is_not_reinterpreted_as_a_supported_binding() {
-        let mut f = Fixture::new();
-        f.policy.lifecycle = ManagedLifecycle::CheckBundleV1;
-        let original = BoundManagedExecution::resolve(&f.policy).unwrap();
-        assert!(original.supports_check_bundles());
-        let mut stored = serde_json::to_value(original).unwrap();
-        stored["schema_version"] = 4.into();
-        let decoded: BoundManagedExecution = serde_json::from_value(stored).unwrap();
-        assert!(!decoded.supports_check_bundles());
+    fn unfamiliar_and_generated_commands_need_no_predefined_inventory() {
+        let mut fixture = Fixture::new(ExecutionRole::Child);
+        let isolation = fixture.bind();
+        // Created only after the domain was captured: actual invocation observes
+        // each executable; neither these names nor digests were configured.
+        for path in [
+            fixture.plan.repository.join("custom/deep/unfamiliar-tool"),
+            fixture.plan.scratch.join("any-layout/generated"),
+        ] {
+            Fixture::program(&path, b"#!/bin/sh\nexit 0\n");
+            assert_eq!(
+                isolation
+                    .resolve_executable(path.to_str().unwrap())
+                    .unwrap(),
+                path
+            );
+        }
         assert_eq!(
-            decoded.revalidate_binding().unwrap_err().code,
-            "identity_mismatch"
-        );
-        assert_eq!(decoded.revalidate().unwrap_err().code, "identity_mismatch");
-    }
-    #[test]
-    fn generic_command_rendering_preserves_argv_and_only_host_environment() {
-        let mut f = Fixture::new();
-        f.policy.generated_executables = Some(ManagedGeneratedExecutables::ScratchBuildV1);
-        f.plan.managed_execution = Some(BoundManagedExecution::resolve(&f.policy).unwrap());
-        let isolation = f.plan.validate().unwrap();
-        let argv = vec![
-            f.tool.to_string_lossy().into_owned(),
-            "repository-selected-command".into(),
-            "--project-option=unchanged".into(),
-        ];
-        // Pure preparation: the inert fixture executable is never launched.
-        let rendered = crate::isolation::render_command(&isolation, &argv).unwrap();
-        assert_eq!(rendered.argv, argv);
-        assert_eq!(rendered.executable, f.tool);
-        assert_eq!(rendered.profile, isolation.seatbelt_profile().unwrap());
-        assert_eq!(
-            rendered.environment,
-            std::collections::BTreeMap::from([
-                ("PATH".into(), isolation.command_path().unwrap()),
-                ("HOME".into(), f.plan.scratch.to_string_lossy().into_owned()),
-                (
-                    "TMPDIR".into(),
-                    f.plan.scratch.to_string_lossy().into_owned()
-                ),
-                ("LANG".into(), "C.UTF-8".into()),
-            ])
+            isolation
+                .resolve_executable("./custom/deep/unfamiliar-tool")
+                .unwrap(),
+            fixture.plan.repository.join("custom/deep/unfamiliar-tool")
         );
         assert_eq!(
-            repository_command_prerequisite(&isolation)
+            isolation
+                .resolve_executable("not-created-command")
+                .unwrap_err()
+                .code,
+            "executable_unavailable"
+        );
+        assert_eq!(
+            super::super::repository_command_prerequisite(&isolation)
                 .unwrap_err()
                 .code,
             "managed_profile_unqualified"
         );
     }
     #[test]
-    fn check_bundle_policy_is_explicit_and_cannot_be_schema_downgraded() {
-        let f = Fixture::new();
-        let foreground = BoundManagedExecution::resolve(&f.policy).unwrap();
-        assert!(!foreground.supports_check_bundles());
-        assert_eq!(
-            serde_json::to_value(&foreground).unwrap()["schema_version"],
-            1
-        );
-        let mut policy = f.policy.clone();
-        policy.lifecycle = ManagedLifecycle::CheckBundleV1;
-        let bundle = BoundManagedExecution::resolve(&policy).unwrap();
-        assert!(bundle.supports_check_bundles());
-        assert_ne!(bundle.policy_digest(), foreground.policy_digest());
-        bundle.revalidate().unwrap();
-        let mut record = serde_json::to_value(bundle).unwrap();
-        assert_eq!(record["schema_version"], 2);
-        record["schema_version"] = 1.into();
-        let changed: BoundManagedExecution = serde_json::from_value(record).unwrap();
-        assert!(changed.revalidate().is_err());
-    }
-    #[test]
-    fn executable_mapping_excludes_arbitrary_read_and_source_roots() {
-        let mut f = Fixture::new();
-        let profile = f.plan.validate().unwrap().seatbelt_profile().unwrap();
-        assert!(profile.contains(&format!(
-            "(allow file-read* file-map-executable (literal \"{}\"))",
-            f.tool.display()
-        )));
-        for path in [&f.sdk, &f.plan.repository, &f.plan.scratch] {
-            assert!(!profile.lines().any(|line| {
-                line.starts_with("(allow")
-                    && line.contains("file-map-executable")
-                    && line.contains(&format!("\"{}\"", path.display()))
-            }));
+    fn path_order_and_alias_spelling_are_preserved_without_ambient_expansion() {
+        let mut fixture = Fixture::new(ExecutionRole::Child);
+        let name = "kegari-fixture-unfamiliar-command";
+        for root in [
+            &fixture.plan.repository,
+            &fixture.plan.scratch,
+            &fixture.resource,
+        ] {
+            Fixture::program(&root.join(name), b"#!/bin/sh\nexit 0\n");
         }
-        assert!(
-            profile.contains(
-                "(allow file-read* file-test-existence file-map-executable (subpath \"/System/Cryptexes/OS\"))"
+        let target = fixture.plan.repository.join(name);
+        let alias = fixture.plan.repository.join("unfamiliar-alias");
+        symlink(name, &alias).unwrap();
+        let isolation = fixture.bind();
+        assert_eq!(isolation.resolve_executable(name).unwrap(), target);
+        assert_eq!(
+            isolation.resolve_executable("unfamiliar-alias").unwrap(),
+            alias
+        );
+        assert_eq!(
+            isolation.command_path().unwrap(),
+            format!(
+                "/usr/bin:/bin:/usr/sbin:/sbin:{}:{}:{}",
+                fixture.plan.repository.display(),
+                fixture.plan.scratch.display(),
+                fixture.resource.display()
             )
         );
-        assert!(profile.contains(&format!(
-            "(deny file-read* file-test-existence file-write* file-map-executable process-exec (subpath \"{}\"))",
-            f.plan.forbidden_roots[0].display()
-        )));
-        assert!(!profile.contains("(import"));
-        assert!(!profile.contains("(allow network"));
-        assert!(!profile.contains("(allow mach"));
-        f.policy.generated_executables = Some(ManagedGeneratedExecutables::ScratchBuildV1);
-        f.plan.managed_execution = Some(BoundManagedExecution::resolve(&f.policy).unwrap());
-        let generated = f.plan.validate().unwrap().seatbelt_profile().unwrap();
-        assert!(generated.contains(&format!(
-            "(allow file-map-executable (subpath \"{}\"))",
-            f.plan.scratch.join("build").display()
-        )));
+        let rendered = super::super::render_command(
+            &isolation,
+            &["unfamiliar-alias".into(), "literal argument".into()],
+        )
+        .unwrap();
+        assert_eq!(rendered.argv, ["unfamiliar-alias", "literal argument"]);
+        assert_eq!(rendered.executable, alias);
+        assert_eq!(rendered.environment.len(), 4);
+        assert_eq!(
+            rendered.environment["HOME"],
+            fixture.plan.scratch.to_str().unwrap()
+        );
+        #[cfg(target_os = "macos")]
+        {
+            let observed = super::super::rendered_launch_identity(&isolation, &rendered).unwrap();
+            assert_eq!(observed.target.path, target);
+            let direct = super::super::command_launch_identity(
+                &isolation,
+                &[name.into(), "literal argument".into()],
+            )
+            .unwrap();
+            assert_ne!(observed.argv_digest, direct.argv_digest);
+        }
     }
     #[test]
-    fn content_bound_resources_preserve_read_scope_and_separate_mappings() {
-        let mut f = Fixture::new();
-        let library = f.sdk.join("compiler.dylib");
-        let header = f.sdk.join("header.h");
-        fs::write(&library, b"library fixture; never executed").unwrap();
-        fs::write(&header, b"header fixture").unwrap();
-        f.policy.read_roots[0].content = Some(crate::config::ManagedResourceContent {
-            digest: crate::isolation::managed_resource_digest(&f.sdk, true).unwrap(),
-            executable_mappings: vec!["compiler.dylib".into()],
-        });
-        let bound = BoundManagedExecution::resolve(&f.policy).unwrap();
-        assert_eq!(serde_json::to_value(&bound).unwrap()["schema_version"], 3);
-        assert!(!bound.supports_check_bundles());
-        f.plan.managed_execution = Some(bound);
-        let isolation = f.plan.validate().unwrap();
-        isolation.revalidate_resource_contents().unwrap();
+    fn canonical_escape_and_unadmitted_external_programs_are_refused() {
+        let mut fixture = Fixture::new(ExecutionRole::Child);
+        let outside = fixture.outside.join("external");
+        let protected = fixture.plan.forbidden_roots[0].join("secret-tool");
+        Fixture::program(&outside, b"outside");
+        Fixture::program(&protected, b"secret");
+        symlink(&outside, fixture.plan.repository.join("escape")).unwrap();
+        symlink(&protected, fixture.plan.scratch.join("protected-alias")).unwrap();
+        let isolation = fixture.bind();
+        for name in [
+            outside,
+            fixture.plan.repository.join("escape"),
+            fixture.plan.scratch.join("protected-alias"),
+        ] {
+            assert_eq!(
+                isolation
+                    .resolve_executable(name.to_str().unwrap())
+                    .unwrap_err()
+                    .code,
+                "scope_violation"
+            );
+        }
+        assert!(
+            !isolation
+                .command_path()
+                .unwrap()
+                .contains(fixture.outside.to_str().unwrap())
+        );
+    }
+    #[test]
+    fn exact_file_resource_is_not_a_sibling_directory_execution_grant() {
+        let mut fixture = Fixture::new(ExecutionRole::Validation);
+        let allowed = fixture.resource.join("allowed");
+        let sibling = fixture.resource.join("sibling");
+        Fixture::program(&allowed, b"allowed");
+        Fixture::program(&sibling, b"sibling");
+        fixture.plan.read_roots = vec![PathGrant {
+            path: allowed.clone(),
+            directory: false,
+        }];
+        let isolation = fixture.bind();
+        assert_eq!(
+            isolation
+                .resolve_executable(allowed.to_str().unwrap())
+                .unwrap(),
+            allowed
+        );
+        assert_eq!(
+            isolation
+                .resolve_executable(sibling.to_str().unwrap())
+                .unwrap_err()
+                .code,
+            "scope_violation"
+        );
         let profile = isolation.seatbelt_profile().unwrap();
         assert!(profile.contains(&format!(
-            "(allow file-read* (subpath \"{}\"))",
-            f.sdk.display()
-        )));
-        for path in [&f.sdk, &library, &header] {
-            assert!(!profile.contains(&format!(
-                "(allow process-exec (literal \"{}\"))",
-                path.display()
-            )));
-        }
-        assert!(profile.contains(&format!(
-            "(allow file-map-executable (literal \"{}\"))",
-            library.display()
+            "file-map-executable process-exec (literal \"{}\")",
+            allowed.display()
         )));
         assert!(!profile.contains(&format!(
-            "(allow file-map-executable (literal \"{}\"))",
-            header.display()
+            "process-exec (subpath \"{}\")",
+            fixture.resource.display()
         )));
-        assert_eq!(
-            repository_command_prerequisite(&isolation)
-                .unwrap_err()
-                .code,
-            "managed_profile_unqualified"
-        );
-        fs::write(&library, b"substituted library fixture").unwrap();
-        // Structural admission checks do not pretend to observe resource bytes.
-        isolation.revalidate().unwrap();
+    }
+    #[test]
+    fn immutable_inputs_are_observed_and_mutable_test_resources_are_not_frozen() {
+        let mut fixture = Fixture::new(ExecutionRole::Validation);
+        fs::write(fixture.resource.join("input"), b"before").unwrap();
+        let isolation = fixture.bind();
+        fs::write(fixture.resource.join("input"), b"after").unwrap();
+        isolation.revalidate().unwrap(); // Structural checks do not read input bytes.
         assert!(isolation.revalidate_resource_contents().is_err());
-        assert_eq!(
-            repository_command_prerequisite(&isolation)
-                .unwrap_err()
-                .code,
-            "managed_profile_unqualified"
-        );
+        fixture.plan.managed_execution = None;
+        fixture.plan.resource_writes = fixture.plan.read_roots.clone();
+        let isolation = fixture.bind();
+        fs::write(fixture.resource.join("input"), b"legitimate test mutation").unwrap();
+        isolation.revalidate_resource_contents().unwrap();
     }
     #[test]
-    fn content_resources_reject_broader_grants_and_preserve_bundle_capability() {
-        let mut f = Fixture::new();
-        fs::write(f.sdk.join("file"), b"resource fixture").unwrap();
-        f.policy.lifecycle = ManagedLifecycle::CheckBundleV1;
-        f.policy.read_roots[0].content = Some(crate::config::ManagedResourceContent {
-            digest: crate::isolation::managed_resource_digest(&f.sdk, true).unwrap(),
-            executable_mappings: vec![],
-        });
-        let bound = BoundManagedExecution::resolve(&f.policy).unwrap();
-        assert!(bound.supports_check_bundles());
-        f.plan.managed_execution = Some(bound.clone());
-        f.plan.validate().unwrap();
-        f.plan.read_roots.push(PathGrant {
-            path: f.sdk.clone(),
+    fn mixed_read_parent_and_writable_child_refuses_without_hiding_read_only_siblings() {
+        let mut fixture = Fixture::new(ExecutionRole::Validation);
+        let input = fixture.resource.join("input");
+        let mutable = fixture.resource.join("mutable");
+        fs::write(&input, b"original read-only input").unwrap();
+        fs::create_dir(&mutable).unwrap();
+        let write = PathGrant {
+            path: mutable.clone(),
             directory: true,
-        });
-        assert_eq!(f.plan.validate().unwrap_err().code, "scope_violation");
-        let mut serialized = serde_json::to_value(&bound).unwrap();
-        serialized["schema_version"] = 2.into();
-        let forged: BoundManagedExecution = serde_json::from_value(serialized).unwrap();
-        assert!(forged.revalidate_binding().is_err());
-        let mut serialized = serde_json::to_value(&bound).unwrap();
-        serialized["resources"] = serde_json::json!([]);
-        let forged: BoundManagedExecution = serde_json::from_value(serialized).unwrap();
-        assert!(forged.revalidate_binding().is_err());
-    }
-    #[test]
-    fn loader_bootstrap_reads_only_fixed_grafts_and_literal_ancestors() {
-        use std::collections::BTreeSet;
-        let f = Fixture::new();
-        let boundary = f.plan.validate().unwrap();
-        let profile = boundary.seatbelt_profile().unwrap();
-        let ancestors = [
-            "/",
-            "/System",
-            "/System/Volumes",
-            "/System/Volumes/Preboot",
-            "/System/Volumes/Preboot/Cryptexes",
-            "/System/Volumes/Preboot/Cryptexes/App",
-            "/System/Volumes/Preboot/Cryptexes/Incoming",
-            "/System/Cryptexes",
+        };
+        fixture.plan.read_roots.push(write.clone());
+        fixture.plan.resource_writes.push(write.clone());
+        // These are genuine, internally consistent filesystem grants. The
+        // automatic observer must reject their unsupported mixed partition,
+        // rather than exempt the whole parent and lose its read-only sibling.
+        fixture.plan.validate().unwrap();
+        let error = BoundManagedExecution::automatic(&fixture.plan).unwrap_err();
+        assert_eq!(error.code, "scope_violation");
+        assert!(error.message.contains("read-only resource parent"));
+        // A disjoint representation retains writable semantics and real input
+        // freshness; standard repository/scratch reads remain valid as well.
+        fixture.plan.read_roots = vec![
+            PathGrant {
+                path: input.clone(),
+                directory: false,
+            },
+            write,
+            PathGrant {
+                path: fixture.plan.repository.clone(),
+                directory: true,
+            },
+            PathGrant {
+                path: fixture.plan.scratch.clone(),
+                directory: true,
+            },
         ];
-        let mut expected: BTreeSet<String> = ancestors
-            .iter()
-            .map(|path| format!("(allow file-read* file-test-existence (literal \"{path}\"))"))
-            .collect();
-        for path in [
-            "/System/Volumes/Preboot/Cryptexes/App/System",
-            "/System/Volumes/Preboot/Cryptexes/Incoming/OS",
-            "/System/Volumes/Preboot/Cryptexes/OS",
-            "/System/Volumes/Preboot/Cryptexes/Rosetta",
-            "/System/Cryptexes/App",
-            "/System/Cryptexes/OS",
-            "/System/Cryptexes/Rosetta",
-        ] {
-            expected.insert(format!(
-                "(allow file-read* file-test-existence file-map-executable (subpath \"{path}\"))"
-            ));
-        }
-        let actual: BTreeSet<String> = profile
-            .lines()
-            .filter(|line| line.starts_with("(allow") && line.contains("file-test-existence"))
-            .map(str::to_owned)
-            .collect();
-        assert_eq!(actual, expected);
-        for ancestor in ancestors {
-            assert!(!profile.contains(&format!("(subpath \"{ancestor}\")")));
-            for line in profile.lines().filter(|line| {
-                line.starts_with("(allow") && line.contains(&format!("(literal \"{ancestor}\")"))
-            }) {
-                assert!(!line.contains("file-write"));
-                assert!(!line.contains("file-map-executable"));
-                assert!(!line.contains("process-exec"));
-            }
-        }
-        assert!(profile.starts_with("(version 1)\n(deny default)\n"));
-        for forbidden in [
-            "(import",
-            "(allow network",
-            "(allow mach",
-            "(allow sysctl-write",
-        ] {
-            assert!(!profile.contains(forbidden));
-        }
-        assert!(profile.contains(&format!(
-            "(deny file-read* file-test-existence file-write* file-map-executable process-exec (subpath \"{}\"))",
-            f.plan.forbidden_roots[0].display()
-        )));
-        assert_eq!(
-            repository_command_prerequisite(&boundary).unwrap_err().code,
-            "managed_profile_unqualified"
-        );
+        let isolation = fixture.bind();
+        fs::write(mutable.join("output"), b"permitted test output").unwrap();
+        fs::write(fixture.plan.scratch.join("output"), b"private output").unwrap();
+        isolation.revalidate_resource_contents().unwrap();
+        fs::write(&input, b"changed read-only input").unwrap();
+        assert!(isolation.revalidate_resource_contents().is_err());
     }
     #[test]
-    fn managed_inventory_rejects_changed_bytes_aliases_and_substituted_records() {
-        let f = Fixture::new();
-        let bound = f.plan.managed_execution.as_ref().unwrap();
-        let mut bad = f.policy.clone();
-        bad.executables[0].digest = bytes_digest(b"different");
-        assert_eq!(
-            BoundManagedExecution::resolve(&bad).unwrap_err().code,
-            "identity_mismatch"
-        );
-        let alias = f.tool.with_file_name("alias");
-        std::os::unix::fs::symlink(&f.tool, &alias).unwrap();
-        let mut duplicate = f.policy.clone();
-        duplicate.executables.push(ManagedExecutable {
-            path: alias.to_str().unwrap().into(),
-            digest: f.policy.executables[0].digest.clone(),
-        });
-        assert!(BoundManagedExecution::resolve(&duplicate).is_err());
-        let mut record = serde_json::to_value(bound).unwrap();
-        record["tools"][0]["digest"] = serde_json::json!(bytes_digest(b"substitution"));
-        let substituted: BoundManagedExecution = serde_json::from_value(record).unwrap();
-        assert_eq!(
-            substituted.revalidate().unwrap_err().code,
-            "identity_mismatch"
-        );
-        fs::write(&f.tool, b"#!/bin/sh\nexit 1\n").unwrap();
-        assert_eq!(bound.revalidate().unwrap_err().code, "identity_mismatch");
-    }
-    #[test]
-    fn tool_reads_stay_command_only_and_do_not_establish_native_qualification() {
-        let f = Fixture::new();
-        let boundary = f.plan.validate().unwrap();
-        assert!(boundary.plan().read_roots.is_empty());
+    fn parent_of_owned_scopes_cannot_hide_an_immutable_sibling() {
+        let mut fixture = Fixture::new(ExecutionRole::Child);
+        let input = fixture.plan.execution_root.join("shared-input");
+        let repository_subpath = fixture.plan.repository.join("source");
+        let scratch_subpath = fixture.plan.scratch.join("output");
+        fs::write(&input, b"read-only sibling").unwrap();
+        fs::create_dir(&repository_subpath).unwrap();
+        fs::create_dir(&scratch_subpath).unwrap();
+        fixture.plan.source_writes = vec![PathGrant {
+            path: repository_subpath.clone(),
+            directory: true,
+        }];
+        fixture.plan.read_roots = vec![PathGrant {
+            path: fixture.plan.execution_root.clone(),
+            directory: true,
+        }];
+        // Reachable through the ordinary path checks: the read parent is an
+        // existing canonical directory, distinct from every forbidden root.
+        fixture.plan.validate().unwrap();
+        let error = BoundManagedExecution::automatic(&fixture.plan).unwrap_err();
+        assert_eq!(error.code, "scope_violation");
         assert!(
-            boundary
-                .seatbelt_profile()
-                .unwrap()
-                .contains(f.sdk.to_str().unwrap())
+            error
+                .message
+                .contains("owned mutable repository or scratch")
         );
-        let error = repository_command_prerequisite(&boundary).unwrap_err();
-        assert_eq!(error.code, "managed_profile_unqualified");
-        assert_eq!(
-            error.details["profile"],
-            boundary
-                .plan()
-                .managed_execution
-                .as_ref()
-                .unwrap()
-                .policy_digest()
-        );
-        let mut legacy = f.plan.clone();
-        legacy.managed_execution = None;
-        let bytes = serde_json::to_vec(&legacy).unwrap();
-        assert!(
-            !String::from_utf8(bytes.clone())
-                .unwrap()
-                .contains("managed_execution")
-        );
-        let roundtrip: IsolationPlan = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(
-            legacy.validate().unwrap().digest(),
-            roundtrip.validate().unwrap().digest()
-        );
-        assert_ne!(legacy.validate().unwrap().digest(), boundary.digest());
-        assert_eq!(
-            repository_command_prerequisite(&legacy.validate().unwrap())
-                .unwrap_err()
-                .code,
-            "process_tree_unverified"
-        );
+        fixture.plan.read_roots = vec![
+            PathGrant {
+                path: input.clone(),
+                directory: false,
+            },
+            PathGrant {
+                path: fixture.plan.repository.clone(),
+                directory: true,
+            },
+            PathGrant {
+                path: repository_subpath.clone(),
+                directory: true,
+            },
+            PathGrant {
+                path: fixture.plan.scratch.clone(),
+                directory: true,
+            },
+            PathGrant {
+                path: scratch_subpath.clone(),
+                directory: true,
+            },
+        ];
+        let isolation = fixture.bind();
+        fs::write(
+            repository_subpath.join("changed"),
+            b"owned source observation",
+        )
+        .unwrap();
+        fs::write(scratch_subpath.join("result"), b"owned output").unwrap();
+        isolation.revalidate_resource_contents().unwrap();
+        fs::write(&input, b"changed sibling").unwrap();
+        assert!(isolation.revalidate_resource_contents().is_err());
     }
     #[test]
-    fn managed_profile_cannot_add_tools_or_read_protected_or_writable_context() {
-        let f = Fixture::new();
+    fn retained_domain_rejects_root_replacement_and_forged_or_legacy_bindings() {
+        let mut fixture = Fixture::new(ExecutionRole::Child);
+        let isolation = fixture.bind();
+        let bound = fixture.plan.managed_execution.as_ref().unwrap();
+        let original = serde_json::to_value(bound).unwrap();
+        let roundtrip: BoundManagedExecution = serde_json::from_value(original.clone()).unwrap();
+        roundtrip.revalidate().unwrap();
+        for schema in 1..5 {
+            let mut value = original.clone();
+            value["schema_version"] = schema.into();
+            let forged: BoundManagedExecution = serde_json::from_value(value).unwrap();
+            assert!(forged.revalidate_binding().is_err());
+        }
+        let mut value = original;
+        value["search_path"] = serde_json::json!([fixture.outside]);
+        let forged: BoundManagedExecution = serde_json::from_value(value).unwrap();
+        assert!(forged.revalidate_binding().is_err());
+        fs::rename(
+            &fixture.plan.repository,
+            fixture.plan.repository.with_extension("old"),
+        )
+        .unwrap();
+        fs::create_dir(&fixture.plan.repository).unwrap();
+        assert!(isolation.revalidate().is_err());
+    }
+    #[test]
+    fn role_boundaries_and_forbidden_roots_remain_strict() {
         for role in [
             ExecutionRole::Coordination,
             ExecutionRole::IndependentReview,
         ] {
-            let mut plan = f.plan.clone();
-            plan.role = role;
-            assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
+            let fixture = Fixture::new(role);
+            assert_eq!(
+                BoundManagedExecution::automatic(&fixture.plan)
+                    .unwrap_err()
+                    .code,
+                "scope_violation"
+            );
+            assert!(
+                fixture
+                    .plan
+                    .validate()
+                    .unwrap()
+                    .resolve_executable("sh")
+                    .is_err()
+            );
         }
-        let mut plan = f.plan.clone();
-        plan.executables.clear();
-        assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
-        for path in [
-            &f.plan.forbidden_roots[0],
-            &f.plan.repository,
-            &f.plan.scratch,
+        for role in [
+            ExecutionRole::Review,
+            ExecutionRole::Validation,
+            ExecutionRole::Child,
         ] {
-            let mut policy = f.policy.clone();
-            policy.read_roots[0].path = path.to_str().unwrap().into();
-            let mut plan = f.plan.clone();
-            plan.managed_execution = Some(BoundManagedExecution::resolve(&policy).unwrap());
-            assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
+            let mut fixture = Fixture::new(role);
+            let isolation = fixture.bind();
+            let profile = isolation.seatbelt_profile().unwrap();
+            assert!(profile.contains(&format!(
+                "(allow file-write* (subpath \"{}\"))",
+                fixture.plan.scratch.display()
+            )));
+            assert!(!profile.contains(&format!(
+                "(allow file-write* (subpath \"{}\"))",
+                fixture.plan.repository.display()
+            )));
+            assert!(profile.contains("(deny default)"));
+            assert!(profile.contains(
+                "(deny file-read* file-test-existence file-write* file-map-executable process-exec"
+            ));
+            assert!(
+                isolation
+                    .plan()
+                    .managed_execution
+                    .as_ref()
+                    .unwrap()
+                    .supports_check_bundles()
+            );
         }
-        let mut plan = f.plan.clone();
-        plan.resource_writes.push(PathGrant {
-            path: f.sdk.clone(),
-            directory: true,
-        });
-        plan.read_roots = plan.resource_writes.clone();
-        assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
     }
     #[test]
-    fn generated_execution_is_explicit_and_bound_to_unredirected_scratch_build() {
-        let mut f = Fixture::new();
-        let before = f.plan.validate().unwrap().seatbelt_profile().unwrap();
-        assert!(!before.contains("(allow process-exec (subpath"));
-        f.policy.generated_executables = Some(ManagedGeneratedExecutables::ScratchBuildV1);
-        f.plan.managed_execution = Some(BoundManagedExecution::resolve(&f.policy).unwrap());
-        let profile = f.plan.validate().unwrap().seatbelt_profile().unwrap();
-        assert!(profile.contains(&format!(
-            "(allow process-exec (subpath \"{}\"))",
-            f.plan.scratch.join("build").display()
-        )));
-        assert!(!profile.contains(&format!(
-            "(allow process-exec (subpath \"{}\"))",
-            f.plan.repository.display()
-        )));
-        std::os::unix::fs::symlink(&f.sdk, f.plan.scratch.join("build")).unwrap();
-        assert_eq!(f.plan.validate().unwrap_err().code, "scope_violation");
-        fs::remove_file(f.plan.scratch.join("build")).unwrap();
-        std::os::unix::fs::symlink(f.sdk.join("not-present"), f.plan.scratch.join("build"))
-            .unwrap();
-        assert_eq!(f.plan.validate().unwrap_err().code, "scope_violation");
+    fn colon_resource_path_does_not_create_additional_search_components() {
+        let mut fixture = Fixture::new(ExecutionRole::Child);
+        let resource = fixture.outside.join("literal:component");
+        fs::create_dir(&resource).unwrap();
+        let program = resource.join("tool");
+        Fixture::program(&program, b"literal");
+        fixture.plan.read_roots = vec![PathGrant {
+            path: resource.clone(),
+            directory: true,
+        }];
+        let isolation = fixture.bind();
+        assert!(
+            !isolation
+                .command_path()
+                .unwrap()
+                .contains(resource.to_str().unwrap())
+        );
+        assert_eq!(
+            isolation
+                .resolve_executable(program.to_str().unwrap())
+                .unwrap(),
+            program
+        );
     }
 }

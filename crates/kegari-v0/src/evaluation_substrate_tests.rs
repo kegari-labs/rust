@@ -108,7 +108,6 @@ impl Case {
             source_writes: vec![],
             resource_writes: vec![],
             forbidden_roots: vec![grader, reports.clone(), auth.clone()],
-            executables: vec![],
         }
         .validate()
         .unwrap();

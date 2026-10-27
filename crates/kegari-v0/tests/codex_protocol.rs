@@ -85,7 +85,6 @@ fn fixture() -> (tempfile::TempDir, IsolationPlan) {
             directory: true,
         }],
         forbidden_roots: vec![root.join("privileged")],
-        executables: vec![],
     };
     (temp, plan)
 }
@@ -308,8 +307,10 @@ fn sandbox_paths_roles_and_environment_fail_closed() {
     assert!(plan.validate().is_err());
     plan.source_writes.clear();
     plan.validate().unwrap();
+    plan.role = ExecutionRole::Child;
+    plan.managed_execution =
+        Some(kegari_v0::isolation::BoundManagedExecution::automatic(&plan).unwrap());
     plan.role = ExecutionRole::IndependentReview;
-    plan.executables.push(PathBuf::from("/bin/sh"));
     assert!(plan.validate().is_err());
     assert!(
         worker_environment(
@@ -579,14 +580,20 @@ fn writable_directory_rejects_hardlinks_to_unrelated_files() {
 #[test]
 fn bare_executable_uses_admitted_path_without_rebasing_arguments() {
     let (_temp, mut plan) = fixture();
-    plan.executables.push(PathBuf::from("/bin/sh"));
+    plan.managed_execution =
+        Some(kegari_v0::isolation::BoundManagedExecution::automatic(&plan).unwrap());
     let isolation = plan.validate().unwrap();
     assert_eq!(
         isolation.resolve_executable("sh").unwrap(),
         Path::new("/bin/sh").canonicalize().unwrap()
     );
     assert!(isolation.resolve_executable("./sh").is_err());
-    assert!(isolation.resolve_executable("curl").is_err());
+    // Unknown names are resolved generically; there is no configured tool list.
+    assert!(
+        isolation
+            .resolve_executable("kegari-nonexistent-command-fixture")
+            .is_err()
+    );
 }
 
 #[tokio::test]

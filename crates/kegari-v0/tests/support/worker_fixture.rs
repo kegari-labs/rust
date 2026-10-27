@@ -353,33 +353,13 @@ impl Fixture {
         let git = Arc::new(Git::new(&pinned_git_path).unwrap());
         let revision = git.revision(&repo, "HEAD").unwrap();
         let child = role.permits_source_writes();
-        let executables = if child {
-            vec![
-                PathBuf::from("/usr/bin/true"),
-                PathBuf::from("/bin/sh"),
-                pinned_git_path.clone(),
-            ]
-        } else {
-            vec![]
-        };
-        let configured_policy = bundle.map(|_| kegari_v0::config::ManagedExecution {
-            lifecycle: kegari_v0::config::ManagedLifecycle::CheckBundleV1,
-            executables: executables
-                .iter()
-                .map(|path| {
-                    let identity =
-                        kegari_v0::platform::BinaryIdentity::inspect(path, false).unwrap();
-                    kegari_v0::config::ManagedExecutable {
-                        path: identity.path.to_string_lossy().into_owned(),
-                        digest: identity.digest,
-                    }
-                })
-                .collect(),
-            read_roots: vec![],
-            generated_executables: None,
-        });
-        let configured_workspace = configured_policy.as_ref().map(|policy| {
-            worker_bundle::configuration(&auth, workflow.path.as_deref().unwrap(), &source, policy, profile())
+        let configured_workspace = bundle.map(|_| {
+            worker_bundle::configuration(
+                &auth,
+                workflow.path.as_deref().unwrap(),
+                &source,
+                profile(),
+            )
         });
         let work = WorkIdentity {
             linear_endpoint: "https://linear.invalid/graphql".into(),
@@ -545,6 +525,8 @@ impl Fixture {
         }
         let execution_role = if child {
             ExecutionRole::Child
+        } else if role == AgentRole::Validation {
+            ExecutionRole::Validation
         } else if role == AgentRole::IndependentReview {
             ExecutionRole::IndependentReview
         } else if role == AgentRole::Review {
@@ -552,11 +534,8 @@ impl Fixture {
         } else {
             ExecutionRole::Coordination
         };
-        let managed_execution = configured_policy
-            .as_ref()
-            .map(|policy| BoundManagedExecution::resolve(policy).unwrap());
-        let isolation = IsolationPlan {
-            managed_execution,
+        let mut plan = IsolationPlan {
+            managed_execution: None,
             schema_version: 1,
             role: execution_role,
             execution_root: run.clone(),
@@ -577,10 +556,11 @@ impl Fixture {
                 vec![]
             },
             forbidden_roots: vec![source.clone(), private.clone(), auth.clone()],
-            executables,
+        };
+        if role.permits_repository_execution() {
+            plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
         }
-        .validate()
-        .unwrap();
+        let isolation = plan.validate().unwrap();
         let context = json!({"issue":{"body":"fixture"},"parent":{},"children":[{"id":id(11)}],"workspace":{"id":id(3)},"scope":{},"dependencies":[],"corrections":[],"evidence":{},"attempt":1,"phase":"work","profile":profile(),"operation":{"id":id(4)}});
         let work_key = authority.work_key().unwrap();
         let generation = match &authority {

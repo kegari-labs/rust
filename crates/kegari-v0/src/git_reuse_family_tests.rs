@@ -247,7 +247,6 @@ impl ReuseFixture {
             resource_writes: vec![],
             source_writes: vec![],
             forbidden_roots: vec![registration.root().path().into()],
-            executables: vec![binary.clone()],
         }
         .validate()
         .unwrap();

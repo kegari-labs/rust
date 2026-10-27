@@ -444,7 +444,6 @@ fn admitted_source_observation_uses_the_returned_bytes_and_refuses_traversal() {
         source_writes: vec![],
         resource_writes: vec![],
         forbidden_roots: vec![],
-        executables: vec![],
     }
     .validate()
     .unwrap();

@@ -406,7 +406,7 @@ impl LocalExecutor<'_> {
         {
             return Err(Error::new(
                 "unsupported_check_bundle",
-                "check services require explicit check_bundle_v1 policy",
+                "registered check services require the current generic execution domain",
             ));
         }
         self.preflight_check(&prepared)?;

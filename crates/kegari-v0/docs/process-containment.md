@@ -12,8 +12,8 @@ gate for earlier public-PR processing.
 
 On 2026-10-26 the user selected the managed-workload contract recorded in
 [SPEC §1.2](../SPEC.md#12-deliverable-and-exclusions), retained and clarified by
-version 1.4. The current local lifecycle guarantee covers the qualified generic
-backend for foreground work within its observed lifecycle, plus explicitly
+version 1.4. The managed-workload contract covers a qualified generic backend
+for foreground work within its observed lifecycle, plus explicitly
 registered managed services with verified ownership and bounded stop/exit handling.
 Actual tools and environment identities are observed per operation; a shipped
 toolset catalog or user-authored executable inventory is not an admission prerequisite.
@@ -52,8 +52,8 @@ finite `tests/process_group.rs` regression demonstrates exactly that late write.
 It establishes a process-group limitation, not a filesystem-sandbox escape.
 
 `src/isolation.rs::repository_command_prerequisite` currently rejects repository
-commands without a bound managed declaration with `process_tree_unverified`.
-A bound foreground declaration still returns `managed_profile_unqualified`;
+commands without an actual host-produced command domain with `process_tree_unverified`.
+A bound schema-5 domain still returns `managed_profile_unqualified`;
 it cannot manufacture the missing native qualification. Successful group cleanup
 and EOF cannot establish
 arbitrary-descendant closure. PID enumeration alone also cannot establish complete
@@ -72,6 +72,34 @@ membership or safely signal a process whose numeric PID has been reused.
 Compilation, help/version output, configuration parsing and deterministic
 fixtures can proceed while native qualification is incomplete. Completing those
 checks does not qualify a managed profile or a broader context profile by itself.
+
+## Current automatic command domain
+
+The host derives the schema-5 domain from fixed OS backend resources, the actual
+owned repository and scratch directories, and already-admitted resource grants.
+Executable names, expected hashes and mapping lists are not configuration inputs.
+Generated and unfamiliar programs can be resolved inside that domain without a
+catalog entry; canonical targets outside it remain refused. External host tool
+directories need actual generic resource authority. Discovery does not add home,
+credential, network or source-write access. Coordination and independent review
+receive no repository command domain.
+
+The original preparation binds the backend policy before hooks; retained model
+and cleanup isolation bind the actual domain and observed resource identities.
+Immutable read resources are captured with bounded no-follow reads outside
+Control. Links contribute their text, not an assertion about target bytes.
+Later serialized gates check retained structure and root identity; full resource
+recapture remains a separate outside-gate check. This is not an atomic filesystem
+snapshot or an exhaustive transitive dependency inventory.
+
+Legacy catalog/configuration fields and managed schemas 1–4 are refused. Schema 5
+also binds the exact build's policy: a different build cannot reuse it merely
+because it accepts schema 5. Retained cleanup therefore refuses incompatible
+bindings instead of replacing their identities, migrating them, or deleting
+owned state through a fallback. Current native qualification is still missing;
+arbitrary worker-command invocation and the complete discovery/validation flow
+also remain unfinished. These code paths do not establish first-run readiness
+or qualification for public PRs.
 
 ## Guard inheritance during concurrent launches
 
@@ -93,8 +121,9 @@ detached-descendant containment is still unproven.
 ## Historical implementation and current boundary
 
 The alpha.3/alpha.4 details below describe their actual historical source. SPEC 1.4
-supersedes their operator-authored executable/toolchain catalog; M02-1–M02-4 must
-remove/rework it while retaining generic lifecycle/resource safeguards. These
+supersedes their operator-authored executable/toolchain catalog, now replaced by
+the automatic domain above. M02-1–M02-4 still include unfinished generic command
+discovery and validation work. These
 older implementation details are not current setup instructions or qualification
 of the replacement backend.
 

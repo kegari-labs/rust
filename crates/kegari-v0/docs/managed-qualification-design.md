@@ -68,13 +68,20 @@ a claim made at 0.2.0 cannot be deferred merely to publish that version.
 
 ## Implementation checkpoint
 
-The pending Cargo-specific parser, launch preparation and result adapter are being
-removed under M02-1. The older executable catalog, named-check prerequisites and
-resource declaration model still need generic replacement; their continued
-presence during correction does not make them the approved onboarding contract.
-The production qualification refusal remains closed while generic execution and
-its required native evidence are incomplete. Do not replace it with an unconfined
-fallback, a `qualified = true` flag or a configuration assertion.
+The Cargo-specific parser, launch preparation and result adapter have been
+removed. The executable catalog is replaced by the host-produced schema-5 domain
+described in [configuration](configuration.md#generic-execution-migration): fixed
+OS resources, owned execution paths and already-admitted generic resources.
+Arbitrary worker-command invocation and the complete command-discovery and
+validation-obligation flow remain unfinished; named workflow checks still supply
+the current worker execution route. External host directories do not gain access
+merely because a command needs them. The exact-build retained policy also refuses
+incompatible cleanup rather than migrating evidence or deleting owned state.
+
+The production qualification refusal remains closed while this backend's native
+evidence is incomplete. Do not replace it with an unconfined fallback, a
+`qualified = true` flag or a configuration assertion. Earlier catalog/schema
+results remain historical evidence for their original implementations.
 
 `housekeeping::RuntimeQualification` is the broader authenticated handover record,
 not a per-command grant. Complete its route under milestone 0.5.0 while preserving

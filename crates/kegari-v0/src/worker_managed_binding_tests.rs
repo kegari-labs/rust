@@ -1,178 +1,104 @@
-//! Actual file-backed declaration checks only; no process or worker is launched.
+//! Actual file-backed automatic-domain checks only; no process or worker is launched.
 use super::*;
-use crate::config::{
-    ManagedExecutable, ManagedExecution, ManagedGeneratedExecutables, ManagedLifecycle,
-    ManagedReadRoot, ManagedResourceContent,
-};
 use crate::isolation::{BoundManagedExecution, IsolationPlan, PathGrant};
-use std::os::unix::fs::PermissionsExt;
 
-fn bound_fixture() -> (tempfile::TempDir, ManagedExecution, ValidatedIsolation) {
+fn bound_fixture() -> (tempfile::TempDir, ValidatedIsolation) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let execution = root.join("execution");
     let repository = execution.join("repository");
     let scratch = execution.join("scratch");
-    let tool_reads = root.join("tool-support");
+    let resource = root.join("admitted-resource");
     let protected = root.join("control");
-    for path in [&repository, &scratch, &tool_reads, &protected] {
+    for path in [&repository, &scratch, &resource, &protected] {
         std::fs::create_dir_all(path).unwrap();
     }
-    let tool = root.join("fixture-tool");
-    let bytes = b"component tool bytes; never executed\n";
-    std::fs::write(&tool, bytes).unwrap();
-    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let policy = ManagedExecution {
-        lifecycle: ManagedLifecycle::ForegroundV1,
-        executables: vec![ManagedExecutable {
-            path: tool.to_str().unwrap().into(),
-            digest: bytes_digest(bytes),
-        }],
-        read_roots: vec![ManagedReadRoot {
-            path: tool_reads.to_str().unwrap().into(),
-            directory: true,
-            content: None,
-        }],
-        generated_executables: None,
-    };
-    let bound = BoundManagedExecution::resolve(&policy).unwrap();
-    let isolation = IsolationPlan {
+    std::fs::write(resource.join("input"), b"actual admitted fixture input\n").unwrap();
+    let mut plan = IsolationPlan {
         schema_version: 1,
         role: ExecutionRole::Child,
         execution_root: execution,
         repository: repository.clone(),
         cwd: repository.clone(),
         scratch,
-        read_roots: vec![PathGrant {
-            path: repository,
-            directory: true,
-        }],
+        read_roots: vec![
+            PathGrant {
+                path: repository,
+                directory: true,
+            },
+            PathGrant {
+                path: resource,
+                directory: true,
+            },
+        ],
         source_writes: vec![],
         resource_writes: vec![],
         forbidden_roots: vec![protected],
-        executables: bound.executables(),
-        managed_execution: Some(bound),
-    }
-    .validate()
-    .unwrap();
-    (temp, policy, isolation)
+        managed_execution: None,
+    };
+    plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
+    (temp, plan.validate().unwrap())
 }
 
 #[test]
-fn configured_profile_rejects_omission_substitution_and_unconfigured_use() {
-    let (_temp, policy, isolation) = bound_fixture();
-    verify_managed_policy(&isolation, Some(&policy)).unwrap();
-    // The public legacy constructor uses this same None expectation.
+fn automatic_domain_rejects_omission_and_nonexecuting_contract_use() {
+    let (_temp, isolation) = bound_fixture();
+    verify_command_domain(&isolation, true).unwrap();
+    // Both constructors require the actual domain for execution; supplying
+    // one to a nonexecuting contract remains a mismatch.
     assert_eq!(
-        verify_managed_policy(&isolation, None).unwrap_err().code,
+        verify_command_domain(&isolation, false).unwrap_err().code,
         "worker_binding"
     );
     let mut omitted = isolation.plan().clone();
     omitted.managed_execution = None;
     let omitted = omitted.validate().unwrap();
     assert_eq!(
-        verify_managed_policy(&omitted, Some(&policy))
-            .unwrap_err()
-            .code,
+        verify_command_domain(&omitted, true).unwrap_err().code,
         "worker_binding"
     );
-    verify_managed_policy(&omitted, None).unwrap();
-    let mut changed = policy.clone();
-    changed.generated_executables = Some(ManagedGeneratedExecutables::ScratchBuildV1);
+    verify_command_domain(&omitted, false).unwrap();
     assert_eq!(
-        verify_managed_policy(&isolation, Some(&changed))
-            .unwrap_err()
-            .code,
-        "worker_binding"
-    );
-    assert!(
-        !isolation
+        isolation
             .plan()
-            .read_roots
-            .iter()
-            .any(|grant| grant.path == Path::new(&policy.read_roots[0].path))
-    );
-    assert_eq!(
-        crate::isolation::repository_command_prerequisite(&isolation)
-            .unwrap_err()
-            .code,
-        "managed_profile_unqualified"
+            .managed_execution
+            .as_ref()
+            .unwrap()
+            .policy_digest(),
+        BoundManagedExecution::automatic_policy_digest().unwrap()
     );
 }
 
 #[test]
-fn configured_profile_revalidates_original_tool_bytes() {
-    let (_temp, policy, isolation) = bound_fixture();
-    verify_managed_policy(&isolation, Some(&policy)).unwrap();
-    std::fs::write(&policy.executables[0].path, b"substituted tool bytes\n").unwrap();
-    assert_eq!(
-        verify_managed_policy(&isolation, Some(&policy))
-            .unwrap_err()
-            .code,
-        "identity_mismatch"
-    );
+fn automatic_domain_rejects_other_owned_roots_and_nonexecuting_roles() {
+    let (_first, original) = bound_fixture();
+    let (_second, other) = bound_fixture();
+    let mut substituted = original.plan().clone();
+    substituted.managed_execution = other.plan().managed_execution.clone();
+    // A self-consistent domain for another actual directory cannot bind this plan.
+    assert!(substituted.validate().is_err());
+    for role in [
+        ExecutionRole::Coordination,
+        ExecutionRole::IndependentReview,
+    ] {
+        let mut changed = original.plan().clone();
+        changed.role = role;
+        assert!(changed.clone().validate().is_err());
+        changed.managed_execution = None;
+        assert!(BoundManagedExecution::automatic(&changed).is_err());
+    }
 }
 
 #[test]
-fn configured_resource_content_survives_isolation_binding_and_rejects_changes() {
-    let (_temp, mut policy, legacy_isolation) = bound_fixture();
-    let resource = Path::new(&policy.read_roots[0].path);
-    let library = resource.join("library.dylib");
-    std::fs::write(&library, b"fixture library contents; never loaded\n").unwrap();
-    let digest = crate::isolation::managed_resource_digest(resource, true).unwrap();
-    policy.read_roots[0].content = Some(ManagedResourceContent {
-        digest: digest.clone(),
-        executable_mappings: vec!["library.dylib".into()],
-    });
-    let mut plan = legacy_isolation.plan().clone();
-    plan.managed_execution = Some(BoundManagedExecution::resolve(&policy).unwrap());
-    let isolation = plan.validate().unwrap();
-    verify_managed_policy(&isolation, Some(&policy)).unwrap();
-    isolation.revalidate_resource_contents().unwrap();
-    assert_ne!(isolation.digest(), legacy_isolation.digest());
-    assert_eq!(
-        serde_json::to_value(isolation.plan()).unwrap()["managed_execution"]["policy"]["read_roots"]
-            [0]["content"]["digest"],
-        digest
-    );
-    assert_eq!(
-        isolation.plan().read_roots,
-        legacy_isolation.plan().read_roots
-    );
-    assert_eq!(
-        isolation.plan().executables,
-        legacy_isolation.plan().executables
-    );
-    assert_eq!(isolation.plan().role, legacy_isolation.plan().role);
-    let sandbox = isolation.seatbelt_profile().unwrap();
-    assert!(sandbox.contains(&format!(
-        "(allow file-map-executable (literal \"{}\"))",
-        library.display()
-    )));
-    assert!(!sandbox.contains(&format!(
-        "(allow process-exec (literal \"{}\"))",
-        library.display()
-    )));
-    assert_eq!(
-        crate::isolation::repository_command_prerequisite(&isolation)
-            .unwrap_err()
-            .code,
-        "managed_profile_unqualified"
-    );
-
-    let mut changed_policy = policy.clone();
-    changed_policy.read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .digest = bytes_digest(b"different declared resource content");
-    assert_eq!(
-        verify_managed_policy(&isolation, Some(&changed_policy))
-            .unwrap_err()
-            .code,
-        "worker_binding"
-    );
-    std::fs::write(&library, b"substituted fixture library contents\n").unwrap();
-    assert!(isolation.revalidate_resource_contents().is_err());
-    assert!(verify_managed_policy(&isolation, Some(&policy)).is_err());
+fn automatic_domain_revalidates_original_admitted_resource_identity() {
+    let (_temp, isolation) = bound_fixture();
+    verify_command_domain(&isolation, true).unwrap();
+    let resource = &isolation.plan().read_roots[1].path;
+    let retained = resource.with_file_name("retained-original-resource");
+    std::fs::rename(resource, &retained).unwrap();
+    std::fs::create_dir(resource).unwrap();
+    std::fs::write(resource.join("input"), b"actual admitted fixture input\n").unwrap();
+    // Same pathname and bytes do not replace the original observed directory.
+    assert!(verify_command_domain(&isolation, true).is_err());
+    assert!(retained.join("input").is_file());
 }

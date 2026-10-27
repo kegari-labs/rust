@@ -111,7 +111,6 @@ impl ReuseFixture {
             resource_writes: vec![],
             source_writes: vec![],
             forbidden_roots: vec![registration.root().path().into()],
-            executables: vec![binary.clone()],
         }
         .validate()
         .unwrap();
@@ -242,7 +241,7 @@ fn reusable_source_requires_fresh_host_scope_and_revalidates_without_processes()
 fn reusable_source_rejects_hidden_edits_untracked_files_and_extra_directories() {
     for fault in ["hidden", "ignored", "directory", "mode", "hardlink"] {
         let f = ReuseFixture::new();
-        let binary = f.boundary.plan().executables[0].clone();
+        let binary = f.unscoped.executable().to_path_buf();
         match fault {
             "hidden" => {
                 git_run(
@@ -300,7 +299,7 @@ fn reusable_source_binds_marker_index_source_inode_and_exact_original_revision()
             }
             "index" => {
                 git_run(
-                    &f.boundary.plan().executables[0],
+                    f.unscoped.executable(),
                     &f.source,
                     &["update-index", "--assume-unchanged", "file.txt"],
                 );
@@ -313,7 +312,7 @@ fn reusable_source_binds_marker_index_source_inode_and_exact_original_revision()
             }
             _ => {
                 fs::write(f.source.join("file.txt"), b"new committed source\n").unwrap();
-                let binary = &f.boundary.plan().executables[0];
+                let binary = f.unscoped.executable();
                 git_run(binary, &f.source, &["add", "file.txt"]);
                 git_run(
                     binary,

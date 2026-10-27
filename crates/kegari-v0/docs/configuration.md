@@ -68,12 +68,43 @@ error. Discovery does not change configured account, repository/write, resource,
 network or release authority. Applicable known validation obligations remain
 required even when a workflow supplies no commands.
 
-The legacy `managed_execution` executable/digest catalog and resource-selection
-fields are being removed/reworked under [M02-1–M02-4](../MILESTONES.md). They are
-not a supported way to onboard new technologies. Their current refusal behavior
-must not be presented as generic execution support or worked around by supplying
-another toolset inventory. The replacement records actual command/environment
-observations automatically under generic authority and resource enforcement.
+Workspace configuration no longer accepts `managed_execution` or any nested
+executable, digest, read-root, executable-mapping, generated-executable or
+qualification catalog. This includes an empty table or a JSON null field: old
+configuration is rejected as unknown input rather than silently ignored or
+converted into execution authority. Remove the obsolete field through an explicit
+configuration change; this does not approve native execution or migrate retained
+execution evidence.
+
+Generic `test_resources` retain their actual paths and read/write/disposable
+permissions. Account, actor, repository, credential, role and release boundaries
+also remain configured and enforced. Fixed Git/Codex integration configuration is
+separate from target technology discovery.
+
+Preparation now produces a managed schema-5 command domain from fixed OS backend
+resources, the actual owned repository/scratch directories and already-admitted
+resource grants. No executable names, expected hashes or executable-mapping list
+are configured. Ordered command lookup uses fixed OS paths followed by those
+owned/admitted directories; explicit paths may select deeper programs. Canonical
+target checks and the rendered sandbox retain the same role, source-write,
+resource, forbidden-path and network boundaries. Finding a tool outside this
+domain does not admit its directory or expose the user's home or credentials:
+external host directories still need actual generic resource authority.
+
+The preparation receipt binds the backend policy, and the retained isolation
+binds its actual paths, root identities and bounded observations of immutable
+read resources. Full resource capture/revalidation occurs outside Control;
+serialized gates validate the retained binding. Symlink text is observed without
+following it or claiming target-content closure. A broad read grant containing
+a narrower writable resource or owned repository/scratch subtree currently
+refuses: use disjoint grants so read-only siblings are still observed. Reads
+wholly inside owned or admitted writable scopes retain their mutable semantics.
+Actual invocation evidence binds
+the selected executable, argv, cwd, rendered environment and isolation. These
+observations are not a user inventory or a `qualified` bit. The current worker
+still exposes named workflow checks; arbitrary worker-command invocation and
+the complete discovery/validation-obligation flow remain unfinished. Production
+repository commands still refuse missing native backend qualification.
 
 The unpublished `offline_cargo` configuration and schema-4 launch/check adapter
 are removed. Unknown obsolete fields/records are rejected without migration or
@@ -101,21 +132,22 @@ repair; a genuine nonzero main-check result may do so after clean service closur
 These are finite check-owned services, not reusable daemons or independently
 installed host services. Supported native service qualification remains incomplete.
 
-Managed foreground records retain schema 1; bound check-bundle policies use
-schema 2. Policies with content resources use managed schema 3 for either
-lifecycle. Service-member process rows use schema 3, while ordinary process rows
-remain schema 2 and legacy rows remain readable without promotion. Service-bearing
+The current automatic domain uses managed schema 5 for foreground and bundled
+checks; retained catalog schemas 1–4 and removed isolation fields are refused.
+Schema-2 resource observations are descriptive and retain their original identity.
+Service-member process rows use schema 3, while ordinary process rows remain
+schema 2 and legacy process rows remain readable without promotion. Service-bearing
 check records use schema 3; checks without services retain schemas 1/2. Handover
-metadata is version 4 and requires process schema 3, managed schema 3 and explicit
+metadata is version 4 and requires process schema 3, managed schema 5 and explicit
 workflow-source schema 1 support for selected or installed workflow origins.
 
-Any policy addition, change or removal creates a workspace authority fence. A
-successful replacement requires PAUSED or STOPPED, drained work and no unresolved
-effects. Even a proposal with another invalid field retains the fence for a
-reliably parsed policy change; an unrelated invalid proposal with the same policy
-does not create this particular fence. Configuration validation and the component
-tests are not native qualification: production command admission continues to
-refuse a policy without the separate required qualification evidence.
+The schema-5 policy digest includes the exact build identity. A retained command
+domain from a different build is refused even if its schema number matches;
+schema compatibility alone does not authorize a retained cleanup hook. There is
+no automatic migration, evidence rebinding or destructive cleanup fallback.
+Existing account, repository and generic resource permission changes retain
+their configuration fencing and drained-update requirements. Removing the old
+catalog does not change those requirements or resolve outstanding effects.
 
 `config check` returns explicit verified/blocked metadata checks and an
 `operational_qualification: unverified` field. A workspace-limited check keeps the

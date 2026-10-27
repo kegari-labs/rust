@@ -679,7 +679,13 @@ pub fn operation_tool_definitions(
 }
 impl WorkerContract {
     pub fn new(input: ContractInput) -> Result<Self> {
-        verify_managed_policy(&input.isolation, None)?;
+        let executes = input
+            .assembled
+            .manifest
+            .permissions
+            .repository_code_execution
+            && input.repository.is_some();
+        verify_command_domain(&input.isolation, executes)?;
         Self::new_inner(input)
     }
     pub(crate) fn new_configured(
@@ -692,17 +698,7 @@ impl WorkerContract {
                 "managed workspace identity differs",
             ));
         }
-        let executes = input.assembled.manifest.role.permits_repository_execution()
-            && input.repository.is_some();
-        verify_managed_policy(
-            &input.isolation,
-            if executes {
-                workspace.managed_execution.as_ref()
-            } else {
-                None
-            },
-        )?;
-        Self::new_inner(input)
+        Self::new(input)
     }
     fn new_inner(input: ContractInput) -> Result<Self> {
         let ContractInput {
@@ -774,7 +770,7 @@ impl WorkerContract {
             || (manifest.permissions.repository_code_execution
                 && !role.permits_repository_execution())
             || (!manifest.permissions.repository_code_execution
-                && !isolation.plan().executables.is_empty())
+                && isolation.plan().managed_execution.is_some())
             || manifest.permissions.enforcement_profile != isolation.digest()
             || serde_json::to_vec(&context)
                 .map_err(|_| Error::invalid("context encoding"))?
@@ -885,7 +881,7 @@ impl WorkerContract {
                     || manifest.work_generation != g.review_identity()
                     || !isolation.plan().source_writes.is_empty()
                     || !isolation.plan().resource_writes.is_empty()
-                    || !isolation.plan().executables.is_empty()
+                    || isolation.plan().managed_execution.is_some()
                 {
                     return Err(Error::new(
                         "worker_binding",
@@ -971,20 +967,18 @@ impl WorkerContract {
     }
 }
 
-fn verify_managed_policy(
-    isolation: &ValidatedIsolation,
-    configured: Option<&crate::config::ManagedExecution>,
-) -> Result<()> {
-    match (&isolation.plan().managed_execution, configured) {
-        (None, None) => Ok(()),
-        (Some(actual), Some(expected))
-            if actual.policy_digest() == canonical_digest(1, expected)? =>
-        {
+fn verify_command_domain(isolation: &ValidatedIsolation, required: bool) -> Result<()> {
+    match (&isolation.plan().managed_execution, required) {
+        (None, false) => Ok(()),
+        (Some(actual), true) => {
+            // Revalidate the exact automatic domain against this retained plan,
+            // not merely the self-consistency of a supplied serialized record.
+            isolation.revalidate()?;
             actual.revalidate()
         }
         _ => Err(Error::new(
             "worker_binding",
-            "managed execution profile differs from the configured workspace",
+            "command domain is missing for execution or present for a nonexecuting contract",
         )),
     }
 }

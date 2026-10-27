@@ -216,6 +216,7 @@ struct Fixture {
     root: PrivateDir,
     source: PathBuf,
     retained: PathBuf,
+    git_binary: PathBuf,
     house: Arc<Housekeeping>,
     control: Arc<ControlHost>,
     wire: Arc<Wire>,
@@ -336,7 +337,6 @@ impl Fixture {
             resource_writes: vec![],
             source_writes: vec![],
             forbidden_roots: vec![root.path().into()],
-            executables: vec![pinned_git.clone()],
         }
         .validate()
         .unwrap();
@@ -477,6 +477,7 @@ impl Fixture {
             root,
             source,
             retained,
+            git_binary: pinned_git,
             house,
             control,
             wire,
@@ -529,23 +530,12 @@ fn concurrent_retention_and_process_registration_preserve_both_facts() {
         entered,
         resume: Mutex::new(paused),
     });
-    let registration: Value = f
-        .root
-        .child("cleanup")
-        .unwrap()
-        .read(&format!("{}.json", id(7)))
-        .unwrap();
-    let executable = PathBuf::from(
-        registration["isolation"]["executables"][0]
-            .as_str()
-            .unwrap(),
-    );
     let house = Arc::new(
         Housekeeping::new(
             PrivateDir::open(f.root.path()).unwrap(),
             f.control.clone(),
             probe.clone(),
-            executable,
+            f.git_binary.clone(),
         )
         .unwrap(),
     );
@@ -1532,6 +1522,7 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
         "missing_managed_policy",
         "foreground_only_managed_policy",
         "pre_resource_managed_policy",
+        "pre_generic_managed_policy",
         "obsolete_offline_cargo_managed_policy",
         "unknown_managed_policy",
     ] {
@@ -1561,6 +1552,7 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
             "unknown_managed_policy" => info["managed_execution_schema"] = 99.into(),
             "foreground_only_managed_policy" => info["managed_execution_schema"] = 1.into(),
             "pre_resource_managed_policy" => info["managed_execution_schema"] = 2.into(),
+            "pre_generic_managed_policy" => info["managed_execution_schema"] = 3.into(),
             "obsolete_offline_cargo_managed_policy" => info["managed_execution_schema"] = 4.into(),
             _ => info["schema_version"] = 1.into(),
         }

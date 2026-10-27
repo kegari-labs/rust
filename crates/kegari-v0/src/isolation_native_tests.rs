@@ -3,9 +3,7 @@
 //! admission or issue a reusable managed-profile qualification record.
 use super::*;
 use crate::{
-    config::{ManagedExecutable, ManagedExecution, ManagedLifecycle},
     control::Lease,
-    platform::BinaryIdentity,
     process_records::{ProcessJournal, RecoveryState, SpawnBinding},
     storage::PrivateDir,
 };
@@ -31,23 +29,7 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
     std::fs::write(&sentinel, b"fixture-protected-value\n").unwrap();
     // Pin the actual shell directly: macOS /bin/sh is a host-selected wrapper.
     // This fixture does not qualify that wrapper or its mutable selector.
-    let policy = ManagedExecution {
-        lifecycle: ManagedLifecycle::ForegroundV1,
-        executables: ["/bin/bash", "/bin/sleep"]
-            .into_iter()
-            .map(|path| {
-                let identity = BinaryIdentity::inspect(Path::new(path), false).unwrap();
-                ManagedExecutable {
-                    path: identity.path.to_string_lossy().into_owned(),
-                    digest: identity.digest,
-                }
-            })
-            .collect(),
-        read_roots: vec![],
-        generated_executables: None,
-    };
-    let profile = BoundManagedExecution::resolve(&policy).unwrap();
-    let isolation = IsolationPlan {
+    let mut plan = IsolationPlan {
         schema_version: 1,
         role: ExecutionRole::Validation,
         execution_root: runs,
@@ -58,11 +40,10 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
         source_writes: vec![],
         resource_writes: vec![],
         forbidden_roots: vec![protected],
-        executables: profile.executables(),
-        managed_execution: Some(profile),
-    }
-    .validate()
-    .unwrap();
+        managed_execution: None,
+    };
+    plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
+    let isolation = plan.validate().unwrap();
     // Even this exact fixture cannot open the public execution entry.
     assert_eq!(
         repository_command_prerequisite(&isolation)

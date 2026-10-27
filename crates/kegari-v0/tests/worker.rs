@@ -491,6 +491,15 @@ fn run_preparation(f: &Fixture) -> kegari_v0::worker_run::Preparation {
             Duration::seconds(30),
         )
         .unwrap();
+    let mut isolation = f.input.isolation.plan().clone();
+    if f.input
+        .assembled
+        .manifest
+        .role
+        .permits_repository_execution()
+    {
+        isolation.managed_execution = Some(BoundManagedExecution::automatic(&isolation).unwrap());
+    }
     kegari_v0::worker_run::Preparation {
         config: Arc::new(config),
         workflow: f.input.workflow.clone(),
@@ -499,7 +508,7 @@ fn run_preparation(f: &Fixture) -> kegari_v0::worker_run::Preparation {
         role: f.input.assembled.manifest.role,
         phase: "work".into(),
         context: f.input.context.clone(),
-        isolation: f.input.isolation.plan().clone(),
+        isolation,
         repository: Some(RepositoryContext {
             root: f.input.isolation.plan().repository.clone(),
             revision: f
@@ -1394,6 +1403,10 @@ fn authorized_resource_write_contract_rejects_unconfigured_flags_and_scope_expan
             disposable: true,
         },
     );
+    // Rebind the host-derived domain after the actual admitted resource grants
+    // are final; the domain does not authorize the configured scope itself.
+    preparation.isolation.managed_execution =
+        Some(BoundManagedExecution::automatic(&preparation.isolation).unwrap());
     let prepared = kegari_v0::worker_run::prepare(preparation).unwrap();
     assert_eq!(
         prepared
@@ -1434,7 +1447,7 @@ fn repository_free_child_keeps_reasoning_role_without_execution_or_fabricated_gi
     input.repository = None;
     input.repository_id = None;
     input.isolation.source_writes.clear();
-    input.isolation.executables.clear();
+    input.isolation.managed_execution = None;
     let prepared = kegari_v0::worker_run::prepare(input).unwrap();
     let manifest = &prepared.contract().instructions().manifest;
     assert_eq!(manifest.role, AgentRole::Documentation);

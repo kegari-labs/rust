@@ -59,455 +59,96 @@ fn typed_config_defaults_and_reproducible_revision() {
     assert_eq!(config.revision().unwrap(), parsed.revision().unwrap());
 }
 
-fn managed_policy() -> ManagedExecution {
-    ManagedExecution {
-        lifecycle: ManagedLifecycle::ForegroundV1,
-        executables: vec![ManagedExecutable {
-            path: "/private/tmp/toolchain/cargo".into(),
-            digest: bytes_digest(b"declared fixture executable; not an observed native tool"),
-        }],
-        read_roots: vec![],
-        generated_executables: None,
-    }
-}
-
+// The removed catalog tests described obsolete target-tool policy. The public
+// configuration now rejects that entire surface rather than retaining an opt-in
+// adapter. Generic account/repository/resource authority remains independently tested.
 #[test]
-fn omitted_managed_policy_keeps_legacy_configuration_bytes_and_revision() {
+fn configuration_without_tool_catalog_preserves_bytes_and_revision() {
     let config = configured();
-    let legacy = serde_json::to_value(&config).unwrap();
+    let value = serde_json::to_value(&config).unwrap();
     assert!(
-        legacy["workspaces"]["example"]
+        value["workspaces"]["example"]
             .get("managed_execution")
             .is_none()
     );
-    assert!(config.workspaces["example"].managed_execution.is_none());
-    assert_eq!(
-        config.revision().unwrap(),
-        canonical_digest(1, &legacy).unwrap()
-    );
+    let decoded: Config = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), value);
+    assert_eq!(decoded.revision().unwrap(), config.revision().unwrap());
     let text = toml::to_string(&config).unwrap();
     assert!(!text.contains("managed_execution"));
     assert_eq!(
-        serde_json::to_value(Config::parse(&text).unwrap()).unwrap(),
-        legacy
-    );
-
-    let policy = managed_policy();
-    let minimal = json!({"lifecycle":"foreground_v1","executables":policy.executables});
-    assert_eq!(serde_json::to_value(&policy).unwrap(), minimal);
-    assert_eq!(
-        serde_json::from_value::<ManagedExecution>(minimal).unwrap(),
-        policy
+        Config::parse(&text).unwrap().revision().unwrap(),
+        config.revision().unwrap()
     );
 }
 
 #[test]
-fn managed_policy_is_closed_and_validates_explicit_unique_tool_inventory() {
-    let policy = managed_policy();
-    policy.validate().unwrap();
-    let value = serde_json::to_value(&policy).unwrap();
-    for field in ["qualified", "enabled", "environment", "services"] {
-        let mut invalid = value.clone();
-        invalid[field] = json!(true);
-        assert!(
-            serde_json::from_value::<ManagedExecution>(invalid).is_err(),
-            "{field}"
-        );
-    }
-    for (field, unsupported) in [
-        ("lifecycle", json!("detached_v1")),
-        ("generated_executables", json!("repository")),
+fn obsolete_managed_catalog_is_rejected_including_null_and_claimed_qualification() {
+    for obsolete in [
+        Value::Null,
+        json!({}),
+        json!({"lifecycle":"foreground_v1"}),
+        json!({"qualified":true}),
+        json!({"lifecycle":"check_bundle_v1","executables":[{"path":"/private/tmp/tool","digest":"sha256:".to_owned()+&"1".repeat(64)}],"read_roots":[{"path":"/private/tmp/library","directory":true}],"generated_executables":"scratch_build_v1"}),
     ] {
-        let mut invalid = value.clone();
-        invalid[field] = unsupported;
-        assert!(serde_json::from_value::<ManagedExecution>(invalid).is_err());
+        let mut value = serde_json::to_value(configured()).unwrap();
+        value["workspaces"]["example"]["managed_execution"] = obsolete;
+        assert!(serde_json::from_value::<Config>(value).is_err());
     }
-    let mut invalid = value.clone();
-    invalid["executables"][0]["arguments"] = json!([]);
-    assert!(serde_json::from_value::<ManagedExecution>(invalid).is_err());
-    let mut invalid = value.clone();
-    invalid["read_roots"] = json!([{"path":"/private/tmp/sdk","directory":true,"writable":true}]);
-    assert!(serde_json::from_value::<ManagedExecution>(invalid).is_err());
-
-    for path in [
-        "",
-        "relative",
-        "/",
-        "~/../escape",
-        "$ROOT/bin",
-        "/tmp/tool\0",
-        &"/".repeat(4097),
-    ] {
-        let mut invalid = policy.clone();
-        invalid.executables[0].path = path.into();
-        assert!(
-            invalid.validate().is_err(),
-            "invalid executable path accepted"
-        );
-    }
-    let mut invalid = policy.clone();
-    invalid.executables[0].digest = "latest".into();
-    assert!(invalid.validate().is_err());
-    invalid = policy.clone();
-    invalid.executables.push(invalid.executables[0].clone());
-    assert!(invalid.validate().is_err());
-    invalid = policy.clone();
-    invalid.read_roots = vec![
-        ManagedReadRoot {
-            path: "/private/tmp/sdk".into(),
-            directory: true,
-            content: None,
-        },
-        ManagedReadRoot {
-            path: "/private/tmp/sdk".into(),
-            directory: false,
-            content: None,
-        },
-    ];
-    assert!(invalid.validate().is_err());
-
-    let mut configured = configured();
-    configured
-        .workspaces
-        .get_mut("example")
-        .unwrap()
-        .managed_execution = Some(invalid);
-    assert!(configured.validate().is_err());
+    let config = configured();
+    let text = toml::to_string(&config).unwrap()
+        + "\n[workspaces.example.managed_execution]\nlifecycle = 'foreground_v1'\n";
+    assert!(Config::parse(&text).is_err());
 }
 
 #[test]
-fn managed_policy_inventory_limits_accept_boundary_and_refuse_overflow() {
-    let mut policy = managed_policy();
-    policy.executables = (0..MAX_MANAGED_EXECUTABLES)
-        .map(|index| ManagedExecutable {
-            path: format!("/private/tmp/tools/tool-{index}"),
-            digest: bytes_digest(b"fixture-only tool digest"),
-        })
-        .collect();
-    policy.read_roots = (0..MAX_MANAGED_READ_ROOTS)
-        .map(|index| ManagedReadRoot {
-            path: format!("/private/tmp/reads/root-{index}"),
-            directory: true,
-            content: None,
-        })
-        .collect();
-    policy.generated_executables = Some(ManagedGeneratedExecutables::ScratchBuildV1);
-    policy.validate().unwrap();
-    policy.executables.push(ManagedExecutable {
-        path: "/private/tmp/tools/overflow".into(),
-        digest: bytes_digest(b"fixture-only tool digest"),
-    });
-    assert!(policy.validate().is_err());
-    policy.executables.pop();
-    policy.read_roots.push(ManagedReadRoot {
-        path: "/private/tmp/reads/overflow".into(),
-        directory: true,
-        content: None,
-    });
-    assert!(policy.validate().is_err());
-    policy.read_roots.pop();
-    policy.executables.clear();
-    assert!(policy.validate().is_err());
-}
-
-#[test]
-fn managed_resource_content_omission_preserves_legacy_bytes_and_revision() {
-    let legacy = json!({"path":"/private/tmp/sdk","directory":true});
-    let read: ManagedReadRoot = serde_json::from_value(legacy.clone()).unwrap();
-    assert!(read.content.is_none());
-    assert_eq!(serde_json::to_value(&read).unwrap(), legacy);
-    assert_eq!(
-        serde_json::to_string(&read).unwrap(),
-        r#"{"path":"/private/tmp/sdk","directory":true}"#
-    );
+fn generic_test_resources_keep_scope_resolution_and_disposable_write_requirement() {
+    let home = TempDir::new().unwrap();
     let mut config = configured();
-    let mut policy = managed_policy();
-    policy.read_roots.push(read);
     config
         .workspaces
         .get_mut("example")
         .unwrap()
-        .managed_execution = Some(policy);
-    let value = serde_json::to_value(&config).unwrap();
+        .test_resources
+        .insert(
+            "fixtures".into(),
+            TestResource {
+                path: "~/fixtures".into(),
+                writable: false,
+                disposable: false,
+            },
+        );
+    config.validate().unwrap();
+    config.resolve_paths(home.path(), |_| None).unwrap();
+    let resource = &config.workspaces["example"].test_resources["fixtures"];
     assert_eq!(
-        config.revision().unwrap(),
-        canonical_digest(1, &value).unwrap()
+        resource.path,
+        home.path().join("fixtures").to_str().unwrap()
     );
-    let text = toml::to_string(&config).unwrap();
-    assert!(!text.contains("content"));
-    let parsed = Config::parse(&text).unwrap();
-    assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
-    assert_eq!(parsed.revision().unwrap(), config.revision().unwrap());
-}
-
-#[test]
-fn managed_resource_content_is_closed_and_validates_digest_and_mapping_scope() {
-    let digest = bytes_digest(b"declared content only; no resource has been observed");
-    let value = json!({"path":"/private/tmp/sdk","directory":true,"content":{"digest":digest}});
-    let read: ManagedReadRoot = serde_json::from_value(value.clone()).unwrap();
-    assert!(
-        read.content
-            .as_ref()
-            .unwrap()
-            .executable_mappings
-            .is_empty()
-    );
-    assert_eq!(serde_json::to_value(&read).unwrap(), value);
-    let mut policy = managed_policy();
-    policy.read_roots.push(read);
-    policy.validate().unwrap();
-    for field in ["qualified", "observed", "writable", "recursive"] {
-        let mut invalid = value.clone();
-        invalid["content"][field] = json!(true);
-        assert!(serde_json::from_value::<ManagedReadRoot>(invalid).is_err());
-    }
-    assert!(
-        serde_json::from_value::<ManagedReadRoot>(json!({
-            "path":"/private/tmp/sdk","directory":true,"content":{}
-        }))
-        .is_err()
-    );
-    for invalid in ["", "latest", "sha256:xyz"] {
-        let mut bad = policy.clone();
-        bad.read_roots[0].content.as_mut().unwrap().digest = invalid.into();
-        assert!(bad.validate().is_err());
-    }
-    policy.read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .executable_mappings = vec!["lib/compiler.dylib".into(), "lib/资源.dylib".into()];
-    policy.validate().unwrap();
-    policy.read_roots[0].directory = false;
-    assert!(policy.validate().is_err());
-    policy.read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .executable_mappings = vec![".".into()];
-    policy.validate().unwrap();
-    policy.read_roots[0].directory = true;
-    assert!(policy.validate().is_err());
-}
-
-#[test]
-fn managed_resource_mappings_reject_aliases_controls_and_excessive_inventory() {
-    let mut policy = managed_policy();
-    policy.read_roots.push(ManagedReadRoot {
-        path: "/private/tmp/sdk".into(),
-        directory: true,
-        content: Some(ManagedResourceContent {
-            digest: bytes_digest(b"fixture resource declaration"),
-            executable_mappings: vec![],
-        }),
-    });
-    for mapping in [
-        "",
-        "/absolute",
-        "//absolute",
-        ".",
-        "..",
-        "../escape",
-        "lib/../escape",
-        "./lib",
-        "lib/./file",
-        "lib//file",
-        "lib/",
-        "lib\\file",
-        "lib\0file",
-        "lib\nfile",
-        "lib\tfile",
-        "lib\u{7f}file",
-        "lib\u{85}file",
-    ] {
-        policy.read_roots[0]
-            .content
-            .as_mut()
-            .unwrap()
-            .executable_mappings = vec![mapping.into()];
-        assert!(policy.validate().is_err(), "accepted {mapping:?}");
-    }
-    let boundary = format!("{}aa", "a/".repeat(2047));
-    assert_eq!(boundary.len(), 4096);
-    policy.read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .executable_mappings = vec![boundary.clone()];
-    policy.validate().unwrap();
-    policy.read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .executable_mappings = vec![format!("{boundary}a")];
-    assert!(policy.validate().is_err());
-    policy.read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .executable_mappings = vec!["lib/file".into(); 2];
-    assert!(policy.validate().is_err());
-    policy.read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .executable_mappings = (0..MAX_MANAGED_EXECUTABLE_MAPPINGS)
-        .map(|i| format!("lib/file-{i}"))
-        .collect();
-    policy.validate().unwrap();
-    policy.read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .executable_mappings
-        .push("lib/overflow".into());
-    assert!(policy.validate().is_err());
-}
-
-#[test]
-fn managed_resource_content_changes_revision_and_keeps_mapping_names_literal() {
-    let mut config = configured();
-    let mut policy = managed_policy();
-    policy.read_roots.push(ManagedReadRoot {
-        path: "$SDK".into(),
-        directory: true,
-        content: None,
-    });
-    config
-        .workspaces
-        .get_mut("example")
-        .unwrap()
-        .managed_execution = Some(policy);
-    let legacy_revision = config.revision().unwrap();
-    let content = ManagedResourceContent {
-        digest: bytes_digest(b"first declared resource contents"),
-        executable_mappings: vec!["$LITERAL/library.dylib".into()],
-    };
-    config
-        .workspaces
-        .get_mut("example")
-        .unwrap()
-        .managed_execution
-        .as_mut()
-        .unwrap()
-        .read_roots[0]
-        .content = Some(content.clone());
-    let declared_revision = config.revision().unwrap();
-    assert_ne!(declared_revision, legacy_revision);
+    assert!(!resource.writable && !resource.disposable);
     let mut changed = config.clone();
     changed
         .workspaces
         .get_mut("example")
         .unwrap()
-        .managed_execution
-        .as_mut()
+        .test_resources
+        .get_mut("fixtures")
         .unwrap()
-        .read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .digest = bytes_digest(b"changed resource contents");
-    assert_ne!(changed.revision().unwrap(), declared_revision);
-    changed = config.clone();
+        .writable = true;
+    assert!(changed.validate().is_err());
     changed
         .workspaces
         .get_mut("example")
         .unwrap()
-        .managed_execution
-        .as_mut()
+        .test_resources
+        .get_mut("fixtures")
         .unwrap()
-        .read_roots[0]
-        .content
-        .as_mut()
-        .unwrap()
-        .executable_mappings
-        .clear();
-    assert_ne!(changed.revision().unwrap(), declared_revision);
-    changed
-        .workspaces
-        .get_mut("example")
-        .unwrap()
-        .managed_execution
-        .as_mut()
-        .unwrap()
-        .read_roots[0]
-        .content = None;
-    assert_eq!(changed.revision().unwrap(), legacy_revision);
-    config
-        .resolve_paths(Path::new("/private/tmp/home"), |name| {
-            assert_eq!(name, "SDK", "mapping names must not be expanded");
-            Some("/private/tmp/sdk".into())
-        })
-        .unwrap();
-    let read = &config.workspaces["example"]
-        .managed_execution
-        .as_ref()
-        .unwrap()
-        .read_roots[0];
-    assert_eq!(read.path, "/private/tmp/sdk");
-    assert_eq!(read.content.as_ref(), Some(&content));
-    let text = toml::to_string(&config).unwrap();
-    let parsed = Config::parse(&text).unwrap();
-    assert_eq!(parsed.revision().unwrap(), config.revision().unwrap());
-}
-
-#[test]
-fn managed_paths_resolve_atomically_and_reject_colliding_aliases() {
-    let mut config = configured();
-    let mut policy = managed_policy();
-    policy.executables[0].path = "~/tools/cargo".into();
-    policy.read_roots.push(ManagedReadRoot {
-        path: "$SDK".into(),
-        directory: true,
-        content: None,
-    });
-    config
-        .workspaces
-        .get_mut("example")
-        .unwrap()
-        .managed_execution = Some(policy);
-    let before = config.revision().unwrap();
-    assert!(
-        config
-            .resolve_paths(Path::new("/private/tmp/home"), |_| None)
-            .is_err()
-    );
-    assert_eq!(config.revision().unwrap(), before);
-    config
-        .resolve_paths(Path::new("/private/tmp/home"), |name| {
-            (name == "SDK").then(|| "/private/tmp/sdk".into())
-        })
-        .unwrap();
-    let resolved = config.workspaces["example"]
-        .managed_execution
-        .as_ref()
-        .unwrap();
-    assert_eq!(
-        resolved.executables[0].path,
-        "/private/tmp/home/tools/cargo"
-    );
-    assert_eq!(resolved.read_roots[0].path, "/private/tmp/sdk");
-    assert_ne!(config.revision().unwrap(), before);
-    let managed = config
-        .workspaces
-        .get_mut("example")
-        .unwrap()
-        .managed_execution
-        .as_mut()
-        .unwrap();
-    managed.executables.push(ManagedExecutable {
-        path: "$ALIAS".into(),
-        digest: managed.executables[0].digest.clone(),
-    });
-    let before_collision = config.revision().unwrap();
-    assert!(
-        config
-            .resolve_paths(Path::new("/private/tmp/home"), |_| Some(
-                "/private/tmp/home/tools/cargo".into()
-            ))
-            .is_err()
-    );
-    assert_eq!(config.revision().unwrap(), before_collision);
+        .disposable = true;
+    changed.validate().unwrap();
+    assert_ne!(changed.revision().unwrap(), config.revision().unwrap());
+    let mut unknown = serde_json::to_value(&config).unwrap();
+    unknown["workspaces"]["example"]["test_resources"]["fixtures"]["executables"] = json!([]);
+    assert!(serde_json::from_value::<Config>(unknown).is_err());
 }
 
 #[test]

@@ -2,9 +2,6 @@
 //! live sandbox or media qualification; no provider/network actions occur.
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
-use kegari_v0::config::{
-    ManagedExecutable, ManagedExecution, ManagedLifecycle, ManagedReadRoot, ManagedResourceContent,
-};
 use kegari_v0::digest::bytes_digest;
 use kegari_v0::error::{Error, Result};
 use kegari_v0::evidence::{CheckKind, Generation, WorkIdentity};
@@ -12,7 +9,7 @@ use kegari_v0::execution::*;
 use kegari_v0::git::{Git, RepositoryId};
 use kegari_v0::isolation::{
     BoundManagedExecution, CommandOutcome, ExecutionRole, IsolationPlan, PathGrant,
-    ValidatedIsolation, managed_resource_digest,
+    ValidatedIsolation,
 };
 use kegari_v0::workflow::Workflow;
 use serde_json::json;
@@ -80,7 +77,8 @@ struct Fixture {
 impl Fixture {
     fn new(role: ExecutionRole) -> Self {
         let temp = TempDir::new().unwrap();
-        let source = temp.path().join("shared-checkout");
+        let temp_root = temp.path().canonicalize().unwrap();
+        let source = temp_root.join("shared-checkout");
         fs::create_dir(&source).unwrap();
         git_run(&source, &["init", "-b", "main"]);
         fs::write(source.join("a.txt"), "original\n").unwrap();
@@ -94,7 +92,7 @@ impl Fixture {
                 "test: initialize disposable execution source",
             ],
         );
-        let root = temp.path().join("executions");
+        let root = temp_root.join("executions");
         fs::create_dir(&root).unwrap();
         let repo = root.join("repository");
         git_run(
@@ -118,7 +116,7 @@ impl Fixture {
             role,
             ExecutionRole::Child | ExecutionRole::Validation | ExecutionRole::Review
         );
-        let boundary = IsolationPlan {
+        let mut plan = IsolationPlan {
             managed_execution: None,
             schema_version: 1,
             role,
@@ -140,18 +138,11 @@ impl Fixture {
                 vec![]
             },
             forbidden_roots: vec![source.clone()],
-            executables: if executable {
-                vec![
-                    PathBuf::from("/bin/sh"),
-                    PathBuf::from("/usr/bin/true"),
-                    git_path(),
-                ]
-            } else {
-                vec![]
-            },
+        };
+        if executable {
+            plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
         }
-        .validate()
-        .unwrap();
+        let boundary = plan.validate().unwrap();
         let git = Git::new(pinned_git::prepare(temp.path())).unwrap();
         let work = WorkIdentity {
             linear_endpoint: "https://api.linear.app/graphql".into(),
@@ -222,36 +213,11 @@ impl Fixture {
         let library = resource.join("library.dylib");
         fs::write(&library, b"fixture library; never loaded\n").unwrap();
         let mut plan = fixture.boundary.plan().clone();
-        // The ordinary boundary fixture permits its host Git path, which need
-        // not have protected ancestry. Managed declarations require the owned
-        // pinned copy already used by this fixture's real Git adapter.
-        let host_git = git_path();
-        for executable in &mut plan.executables {
-            if *executable == host_git {
-                *executable = fixture.git.executable().to_path_buf();
-            }
-        }
-        let policy = ManagedExecution {
-            lifecycle: ManagedLifecycle::ForegroundV1,
-            executables: plan
-                .executables
-                .iter()
-                .map(|path| ManagedExecutable {
-                    path: path.to_str().unwrap().into(),
-                    digest: bytes_digest(&fs::read(path).unwrap()),
-                })
-                .collect(),
-            read_roots: vec![ManagedReadRoot {
-                path: resource.to_str().unwrap().into(),
-                directory: true,
-                content: Some(ManagedResourceContent {
-                    digest: managed_resource_digest(&resource, true).unwrap(),
-                    executable_mappings: vec!["library.dylib".into()],
-                }),
-            }],
-            generated_executables: None,
-        };
-        plan.managed_execution = Some(BoundManagedExecution::resolve(&policy).unwrap());
+        plan.read_roots.push(PathGrant {
+            path: resource.clone(),
+            directory: true,
+        });
+        plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
         fixture.boundary = plan.validate().unwrap();
         fixture.binding.isolation_digest = fixture.boundary.digest().into();
         // Reuse the actual exclusive marker, work and repository identity. Only
