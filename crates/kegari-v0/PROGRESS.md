@@ -1,12 +1,77 @@
 # Kegari v0 build progress
 
-The Goal is active and incomplete. On 2026-10-26 the user authorized continuation
-and resumed the existing Goal, superseding the earlier instruction to keep it
-paused. The previous pause followed the explicit "Keep the goal paused" /
-"Do not start implementation yet" instruction, rather than an entitlement
-prerequisite. Supervision and existing action restrictions remain in force.
+The Goal remains **paused and incomplete** at the user's explicit architecture
+checkpoint. On 2026-10-27 the user approved the technology-agnostic correction
+and authorized specification/goal documentation updates only. SPEC 1.4 now
+prohibits target-toolset-specific code, including optional adapters and manifest
+parsers, and removes mandatory environment/tool/command specifications. Agents
+must discover project commands/context under generic host enforcement.
 
-Current verified increment on baseline `0a8ab79`: **0.2.0-alpha.8** adds
+[MILESTONES.md](MILESTONES.md) now holds the revised version plan, retaining the
+0.2.0–0.7.0 sequence and correcting 0.2.0 first. The immediate target on explicit
+resumption is **0.2.0 / M02-1: remove/rework the incompatible execution design**.
+No minor milestone is complete. The goal files require concise milestone updates
+with completed work/evidence, remaining exit criteria, next action and blockers,
+plus a status update in the milestone file at meaningful checkpoints.
+
+The current authorized work is planning/documentation only. The milestone plan
+is recorded; only explicit user resumption can lift the implementation hold.
+The user subsequently authorized committing these documentation changes. Code
+deletion, implementation, product/native validation and build packaging remain
+outside this step; the documentation commit does not resume the Goal.
+
+On resumption, audit and remove/rework incompatible implementation throughout
+the repository, including the pending alpha.9 Cargo-specific paths. Preserve
+useful generic supervision/evidence and historical failures. The prior source
+reviews and test results below remain evidence for their actual SPEC 1.3/code
+baseline, not proof of SPEC 1.4 conformance or a direction to finish alpha.9 as
+previously designed. The inventory tool's approved hash and coverage ledger
+still reference SPEC 1.3; reconcile them, new V0-H04/T38/T39/E09 and affected
+existing requirement statuses during the implementation package without
+inheriting passes for changed requirements. Historical reports stay unchanged.
+
+Pre-amendment implementation checkpoint (retained for reconciliation):
+
+Current work in progress after committed alpha.8 `4b95a81bb4652979f6083450c4c98093854f0398`
+(`feat(kegari-v0): bind managed SDK and library contents`): **0.2.0-alpha.9**
+adds the closed offline Cargo selection, input closure, protected per-command
+configuration and exact rendered launch/environment binding. The previous goal
+turn was progress: the alpha.8 commit and clean tree were verified, with its
+retained executable/evidence hashes matching. No commits were consolidated.
+
+Alpha.9 implementation and independent source review are complete through the
+protected offline launch path, requested/actual command evidence separation and
+literal linker-library mappings. Initial checks exposed a type-inference error
+and two fixture setup errors; all are corrected and their logs retained. The
+first full release suite passed **1,150 tests, zero failures, three native ignores,
+40 groups**, and clippy passed. That source is retained in the pre-cache snapshot.
+
+A final review then confirmed that repeated invocations reused Cargo target/tmp
+state. The correction creates exclusive per-command generated namespaces,
+retains their directory identities and rejects prelaunch population/replacement.
+Old caches and partial directories are preserved. The focused cache/executor
+run passed 35 tests, and final all-target clippy passed. Final-source release
+regression session `33130` returned exit 0: **1,152 tests passed, zero failures,
+three native ignores, across 40 groups**. Its logs are
+`/private/tmp/kegari-v0-alpha9-full2.stdout` and `.stderr`; the terminal results
+are recorded in `/private/tmp/kegari-alpha9-final-commands.json`.
+The 728-input final test snapshot is
+`/private/tmp/kegari-alpha9-test-source.json`, SHA-256
+`3f39ee3f80d8b4bd2d0bdc57c83020d7e730926d591f3497fe7b753a0ce23428`.
+All previously owned Cargo sessions are terminal; no native qualification
+command is running. Alpha.9 changes remain uncommitted. Final formatting,
+inventory/toolchain checks, exact executable packaging, evidence collection
+and its independent audit were pending at that checkpoint; the old packaging
+plan is now superseded by MILESTONES.md. Prepared helpers in
+`/private/tmp/kegari-alpha9-{artifact,evidence}.py` have not been run.
+
+The public qualification prerequisite remains closed; NQ-02C remains consumed.
+Read-only installed-tool metadata/header inspection identified four linker
+libraries (now explicitly bound) and the archiver's possible ranlib/libtool alias
+path. Alias handling, actual native Rust/Cargo and the larger milestones remain
+open. No setup, Keychain, install, provider or remote operation occurred.
+
+Previous verified increment on baseline `0a8ab79`: **0.2.0-alpha.8** adds
 bounded SDK/library content identity and explicit executable-library mappings.
 Full content observations run outside serialized Control callbacks during
 preparation, check/hook completion and cleanup; changed inputs cannot become

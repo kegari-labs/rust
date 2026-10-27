@@ -1,19 +1,83 @@
-/goal Implement and independently validate the complete Kegari v0 application and its delivered agent harness against /Users/lgr/Development/com.kegari/com.kegari.rust/crates/kegari-v0/SPEC.md. Continue through implementation, testing, review and corrections until the specification's definition of done is supported by actual evidence. Preserve its scope, authority, isolation, acceptance, release and recovery guarantees. If a required permission, resource or decision prevents completion, finish all independent authorized work and report the precise blocker without marking the goal complete.
+/goal Implement and independently validate the complete Kegari v0 application and its delivered agent harness against /Users/lgr/Development/com.kegari/com.kegari.rust/crates/kegari-v0/SPEC.md. After explicit goal resumption under the revised milestone plan, continue through implementation, testing, review and corrections until the specification's definition of done is supported by actual evidence. Preserve its scope, authority, isolation, acceptance, release and recovery guarantees. If a required permission, resource or decision prevents completion, finish all independent authorized work and report the precise blocker without marking the goal complete.
 
-Versioned completion plan — amendment
+Technology-agnostic execution correction — approved 2026-10-27
 
-Continue the existing Kegari v0 assignment from its current repository state.
+Keep the Goal paused. The current authorized step is maintaining the milestone
+plan and its links/progress instructions. The revised plan is now recorded in
+[MILESTONES.md](/Users/lgr/Development/com.kegari/com.kegari.rust/crates/kegari-v0/MILESTONES.md).
+Do not start implementation, delete code, package a build or run product/native/live
+qualification during this documentation step. A separate explicit request may
+authorize a documentation commit; it does not resume implementation. Explicit user
+resumption is still required; editing or committing these files does not resume
+the Goal. This hold takes precedence over all automatic-continuation language below.
+
+Implement SPEC 1.4's technology-agnostic contract. Kegari's orchestration and
+harness code must not contain target-language, framework, build-system,
+package-manager or toolchain-specific adapters, parsers, validators, command
+rewriters or special cases. This includes manifest/lockfile handling and
+optional plugins/helpers. Do not retain Cargo-specific execution support as an
+optional feature. Required Git, Codex, Linear, GitHub and OS integrations and
+Kegari's own Rust build remain in scope; representative toolset fixtures are
+validation data, not a supported-ecosystem catalog. Authorized target-project
+code/configuration written by child agents is not prohibited by this rule.
+
+Do not require users to predefine commands, tool inventories, dependency or
+environment manifests, exact-digest catalogs or Kegari environment packages.
+The agent must inspect available repository instructions, documentation,
+configuration and scripts with generic tools, understand the assigned technology
+and component boundaries, and discover/infer suitable commands and preparation
+from that context and the authorized task. Empty or unfamiliar repositories are
+valid starting points. Record absent/unborn baselines honestly and distinguish
+routine discoverable details from missing material requirements or authority.
+An optional selected workflow may add guidance; otherwise use the installed
+version-bound generic workflow without requiring another onboarding file.
+
+The host must enforce generic authority, role, filesystem/network/credential
+boundaries, original process/service ownership, deadlines and evidence freshness.
+Automatically record actual command/cwd/environment observations and the basis
+of validation obligations; these are operation evidence, not user-authored
+specifications. Discovery cannot widen permissions, reset budgets, hide earlier
+failures or drop required checks. Independent review must assess validation
+adequacy; host gates enforce actual outcomes and current bindings. Keep public
+PR/untrusted-context qualification blocked by the retained full-descendant
+coverage requirement. No additional native, host, provider or deployment action
+is authorized by this correction.
+
+When implementation is explicitly resumed, follow MILESTONES.md and first
+reconcile the entire repository against this contract, including committed work
+and the uncommitted alpha.9 increment. Remove or rework all incompatible code,
+interfaces, configuration/schema requirements, tests and documentation; do not
+preserve them behind disabled flags or optional adapters. Preserve reusable
+generic supervision/enforcement/evidence behavior, unrelated work, historical
+commits, failed results and prior validation artifacts. Tests that enforce the
+superseded philosophy must be replaced or removed with an explicit rationale;
+retain applicable failure regressions and never erase failures to obtain a pass.
+Old evidence must remain bound to its actual source/specification and cannot be
+promoted to SPEC 1.4 conformance.
+
+Validate generic discovery with materially different existing projects, an
+unfamiliar custom tool and an empty repository, without adding toolset-specific
+Kegari code or supplying predefined Kegari commands/environments to the agent.
+Include misleading/stale guidance, missing necessary tests, permissions and
+capability refusal, correction/recovery races, actual invocation evidence and
+independent review. Test fixtures may declare finite bounds and scorer-only
+expectations; those do not become production environment specifications.
+
+Versioned completion plan — MILESTONES.md
+
+After the hold above is lifted, continue the existing Kegari v0 assignment from its current repository state.
 Retain the package and executable name kegari-v0. Version the application
 within 0.x.y; reserve 1.0.0 for a future, explicitly agreed production-readiness
 decision. Do not begin the lasting kegari implementation as part of this goal.
 
-This completion plan follows the approved managed-workload scope in SPEC 1.3.
+The completion scope follows SPEC 1.4, including the managed-workload limitation. MILESTONES.md is the single current version allocation, package order and exit-criteria record; it supersedes earlier milestone descriptions in this prompt and historical progress entries.
 It does not broaden action permissions or remove unrelated completion gates.
 
 Managed-workload decision — approved 2026-10-26
 
-For v0, support qualified foreground tools and explicitly registered managed
-background services. Accept that unregistered detached descendants can escape
+For v0, qualify the generic execution backend for foreground managed workloads
+and explicitly registered managed background services; do not qualify a closed
+catalog of target toolsets. Accept that unregistered detached descendants can escape
 supervision and fall outside the shutdown guarantee. Document this limitation;
 a policy forbidding detachment does not itself prevent it. Filesystem, network,
 credential, role and control-authority isolation remain required.
@@ -35,38 +99,44 @@ Preserve valid work and failures. Treat incomplete TEMP drafts as unverified
 until inspected against current source. Do not resume the previous evaluation
 work merely because it was the last activity before the pause.
 
-Prioritize these milestones:
+Read [MILESTONES.md](/Users/lgr/Development/com.kegari/com.kegari.rust/crates/kegari-v0/MILESTONES.md)
+on resumption and before selecting a milestone or declaring it complete. Focus
+first on **0.2.0 / M02-1: correct the implementation baseline**, then close the
+remaining 0.2.0 packages. Do not finish the superseded Cargo-specific alpha.9
+packaging plan. Reconcile actual progress before selecting the next incomplete
+package; do not restart completed packages merely because this prompt names the
+initial checkpoint. SPEC remains the product contract and existing permissions
+remain controlling. Milestone completion is not overall Goal completion.
 
-0.2.0: Implement and validate managed-workload process supervision under the
-approved scope, integrate commands, checks, hooks, cancellation, retirement
-and cleanup, and deliver a versioned release-mode executable with matching assets.
+Milestone focus and user updates
 
-0.3.0: Complete cold workflow recovery and reassembly, fresh-authority
-revalidation, and supported provider-intervention resolution/readmission.
+During resumed work, keep the user informed of the current target version and
+package, concrete progress since the previous checkpoint, evidence established,
+remaining exit criteria, next action and any exact approval/resource blocker.
+Give concise meaningful updates during active work and this milestone summary at
+every goal-turn handoff. Announce each completed milestone with its artifact,
+evidence, retained limitations and next version. Do not report elapsed effort,
+test counts or version bumps as completion, or invent percentages or deadlines.
 
-0.4.0: Complete required external-target proof and authenticated visual
-evidence recovery, including stale and substituted evidence rejection.
-
-0.5.0: Complete the operator handover route, qualification-record workflow,
-immutable installation procedure, compatibility checks and operator guidance.
-
-0.6.0: Complete finite output observation, typed authenticated grading,
-all required native evaluation contexts/callers and genuine prior-state
-preparation for continuation/recovery cases.
-
-0.7.0: Complete all separately authorized real-agent, real-integration,
-native-host and human qualification required by SPEC; resolve material
-findings and independently audit the final implementation and evidence.
+Update milestone/package status in MILESTONES.md and the detailed evidence in
+PROGRESS.md after a coherent increment, material finding/correction, blocker
+change, exit audit and before handoff. Keep logging proportional; do not repeat
+unchanged reports or re-run passing checks without a material reason. Each new
+task must advance an exit criterion or resolve a concrete blocking defect.
+Continue independent authorized work when approval blocks a dependent step,
+keeping that milestone visibly incomplete; explain any work on a later milestone.
+Do not silently expand scope, add frameworks or shift an unmet exit criterion to
+another version merely to mark a milestone complete.
 
 Use prerelease versions while a milestone is incomplete. Use 0.x.1 and later
 patches only for actual compatible corrections; do not place new capability
 or incompatible persisted-format changes in a patch release. Keep application,
 instruction, protocol, configuration and evidence schema identities explicit.
 
-Begin managed-workload implementation with launch-time registration, owned
+Under MILESTONES.md after explicit resumption, retain and complete generic launch-time registration, owned
 process/group and managed-service lifecycle, bounded cancellation, identity-safe
 signalling, failure detection and conservative restart semantics. Qualify the
-supported command/service configurations; do not declare success from EOF or
+backend and observe actual command/service behavior without a toolset catalog; do not declare success from EOF or
 self-report when their registered work remains active or uncertain. Preserve
 the detached-process regression as evidence of the accepted limitation rather
 than demanding its containment before enabling the managed profile. A managed
@@ -88,7 +158,7 @@ qualified and human-reviewed states. Preserve failures, interrupted outcomes
 and uncertainty. A passing build or completed minor milestone is not completion
 of the comprehensive goal.
 
-Continue through the milestones without requiring routine “continue” prompts.
+After explicit resumption, continue through MILESTONES.md without requiring routine “continue” prompts, retaining the milestone updates and action restrictions above.
 Existing approval, unattended-operation, commit, remote-operation, installation
 and deployment restrictions remain effective. Prepare concrete bounded plans
 for actions needing additional authority; do not infer it from resumption.
@@ -97,19 +167,20 @@ Complete this goal only when the full v0 specification and its evidence
 obligations are satisfied. Production 1.0.0 and activation of the lasting build
 remain outside this assignment.
 
-This is one comprehensive implementation-and-correction assignment. “One-shot” means I should not have to keep asking you to continue; it does not mean accepting the first generated implementation or completing everything in one model response. Begin the authorized local implementation after the initial inspection and concise plan. Do not stop at a proposal, scaffolding, a compiling binary or a happy-path demonstration.
+This is one comprehensive implementation-and-correction assignment. “One-shot” means I should not have to keep asking you to continue; it does not mean accepting the first generated implementation or completing everything in one model response. Begin local implementation only after the documentation hold above has been lifted, then reconcile the repository and follow the agreed plan. Do not stop at a proposal, scaffolding, a compiling binary or a happy-path demonstration.
 
 Authoritative inputs and starting point
 
 - Working repository: /Users/lgr/Development/com.kegari/com.kegari.rust
+- Version/milestone plan: /Users/lgr/Development/com.kegari/com.kegari.rust/crates/kegari-v0/MILESTONES.md. Read it with PROGRESS.md; preserve its exit criteria and report progress as directed above.
 - Implement the existing Cargo workspace member and executable kegari-v0 at crates/kegari-v0.
-- Read the entire SPEC.md and all applicable AGENTS.md instructions before implementation. The approved specification is version 1.3 (SHA-256: `35d4515585fe92350ec1cc8b78a5919c834d559a48d48d071239d39305032fb3`); its source baselines are recorded in SPEC.md. Inspect the actual branch, working tree, staging and current specification. Preserve later or unrelated work; do not reset or silently substitute an older baseline. Report any material divergence from the approved contract.
+- Read the entire SPEC.md and all applicable AGENTS.md instructions before implementation. The approved specification is version 1.4 (SHA-256: `b01064b5238554d2def840cabf6a9e5d555535e35ce4877838a55ade2dd0a6e7`); its source baselines are recorded in SPEC.md. Inspect the actual branch, working tree, staging and current specification. Preserve later or unrelated work; do not reset or silently substitute an older baseline. Report any material divergence from the approved contract.
 - SPEC.md is the self-contained product contract. Its current Kegari rules take precedence over conflicting Symphony defaults and older discovery direction. Operational instructions and permissions still govern actual actions. Do not weaken the specification or rewrite its requirements to match an easier implementation.
 - The sibling com.kegari.symphony and com.kegari.specification repositories are read-only references. Use them only to resolve a concrete question; do not restart discovery, require the entire corpus as runtime context, or update their pinned baselines. Prefer targeted official documentation for technical compatibility questions and record what you actually verify.
 
 Implementation scope and boundaries
 
-Implement all retained v0 behavior, including capabilities that are disabled by default. Deliver the Rust application, local and remote CLI/control service, background-operation support, provider integrations, runtime-enforced parent/subissue delivery workflow, reusable versioned instruction content, starter WORKFLOW.md, repository preparation and operator guidance, deterministic tests, executable behavior evaluations, and validation evidence.
+Implement all retained v0 behavior, including capabilities that are disabled by default. Deliver the Rust application, local and remote CLI/control service, background-operation support, provider integrations, runtime-enforced parent/subissue delivery workflow, reusable versioned instruction content, an installed generic workflow and optional starter WORKFLOW.md, agent-led repository discovery/preparation and operator guidance, deterministic tests, executable behavior evaluations, and validation evidence.
 
 The workflow must remain useful for building the lasting implementation: parent authorization with child-only implementation; scoped accounts/repositories/tools; actionable corrections and continuation; separate local-test, hosted-CI, Codex-review, staging, integrated-evidence, human-acceptance and release gates; isolated approved-slice releases; and durable operator intent with conservative recovery. The detailed specification controls each behavior; this summary does not replace it.
 
@@ -121,7 +192,7 @@ This builder conversation is intended to use GPT-6 Astra, Ultra reasoning and St
 
 Working method
 
-1. Inspect the scaffold and instructions, then establish a compact implementation plan and requirement-to-evidence checklist in PROGRESS.md as described below. Cover all normative v0 requirements, the retained source REQ/SC identifiers, V0-T01–37 and V0-E01–08. Keep deferred clauses identified as deferred.
+1. Inspect the scaffold and instructions, then establish a compact implementation plan and requirement-to-evidence checklist in PROGRESS.md as described below. Cover all normative v0 requirements, the retained source REQ/SC identifiers, V0-T01–39, V0-E01–09 and V0-H01–04. Keep deferred clauses identified as deferred.
 2. Check the effective permissions, required local tools, dependency access and validation prerequisites early; record missing prerequisites without treating them as permission to change the host configuration. Identify high-risk compatibility and enforcement assumptions, especially the supported Codex app-server profile, sandbox/tool boundaries, same-account review evidence, HTTPS identity, persistent intent and uncertain external actions. Investigate them without broadening authority. A blocked integration must not prevent independent implementation and deterministic testing.
 3. Implement coherent increments and validate them as you go. Prefer straightforward, maintainable Rust and clear ownership of state and side effects. Temporary development scaffolding must not remain as a substitute for required behavior. Do not count mock adapters, TODOs or unsupported-operation placeholders as completed production integrations.
 4. Use available subagents for bounded independent implementation or review where useful. Assign non-overlapping ownership, integrate their work, and inspect their evidence. Keep the selected builder configuration where supported. Do not create separate user-facing conversations, project branches or worktrees as a substitute for this assignment.
@@ -138,7 +209,7 @@ Durable progress and resumption record
 
 At the start of implementation, create and maintain /Users/lgr/Development/com.kegari/com.kegari.rust/crates/kegari-v0/PROGRESS.md alongside SPEC.md and GOAL.md. If it already exists, read and reconcile it with the actual repository and available evidence; preserve relevant history and unrelated content. This is the build assignment's progress record, not a Kegari runtime state store or a replacement for the specification or Goal lifecycle controls. The coordinating agent owns updates; subagents report their results to it rather than concurrently editing this file.
 
-Keep a concise current summary at the top, followed by:
+Keep a concise current summary at the top identifying Goal state, target version/package, evidence, next action and blockers, linked to MILESTONES.md, followed by:
 
 - The specification/repository baseline, current implementation checkpoint, next useful actions, and a compact requirement-to-evidence checklist. Distinguish implemented, verified, failed, blocked, not run and deferred work; implementation alone is not verification.
 - Validation commands and results, affected files/code state and relevant tool/profile/instruction versions, with links to detailed reports and artifacts. Separate deterministic tests, actual-agent evaluations, real integration validation and required human review. Mark stale evidence when subsequent changes invalidate it. Retain failures and unresolved review findings rather than replacing them with a later success claim.

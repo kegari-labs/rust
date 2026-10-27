@@ -1,9 +1,11 @@
 # Kegari v0
 
-Kegari v0 is the scoped Rust delivery coordinator defined by [SPEC 1.3](SPEC.md).
+Kegari v0 is the scoped Rust delivery coordinator defined by [SPEC 1.4](SPEC.md).
 Implementation and qualification remain in progress. The current build is not
 qualified to coordinate the lasting implementation. See [PROGRESS.md](PROGRESS.md)
 for the actual checkpoint, failed or blocked checks, and current work.
+[MILESTONES.md](MILESTONES.md) defines version targets, immediate 0.2.0 correction
+packages, completion gates and progress reporting. The Goal remains paused.
 
 ## Build and deterministic checks
 
@@ -25,12 +27,15 @@ Native tests remain explicitly ignored in ordinary suite runs. The separately
 approved [NQ-01A identity check](validation/NATIVE-IDENTITY.md) passed once.
 [NQ-02C](validation/LOADER-BOOTSTRAP.md) passed three fixed foreground cases after
 the loader correction; the earlier NQ-02A/B failures remain recorded. The separate
-NQ-01B check, Rust/Cargo, services and remaining native qualification are pending.
+NQ-01B check and broader native execution/service qualification remain pending;
+new requests must follow the generic backend and milestone plan.
 
 ## Versioned prerelease executable
 
-The application is versioned as `0.2.0-alpha.8`; the package and executable remain
-`kegari-v0`. This prerelease does not complete the 0.2.0 containment milestone.
+The uncommitted development source declares `0.2.0-alpha.9`; the package and
+executable remain `kegari-v0`. No final alpha.9 artifact has been packaged. Its
+Cargo-specific design is superseded by SPEC 1.4 and the 0.2.0 correction plan;
+alpha.8 remains the latest retained committed/artifact baseline.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or
 unqualified declared profiles (`managed_profile_unqualified`), and native,
 provider, actual-agent and human qualification remain incomplete.
@@ -59,10 +64,11 @@ checksum or a complete record of compiler settings. Release and debug profiles
 have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
-running coordinator. The [alpha.8 resource binding](validation/MANAGED-RESOURCES.md)
-adds bounded SDK/library content observations and explicit mappings, with 1,117
-passing final-source local tests. It keeps qualification closed while the offline
-Rust/Cargo contract and actual native evidence remain incomplete.
+running coordinator. The pending offline Cargo design is superseded development
+work awaiting removal/rework. Generic execution and agent-led discovery now follow
+SPEC 1.4 and MILESTONES.md. The historical [alpha.8 resource binding](validation/MANAGED-RESOURCES.md)
+records bounded SDK/library observations and explicit mappings, with 1,117
+passing tests for that source. It does not establish SPEC 1.4 conformance.
 The [alpha.7 loader correction](validation/LOADER-BOOTSTRAP.md)
 records the exact staged executable, 97 passing affected local tests and three
 passing native foreground cases. The qualification prerequisite remains enforced.
@@ -85,8 +91,8 @@ it does not open a setup wizard or start a service. Before setup, alpha.4 and la
 runtime has been configured yet. Use `./kegari-v0 --help` or
 `./kegari-v0 setup --help` to inspect the available commands without setup.
 
-Alpha.8 is an inspectable development artifact, not a qualified installation ready
-for activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
+Alpha.9 remains uncommitted development work requiring architectural correction;
+no current build is qualified for coordinator activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
 requires the supported profile and native/provider prerequisites to be established
 first, then a final protected, versioned binary and explicit runtime configuration.
 Interactive initial local `setup` now derives host/account identity, generates the
