@@ -317,6 +317,7 @@ pub fn parent(
     let child_id = child_work.child.unwrap();
     let now = Utc::now();
     let mut manifest = ParentEvidence {
+        integrated_validation: None,
         schema_version: 1,
         work: parent_work.clone(),
         required_children: BTreeSet::from([child_id]),

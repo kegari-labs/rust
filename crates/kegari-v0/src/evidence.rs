@@ -348,7 +348,10 @@ pub enum ReviewKind {
 
 #[path = "evidence_validation.rs"]
 mod validation;
-pub use validation::{ValidationAssessment, ValidationEvidence, ValidationRequirementAssessment};
+pub use validation::{
+    IntegratedAdequacyReview, ReviewedIntegratedValidation, ValidationAssessment,
+    ValidationEvidence, ValidationRequirementAssessment,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1327,6 +1330,8 @@ pub struct ParentEvidence {
     pub dependency_snapshot_digest: String,
     pub production_targets: BTreeSet<String>,
     pub integrated_results: Vec<IntegratedRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrated_validation: Option<Box<ReviewedIntegratedValidation>>,
     pub visual: bool,
     pub video: Option<VideoEvidence>,
     pub publication_operation: Uuid,
@@ -1388,7 +1393,12 @@ pub fn verify_parent(
     linear_writer: &str,
 ) -> Result<VerifiedParent> {
     evidence.work.validate()?;
-    if evidence.schema_version != 1
+    if evidence.schema_version
+        != if evidence.integrated_validation.is_some() {
+            2
+        } else {
+            1
+        }
         || evidence.work.child.is_some()
         || &evidence.work != requirements.work
         || requirements.required_children.is_empty()
@@ -1597,7 +1607,34 @@ pub fn verify_parent(
     }
     validate_digest(&evidence.dependency_snapshot_digest)?;
     let vector = evidence.candidate_vector_digest()?;
-    if requirements.integrated_commands.is_empty() {
+    let discovered_commands;
+    let commands = if let Some(reviewed) = &evidence.integrated_validation {
+        reviewed.verify(
+            requirements.work,
+            requirements.e2e_child,
+            &vector,
+            &evidence.candidates,
+        )?;
+        discovered_commands = reviewed
+            .validation
+            .current()?
+            .requirements
+            .iter()
+            .map(|r| (r.id.clone(), r.argv.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for (id, command) in requirements.integrated_commands {
+            if discovered_commands.get(id) != Some(command) {
+                return Err(Error::new(
+                    "integrated_gate",
+                    "discovered parent evidence omitted a configured integrated constraint",
+                ));
+            }
+        }
+        &discovered_commands
+    } else {
+        requirements.integrated_commands
+    };
+    if commands.is_empty() {
         return Err(Error::invalid(
             "parent needs configured integrated validation",
         ));
@@ -1611,7 +1648,13 @@ pub fn verify_parent(
             ));
         }
     }
-    for (id, command) in requirements.integrated_commands {
+    if evidence.integrated_validation.is_some() && integrated_ids != commands.keys().collect() {
+        return Err(Error::new(
+            "integrated_gate",
+            "integrated result inventory differs from reviewed obligations",
+        ));
+    }
+    for (id, command) in commands {
         let run = evidence
             .integrated_results
             .iter()
@@ -1638,6 +1681,39 @@ pub fn verify_parent(
                 "integrated_gate",
                 "integrated validation is failed, unperformed or belongs to another candidate/resource set",
             ));
+        }
+        if let Some(reviewed) = &evidence.integrated_validation {
+            let selected = reviewed
+                .validation
+                .selected()?
+                .into_iter()
+                .find(|r| &r.check_name == id)
+                .ok_or_else(|| {
+                    Error::new(
+                        "integrated_gate",
+                        "reviewed obligation has no selected original result",
+                    )
+                })?;
+            if run.operation_id != selected.binding.operation_id
+                || run.started_at != selected.started_at
+                || run.completed_at != selected.completed_at
+                || run.command != selected.command.argv
+                || run
+                    .artifacts
+                    .iter()
+                    .map(|a| &a.digest)
+                    .collect::<BTreeSet<_>>()
+                    != selected
+                        .artifacts
+                        .iter()
+                        .map(|a| &a.digest)
+                        .collect::<BTreeSet<_>>()
+            {
+                return Err(Error::new(
+                    "integrated_gate",
+                    "integrated run projection differs from reviewed actual execution",
+                ));
+            }
         }
         for artifact in &run.artifacts {
             artifact.validate()?;

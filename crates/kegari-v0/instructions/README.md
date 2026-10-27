@@ -61,7 +61,7 @@ generic boundary. It records actual source, environment and outcome observations
 it does not mint check evidence or authorize broader access. Results include
 bounded output previews and protected history references, also available through
 `context_read` with key `command_history`. Native qualification remains closed.
-Child-local workers use actual settled source/context reads to enroll obligations
+Child-local and assigned integrated workers use actual settled source/context reads to enroll obligations
 with `validation_propose`, then execute the current plan with `validation_run`.
 `context_read` with key `validation_evidence` supplies observed read references
 and the current plan identity. No configured check list or custom report format
@@ -70,12 +70,19 @@ earlier obligations and attempts. Independent review must assess the exact
 history's adequacy before final staging/readiness. Commands and enrolled plans
 alone are not passes. See `validation.md` for the actual tool contract.
 
-Parent integrated discovery, discovered-plan continuation/recovery, complete
-output paging and empty/unborn Git runtime support remain implementation work.
+Integrated plans bind the authorized E2E child and the complete isolated candidate
+vector. Mechanical execution completion precedes a separate read-only adequacy
+review; only its verified result can establish integrated readiness. Parent
+coordination then summarizes the completed evidence. It cannot replace adequacy.
+
+Discovered-plan continuation/recovery, complete output paging and empty/unborn
+Git runtime support remain implementation work. Parent reassembly cannot reset
+discovered obligations or omit the distinct adequacy phase; unsupported lineage
+refuses before replacement work begins.
 Current review history travels inline and must fit the actual prompt/publication
 bounds; oversized histories refuse rather than disappearing. Empty configured
 check sets are valid undiscovered inputs; missing or unrun obligations still
-block dependent delivery. This child-local increment does not qualify the native
+block dependent delivery. These local paths do not qualify the native
 backend, actual-agent behavior or the complete default-workflow lifecycle.
 
 A file workflow records its actual canonical path and byte digest. The installed

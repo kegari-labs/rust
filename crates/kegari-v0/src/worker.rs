@@ -11,6 +11,8 @@ mod broker_observation;
 mod command;
 #[path = "worker_command_history.rs"]
 mod command_history;
+#[path = "worker_read_sources.rs"]
+mod read_sources;
 #[path = "worker_validation.rs"]
 mod validation;
 pub(crate) use broker_observation::CaptureBudget;
@@ -634,6 +636,7 @@ pub struct WorkerContract {
     scope_digest: String,
     account_id: String,
     repository: Option<crate::git::RepositoryId>,
+    read_resources: BTreeMap<PathBuf, ReadResource>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -690,8 +693,8 @@ pub fn operation_tool_definitions(
             ToolCapability::ContextRead,
             tool(
                 "source_read",
-                "Read a bounded UTF-8 regular file inside the admitted repository read boundary. No symlinks, Git administration or control files.",
-                json!({"path":{"type":"string","minLength":1}}),
+                "Read a bounded UTF-8 regular file in the primary repository or an explicitly host-bound read repository selected by repository_id. context_read read_sources lists available IDs. No raw root, symlinks, Git administration or writes.",
+                json!({"path":{"type":"string","minLength":1},"repository_id":{"type":"string","minLength":1,"maxLength":256}}),
                 &["path"],
             ),
         ),
@@ -1001,6 +1004,7 @@ impl WorkerContract {
             scope_digest,
             account_id,
             repository,
+            read_resources,
         })
     }
     pub(crate) fn workflow(&self) -> &Workflow {
@@ -1801,6 +1805,8 @@ impl ScopedWorker {
                     self.command_history()
                 } else if a.key == "validation_evidence" {
                     self.validation_evidence()
+                } else if a.key == "read_sources" {
+                    self.read_sources()
                 } else {
                     let v = self.contract.context.get(&a.key).ok_or_else(|| {
                         Error::new("missing_context", "named context entry unavailable")
@@ -1827,6 +1833,8 @@ impl ScopedWorker {
                                     "owner_command_history"
                                 } else if a.key == "validation_evidence" {
                                     "owner_validation_evidence"
+                                } else if a.key == "read_sources" {
+                                    "owner_read_sources"
                                 } else {
                                     "contract_context"
                                 }
@@ -1842,9 +1850,14 @@ impl ScopedWorker {
             }
             "source_read" => {
                 let a: SourceRead = parse(&call.arguments)?;
+                let root = self.contract.read_source_root(a.repository_id.as_deref())?;
                 let mut fact = None;
-                let result =
-                    read_source(&self.contract.isolation, &a.path, |path, bytes, value| {
+                let result = read_source_at(
+                    &self.contract.isolation,
+                    &root,
+                    &a.path,
+                    a.repository_id.as_deref(),
+                    |path, bytes, value| {
                         fact = Some(canonical_digest(1, value).map(|returned_value_digest| {
                             BrokerSemantic::Source {
                                 requested_path: a.path.clone(),
@@ -1854,14 +1867,19 @@ impl ScopedWorker {
                                 returned_value_digest,
                             }
                         }));
-                    });
+                    },
+                );
                 if let Some(fact) = fact {
                     match fact {
                         Ok(fact) => {
                             if let Ok(value) = &result {
-                                self.retain_source_read(call, id, &fact, value)?;
+                                self.retain_source_read(call, id, &root, &fact, value)?;
                             }
-                            self.broker_semantic(id, fact);
+                            if root == self.contract.isolation.plan().repository {
+                                self.broker_semantic(id, fact);
+                            } else {
+                                self.broker_gap(&Error::new("additional_source_observation", "evaluation broker projection does not describe cross-repository source reads"));
+                            }
                         }
                         Err(error) => self.broker_gap(&error),
                     }
@@ -2993,6 +3011,15 @@ fn bounded_value(value: Value) -> Result<Value> {
 fn read_source(
     boundary: &ValidatedIsolation,
     path: &str,
+    observe: impl FnMut(&str, &[u8], &Value),
+) -> Result<Value> {
+    read_source_at(boundary, &boundary.plan().repository, path, None, observe)
+}
+fn read_source_at(
+    boundary: &ValidatedIsolation,
+    root: &Path,
+    path: &str,
+    repository_id: Option<&str>,
     mut observe: impl FnMut(&str, &[u8], &Value),
 ) -> Result<Value> {
     boundary.revalidate()?;
@@ -3009,10 +3036,10 @@ fn read_source(
             "source read path must stay inside repository and exclude Git administration",
         ));
     }
-    let candidate = boundary.plan().repository.join(relative);
+    let candidate = root.join(relative);
     let actual = crate::isolation::canonical_target(&candidate)?;
     if actual != candidate
-        || !actual.starts_with(&boundary.plan().repository)
+        || !actual.starts_with(root)
         || boundary
             .plan()
             .forbidden_roots
@@ -3061,9 +3088,12 @@ fn read_source(
     }
     let content = std::str::from_utf8(&bytes)
         .map_err(|_| Error::new("invalid_input", "source is not UTF-8"))?;
-    let value = json!({"path":path,"digest":bytes_digest(&bytes),"content":content});
+    let mut value = json!({"path":path,"digest":bytes_digest(&bytes),"content":content});
+    if let Some(repository_id) = repository_id {
+        value["repository_id"] = json!(repository_id);
+    }
     let admitted = actual
-        .strip_prefix(&boundary.plan().repository)
+        .strip_prefix(root)
         .map_err(|_| Error::new("scope_violation", "admitted source left repository"))?;
     let admitted = admitted
         .to_str()
@@ -3127,6 +3157,8 @@ struct ContextRead {
 #[serde(deny_unknown_fields)]
 struct SourceRead {
     path: String,
+    #[serde(default)]
+    repository_id: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

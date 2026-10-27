@@ -407,3 +407,158 @@ fn signed_review_schema_cannot_implicitly_promote_legacy_or_insufficient_assessm
     record.schema_version = 1;
     verify(&record).unwrap(); // Historical legacy semantics stay explicit.
 }
+
+fn integrated_description() -> (
+    ReviewedIntegratedValidation,
+    WorkIdentity,
+    String,
+    crate::git::CandidateManifest,
+    RevisionBinding,
+) {
+    let (mut validation, revision) = evidence();
+    let vector = bytes_digest(b"entire descriptive candidate vector");
+    validation.schema_version = 2;
+    let plan = &mut validation.history[0];
+    plan.kind = CheckKind::Integrated;
+    plan.original_binding.candidate_vector_digest = Some(vector.clone());
+    plan.binding.candidate_vector_digest = Some(vector.clone());
+    validation.plan_digest = canonical_digest(1, plan).unwrap();
+    let attempt = &mut validation.attempts[0];
+    attempt.kind = CheckKind::Integrated;
+    attempt.binding = plan.binding.clone();
+    attempt.artifacts[0].candidate_vector_digest = Some(vector.clone());
+    let provenance = attempt.discovered.as_mut().unwrap();
+    provenance.plan = plan.clone();
+    provenance.plan_digest = validation.plan_digest.clone();
+    let candidate = crate::git::CandidateManifest {
+        schema_version: 1,
+        operation_id: Uuid::from_u128(30),
+        runtime_id: plan.binding.runtime_id,
+        repository: revision.repository.clone(),
+        parent_id: plan.binding.work.parent,
+        work_generation: bytes_digest(b"work"),
+        correction_generation: bytes_digest(b"correction"),
+        git_version: "descriptive".into(),
+        production: Revision {
+            commit: revision.base.clone(),
+            tree: "c".repeat(40),
+        },
+        ordered_delta_digests: vec![],
+        ordered_patch_digests: vec![],
+        selected_contributions: BTreeMap::new(),
+        production_integrations: vec![],
+        result: Some(plan.binding.revision.clone()),
+        combined_patch_digest: None,
+    };
+    let review = IntegratedAdequacyReview {
+        schema_version: 1,
+        operation_id: Uuid::from_u128(31),
+        session_id: "separate review".into(),
+        work: plan.binding.work.clone(),
+        candidate_vector_digest: vector.clone(),
+        instruction_manifest: bytes_digest(b"review instructions"),
+        tool_contract_digest: bytes_digest(b"review tools"),
+        context_digest: bytes_digest(b"actual review context"),
+        completed_at: at(4),
+        assessment: assessment(&validation),
+    };
+    let mut parent = review.work.clone();
+    parent.child = None;
+    (
+        ReviewedIntegratedValidation { validation, review },
+        parent,
+        vector,
+        candidate,
+        revision,
+    )
+}
+
+#[test]
+fn integrated_description_requires_separate_sufficient_exact_vector_review() {
+    let (reviewed, parent, vector, candidate, revision) = integrated_description();
+    let e2e = reviewed.review.work.child.unwrap();
+    reviewed
+        .verify(&parent, e2e, &vector, std::slice::from_ref(&candidate))
+        .unwrap();
+    assert!(
+        reviewed
+            .validation
+            .validate(&reviewed.review.work, &revision)
+            .is_err()
+    );
+    assert!(
+        reviewed
+            .verify(
+                &parent,
+                e2e,
+                &bytes_digest(b"other vector"),
+                std::slice::from_ref(&candidate)
+            )
+            .is_err()
+    );
+    assert!(reviewed.verify(&parent, e2e, &vector, &[]).is_err());
+    let mut same_owner = reviewed.clone();
+    same_owner.review.operation_id = same_owner.validation.history[0].binding.operation_id;
+    assert_eq!(
+        same_owner
+            .verify(&parent, e2e, &vector, std::slice::from_ref(&candidate))
+            .unwrap_err()
+            .code,
+        "validation_adequacy"
+    );
+    let mut insufficient = reviewed.clone();
+    insufficient.review.assessment.sufficient = false;
+    assert_eq!(
+        insufficient
+            .verify(&parent, e2e, &vector, std::slice::from_ref(&candidate))
+            .unwrap_err()
+            .code,
+        "validation_adequacy"
+    );
+    let mut substituted = reviewed;
+    substituted.review.assessment.evidence_digest = bytes_digest(b"other inventory");
+    assert_eq!(
+        substituted
+            .verify(&parent, e2e, &vector, &[candidate])
+            .unwrap_err()
+            .code,
+        "validation_adequacy"
+    );
+}
+
+#[test]
+fn integrated_configuration_is_optional_but_selected_constraints_remain_exact() {
+    let (reviewed, _, _, _, _) = integrated_description();
+    let workflow = crate::workflow::Workflow::parse("---\nchecks:\n  integrated:\n    behavior:\n      argv: [unfamiliar-tool, verify]\n      result_artifact: result.json\n---\nTask\n", "/descriptive/workflow.md").unwrap();
+    reviewed
+        .validation
+        .verify_configured(&[], &workflow)
+        .unwrap();
+    reviewed
+        .validation
+        .verify_configured(&["behavior".into()], &workflow)
+        .unwrap();
+    assert!(
+        reviewed
+            .validation
+            .verify_configured(&["missing".into()], &workflow)
+            .is_err()
+    );
+    let mut changed = reviewed.validation;
+    changed.history[0].requirements[0]
+        .services
+        .push(crate::workflow::CheckService {
+            name: "extra".into(),
+            argv: vec!["service".into()],
+            readiness: crate::workflow::ServiceReadiness {
+                argv: vec!["ready".into()],
+                timeout_ms: 1,
+            },
+            max_lifetime_ms: 1,
+        });
+    assert!(
+        changed
+            .verify_configured(&["behavior".into()], &workflow)
+            .is_err()
+    );
+}

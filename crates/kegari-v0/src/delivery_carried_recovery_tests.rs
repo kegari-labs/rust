@@ -128,6 +128,7 @@ fn synthetic_record(key: &AttestationKey) -> Signed<CarryPublicationRecord> {
     };
     let now = Utc::now();
     let evidence = evidence::ParentEvidence {
+        integrated_validation: None,
         schema_version: 1,
         work: work.clone(),
         required_children: BTreeSet::new(),

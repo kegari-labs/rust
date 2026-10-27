@@ -1,4 +1,4 @@
-# Exact-revision Codex review — version 3
+# Exact-revision Codex review — version 4
 
 Review the supplied exact head/base/delta and requirement/correction generation.
 Use the requested outcome, authorized boundary, relevant repository guidance and
@@ -34,6 +34,13 @@ obligations. A zero exit or a host-enrolled plan alone cannot establish adequacy
 Do not execute code to make this assessment; report unavailable material evidence
 as blocked. A legacy result without the required adequacy assessment cannot
 qualify discovered validation.
+
+For an integrated-adequacy assignment, assess the E2E outcome against the full
+supplied candidate vector, declared resources, obligation history and every
+attempt. Inspect the exact admitted candidate sources through generic read tools;
+do not execute them. Explain whether the checks cover the relevant cross-component
+behavior and whether changed commands preserve required coverage. Keep this
+assessment separate from parent coordination, human acceptance and release.
 
 For a review whose supplied context requests schema 1, submit this exact `claim`
 shape through `outcome_submit`:

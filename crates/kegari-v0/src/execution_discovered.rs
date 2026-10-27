@@ -82,20 +82,20 @@ fn matching_plan(
 ) -> Result<()> {
     let original = executor.check_ownership_binding(binding, effective)?;
     let record = plan.record();
+    crate::validation::validate_execution_kind(&record.kind, binding)?;
     if record.original_binding != *original
         || record.binding != *binding
         || record.correction
             != effective
                 .map(EffectiveExecutionBinding::provenance)
                 .transpose()?
-        || record.kind != CheckKind::Local
-        || binding.work.child.is_none()
-        || binding.candidate_vector_digest.is_some()
+        || (record.kind == CheckKind::Integrated
+            && executor.isolation.plan().role != ExecutionRole::Validation)
         || plan.digest() != canonical_digest(1, record)?
     {
         return Err(Error::new(
             "validation_plan_binding",
-            "discovered obligation differs from actual original/effective child execution",
+            "discovered obligation differs from actual original/effective validation execution",
         ));
     }
     executor.launch_identity(original)
@@ -277,7 +277,7 @@ impl LocalExecutor<'_> {
             effective: effective.cloned(),
             workflow_digest: plan.record().workflow_digest.clone(),
             check_name: id.into(),
-            kind: CheckKind::Local,
+            kind: plan.record().kind.clone(),
             resolved,
             outputs,
             prior,
@@ -307,6 +307,9 @@ impl PreparedDiscovered {
             ));
         }
         self.isolation.verify_cwd_derivation(executor.isolation)?;
+        if let Some(managed) = &executor.isolation.plan().managed_execution {
+            managed.revalidate_resource_versions_until(self.deadline)?;
+        }
         self.source.verify(Some(self.deadline))?;
         for anchor in &self.executables {
             anchor.verify(Some(self.deadline))?;
@@ -423,7 +426,6 @@ impl DiscoveredCheckProvenance {
             || record.correction != self.plan.correction
             || record.workflow_digest != self.plan.workflow_digest
             || record.kind != self.plan.kind
-            || record.kind != CheckKind::Local
             || record.before.digest()? != self.plan.source_digest
             || record.before.revision != record.binding.revision
             || self.prepared_at != record.started_at

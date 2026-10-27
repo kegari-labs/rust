@@ -387,7 +387,7 @@ impl RuntimeCoordinator {
         })?;
         if matches!(
             input.assignment.phase(),
-            "parent_integrated_validation" | "parent_evidence_review"
+            "parent_integrated_validation" | "parent_integrated_review" | "parent_evidence_review"
         ) && origin.is_none()
         {
             return Err(invalid(

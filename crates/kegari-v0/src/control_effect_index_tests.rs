@@ -138,6 +138,54 @@ fn ok_observation(receipt: &Receipt) -> Reconciliation {
 }
 
 #[test]
+fn independent_integrated_review_has_its_own_retained_effect_inventory() {
+    let mut f = Fixture::new();
+    f.run.phase.phase = "parent_integrated_review".into();
+    let p = f.admit();
+    assert_eq!(
+        f.host
+            .receipts
+            .get(p.operation_id)
+            .unwrap()
+            .expected
+            .get(KEY),
+        Some(&"1".into())
+    );
+    let receipt = f
+        .host
+        .mutate(
+            f.request(&p, "review_feedback"),
+            Some(&p),
+            None,
+            || Ok(()),
+            |r| {
+                callback_observes_member(&f.host, &p, r);
+                Ok((
+                    BTreeMap::new(),
+                    json!({"component":"review feedback recorded"}),
+                ))
+            },
+        )
+        .unwrap();
+    f.host
+        .retire_local(p.operation_id, json!({"component_only":true}))
+        .unwrap();
+    assert!(f.inventory(&p).frozen.is_some());
+    recover(&f.host.root, &f.host.receipts).unwrap();
+    std::fs::remove_file(
+        f.host
+            .receipts
+            .directory
+            .path()
+            .join(format!("{}.json", receipt.operation_id)),
+    )
+    .unwrap();
+    let error = recover(&f.host.root, &f.host.receipts).unwrap_err();
+    assert_eq!(error.code, "record_missing");
+    assert_eq!(error.message, "indexed effect receipt is missing");
+}
+
+#[test]
 fn all_dispatch_funnels_register_before_callback_and_keep_acknowledged_members() {
     let f = Fixture::new();
     let p = f.admit();

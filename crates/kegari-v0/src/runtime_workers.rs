@@ -785,7 +785,9 @@ async fn prepare_admitted_inner(
         if let Some(assignment) = &plan.request.delivery
             && matches!(
                 assignment.phase(),
-                "parent_integrated_validation" | "parent_evidence_review"
+                "parent_integrated_validation"
+                    | "parent_integrated_review"
+                    | "parent_evidence_review"
             )
         {
             let preparation = runtime.control.operation(prep_id)?;

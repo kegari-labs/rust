@@ -1627,6 +1627,7 @@ impl GateFixture {
         );
         children.push(e2e);
         let mut manifest = ParentEvidence {
+            integrated_validation: None,
             schema_version: 1,
             work: parent_work.clone(),
             required_children: children
@@ -2269,6 +2270,7 @@ fn parent_fixture_for_candidates(
     children.push(e2e);
     let now = Utc::now();
     let mut manifest = ParentEvidence {
+        integrated_validation: None,
         schema_version: 1,
         work: work(parent_id, None),
         required_children: children

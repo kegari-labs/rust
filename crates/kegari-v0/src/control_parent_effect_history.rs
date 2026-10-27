@@ -123,7 +123,9 @@ impl ControlHost {
             || preparation.actor != model.actor
             || !matches!(
                 run.phase.phase.as_str(),
-                "parent_integrated_validation" | "parent_evidence_review"
+                "parent_integrated_validation"
+                    | "parent_integrated_review"
+                    | "parent_evidence_review"
             )
         {
             return Err(invalid(

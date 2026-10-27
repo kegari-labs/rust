@@ -308,6 +308,9 @@ impl BoundManagedExecution {
     }
     /// Bounded structure and metadata checks only; no resource content reads.
     pub(crate) fn revalidate_binding(&self) -> Result<()> {
+        self.revalidate_binding_with_budget(&mut ResourceBudget::new())
+    }
+    fn revalidate_binding_with_budget(&self, budget: &mut ResourceBudget) -> Result<()> {
         if self.schema_version != SCHEMA || self.policy_digest != Self::automatic_policy_digest()? {
             return Err(changed());
         }
@@ -321,11 +324,24 @@ impl BoundManagedExecution {
         if reads.len() != self.resources.len() {
             return Err(changed());
         }
-        let mut budget = ResourceBudget::new();
         for (grant, resource) in reads.into_iter().zip(&self.resources) {
-            resource.validate_binding_with_budget(grant, &mut budget)?;
+            resource.validate_binding_with_budget(grant, budget)?;
         }
         Ok(())
+    }
+    /// Original resource versions are checked at the dispatch boundary. This
+    /// reads bounded metadata only; full contents stay outside Control.
+    pub(crate) fn revalidate_resource_versions_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<()> {
+        let mut budget = ResourceBudget::until(deadline);
+        budget.check()?;
+        self.revalidate_binding_with_budget(&mut budget)?;
+        for resource in &self.resources {
+            resource.revalidate_versions(&mut budget)?;
+        }
+        budget.check()
     }
     pub fn revalidate(&self) -> Result<()> {
         self.revalidate_binding()?;
@@ -334,6 +350,26 @@ impl BoundManagedExecution {
             resource.revalidate(&mut budget)?;
         }
         Ok(())
+    }
+    /// Compare a read with the original immutable resource snapshot. Current
+    /// resource bytes must still be revalidated separately before acceptance.
+    pub(crate) fn verify_resource_file(
+        &self,
+        root: &Path,
+        path: &Path,
+        digest: &str,
+        bytes: u64,
+    ) -> Result<()> {
+        self.revalidate_binding()?;
+        let mut matching = self
+            .resources
+            .iter()
+            .filter(|resource| resource.root() == root);
+        let resource = matching.next().ok_or_else(changed)?;
+        if matching.next().is_some() {
+            return Err(changed());
+        }
+        resource.verify_file(path, digest, bytes)
     }
     pub(super) fn validate_plan(&self, plan: &IsolationPlan) -> Result<()> {
         if self.context != DomainContext::from_plan(plan) {

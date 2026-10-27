@@ -60,15 +60,18 @@ impl Default for ResourceBudget {
 }
 impl ResourceBudget {
     pub(super) fn new() -> Self {
+        Self::until(Instant::now() + MAX_ELAPSED)
+    }
+    pub(super) fn until(deadline: Instant) -> Self {
         Self {
-            deadline: Instant::now() + MAX_ELAPSED,
+            deadline: deadline.min(Instant::now() + MAX_ELAPSED),
             entries: MAX_ENTRIES,
             bytes: MAX_BYTES,
             text: MAX_TEXT_BYTES,
             file_bytes: MAX_FILE_BYTES,
         }
     }
-    fn check(&self) -> Result<()> {
+    pub(super) fn check(&self) -> Result<()> {
         if Instant::now() >= self.deadline {
             Err(limit())
         } else {
@@ -163,6 +166,39 @@ pub(super) struct BoundManagedResource {
     digest: String,
 }
 impl BoundManagedResource {
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Membership in the original observation only. This does not observe
+    /// current contents, grant access or replace full resource revalidation.
+    pub(super) fn verify_file(&self, path: &Path, digest: &str, bytes: u64) -> Result<()> {
+        let suffix = path.strip_prefix(&self.root).map_err(|_| changed())?;
+        let name = if suffix.as_os_str().is_empty() {
+            "."
+        } else {
+            if suffix
+                .components()
+                .any(|c| !matches!(c, Component::Normal(_)))
+            {
+                return Err(changed());
+            }
+            suffix.to_str().ok_or_else(changed)?
+        };
+        match self
+            .entries
+            .iter()
+            .find(|entry| entry.path == name)
+            .map(|entry| &entry.kind)
+        {
+            Some(EntryKind::File {
+                bytes: original_bytes,
+                digest: original_digest,
+            }) if *original_bytes == bytes && original_digest == digest => Ok(()),
+            _ => Err(changed()),
+        }
+    }
+
     pub(super) fn capture(input: &PathGrant, budget: &mut ResourceBudget) -> Result<Self> {
         charge_grant(input, budget)?;
         let (root, entries, versions) = capture_tree(&input.path, input.directory, budget)?;
@@ -227,6 +263,72 @@ impl BoundManagedResource {
             return Err(changed());
         }
         Ok(())
+    }
+    /// Recheck the original filesystem versions without reading file contents
+    /// or enumerating a new inventory. Directory versions detect added/removed
+    /// names; every intermediate directory is opened without following links.
+    /// This is a dispatch-time check, not a replacement for full recapture.
+    pub(super) fn revalidate_versions(&self, budget: &mut ResourceBudget) -> Result<()> {
+        budget.check()?;
+        let originals = self
+            .entries
+            .iter()
+            .zip(&self.versions)
+            .map(|(entry, version)| (entry.path.as_str(), version))
+            .collect::<BTreeMap<_, _>>();
+        let original_root = originals.get(".").ok_or_else(invalid)?;
+        let name = self.root.to_str().ok_or_else(invalid)?;
+        if self
+            .root
+            .canonicalize()
+            .map_err(|e| Error::io("resolve original resource root", e))?
+            != self.root
+            || stat_at(libc::AT_FDCWD, name)? != **original_root
+        {
+            return Err(changed());
+        }
+        let root = open_at(libc::AT_FDCWD, name, self.input.directory)?;
+        if stat_file(&root)? != **original_root {
+            return Err(changed());
+        }
+        for (relative, original) in &originals {
+            budget.check()?;
+            let actual = if *relative == "." {
+                stat_file(&root)?
+            } else {
+                let parts = relative.split('/').collect::<Vec<_>>();
+                let mut parent = open_at(root.as_raw_fd(), ".", true)?;
+                let mut prefix = String::new();
+                for part in &parts[..parts.len() - 1] {
+                    budget.check()?;
+                    if !prefix.is_empty() {
+                        prefix.push('/');
+                    }
+                    prefix.push_str(part);
+                    parent = open_at(parent.as_raw_fd(), part, true)?;
+                    if stat_file(&parent)?
+                        != **originals.get(prefix.as_str()).ok_or_else(invalid)?
+                    {
+                        return Err(changed());
+                    }
+                }
+                stat_at(parent.as_raw_fd(), parts[parts.len() - 1])?
+            };
+            if actual != **original {
+                return Err(changed());
+            }
+        }
+        if stat_file(&root)? != **original_root
+            || stat_at(libc::AT_FDCWD, name)? != **original_root
+            || self
+                .root
+                .canonicalize()
+                .map_err(|e| Error::io("recheck original resource root", e))?
+                != self.root
+        {
+            return Err(changed());
+        }
+        budget.check()
     }
     #[cfg(test)]
     fn read_grants(&self) -> Vec<PathGrant> {
@@ -789,6 +891,122 @@ mod tests {
                 directory: true
             }]
         );
+    }
+
+    #[test]
+    fn original_resource_versions_refuse_changed_inventory_and_replaced_inputs() {
+        for case in 0..6 {
+            let tree = Tree::new();
+            fs::create_dir(tree.root.join("nested")).unwrap();
+            let source = tree.root.join("nested/source");
+            fs::write(&source, b"original").unwrap();
+            let captured = tree.capture();
+            captured
+                .revalidate_versions(&mut ResourceBudget::new())
+                .unwrap();
+            match case {
+                0 => fs::write(&source, b"changed contents and length").unwrap(),
+                1 => fs::write(tree.root.join("nested/new"), b"new input").unwrap(),
+                2 => fs::remove_file(&source).unwrap(),
+                3 => {
+                    fs::rename(&source, tree.root.join("original-inode")).unwrap();
+                    fs::write(&source, b"original").unwrap();
+                }
+                4 => {
+                    fs::rename(
+                        tree.root.join("nested"),
+                        tree.root.join("original-directory"),
+                    )
+                    .unwrap();
+                    symlink("original-directory", tree.root.join("nested")).unwrap();
+                }
+                _ => {
+                    let moved = tree.root.with_file_name("original-root");
+                    fs::rename(&tree.root, &moved).unwrap();
+                    symlink(moved, &tree.root).unwrap();
+                }
+            }
+            // The retained descriptive inventory remains valid; current
+            // filesystem versions must nevertheless refuse before dispatch.
+            binding(&captured, &captured.input).unwrap();
+            assert!(
+                captured
+                    .revalidate_versions(&mut ResourceBudget::new())
+                    .is_err(),
+                "case {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn resource_version_preflight_keeps_original_file_identity_and_deadline() {
+        let tree = Tree::new();
+        let path = tree.root.join("input");
+        fs::write(&path, b"original").unwrap();
+        let grant = PathGrant {
+            path: path.clone(),
+            directory: false,
+        };
+        let captured = BoundManagedResource::capture(&grant, &mut ResourceBudget::new()).unwrap();
+        captured
+            .revalidate_versions(&mut ResourceBudget::new())
+            .unwrap();
+        assert_eq!(
+            captured
+                .revalidate_versions(&mut ResourceBudget::until(Instant::now()))
+                .unwrap_err()
+                .code,
+            "managed_resource_limit"
+        );
+        fs::rename(&path, tree.root.join("old-input")).unwrap();
+        fs::write(path, b"original").unwrap();
+        assert_eq!(
+            captured
+                .revalidate_versions(&mut ResourceBudget::new())
+                .unwrap_err()
+                .code,
+            "identity_mismatch"
+        );
+    }
+
+    #[test]
+    fn original_file_membership_refuses_other_bytes_paths_and_links() {
+        let tree = Tree::new();
+        fs::write(tree.root.join("source"), b"observed").unwrap();
+        symlink("source", tree.root.join("alias")).unwrap();
+        let resource = tree.capture();
+        let digest = crate::digest::bytes_digest(b"observed");
+        resource
+            .verify_file(&tree.root.join("source"), &digest, 8)
+            .unwrap();
+        for path in [
+            tree.root.clone(),
+            tree.root.join("alias"),
+            tree.root.join("missing"),
+            tree.root.join("../source"),
+        ] {
+            assert!(resource.verify_file(&path, &digest, 8).is_err());
+        }
+        assert!(
+            resource
+                .verify_file(&tree.root.join("source"), &digest, 7)
+                .is_err()
+        );
+        assert!(
+            resource
+                .verify_file(
+                    &tree.root.join("source"),
+                    &crate::digest::bytes_digest(b"changed"),
+                    8
+                )
+                .is_err()
+        );
+        fs::write(tree.root.join("source"), b"changed!").unwrap();
+        // Original membership is deliberately not a fresh filesystem proof.
+        resource
+            .verify_file(&tree.root.join("source"), &digest, 8)
+            .unwrap();
+        assert!(resource.revalidate(&mut ResourceBudget::new()).is_err());
     }
 
     #[test]

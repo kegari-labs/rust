@@ -2133,6 +2133,19 @@
           "limits": "Actual worker/Control/executor components use explicitly deterministic command outcomes; signed evidence predicate fixtures do not mint native capabilities. No native, actual-agent or human qualification. Parent integrated discovery, cross-worker lineage, large evidence transport, environment admission and empty/unborn baselines remain open. Final build differs from tested source only in instruction README prose.",
           "class": "deterministic",
           "source_digest": "sha256:a9a22171ef5f703a0265afd6782627e6632c7698027eda63579e118ea74a4a09"
+        },
+        {
+          "reference": "validation/LOCAL-INTEGRATED-DISCOVERY.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Actual coordinator-created integrated assignment with no configured commands enrolls and runs source-derived obligations through ScopedWorker and Control, retaining the exact candidate-vector binding.",
+          "tests": [
+            "tests/delivery.rs::parent_slice_uses_actual_production_and_preserves_dirty_operator_checkout",
+            "src/worker_validation_tests.rs::additional_source_read_uses_actual_host_repository_and_settled_snapshot_reference"
+          ],
+          "limits": "Real coordinator/worker/Control components use explicitly injected command outcomes; signed-description fixtures cannot mint native capabilities. No native, actual-agent, provider or human qualification. Not an atomic filesystem snapshot. Discovered recovery, compact full-history/all-attempt artifact retention, environment admission, output paging and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216"
         }
       ]
     },
@@ -2157,6 +2170,20 @@
           "limits": "Actual worker/Control/executor components use explicitly deterministic command outcomes; signed evidence predicate fixtures do not mint native capabilities. No native, actual-agent or human qualification. Parent integrated discovery, cross-worker lineage, large evidence transport, environment admission and empty/unborn baselines remain open. Final build differs from tested source only in instruction README prose.",
           "class": "deterministic",
           "source_digest": "sha256:a9a22171ef5f703a0265afd6782627e6632c7698027eda63579e118ea74a4a09"
+        },
+        {
+          "reference": "validation/LOCAL-INTEGRATED-DISCOVERY.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Integrated plans preserve original E2E/vector and full attempted history; separate read-only adequacy is required before readiness and new publication. Legacy signed history does not supply new publication authority.",
+          "tests": [
+            "src/validation.rs::integrated_enrollment_requires_e2e_child_vector_and_preserves_its_history",
+            "src/evidence_validation_tests.rs::integrated_description_requires_separate_sufficient_exact_vector_review",
+            "src/delivery_integrated_validation.rs::legacy_signed_integrated_history_is_readable_but_not_new_publication_authority"
+          ],
+          "limits": "Real coordinator/worker/Control components use explicitly injected command outcomes; signed-description fixtures cannot mint native capabilities. No native, actual-agent, provider or human qualification. Not an atomic filesystem snapshot. Discovered recovery, compact full-history/all-attempt artifact retention, environment admission, output paging and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216"
         }
       ]
     },
@@ -2212,6 +2239,21 @@
           "limits": "Actual worker/Control/executor components use explicitly deterministic command outcomes; signed evidence predicate fixtures do not mint native capabilities. No native, actual-agent or human qualification. Parent integrated discovery, cross-worker lineage, large evidence transport, environment admission and empty/unborn baselines remain open. Final build differs from tested source only in instruction README prose.",
           "class": "deterministic",
           "source_digest": "sha256:a9a22171ef5f703a0265afd6782627e6632c7698027eda63579e118ea74a4a09"
+        },
+        {
+          "reference": "validation/LOCAL-INTEGRATED-DISCOVERY.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Generic and discovered dispatch recheck original immutable resource versions under the original deadline. Actual Control tracking retains new adequacy owners/preparation and unknown effects across generation/drain checks.",
+          "tests": [
+            "src/execution_discovered_tests.rs::integrated_preflight_refuses_vector_role_and_other_candidate_changes_before_dispatch",
+            "src/execution_discovered_tests.rs::generic_command_refuses_changed_original_resource_before_dispatch",
+            "src/managed_resources.rs::original_resource_versions_refuse_changed_inventory_and_replaced_inputs",
+            "src/runtime_delivery_parent.rs::adequacy_phase_does_not_publish_readiness_and_original_owners_block_generation"
+          ],
+          "limits": "Real coordinator/worker/Control components use explicitly injected command outcomes; signed-description fixtures cannot mint native capabilities. No native, actual-agent, provider or human qualification. Not an atomic filesystem snapshot. Discovered recovery, compact full-history/all-attempt artifact retention, environment admission, output paging and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216"
         }
       ]
     },
@@ -2251,6 +2293,19 @@
           "limits": "Actual worker/Control/executor components use explicitly deterministic command outcomes; signed evidence predicate fixtures do not mint native capabilities. No native, actual-agent or human qualification. Parent integrated discovery, cross-worker lineage, large evidence transport, environment admission and empty/unborn baselines remain open. Final build differs from tested source only in instruction README prose.",
           "class": "deterministic",
           "source_digest": "sha256:a9a22171ef5f703a0265afd6782627e6632c7698027eda63579e118ea74a4a09"
+        },
+        {
+          "reference": "validation/LOCAL-INTEGRATED-DISCOVERY.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Actual generic execution facts remain separate from discovered-plan adequacy and parent readiness; insufficient completed review blocks, while unresolved effects retain their original owner.",
+          "tests": [
+            "src/execution_discovered_tests.rs::integrated_discovery_retains_actual_e2e_binding_and_transcript_without_native_promotion",
+            "src/runtime_delivery_parent.rs::completed_inadequate_or_missing_obligations_block_without_losing_uncertain_effects"
+          ],
+          "limits": "Real coordinator/worker/Control components use explicitly injected command outcomes; signed-description fixtures cannot mint native capabilities. No native, actual-agent, provider or human qualification. Not an atomic filesystem snapshot. Discovered recovery, compact full-history/all-attempt artifact retention, environment admission, output paging and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216"
         }
       ]
     },
@@ -2428,8 +2483,23 @@
       "line": 507,
       "sha256": "3ee8724121e2975860736daf058e0598fefd1c00a46a46f5c72d618379624fd0",
       "excerpt": "Parent evidence MUST refer to the actual isolated candidate assembled by §9.1, not a shared staging environment containing additional parents. The E2E child defines and runs integr",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-INTEGRATED-DISCOVERY.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Actual isolated candidate construction supplies the integrated worker assignment before E2E completion. Integrated plan/execution evidence binds the complete vector, with a separate adequacy phase before readiness.",
+          "tests": [
+            "tests/delivery.rs::parent_slice_uses_actual_production_and_preserves_dirty_operator_checkout",
+            "src/evidence_validation_tests.rs::integrated_description_requires_separate_sufficient_exact_vector_review",
+            "src/runtime_delivery_parent.rs::adequacy_phase_does_not_publish_readiness_and_original_owners_block_generation"
+          ],
+          "limits": "Real coordinator/worker/Control components use explicitly injected command outcomes; signed-description fixtures cannot mint native capabilities. No native, actual-agent, provider or human qualification. Not an atomic filesystem snapshot. Discovered recovery, compact full-history/all-attempt artifact retention, environment admission, output paging and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216"
+        }
+      ]
     },
     {
       "id": "clause:8.5:54d46458fc54",

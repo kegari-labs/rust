@@ -1,5 +1,7 @@
 //! Delivery integration fixtures use production reconciliation/provider parsers.
 //! HTTP observations are deterministic fixtures, never live qualification.
+#[path = "support/integrated_worker.rs"]
+mod integrated_worker;
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
 #[path = "support/process_probe.rs"]
@@ -407,6 +409,7 @@ struct DeliveryFixture {
     _temp: tempfile::TempDir,
     coordinator: DeliveryCoordinator,
     host: Arc<ControlHost>,
+    lease: Lease,
     admission: DeliveryAdmission,
     key: Arc<AttestationKey>,
     wire: Arc<Mutex<Fixture>>,
@@ -695,6 +698,7 @@ impl DeliveryFixture {
             _temp: temp,
             coordinator,
             host,
+            lease,
             admission,
             key,
             wire,
@@ -1712,7 +1716,9 @@ fn fixture_git(path: &std::path::Path, args: &[&str]) -> String {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checkout() {
-    let f = DeliveryFixture::build(false, true).await;
+    // Selection is empty before configuration/authority publication. The
+    // workflow's e2e entry remains optional guidance, not a required command.
+    let f = DeliveryFixture::with_obligations(false, true, true, false).await;
     let source = f._temp.path().join("source");
     std::fs::write(source.join("source.txt"), "unrelated staged\n").unwrap();
     fixture_git(&source, &["add", "source.txt"]);
@@ -1818,15 +1824,62 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
         .await
         .unwrap();
     assert_eq!(assignment.candidate_vector_digest(), Some(vector.digest()));
+    assert!(contract.integrated_commands().is_empty());
+    assert_eq!(
+        assignment.context()["validation_assignment"]["configured_checks"],
+        json!([])
+    );
     assert_eq!(
         assignment.source().unwrap().revision(),
         slice.manifest().result.as_ref().unwrap()
     );
-    assert!(
+    let discovered = tokio::time::timeout(
+        StdDuration::from_secs(60),
+        integrated_worker::exercise_assignment(
+            &f._temp.path().canonicalize().unwrap(),
+            &f.parent,
+            &assignment,
+            workflow(),
+            f.host.clone(),
+            &f.lease,
+        ),
+    )
+    .await
+    .expect("bounded actual integrated worker component");
+    assert_eq!(discovered.len(), 1);
+    // A genuine assignment and mechanically successful injected command still
+    // cannot produce readiness. Discovered checks require the separate retained
+    // validation/independent-adequacy path; the old named-check entrypoint refuses.
+    assert_eq!(
+        f.coordinator
+            .verify_integrated_checks(
+                &contract,
+                &e2e_gate,
+                &vector,
+                &f.observer,
+                &[&discovered[0]],
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "validation_obligations_pending"
+    );
+    assert_eq!(
+        discovered[0].production_evidence().unwrap_err().code,
+        "unqualified_fixture"
+    );
+    assert_eq!(std::fs::read(source.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        std::fs::read_to_string(source.join("source.txt")).unwrap(),
+        "unrelated unstaged\n"
+    );
+    assert_eq!(
         f.coordinator
             .verify_integrated_checks(&contract, &e2e_gate, &vector, &f.observer, &[])
             .await
-            .is_err()
+            .unwrap_err()
+            .code,
+        "validation_obligations_pending"
     );
     let authority = kegari_v0::worker::WorkerAuthority::Authorized(e2e_gate.clone());
     let mut request = kegari_v0::runtime_workers::LaunchRequest {
@@ -1922,16 +1975,18 @@ async fn undiscovered_local_obligations_cannot_become_a_vacuous_pass() {
 }
 
 #[tokio::test]
-async fn undiscovered_integrated_obligations_block_candidate_contract() {
+async fn empty_integrated_selection_preserves_candidate_contract_without_inventing_commands() {
+    // A prior test refused the contract itself, enforcing the superseded
+    // predefined-command prerequisite. Preparation now permits discovery;
+    // parent_slice above checks missing/discovered evidence cannot bypass readiness.
     let f = DeliveryFixture::with_obligations(false, true, true, false).await;
     let before = f.wire.lock().unwrap().requests.len();
-    assert_eq!(
-        f.coordinator
-            .parent_contract(f.admission.fresh_gate().clone(), &f.parent, &workflow())
-            .unwrap_err()
-            .code,
-        "validation_obligations_pending"
-    );
+    let contract = f
+        .coordinator
+        .parent_contract(f.admission.fresh_gate().clone(), &f.parent, &workflow())
+        .unwrap();
+    assert!(contract.integrated_commands().is_empty());
+    assert_eq!(contract.required_children(), &f.parent.required_children);
     assert_eq!(f.wire.lock().unwrap().requests.len(), before);
 }
 

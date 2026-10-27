@@ -184,7 +184,7 @@ pub(super) fn publication_bounds<T: Serialize>(purpose: &str, signed: &Signed<T>
     Ok(())
 }
 
-fn require_recorded_attempt(
+pub(super) fn require_recorded_attempt(
     attempts: &[CheckExecutionRecord],
     record: &CheckExecutionRecord,
 ) -> Result<()> {
@@ -203,7 +203,7 @@ fn require_recorded_attempt(
     Ok(())
 }
 
-fn retain_attempt(
+pub(super) fn retain_attempt(
     current: &ValidationPlan,
     original: Option<&ValidationPlan>,
     record: &CheckExecutionRecord,

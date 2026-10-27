@@ -51,6 +51,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_scope(false)
+    }
+    fn integrated() -> Self {
+        Self::with_scope(true)
+    }
+    fn with_scope(integrated: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let binary = pinned_git::prepare(&root);
@@ -87,7 +93,11 @@ impl Fixture {
         std::fs::create_dir(&scratch).unwrap();
         let mut plan = IsolationPlan {
             schema_version: 1,
-            role: ExecutionRole::Child,
+            role: if integrated {
+                ExecutionRole::Validation
+            } else {
+                ExecutionRole::Child
+            },
             execution_root: execution,
             repository: repository.clone(),
             cwd: repository.clone(),
@@ -104,6 +114,19 @@ impl Fixture {
             forbidden_roots: vec![operator.clone()],
             managed_execution: None,
         };
+        if integrated {
+            // Actual read-only bytes model the separately retained repositories
+            // granted to an E2E worker. The vector digest below is component
+            // data, not a reconstructed parent-vector capability.
+            let candidate = root.join("other-candidate");
+            std::fs::create_dir(&candidate).unwrap();
+            std::fs::write(candidate.join("input.txt"), b"original integrated input\n").unwrap();
+            plan.read_roots.push(PathGrant {
+                path: candidate,
+                directory: true,
+            });
+            plan.source_writes.clear();
+        }
         plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
         let isolation = plan.validate().unwrap();
         let git = Git::new(binary).unwrap();
@@ -128,7 +151,8 @@ impl Fixture {
                 id: "101".into(),
             },
             revision: git.revision(&repository, "HEAD").unwrap(),
-            candidate_vector_digest: None,
+            candidate_vector_digest: integrated
+                .then(|| bytes_digest(b"component candidate vector; not native authority")),
             isolation_digest: isolation.digest().into(),
         };
         let owner = OwnedDirectory::register(
@@ -314,6 +338,11 @@ fn enroll(
             original_binding: f.binding.clone(),
             binding: f.binding.clone(),
             correction: None,
+            kind: if f.binding.candidate_vector_digest.is_some() {
+                CheckKind::Integrated
+            } else {
+                CheckKind::Local
+            },
             workflow_digest: bytes_digest(b"generic workflow; no named checks"),
             instruction_digest: digest.clone(),
             tool_contract_digest: digest.clone(),
@@ -659,4 +688,244 @@ fn discovered_services_bind_actual_observations_and_require_original_bundle_admi
     assert_eq!(bundle.plan().steps().len(), 3);
     assert_eq!(bundle.plan().effect_id(), original_invocation);
     assert_eq!(boundary.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn integrated_discovery_retains_actual_e2e_binding_and_transcript_without_native_promotion() {
+    let f = Fixture::integrated();
+    assert_eq!(f.isolation.plan().role, ExecutionRole::Validation);
+    assert!(f.isolation.plan().source_writes.is_empty());
+    let boundary = Boundary::default();
+    let executor = f.executor(&boundary);
+    let plan = enroll(&f, &executor, requirement());
+    assert_eq!(plan.record().kind, CheckKind::Integrated);
+    let invocation = Uuid::new_v4();
+    let prepared = executor
+        .prepare_discovered_check(
+            &f.binding,
+            &plan,
+            "discovered-obligation",
+            invocation,
+            &[],
+            None,
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(boundary.calls.load(Ordering::SeqCst), 0);
+    let running = executor.start_check(prepared).unwrap();
+    let CheckCompletion::Passed(passed) =
+        executor.complete_check(running, |_| Ok(())).await.unwrap()
+    else {
+        panic!("injected integrated command did not pass its mechanical checks")
+    };
+    let record = passed.record();
+    assert_eq!(record.kind, CheckKind::Integrated);
+    assert_eq!(record.binding, f.binding);
+    assert_eq!(record.before, record.after);
+    assert_eq!(
+        record.discovered.as_ref().unwrap().plan_digest,
+        plan.digest()
+    );
+    assert_eq!(
+        passed
+            .validation_plan()
+            .unwrap()
+            .record()
+            .binding
+            .candidate_vector_digest,
+        f.binding.candidate_vector_digest
+    );
+    assert!(
+        record
+            .artifacts
+            .iter()
+            .all(|a| a.candidate_vector_digest == f.binding.candidate_vector_digest)
+    );
+    record.validate_shape().unwrap();
+    assert_eq!(
+        passed.production_evidence().unwrap_err().code,
+        "unqualified_fixture"
+    );
+    let transcript: Value = serde_json::from_slice(
+        &std::fs::read(&record.discovered.as_ref().unwrap().transcript).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(transcript["command"]["stdout"], "actual injected stdout\n");
+    assert_eq!(boundary.calls.load(Ordering::SeqCst), 1);
+    let mut rewritten = record.clone();
+    rewritten.kind = CheckKind::Local;
+    assert!(rewritten.validate_shape().is_err());
+    let mut rewritten = record.clone();
+    rewritten.binding.candidate_vector_digest = Some(bytes_digest(b"substituted vector"));
+    assert!(rewritten.validate_shape().is_err());
+}
+
+#[test]
+fn integrated_preflight_refuses_vector_role_and_other_candidate_changes_before_dispatch() {
+    let f = Fixture::integrated();
+    let boundary = Boundary::default();
+    let executor = f.executor(&boundary);
+    let plan = enroll(&f, &executor, requirement());
+    let mut changed = f.binding.clone();
+    changed.candidate_vector_digest = Some(bytes_digest(b"substituted vector"));
+    assert_eq!(
+        executor
+            .prepare_discovered_check(
+                &changed,
+                &plan,
+                "discovered-obligation",
+                Uuid::new_v4(),
+                &[],
+                None,
+                |_| Ok(()),
+            )
+            .unwrap_err()
+            .code,
+        "validation_plan_binding"
+    );
+    let prepared = executor
+        .prepare_discovered_check(
+            &f.binding,
+            &plan,
+            "discovered-obligation",
+            Uuid::new_v4(),
+            &[],
+            None,
+            |_| Ok(()),
+        )
+        .unwrap();
+    let candidate = f
+        ._temp
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("other-candidate/input.txt");
+    std::fs::write(candidate, b"changed other repository before launch\n").unwrap();
+    assert!(executor.start_check(prepared).is_err());
+    assert_eq!(boundary.calls.load(Ordering::SeqCst), 0);
+
+    // A descriptive vector on an ordinary Child fixture does not supply the
+    // actual integrated Validation-role boundary.
+    let mut child = Fixture::new();
+    child.binding.candidate_vector_digest = Some(bytes_digest(b"descriptive vector"));
+    let executor = child.executor(&boundary);
+    let plan = enroll(&child, &executor, requirement());
+    assert_eq!(
+        executor
+            .prepare_discovered_check(
+                &child.binding,
+                &plan,
+                "discovered-obligation",
+                Uuid::new_v4(),
+                &[],
+                None,
+                |_| Ok(()),
+            )
+            .unwrap_err()
+            .code,
+        "validation_plan_binding"
+    );
+    assert_eq!(boundary.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn integrated_completion_rechecks_other_candidate_bytes_before_transcript_or_capability() {
+    let f = Fixture::integrated();
+    let candidate = f
+        ._temp
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("other-candidate/input.txt");
+    let boundary = Boundary {
+        // Injected boundary deliberately violates the read-only fixture scope;
+        // actual completion must detect this, even with reported exit zero.
+        writes: vec![(candidate, b"changed during injected execution\n".to_vec())],
+        ..Default::default()
+    };
+    let executor = f.executor(&boundary);
+    let plan = enroll(&f, &executor, requirement());
+    let invocation = Uuid::new_v4();
+    let prepared = executor
+        .prepare_discovered_check(
+            &f.binding,
+            &plan,
+            "discovered-obligation",
+            invocation,
+            &[],
+            None,
+            |_| Ok(()),
+        )
+        .unwrap();
+    let running = executor.start_check(prepared).unwrap();
+    let mut journal = Vec::new();
+    assert!(
+        executor
+            .complete_check(running, |event| {
+                journal.push(serde_json::to_value(event).unwrap());
+                Ok(())
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(boundary.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(journal.len(), 1);
+    assert_eq!(journal[0]["state"], "uncertain");
+    assert!(
+        !f.isolation
+            .plan()
+            .scratch
+            .join(format!("validation-transcript-{invocation}.json"))
+            .exists()
+    );
+}
+
+#[test]
+fn generic_command_refuses_changed_original_resource_before_dispatch() {
+    let f = Fixture::integrated();
+    let boundary = Boundary::default();
+    let executor = f.executor(&boundary);
+    let request = CommandRequest {
+        argv: requirement().argv,
+        cwd: ".".into(),
+    };
+    let invocation = Uuid::new_v4();
+    let mut journal = Vec::new();
+    let prepared = executor
+        .prepare_command(&f.binding, &request, invocation, None, |event| {
+            journal.push(serde_json::to_value(event).unwrap());
+            Ok(())
+        })
+        .unwrap();
+    let candidate = f
+        ._temp
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("other-candidate/input.txt");
+    std::fs::write(
+        candidate,
+        b"changed resource after actual command preparation\n",
+    )
+    .unwrap();
+    assert_eq!(
+        executor.preflight_command(&prepared).unwrap_err().code,
+        "identity_mismatch"
+    );
+    let error = executor
+        .start_command(prepared, |event| {
+            journal.push(serde_json::to_value(event).unwrap());
+            Ok(())
+        })
+        .err()
+        .expect("stale original resource must refuse without dispatch");
+    assert_eq!(error.code, "identity_mismatch");
+    assert_eq!(boundary.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(journal.len(), 2);
+    assert_eq!(journal[0]["state"], "prepared");
+    assert_eq!(journal[1]["state"], "not_started");
+    assert_eq!(
+        journal[1]["invocation_id"],
+        serde_json::to_value(invocation).unwrap()
+    );
 }

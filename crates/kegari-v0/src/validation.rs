@@ -190,7 +190,6 @@ pub struct ValidationPlanRecord {
 impl ValidationPlanRecord {
     pub(crate) fn validate_shape(&self) -> Result<()> {
         if self.schema_version != 1
-            || self.kind != CheckKind::Local
             || self.ordinal == 0
             || self.ordinal as usize > MAX_VALIDATION_HISTORY
             || (self.ordinal == 1) != self.predecessor.is_none()
@@ -204,15 +203,12 @@ impl ValidationPlanRecord {
             binding.repository.validate()?;
             binding.revision.validate()?;
             validate_digest(&binding.isolation_digest)?;
-            if binding.runtime_id.is_nil()
-                || binding.operation_id.is_nil()
-                || binding.work.child.is_none()
-                || binding.candidate_vector_digest.is_some()
-            {
+            if binding.runtime_id.is_nil() || binding.operation_id.is_nil() {
                 return Err(invalid(
-                    "discovered plan requires an actual child-local binding",
+                    "discovered plan requires actual runtime and operation identities",
                 ));
             }
+            validate_execution_kind(&self.kind, binding)?;
         }
         let mut unchanged = self.binding.clone();
         unchanged.work = self.original_binding.work.clone();
@@ -304,6 +300,8 @@ pub(crate) struct ValidationEnrollment {
     pub original_binding: ExecutionBinding,
     pub binding: ExecutionBinding,
     pub correction: Option<CorrectionExecutionProvenance>,
+    /// Chosen by the actual host assignment, never by a validation proposal.
+    pub kind: CheckKind,
     pub workflow_digest: String,
     pub instruction_digest: String,
     pub tool_contract_digest: String,
@@ -359,6 +357,7 @@ impl ValidationPlan {
         let mut history = previous.map(|p| p.history.clone()).unwrap_or_default();
         if let Some(prior) = previous {
             if prior.record().original_binding != enrollment.original_binding
+                || prior.record().kind != enrollment.kind
                 || prior.record().workflow_digest != enrollment.workflow_digest
                 || prior.record().instruction_digest != enrollment.instruction_digest
                 || prior.record().tool_contract_digest != enrollment.tool_contract_digest
@@ -400,7 +399,7 @@ impl ValidationPlan {
             original_binding: enrollment.original_binding,
             binding: enrollment.binding,
             correction: enrollment.correction,
-            kind: CheckKind::Local,
+            kind: enrollment.kind,
             workflow_digest: enrollment.workflow_digest,
             instruction_digest: enrollment.instruction_digest,
             tool_contract_digest: enrollment.tool_contract_digest,
@@ -417,6 +416,24 @@ impl ValidationPlan {
         let digest = canonical_digest(1, &record)?;
         history.push(record);
         Ok(Self { history, digest })
+    }
+}
+
+/// Descriptive scope consistency only. The worker supplies the actual E2E
+/// assignment and the executor retains its original owned binding; a digest or
+/// a decoded record cannot grant candidate-vector authority.
+pub(crate) fn validate_execution_kind(kind: &CheckKind, binding: &ExecutionBinding) -> Result<()> {
+    if binding.work.child.is_none() {
+        return Err(invalid(
+            "discovered execution requires an actual child responsibility",
+        ));
+    }
+    match (kind, binding.candidate_vector_digest.as_deref()) {
+        (CheckKind::Local, None) => Ok(()),
+        (CheckKind::Integrated, Some(vector)) => validate_digest(vector),
+        _ => Err(invalid(
+            "validation kind differs from the original local or integrated vector binding",
+        )),
     }
 }
 
@@ -516,6 +533,7 @@ mod tests {
             original_binding: binding.clone(),
             binding,
             correction: None,
+            kind: CheckKind::Local,
             workflow_digest: digest.clone(),
             instruction_digest: digest.clone(),
             tool_contract_digest: digest.clone(),
@@ -584,6 +602,97 @@ mod tests {
         let mut next = proposal;
         next.previous = Some(first.digest().into());
         assert!(ValidationPlan::enroll(changed, next, reads, Some(&first)).is_err());
+    }
+
+    #[test]
+    fn integrated_enrollment_requires_e2e_child_vector_and_preserves_its_history() {
+        // Descriptor/enrollment invariants only: this does not manufacture a
+        // verified parent candidate vector or a runtime assignment.
+        let (mut enrollment, mut proposal, reads) = fixture();
+        enrollment.kind = CheckKind::Integrated;
+        let vector = bytes_digest(b"descriptive complete candidate vector");
+        enrollment.original_binding.candidate_vector_digest = Some(vector.clone());
+        enrollment.binding.candidate_vector_digest = Some(vector.clone());
+        let first =
+            ValidationPlan::enroll(enrollment.clone(), proposal.clone(), reads.clone(), None)
+                .unwrap();
+        assert_eq!(first.record().kind, CheckKind::Integrated);
+        assert!(first.record().binding.work.child.is_some());
+        assert_eq!(
+            first.record().binding.candidate_vector_digest.as_deref(),
+            Some(vector.as_str())
+        );
+        proposal.previous = Some(first.digest().into());
+        proposal.reason = "Repository evidence refines the integrated assertion".into();
+        proposal.requirements[0]
+            .argv
+            .push("--cross-component".into());
+        let next = ValidationPlan::enroll(
+            enrollment.clone(),
+            proposal.clone(),
+            reads.clone(),
+            Some(&first),
+        )
+        .unwrap();
+        assert_eq!(next.history()[0], *first.record());
+        assert_eq!(next.record().binding, first.record().binding);
+        for case in 0..3 {
+            let mut changed = enrollment.clone();
+            match case {
+                0 => changed.kind = CheckKind::Local,
+                1 => {
+                    changed.original_binding.candidate_vector_digest =
+                        Some(bytes_digest(b"other vector"));
+                    changed.binding.candidate_vector_digest =
+                        changed.original_binding.candidate_vector_digest.clone();
+                }
+                _ => {
+                    changed.original_binding.work.child = Some(Uuid::from_u128(99));
+                    changed.binding.work.child = changed.original_binding.work.child;
+                }
+            }
+            assert!(
+                ValidationPlan::enroll(changed, proposal.clone(), reads.clone(), Some(&first))
+                    .is_err(),
+                "case {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn integrated_scope_cannot_be_supplied_by_a_proposal_or_promote_local_parent_or_hosted_work() {
+        let (enrollment, proposal, reads) = fixture();
+        let mut supplied = serde_json::to_value(&proposal).unwrap();
+        supplied["kind"] = serde_json::json!("integrated");
+        assert!(serde_json::from_value::<ValidationProposal>(supplied).is_err());
+        for case in 0..5 {
+            let mut changed = enrollment.clone();
+            changed.kind = CheckKind::Integrated;
+            let vector = Some(bytes_digest(b"descriptive vector"));
+            changed.original_binding.candidate_vector_digest = vector.clone();
+            changed.binding.candidate_vector_digest = vector;
+            match case {
+                0 => {
+                    changed.binding.candidate_vector_digest = None;
+                    changed.original_binding.candidate_vector_digest = None;
+                }
+                1 => {
+                    changed.binding.work.child = None;
+                    changed.original_binding.work.child = None;
+                }
+                2 => changed.kind = CheckKind::Local,
+                3 => changed.kind = CheckKind::HostedCi,
+                _ => {
+                    changed.binding.candidate_vector_digest = Some("not-a-digest".into());
+                    changed.original_binding.candidate_vector_digest =
+                        changed.binding.candidate_vector_digest.clone();
+                }
+            }
+            assert!(
+                ValidationPlan::enroll(changed, proposal.clone(), reads.clone(), None).is_err(),
+                "case {case}"
+            );
+        }
     }
 
     #[test]

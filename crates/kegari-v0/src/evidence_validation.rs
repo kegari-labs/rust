@@ -49,13 +49,14 @@ impl ValidationEvidence {
     }
 
     pub(crate) fn requirements(&self) -> Result<Vec<CheckRequirement>> {
+        let kind = self.current()?.kind.clone();
         Ok(self
             .current()?
             .requirements
             .iter()
             .map(|r| CheckRequirement {
                 id: r.id.clone(),
-                kind: CheckKind::Local,
+                kind: kind.clone(),
                 workflow_id: None,
                 command: r.argv.clone(),
             })
@@ -65,7 +66,37 @@ impl ValidationEvidence {
     /// The same predicate is used before review and when signed child history is
     /// read again. It validates a description, never grants dispatch authority.
     pub(crate) fn validate(&self, work: &WorkIdentity, revision: &RevisionBinding) -> Result<()> {
-        if self.schema_version != 1
+        self.validate_kind(work, revision, CheckKind::Local)
+    }
+
+    pub(crate) fn validate_integrated(
+        &self,
+        work: &WorkIdentity,
+        revision: &RevisionBinding,
+        vector: &str,
+    ) -> Result<()> {
+        self.validate_kind(work, revision, CheckKind::Integrated)?;
+        validate_digest(vector)?;
+        if self
+            .history
+            .iter()
+            .any(|plan| plan.binding.candidate_vector_digest.as_deref() != Some(vector))
+        {
+            return Err(Error::new(
+                "validation_gate",
+                "integrated history differs from the entire candidate vector",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_kind(
+        &self,
+        work: &WorkIdentity,
+        revision: &RevisionBinding,
+        kind: CheckKind,
+    ) -> Result<()> {
+        if self.schema_version != if kind == CheckKind::Local { 1 } else { 2 }
             || !self.original_cwd.is_absolute()
             || self.history.is_empty()
             || self.history.len() > MAX_VALIDATION_HISTORY
@@ -85,6 +116,12 @@ impl ValidationEvidence {
         let mut previous: Option<&ValidationPlanRecord> = None;
         for (index, plan) in self.history.iter().enumerate() {
             plan.validate_shape()?;
+            if plan.kind != kind {
+                return Err(Error::new(
+                    "validation_gate",
+                    "validation history changed its admitted kind",
+                ));
+            }
             let digest = canonical_digest(1, plan)?;
             if plan.ordinal as usize != index + 1
                 || plan.predecessor != previous.map(|p| canonical_digest(1, p)).transpose()?
@@ -138,7 +175,7 @@ impl ValidationEvidence {
                 || canonical_digest(1, *plan)? != canonical_digest(1, &provenance.plan)?
                 || attempt.binding != plan.binding
                 || attempt.started_at < plan.created_at
-                || attempt.kind != CheckKind::Local
+                || attempt.kind != kind
                 || !invocations.insert(provenance.invocation_id)
             {
                 return Err(Error::new(
@@ -241,18 +278,23 @@ impl ValidationEvidence {
         workflow: &crate::workflow::Workflow,
     ) -> Result<()> {
         let selected = self.selected()?;
+        let commands = match &self.current()?.kind {
+            CheckKind::Local => &workflow.front_matter.checks.local,
+            CheckKind::Integrated => &workflow.front_matter.checks.integrated,
+            _ => {
+                return Err(Error::new(
+                    "validation_gate",
+                    "unsupported configured validation kind",
+                ));
+            }
+        };
         for name in names {
-            let configured = workflow
-                .front_matter
-                .checks
-                .local
-                .get(name)
-                .ok_or_else(|| {
-                    Error::new(
-                        "incompletely_prepared",
-                        "configured local obligation is absent from workflow",
-                    )
-                })?;
+            let configured = commands.get(name).ok_or_else(|| {
+                Error::new(
+                    "incompletely_prepared",
+                    "configured local obligation is absent from workflow",
+                )
+            })?;
             let requirement = self
                 .current()?
                 .requirements
@@ -331,6 +373,93 @@ impl ValidationEvidence {
             }
         }
         Ok(())
+    }
+}
+
+/// Host-signed historical description of an actual separate read-only review.
+/// Neither this DTO nor its assessment constructs a worker/execution capability.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegratedAdequacyReview {
+    pub schema_version: u32,
+    pub operation_id: Uuid,
+    pub session_id: String,
+    pub work: WorkIdentity,
+    pub candidate_vector_digest: String,
+    pub instruction_manifest: String,
+    pub tool_contract_digest: String,
+    pub context_digest: String,
+    pub completed_at: chrono::DateTime<chrono::Utc>,
+    pub assessment: ValidationAssessment,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedIntegratedValidation {
+    pub validation: ValidationEvidence,
+    pub review: IntegratedAdequacyReview,
+}
+impl ReviewedIntegratedValidation {
+    pub(crate) fn verify(
+        &self,
+        parent: &WorkIdentity,
+        e2e: Uuid,
+        vector: &str,
+        candidates: &[crate::git::CandidateManifest],
+    ) -> Result<()> {
+        let current = self.validation.current()?;
+        let mut expected = parent.clone();
+        expected.child = Some(e2e);
+        let candidate = candidates
+            .iter()
+            .find(|c| c.repository == current.binding.repository)
+            .ok_or_else(|| {
+                Error::new(
+                    "integrated_gate",
+                    "integrated validation repository is outside candidate vector",
+                )
+            })?;
+        let source = candidate
+            .result
+            .as_ref()
+            .ok_or_else(|| Error::new("integrated_gate", "integrated candidate has no result"))?;
+        let revision = RevisionBinding {
+            repository: candidate.repository.clone(),
+            head: source.commit.clone(),
+            base: candidate.production.commit.clone(),
+            tested_commit: source.commit.clone(),
+            tested_tree: source.tree.clone(),
+        };
+        self.validation
+            .validate_integrated(&expected, &revision, vector)?;
+        if self.review.schema_version != 1
+            || self.review.operation_id.is_nil()
+            || self.review.operation_id == current.binding.operation_id
+            || self.review.session_id.trim().is_empty()
+            || self.review.session_id.len() > 4096
+            || self.review.work != expected
+            || self.review.candidate_vector_digest != vector
+            || self.review.completed_at > chrono::Utc::now()
+            || self
+                .validation
+                .attempts
+                .iter()
+                .any(|a| a.completed_at > self.review.completed_at)
+        {
+            return Err(Error::new(
+                "validation_adequacy",
+                "integrated adequacy is not a separate exact-vector completed review",
+            ));
+        }
+        for value in [
+            &self.review.instruction_manifest,
+            &self.review.tool_contract_digest,
+            &self.review.context_digest,
+        ] {
+            validate_digest(value)?;
+        }
+        self.validation
+            .verify_assessment(&self.review.assessment, true)
     }
 }
 

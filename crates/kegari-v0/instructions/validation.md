@@ -1,4 +1,4 @@
-# Permitted validation and evidence preparation — version 4
+# Permitted validation and evidence preparation — version 5
 
 Validate the exact isolated candidate/repository tree vector, declared test
 resources and artifact identities supplied by the host. Do not validate a shared
@@ -10,7 +10,7 @@ pass or an execution grant. Record obligations and their revision; never drop
 failures or select an easier subset. Source changes, including test repairs,
 require the scoped child implementation path and repeated gates.
 
-For child-local validation, use ordinary `source_read` and `context_read` to
+For child-local and assigned integrated validation, use `source_read` and `context_read` to
 inspect the actual task, instructions, configuration and scripts. Read
 `context_read` with key `validation_evidence` to obtain the host's retained read
 references and current plan. Submit `validation_propose` with `previous` (the
@@ -39,6 +39,16 @@ Independent review receives the plan history and actual attempts and must assess
 their adequacy. Mechanical check completion alone does not establish that the
 suite covers the required behavior. Unknown execution, inaccessible prerequisites,
 or lineage that cannot be recovered blocks the affected gate.
+
+For integrated validation, inspect the supplied complete candidate vector and
+the E2E child's required outcome. The host derives integrated scope from that
+assignment; a tool argument cannot select a different candidate or role. Preserve
+all applicable configured and previously discovered obligations. Checks execute
+from the E2E repository and may read only the other exact candidates/resources
+admitted by the host. Source or test changes require scoped child work, followed
+by fresh candidate construction and validation. A separate read-only Codex review
+must assess the complete validation evidence before integrated readiness. The
+later parent summary is coordination and cannot supply that independent review.
 
 Record command argv, cwd, environment identity, operation/generation, tested
 revision, start/end, exit/outcome and current-run artifact references. Missing,

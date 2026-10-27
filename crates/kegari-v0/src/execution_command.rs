@@ -408,6 +408,9 @@ impl LocalExecutor<'_> {
         }
         self.launch_identity(original)?;
         prepared.isolation.verify_cwd_derivation(self.isolation)?;
+        if let Some(managed) = &self.isolation.plan().managed_execution {
+            managed.revalidate_resource_versions_until(prepared.deadline)?;
+        }
         prepared.source.verify(Some(prepared.deadline))?;
         prepared.executable.verify(Some(prepared.deadline))?;
         self.boundary.preflight(&prepared.isolation)?;

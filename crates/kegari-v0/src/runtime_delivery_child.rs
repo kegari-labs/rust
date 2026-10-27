@@ -3011,6 +3011,8 @@ pub(super) fn terminal_gate_failure(error: &Error) -> bool {
         error.code.as_str(),
         "validation_failed"
             | "validation_gate"
+            | "validation_adequacy"
+            | "validation_obligations_pending"
             | "review_failed"
             | "review_gate"
             | "integrated_gate"

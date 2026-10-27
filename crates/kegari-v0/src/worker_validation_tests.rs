@@ -679,3 +679,229 @@ async fn discovered_service_bundle_joins_all_writers_before_artifact_and_transcr
     assert_eq!(checks[0].validation_plan().unwrap().digest(), plan);
     assert!(checks[0].production_evidence().is_err());
 }
+
+#[test]
+fn integrated_scope_uses_retained_assignment_vector_and_cannot_be_requested_as_a_kind() {
+    use crate::worker::validation::classify_discovery_scope;
+    // Pure classification of host-bound data. This does not construct a native
+    // assignment, validation plan, source snapshot or execution capability.
+    let vector = bytes_digest(b"component candidate vector identity");
+    let context = json!({"evidence":{"delivery_assignment":{"validation_assignment":{"kind":"integrated","vector":vector,"configured_checks":[]}}}});
+    assert_eq!(
+        classify_discovery_scope(
+            AgentRole::Validation,
+            "parent_integrated_validation",
+            ExecutionRole::Validation,
+            Some(&vector),
+            &context
+        )
+        .unwrap(),
+        CheckKind::Integrated
+    );
+    for (role, phase, execution, supplied) in [
+        (
+            AgentRole::Implementation,
+            "parent_integrated_validation",
+            ExecutionRole::Validation,
+            Some(vector.as_str()),
+        ),
+        (
+            AgentRole::Validation,
+            "work",
+            ExecutionRole::Validation,
+            Some(vector.as_str()),
+        ),
+        (
+            AgentRole::Validation,
+            "parent_integrated_validation",
+            ExecutionRole::Child,
+            Some(vector.as_str()),
+        ),
+        (
+            AgentRole::Validation,
+            "parent_integrated_validation",
+            ExecutionRole::Validation,
+            None,
+        ),
+    ] {
+        assert!(classify_discovery_scope(role, phase, execution, supplied, &context).is_err());
+    }
+    let changed = bytes_digest(b"different actual vector");
+    assert!(
+        classify_discovery_scope(
+            AgentRole::Validation,
+            "parent_integrated_validation",
+            ExecutionRole::Validation,
+            Some(&changed),
+            &context
+        )
+        .is_err()
+    );
+    assert!(classify_discovery_scope(AgentRole::Validation, "parent_integrated_validation", ExecutionRole::Validation, Some(&vector), &json!({"validation_assignment":context["evidence"]["delivery_assignment"]["validation_assignment"]})).is_err());
+}
+
+#[tokio::test]
+async fn additional_source_read_uses_actual_host_repository_and_settled_snapshot_reference() {
+    let mut f = Fixture::with_read_repository(AgentRole::Implementation);
+    let sources = f.call("context_read", json!({"key":"read_sources"}));
+    let listed = f.worker.call(&sources).await.unwrap();
+    assert!(
+        listed["repositories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["repository_id"] == "43" && source["primary"] == false)
+    );
+    let call = f.call(
+        "source_read",
+        json!({"repository_id":"43","path":"notes.txt"}),
+    );
+    let actual = f.worker.call(&call).await.unwrap();
+    assert_eq!(actual["repository_id"], "43");
+    assert_eq!(actual["content"], "actual additional repository input\n");
+    assert_eq!(
+        actual["digest"],
+        bytes_digest(b"actual additional repository input\n")
+    );
+    let index = f.worker.validation_evidence().unwrap();
+    let reference: DiscoveryReadReference =
+        serde_json::from_value(index["reads"][0]["reference"].clone()).unwrap();
+    let crate::validation::DiscoveryReadContent::Source { path, .. } = &reference.content else {
+        panic!("source callback must retain actual bytes");
+    };
+    assert_eq!(
+        path,
+        &f.input
+            .read_resources
+            .keys()
+            .next()
+            .unwrap()
+            .join("notes.txt")
+    );
+    let proposed = proposal(
+        &f,
+        &[reference.digest().unwrap()],
+        None,
+        vec![requirement("cross-repository-obligation")],
+    );
+    let result = f.worker.call(&proposed).await.unwrap();
+    let plan = retained_plan(&mut f);
+    assert_eq!(plan.digest(), result["plan_digest"]);
+    assert_eq!(plan.record().kind, CheckKind::Local); // no invented integrated capability
+    assert_eq!(
+        plan.record().supporting_reads[0].digest().unwrap(),
+        reference.digest().unwrap()
+    );
+    assert_eq!(
+        plan.record().original_binding,
+        f.execution.as_ref().unwrap().binding
+    );
+}
+
+#[tokio::test]
+async fn additional_read_mutation_and_caller_chosen_roots_cannot_enroll() {
+    let mut f = Fixture::with_read_repository(AgentRole::Implementation);
+    let reference = read(
+        &mut f,
+        "source_read",
+        json!({"repository_id":"43","path":"notes.txt"}),
+    )
+    .await;
+    let root = f.input.read_resources.keys().next().unwrap().clone();
+    let outside = f.call(
+        "source_read",
+        json!({"repository_id":root,"path":"notes.txt"}),
+    );
+    assert_eq!(
+        f.worker.call(&outside).await.unwrap_err().code,
+        "scope_violation"
+    );
+    let traversal = f.call(
+        "source_read",
+        json!({"repository_id":"43","path":"../operator/a.txt"}),
+    );
+    assert_eq!(
+        f.worker.call(&traversal).await.unwrap_err().code,
+        "scope_violation"
+    );
+    std::fs::write(root.join("notes.txt"), b"changed host input\n").unwrap();
+    let proposed = proposal(&f, &[reference], None, vec![requirement("behavior")]);
+    assert!(f.worker.call(&proposed).await.is_err());
+    assert!(f.worker.take_validation_plan().is_none());
+    assert!(validation_receipts(&f).is_empty());
+    assert!(f.boundary.last_cancel.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn readonly_review_can_read_an_original_additional_repository_without_execution() {
+    let mut f = Fixture::with_read_repository(AgentRole::Review);
+    let call = f.call(
+        "source_read",
+        json!({"repository_id":"43","path":"notes.txt"}),
+    );
+    assert_eq!(
+        f.worker.call(&call).await.unwrap()["content"],
+        "actual additional repository input\n"
+    );
+    let command = f.call("command_run", json!({"argv":["/usr/bin/true"],"cwd":"."}));
+    assert_eq!(
+        f.worker.call(&command).await.unwrap_err().code,
+        "unsupported_tool"
+    );
+    let write = f.call("source_write", json!({"path":"notes.txt","expected_digest":null,"content":"must not write","executable":false}));
+    assert_eq!(
+        f.worker.call(&write).await.unwrap_err().code,
+        "unsupported_tool"
+    );
+    assert_eq!(f.worker.validation_evidence().unwrap()["total_reads"], 0);
+    assert!(f.execution.is_none());
+}
+
+#[tokio::test]
+async fn integrated_selected_constraints_use_integrated_table_and_keep_primary_cwd() {
+    let f = Fixture::with_bundle(worker_bundle::Mode::Success, WorkerContract::new_configured);
+    let mut obligation = requirement("e2e");
+    obligation["argv"] = json!(f.input.workflow.front_matter.checks.integrated["e2e"].argv);
+    let proposed: crate::validation::ValidationProposal = serde_json::from_value(
+        proposal(
+            &f,
+            &[bytes_digest(b"schema-only reference")],
+            None,
+            vec![obligation],
+        )
+        .arguments,
+    )
+    .unwrap();
+    let context = json!({"evidence":{"delivery_assignment":{"validation_assignment":{"kind":"integrated","configured_checks":["e2e"]}}}});
+    crate::worker::validation::validate_assignment_requirements(
+        &f.input.workflow,
+        &f.input.isolation,
+        &context,
+        &proposed,
+    )
+    .unwrap();
+    let mut changed = proposed.clone();
+    changed.requirements[0].argv.push("changed".into());
+    assert!(
+        crate::worker::validation::validate_assignment_requirements(
+            &f.input.workflow,
+            &f.input.isolation,
+            &context,
+            &changed
+        )
+        .is_err()
+    );
+    changed = proposed;
+    let cwd = f.input.isolation.plan().repository.join("another-cwd");
+    std::fs::create_dir(&cwd).unwrap();
+    changed.requirements[0].cwd = cwd.to_string_lossy().into_owned();
+    assert!(
+        crate::worker::validation::validate_assignment_requirements(
+            &f.input.workflow,
+            &f.input.isolation,
+            &context,
+            &changed
+        )
+        .is_err()
+    );
+}

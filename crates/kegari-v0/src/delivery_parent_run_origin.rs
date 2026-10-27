@@ -134,6 +134,7 @@ impl ParentAssignmentOrigin {
         contract: &ParentContract,
         vector: &ParentCandidateVector,
         review: Option<&ParentReviewAssignment>,
+        integrated: Option<&Signed<IntegratedRecord>>,
     ) -> Result<Self> {
         coordinator
             .key
@@ -242,34 +243,46 @@ impl ParentAssignmentOrigin {
                 refs.retain_receipt(&coordinator.host.operation(merge)?)?;
             }
         }
+        if review.is_some() && integrated.is_some() {
+            return Err(invalid("parent origin has conflicting integrated inputs"));
+        }
         if let Some(review) = review {
             review.matches_worker(contract)?;
+        }
+        if let Some(integrated) = integrated.or_else(|| review.map(|r| &r.integrated.signed)) {
             coordinator
                 .key
-                .verify("parent_integrated_execution", &review.integrated.signed)?;
+                .verify("parent_integrated_execution", integrated)?;
+            if integrated.payload.runtime_id != vector.signed.payload.runtime_id
+                || integrated.payload.contract_digest != contract.digest()?
+                || integrated.payload.vector_digest != vector.digest()
+                || integrated.payload.e2e_work.child != Some(contract.e2e_child)
+            {
+                return Err(invalid(
+                    "integrated origin differs from its actual parent vector",
+                ));
+            }
+            let integrated_digest = canonical_digest(1, integrated)?;
             refs.retain_file(
                 namespace,
                 records,
-                &format!(
-                    "parent-integrated-{}.json",
-                    &review.integrated.digest()?[7..]
-                ),
+                &format!("parent-integrated-{}.json", &integrated_digest[7..]),
                 "parent_integrated_execution",
                 &coordinator.key,
             )?;
             let retained_integrated: Signed<IntegratedRecord> = records.read(&format!(
                 "parent-integrated-{}.json",
-                &review.integrated.digest()?[7..]
+                &integrated_digest[7..]
             ))?;
             coordinator
                 .key
                 .verify("parent_integrated_execution", &retained_integrated)?;
-            if retained_integrated.digest()? != review.integrated.signed.digest()? {
+            if retained_integrated.digest()? != integrated.digest()? {
                 return Err(invalid(
                     "retained integrated record differs from actual review input",
                 ));
             }
-            for output in &review.integrated.signed.payload.outputs {
+            for output in &integrated.payload.outputs {
                 retain_artifact_chunks(
                     records,
                     &output.chunks,
@@ -278,6 +291,8 @@ impl ParentAssignmentOrigin {
                     &mut files,
                 )?;
             }
+        }
+        if let Some(review) = review {
             let receipts = coordinator.host.operations()?;
             for child in &review.children {
                 let child_leaf = format!("child-result-{}.json", child.digest.replace(':', "-"));
@@ -534,9 +549,14 @@ impl ParentOriginRecord {
             || self.worker.linear_workspace != self.parent.linear_workspace
             || !matches!(
                 self.phase.as_str(),
-                "parent_integrated_validation" | "parent_evidence_review"
+                "parent_integrated_validation"
+                    | "parent_integrated_review"
+                    | "parent_evidence_review"
             )
-            || (self.phase == "parent_integrated_validation") != self.worker.child.is_some()
+            || matches!(
+                self.phase.as_str(),
+                "parent_integrated_validation" | "parent_integrated_review"
+            ) != self.worker.child.is_some()
             || canonical_digest(1, &self.context)? != self.manifest.context_digest
         {
             return Err(invalid("parent origin immutable identity is invalid"));

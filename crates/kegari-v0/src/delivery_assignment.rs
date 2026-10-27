@@ -454,8 +454,34 @@ impl DeliveryCoordinator {
                 contract,
                 assignment.retirement_vector(),
                 Some(assignment),
+                None,
             )?),
         })
+    }
+    pub async fn integrated_review_worker_assignment(
+        &self,
+        contract: &ParentContract,
+        gate: &FreshGate,
+        vector: &ParentCandidateVector,
+        observer: &crate::deployment::ProductionObserver,
+        slices: &[&IsolatedSlice],
+        review: &IntegratedReviewAssignment,
+    ) -> Result<DeliveryWorkerAssignment> {
+        review.verify_assignment(contract, vector)?;
+        let mut assignment = self
+            .integrated_worker_assignment(contract, gate, vector, observer, slices, json!({}))
+            .await?;
+        assignment.phase = "parent_integrated_review".into();
+        assignment.role = AgentRole::Review;
+        assignment.context = review.context().clone();
+        assignment.parent_origin = Some(super::parent::ParentAssignmentOrigin::capture(
+            self,
+            contract,
+            vector,
+            None,
+            Some(review.signed_input()),
+        )?);
+        Ok(assignment)
     }
     pub async fn integrated_worker_assignment(
         &self,
@@ -536,7 +562,7 @@ impl DeliveryCoordinator {
                 )
             })?;
         let primary = sources.remove(&key).expect("selected source");
-        context.as_object_mut().ok_or_else(||Error::invalid("integrated base context must be an object"))?.insert("validation_assignment".into(),json!({"kind":"integrated","vector":vector.digest(),"candidates":vector.candidates(),"test_resources":contract.test_resources(),"configured_checks":contract.integrated_commands()}));
+        context.as_object_mut().ok_or_else(||Error::invalid("integrated base context must be an object"))?.insert("validation_assignment".into(),json!({"kind":"integrated","vector":vector.digest(),"candidates":vector.candidates(),"test_resources":contract.test_resources(),"configured_checks":contract.integrated_commands().keys().collect::<Vec<_>>(),"configured_commands":contract.integrated_commands()}));
         Ok(DeliveryWorkerAssignment {
             authority: gate.clone(),
             phase: "parent_integrated_validation".into(),
@@ -548,7 +574,7 @@ impl DeliveryCoordinator {
             contract_digest: contract.digest()?,
             parent_reassembly: None,
             parent_origin: Some(super::parent::ParentAssignmentOrigin::capture(
-                self, contract, vector, None,
+                self, contract, vector, None, None,
             )?),
         })
     }

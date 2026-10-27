@@ -61,6 +61,19 @@ impl RuntimeDelivery {
         {
             return Ok(false);
         }
+        if parent.reference.adequacy.is_some()
+            || parent.prepared_validation.is_some()
+            || parent.adequacy_assignment.is_some()
+            || parent
+                .integrated
+                .as_ref()
+                .is_some_and(IntegratedEvidence::has_discovered_validation)
+        {
+            return Err(Error::new(
+                "validation_lineage_pending",
+                "discovered parent reassembly requires preserved obligation, attempt and independent adequacy lineage",
+            ));
+        }
         let previous_parent = published.clone();
         self.parent_generation_clear(&parent.reference, parent.phase.is_some())?;
         let joined = |operation: Option<Uuid>| -> Result<Arc<crate::worker_run::RunCompletion>> {
@@ -233,6 +246,7 @@ impl RuntimeDelivery {
             parent.reference.slices.clear();
             parent.reference.vector = None;
             parent.reference.integrated = None;
+            parent.reference.adequacy = None;
             parent.reference.review = None;
             parent.reference.publication = None;
             parent.reference.error = None;
@@ -241,6 +255,8 @@ impl RuntimeDelivery {
             parent.slices.clear();
             parent.vector = None;
             parent.integrated = None;
+            parent.prepared_validation = None;
+            parent.adequacy_assignment = None;
             parent.assignment = None;
             parent.published = None;
             let previous_integrated_assignment = parent
@@ -285,6 +301,15 @@ impl RuntimeDelivery {
         let Some(reassembly) = &mut parent.reassembly else {
             return Ok(assignment);
         };
+        if !matches!(
+            assignment.phase(),
+            "parent_integrated_validation" | "parent_evidence_review"
+        ) {
+            return Err(Error::new(
+                "validation_lineage_pending",
+                "parent reassembly cannot replace a distinct independent adequacy phase with synthesis",
+            ));
+        }
         let source =
             required_parent(&reassembly.source, "closed reassembly vector source")?.clone();
         source.refresh_current(&workspace.configuration).await?;

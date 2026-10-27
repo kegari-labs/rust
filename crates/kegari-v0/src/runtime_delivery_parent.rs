@@ -19,6 +19,8 @@ enum ParentStage {
     Vector,
     LaunchIntegrated,
     Integrated,
+    LaunchAdequacy,
+    Adequacy,
     LaunchReview,
     Publish,
     Complete,
@@ -37,6 +39,8 @@ struct ParentReference {
     slices: Vec<Uuid>,
     vector: Option<String>,
     integrated: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adequacy: Option<Uuid>,
     review: Option<Uuid>,
     publication: Option<String>,
     error: Option<Error>,
@@ -55,6 +59,8 @@ struct ParentPipeline {
     slices: Vec<Arc<IsolatedSlice>>,
     vector: Option<ParentCandidateVector>,
     integrated: Option<IntegratedEvidence>,
+    prepared_validation: Option<PreparedIntegratedValidation>,
+    adequacy_assignment: Option<IntegratedReviewAssignment>,
     assignment: Option<ParentReviewAssignment>,
     published: Option<PublishedParent>,
     phase: Option<ActivePhase>,
@@ -323,6 +329,7 @@ impl RuntimeDelivery {
             .phase_operation
             .iter()
             .chain(reference.integrated.iter())
+            .chain(reference.adequacy.iter())
             .chain(reference.review.iter())
         {
             for operation in [*id, crate::runtime_workers::preparation_operation(*id)?] {
@@ -425,7 +432,9 @@ impl RuntimeDelivery {
                 )?;
                 if matches!(
                     parent.reference.stage,
-                    ParentStage::LaunchIntegrated | ParentStage::LaunchReview
+                    ParentStage::LaunchIntegrated
+                        | ParentStage::LaunchAdequacy
+                        | ParentStage::LaunchReview
                 ) {
                     let stage = parent.reference.stage;
                     self.finish_parent_phase(&mut parent, stage)
@@ -542,6 +551,7 @@ impl RuntimeDelivery {
                     slices: vec![],
                     vector: None,
                     integrated: None,
+                    adequacy: None,
                     review: None,
                     publication: None,
                     error: None,
@@ -556,6 +566,8 @@ impl RuntimeDelivery {
                 slices: vec![],
                 vector: None,
                 integrated: None,
+                prepared_validation: None,
+                adequacy_assignment: None,
                 assignment: None,
                 published: None,
                 phase: None,
@@ -760,10 +772,12 @@ impl RuntimeDelivery {
         }
         if matches!(
             parent.reference.stage,
-            ParentStage::Integrated | ParentStage::Publish
+            ParentStage::Integrated | ParentStage::Adequacy | ParentStage::Publish
         ) {
             let operation = if parent.reference.stage == ParentStage::Integrated {
                 parent.reference.integrated
+            } else if parent.reference.stage == ParentStage::Adequacy {
+                parent.reference.adequacy
             } else {
                 parent.reference.review
             }
@@ -782,6 +796,10 @@ impl RuntimeDelivery {
                 .reference
                 .integrated
                 .map(|id| (id, ParentStage::Integrated)),
+            ParentStage::LaunchAdequacy => parent
+                .reference
+                .adequacy
+                .map(|id| (id, ParentStage::Adequacy)),
             ParentStage::LaunchReview => {
                 parent.reference.review.map(|id| (id, ParentStage::Publish))
             }
@@ -951,7 +969,7 @@ impl RuntimeDelivery {
                 }
             }
             ParentStage::LaunchIntegrated => {
-                let assignment=coordinator.integrated_worker_assignment(&contract,e2e,required_parent(&parent.vector,"candidate vector")?,observer,&parent.slices.iter().map(Arc::as_ref).collect::<Vec<_>>(),json!({"purpose":"execute every configured integrated check against this complete isolated parent vector","parent":projection.issue})).await?;
+                let assignment=coordinator.integrated_worker_assignment(&contract,e2e,required_parent(&parent.vector,"candidate vector")?,observer,&parent.slices.iter().map(Arc::as_ref).collect::<Vec<_>>(),json!({"purpose":"discover, retain and execute sufficient integrated validation obligations against this complete isolated parent vector; preserve any configured required constraints","parent":projection.issue})).await?;
                 self.finish_parent_phase(parent, ParentStage::LaunchIntegrated)?;
                 let operation = parent.reference.integrated.unwrap_or_else(Uuid::new_v4);
                 parent.reference.integrated = Some(operation);
@@ -964,20 +982,75 @@ impl RuntimeDelivery {
                 self.persist_parent(parent)?;
             }
             ParentStage::Integrated => {
-                let (_, completion) = self
+                let (outcome, completion) = self
                     .completed_claim(parent.reference.integrated.unwrap())?
                     .ok_or_else(|| {
                         Error::new("operation_pending", "integrated worker remains owned")
                     })?;
                 self.verify_reassembled_parent_result(parent, &completion, true)?;
-                parent.integrated = Some(
+                parent.prepared_validation = Some(
                     coordinator
-                        .verify_integrated_checks(
+                        .prepare_integrated_validation(
                             &contract,
                             e2e,
                             required_parent(&parent.vector, "candidate vector")?,
                             observer,
-                            &completion.checks.iter().collect::<Vec<_>>(),
+                            &workspace.workflow,
+                            (&outcome, &completion),
+                        )
+                        .await?,
+                );
+                // Mechanical completion deliberately does not populate the
+                // integrated responsibility cache used by the E2E child.
+                self.finish_parent_phase(parent, ParentStage::LaunchAdequacy)?;
+            }
+            ParentStage::LaunchAdequacy => {
+                if parent.adequacy_assignment.is_none() {
+                    parent.adequacy_assignment = Some(coordinator.prepare_integrated_review(
+                        &contract, e2e, required_parent(&parent.vector, "candidate vector")?, observer,
+                        required_parent(&parent.prepared_validation, "prepared integrated validation")?.clone(),
+                        json!({"parent":projection.issue,"purpose":"independently assess complete-parent integrated validation adequacy"}),
+                    ).await?);
+                }
+                let assignment = coordinator
+                    .integrated_review_worker_assignment(
+                        &contract,
+                        e2e,
+                        required_parent(&parent.vector, "candidate vector")?,
+                        observer,
+                        &parent.slices.iter().map(Arc::as_ref).collect::<Vec<_>>(),
+                        required_parent(
+                            &parent.adequacy_assignment,
+                            "integrated adequacy assignment",
+                        )?,
+                    )
+                    .await?;
+                self.finish_parent_phase(parent, ParentStage::LaunchAdequacy)?;
+                let operation = parent.reference.adequacy.unwrap_or_else(Uuid::new_v4);
+                parent.reference.adequacy = Some(operation);
+                self.persist_parent(parent)?;
+                self.launch_assignment(lease, operation, assignment).await?;
+                parent.reference.stage = ParentStage::Adequacy;
+                self.persist_parent(parent)?;
+            }
+            ParentStage::Adequacy => {
+                let (outcome, completion) = self
+                    .completed_claim(parent.reference.adequacy.unwrap())?
+                    .ok_or_else(|| {
+                        Error::new("operation_pending", "integrated review remains owned")
+                    })?;
+                parent.integrated = Some(
+                    coordinator
+                        .complete_integrated_review(
+                            &contract,
+                            e2e,
+                            required_parent(&parent.vector, "candidate vector")?,
+                            observer,
+                            required_parent(
+                                &parent.adequacy_assignment,
+                                "integrated adequacy assignment",
+                            )?,
+                            (&outcome, &completion),
                         )
                         .await?,
                 );
@@ -994,7 +1067,8 @@ impl RuntimeDelivery {
                         parent_key(parent.reference.workspace, &parent.reference.work)?,
                         (
                             required_parent(&parent.vector, "candidate vector")?.clone(),
-                            required_parent(&parent.integrated, "integrated execution")?.clone(),
+                            required_parent(&parent.integrated, "reviewed integrated execution")?
+                                .clone(),
                         ),
                     );
                 self.finish_parent_phase(parent, ParentStage::LaunchReview)?;
@@ -1089,6 +1163,7 @@ mod lifecycle_tests {
             slices: vec![],
             vector: None,
             integrated: None,
+            adequacy: None,
             review: None,
             publication: None,
             error: None,
@@ -1107,12 +1182,78 @@ mod lifecycle_tests {
             slices: vec![],
             vector: None,
             integrated: None,
+            prepared_validation: None,
+            adequacy_assignment: None,
             assignment: None,
             published: None,
             phase: None,
             reassembly: None,
             carry_import: None,
         }
+    }
+    #[tokio::test]
+    async fn adequacy_phase_does_not_publish_readiness_and_original_owners_block_generation() {
+        let (_root, fixture, service) = super::super::tests::fixture().await;
+        let projection = fixture.runtime.observations.snapshot().unwrap();
+        let observed = projection
+            .parent(Uuid::from_u128(2), Uuid::from_u128(100))
+            .unwrap();
+        let work = observed.work.clone().unwrap();
+        let mut parent = pipeline(reference(observed.workspace_id, work));
+        parent.reference.stage = ParentStage::Integrated;
+        // Actual phase persistence only: this is not a manufactured integrated
+        // execution/review capability. No readiness record is created here.
+        service
+            .finish_parent_phase(&mut parent, ParentStage::LaunchAdequacy)
+            .unwrap();
+        assert!(service.parents.integrated.lock().unwrap().is_empty());
+        assert!(parent.integrated.is_none());
+        assert!(parent.reference.stage == ParentStage::LaunchAdequacy);
+        let lease = super::super::tests::start_control(&fixture.runtime);
+        let model = Uuid::new_v4();
+        parent.reference.adequacy = Some(model);
+        for operation in [
+            model,
+            crate::runtime_workers::preparation_operation(model).unwrap(),
+        ] {
+            fixture
+                .runtime
+                .control
+                .admit(
+                    &lease,
+                    operation,
+                    "actual adequacy lifecycle component".into(),
+                    canonical_digest(1, &operation).unwrap(),
+                    || Ok(()),
+                )
+                .unwrap();
+            assert_eq!(
+                service
+                    .parent_generation_clear(&parent.reference, false)
+                    .unwrap_err()
+                    .code,
+                "operation_uncertain"
+            );
+            fixture
+                .runtime
+                .control
+                .retire_local(operation, json!({"fixture":"never spawned"}))
+                .unwrap();
+            service
+                .parent_generation_clear(&parent.reference, false)
+                .unwrap();
+        }
+        assert!(service.parents.integrated.lock().unwrap().is_empty());
+        let serialized = serde_json::to_value(&parent.reference).unwrap();
+        assert_eq!(serialized["adequacy"], serde_json::to_value(model).unwrap());
+        let mut legacy = parent.reference;
+        legacy.adequacy = None;
+        assert!(
+            serde_json::to_value(legacy)
+                .unwrap()
+                .get("adequacy")
+                .is_none()
+        );
     }
     #[tokio::test]
     async fn corrected_generation_has_separate_immutable_records_and_prior_unknown_blocks_it() {
@@ -1451,6 +1592,17 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn terminal_gate_failure_retires_admission_without_authorizing_retry_and_unknown_stays_held()
      {
+        terminal_parent_failure_case("integrated_gate").await;
+    }
+
+    #[tokio::test]
+    async fn completed_inadequate_or_missing_obligations_block_without_losing_uncertain_effects() {
+        for code in ["validation_adequacy", "validation_obligations_pending"] {
+            terminal_parent_failure_case(code).await;
+        }
+    }
+
+    async fn terminal_parent_failure_case(code: &str) {
         let (_root, fixture, service) = super::super::tests::fixture_authorization(true).await;
         let projection = fixture.runtime.observations.snapshot().unwrap();
         let observed = projection
@@ -1542,12 +1694,17 @@ mod lifecycle_tests {
         };
         let operation = Uuid::new_v4();
         let mut parent = pipeline(reference(gate.workspace_id(), gate.work().clone()));
-        parent.reference.stage = ParentStage::Integrated;
+        let stage = if code == "integrated_gate" {
+            ParentStage::Integrated
+        } else {
+            ParentStage::Adequacy
+        };
+        parent.reference.stage = stage;
         parent.reference.phase_operation = Some(operation);
         parent.phase = Some(make_phase(operation));
         lifecycle(crate::control::Lifecycle::Pause);
         assert!(!fixture.runtime.control.snapshot().unwrap().admission_open);
-        let failure = Error::new("integrated_gate", "actual bounded fixture check failed");
+        let failure = Error::new(code, "actual bounded fixture gate failed");
         service
             .block_terminal_parent(&mut parent, &failure)
             .unwrap();
@@ -1572,7 +1729,7 @@ mod lifecycle_tests {
                 .unwrap()
                 .observed_result
                 .unwrap()["observation"]["error"]["code"],
-            "integrated_gate"
+            code
         );
         let before = fixture.runtime.control.operations().unwrap().len();
         service
@@ -1582,7 +1739,7 @@ mod lifecycle_tests {
         assert_eq!(fixture.runtime.control.operations().unwrap().len(), before);
         lifecycle(crate::control::Lifecycle::Resume);
         let unknown = Uuid::new_v4();
-        parent.reference.stage = ParentStage::Integrated;
+        parent.reference.stage = stage;
         parent.reference.phase_operation = Some(unknown);
         parent.phase = Some(make_phase(unknown));
         let effect = Uuid::new_v4();
@@ -1617,7 +1774,7 @@ mod lifecycle_tests {
             "operation_uncertain"
         );
         assert!(parent.phase.is_some());
-        assert!(parent.reference.stage == ParentStage::Integrated);
+        assert!(parent.reference.stage == stage);
         assert!(
             fixture
                 .runtime

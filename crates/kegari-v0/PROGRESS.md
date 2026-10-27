@@ -1,6 +1,63 @@
 # Kegari v0 build progress
 
 **Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-4.**
+This increment began on clean `main` after
+`fd907516649f4a3db50f00bc757cef855c4776cb`
+(`feat(kegari-v0): bind discovered child validation to independent review`).
+No minor milestone is complete. SPEC 1.4 and all native/live restrictions remain.
+
+Parent discovery now accepts no configured command list while preserving actual
+E2E authority, the complete candidate vector, original plan/attempt seals and
+selected execution capabilities. Separate read-only adequacy is required before
+readiness and new parent publication. Generic source reads can select only
+originally admitted repository identities. Historical named evidence remains
+readable; unsupported discovered reassembly refuses. Assets are version 6;
+package remains development `0.2.0-alpha.9`.
+
+Independent review corrected adequacy-owner/preparation tracking and draining,
+completed inadequacy retirement, and legacy new-publication bypass. The first
+focused run passed 12 and failed one real stale-resource prelaunch regression.
+Both generic and discovered dispatch now recheck original no-follow resource
+metadata under the original deadline; full byte recapture stays outside Control.
+The failed assertion remains unchanged and now passes. Missing imports/closure
+and lint issues were corrected without weakening assertions or new suppressions.
+
+Strict all-target Clippy and full release regression pass on frozen source
+`sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216`:
+**1,206 passed, zero failed, three native ignored**, 40 groups. The genuine
+coordinator-created assignment test uses empty configured commands and actual
+worker read/propose/run calls with explicitly injected outcomes. It cannot mint
+native evidence/readiness. All 742 logical inputs matched after tests and build.
+
+The exact-source development executable passed build and static inspection:
+SHA-256 `3ddba1cf7ed292fdebf3a3b8db516631e4d2d42b2745c826e55d28e5bd277eb5`,
+independently recomputed build identity
+`sha256:9993684649f77df928bff6caee8ab467ad421098dfb486a9c2160351e22c77a2`
+(342 build inputs). Formatting, whitespace and inventory consistency pass;
+11 inventory tests pass. All Cargo/test handles and delegated work are terminal.
+See [the integrated-discovery report](validation/LOCAL-INTEGRATED-DISCOVERY.md).
+Evidence archive: `target/validation/m02-integrated-969d688a092d`, 2,252 files plus
+manifest SHA-256 `e1da9a09a2f8abaa0d9645169240d176308223c18f506546593f8e2aa6a07a5e`.
+All archive hashes were verified; failed results and development bytes are retained.
+
+Next: compact authenticated evidence transport while preserving full plan/attempt
+history, actual reviewer input and artifact bytes from every attempt. Current
+integrated artifact retention covers selected successes; current publication and
+review bounds remain 60 KiB / 1 MiB. References cannot substitute for readable
+retained bytes. Then continue environment admission, full output access and
+empty/unborn baselines. Cross-worker discovery/reassembly recovery remains open.
+Native viability still requires a separately approved bounded exact-source plan;
+prior approvals remain consumed. No native/live action, permission request,
+installation, remote mutation or runtime activation occurred.
+
+Root owns the authorized local commit. No consolidation is performed: parent
+candidate scope, its distinct review lifecycle and signed formats form a separate
+review/build checkpoint from child validation. Follow [MILESTONES.md](MILESTONES.md);
+this locally verified increment does not close 0.2.0 or the comprehensive Goal.
+
+### Previous child-discovery increment
+
+**Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-4.**
 This increment began on `main` with a clean index/tree after
 `9b5a3c1cae3069cac1564b4872ef2d01b529a6e1`
 (`feat(kegari-v0): add bounded generic command invocations`). No history rewrite

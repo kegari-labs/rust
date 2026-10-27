@@ -180,6 +180,35 @@ fn digest(value: &str) -> String {
 }
 
 #[test]
+fn independent_integrated_review_preserves_distinct_preparation_and_model_history() {
+    let mut f = Fixture::new();
+    f.run.phase.phase = "parent_integrated_review".into();
+    let operation = Uuid::new_v4();
+    let preparation = f.prepare(operation);
+    let model = f.model(operation);
+    assert!(f.read(preparation.operation_id, operation).is_err());
+    f.host
+        .retire_local(model.operation_id, json!({"component_only":true}))
+        .unwrap();
+    let original = f.read(preparation.operation_id, operation).unwrap();
+    assert!(original.has_indexed_owner());
+    // A different synthesis owner cannot replace the actual read-only review.
+    f.run.phase.phase = "parent_evidence_review".into();
+    let unrelated = f.model(Uuid::new_v4());
+    f.host
+        .retire_local(unrelated.operation_id, json!({"component_only":true}))
+        .unwrap();
+    assert!(
+        f.read(preparation.operation_id, unrelated.operation_id)
+            .is_err()
+    );
+    assert_eq!(
+        f.read(preparation.operation_id, operation).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn real_control_pair_retains_all_reserved_outcomes_without_reader_writes() {
     let f = Fixture::new();
     let model = Uuid::new_v4();

@@ -2242,6 +2242,7 @@ async fn changed_candidate_from(
         publication: child_publication,
     };
     let mut manifest = ParentEvidence {
+        integrated_validation: None,
         schema_version: 1,
         work: f.admission.scope.work.clone(),
         required_children: BTreeSet::from([id(101)]),

@@ -36,7 +36,7 @@ pub(super) fn eligible(reference: Option<&AdmissionReference>) -> bool {
     };
     matches!(
         phase.as_str(),
-        "parent_integrated_validation" | "parent_evidence_review"
+        "parent_integrated_validation" | "parent_integrated_review" | "parent_evidence_review"
     )
 }
 
@@ -66,7 +66,7 @@ fn required(receipt: &Receipt) -> Result<bool> {
     };
     if !matches!(
         phase.phase.as_str(),
-        "parent_integrated_validation" | "parent_evidence_review"
+        "parent_integrated_validation" | "parent_integrated_review" | "parent_evidence_review"
     ) {
         return Err(invalid("indexed owner is not an eligible parent phase"));
     }

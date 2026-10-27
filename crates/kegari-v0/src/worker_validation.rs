@@ -1,4 +1,4 @@
-//! Child-local validation discovery is enrolled from actual settled worker reads.
+//! Assignment-bound local/integrated validation discovery is enrolled from actual settled worker reads.
 //! Public records remain descriptive; only this retained owner holds a plan.
 use super::*;
 use crate::validation::{
@@ -92,14 +92,14 @@ pub(super) fn proposal_tool() -> Value {
                 "services":{"type":"array"},"artifacts":{"type":"array","items":{"type":"string"}}},
             "required":["id","statement","rationale","argv","cwd","services","artifacts"]}}},
         "required":["previous","reason","supporting_reads","requirements"]});
-    json!({"type":"function","name":"validation_propose","description":"Enroll or revise child-local validation obligations from actual settled source/context reads. Use context_read validation_evidence for reference IDs. Every prior obligation must remain; changed commands require a reason. Does not grant permissions or pass a gate.","inputSchema":schema})
+    json!({"type":"function","name":"validation_propose","description":"Enroll or revise obligations for the actual host-assigned local or integrated validation scope from actual settled source/context reads. Use context_read validation_evidence for reference IDs. Every prior obligation must remain; changed commands require a reason. Does not grant permissions or pass a gate.","inputSchema":schema})
 }
 pub(super) fn run_tool() -> Value {
     let schema = json!({"type":"object","additionalProperties":false,"properties":{
         "name":{"type":"string"},"kind":{"type":"string","enum":["local","integrated"]},
         "plan_digest":{"type":"string"},"obligation_id":{"type":"string"}},"required":[],
         "oneOf":[{"required":["name","kind"]},{"required":["plan_digest","obligation_id"]}]});
-    json!({"type":"function","name":"validation_run","description":"Execute one obligation of the current enrolled child-local plan by plan_digest and obligation_id. Legacy configured callers may use name and kind. Actual process closure, source and artifact observations are required; no self-reported result is accepted.","inputSchema":schema})
+    json!({"type":"function","name":"validation_run","description":"Execute one obligation of the current host-enrolled validation plan by plan_digest and obligation_id. Legacy configured callers may use name and kind. Actual process closure, source and artifact observations are required; no self-reported result is accepted.","inputSchema":schema})
 }
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -140,39 +140,56 @@ impl SelectedRun {
     }
 }
 impl ScopedWorker {
-    fn supports_discovery(&self) -> bool {
-        self.contract
+    fn discovery_kind(&self) -> Result<CheckKind> {
+        let execution = self.execution.as_ref().ok_or_else(|| {
+            Error::new(
+                "validation_scope",
+                "discovery requires an actual execution owner",
+            )
+        })?;
+        let work = self.contract.authority.work().ok_or_else(|| {
+            Error::new(
+                "validation_scope",
+                "independent review cannot enroll execution obligations",
+            )
+        })?;
+        if !self
+            .contract
             .assembled
             .manifest
             .role
             .permits_repository_execution()
-            && self
+            || !self
                 .contract
                 .assembled
                 .manifest
                 .permissions
                 .repository_code_execution
-            && self
-                .contract
-                .authority
-                .work()
-                .is_some_and(|work| work.child.is_some())
-            && self.execution.as_ref().is_some_and(|execution| {
-                execution.binding.work.child.is_some()
-                    && execution.binding.candidate_vector_digest.is_none()
-            })
-    }
-    fn require_discovery(&self) -> Result<()> {
-        if !self.supports_discovery() {
+            || work != &execution.binding.work
+            || work.child.is_none()
+        {
             return Err(Error::new(
                 "validation_scope",
-                "discovered validation requires the actual child-local execution owner",
+                "discovery requires actual authorized child execution",
             ));
         }
+        classify_discovery_scope(
+            self.contract.assembled.manifest.role,
+            &self.contract.assembled.manifest.phase,
+            self.contract.isolation.plan().role,
+            execution.binding.candidate_vector_digest.as_deref(),
+            &self.contract.context,
+        )
+    }
+    fn supports_discovery(&self) -> bool {
+        self.discovery_kind().is_ok()
+    }
+    fn require_discovery(&self) -> Result<CheckKind> {
+        let kind = self.discovery_kind()?;
         if let Some(error) = self.validation_history_error() {
             return Err(error);
         }
-        Ok(())
+        Ok(kind)
     }
     pub(super) fn select_validation(&self, args: RunArgs) -> Result<SelectedRun> {
         match args {
@@ -190,14 +207,14 @@ impl ScopedWorker {
                 },
             }),
             RunArgs::Discovered(args) => {
-                self.require_discovery()?;
+                let kind = self.require_discovery()?;
                 let plan = self.validation.current.as_ref().ok_or_else(|| {
                     Error::new(
                         "validation_plan_missing",
                         "no current host-enrolled validation plan",
                     )
                 })?;
-                if plan.digest() != args.plan_digest {
+                if plan.digest() != args.plan_digest || plan.record().kind != kind {
                     return Err(Error::new(
                         "validation_plan_changed",
                         "execution must use the current host-enrolled plan",
@@ -266,6 +283,7 @@ impl ScopedWorker {
         &mut self,
         call: &ToolCall,
         id: Uuid,
+        root: &Path,
         fact: &BrokerSemantic,
         value: &Value,
     ) -> Result<()> {
@@ -288,7 +306,7 @@ impl ScopedWorker {
             value,
             DiscoveryReadContent::Source {
                 requested_path: requested_path.clone(),
-                path: self.contract.isolation.plan().repository.join(path),
+                path: root.join(path),
                 digest: digest.clone(),
                 bytes: *bytes,
             },
@@ -446,7 +464,7 @@ impl ScopedWorker {
         }
     }
     pub(super) async fn propose_validation(&mut self, call: &ToolCall, id: Uuid) -> Result<Value> {
-        self.require_discovery()?;
+        let kind = self.require_discovery()?;
         let proposal: ValidationProposal = parse(&call.arguments)?;
         if proposal.supporting_reads.is_empty() || proposal.supporting_reads.len() > 64 {
             return Err(Error::new(
@@ -507,17 +525,19 @@ impl ScopedWorker {
             let binding = effective.as_ref().map_or(&execution.binding, |effective| effective.binding());
             if expected.work() != Some(&binding.work) { return Err(Error::new("correction_execution_binding", "validation discovery requires the acknowledged current input")); }
             for reference in &references {
-                verify_read(&journal, &contract.isolation, reference, permit.operation_id, &contract.assembled.manifest_digest, &context_digest)?;
+                verify_read(&journal, &contract, reference, permit.operation_id, &contract.assembled.manifest_digest, &context_digest)?;
             }
             let source = execution.executor(&contract.isolation).validation_source(binding, effective.as_ref())?;
             for reference in &references {
                 if let DiscoveryReadContent::Source { path, digest, .. } = &reference.content
+                    && path.starts_with(&contract.isolation.plan().repository)
                     && path.strip_prefix(&contract.isolation.plan().repository).ok().and_then(Path::to_str)
                         .and_then(|relative| source.files.get(relative)).is_none_or(|file| &file.digest != digest) {
                     return Err(Error::new("validation_read_changed", "observed source is absent or changed in the current complete source snapshot"));
                 }
             }
             let enrollment = ValidationEnrollment {
+                kind,
                 original_binding:execution.binding.clone(), binding:binding.clone(), correction:effective.as_ref().map(|e|e.provenance()).transpose()?,
                 workflow_digest:contract.workflow.digest.clone(), instruction_digest:contract.assembled.manifest_digest.clone(),
                 tool_contract_digest:contract.tools.digest().into(), context_digest, source_digest:source.digest()?,
@@ -542,7 +562,7 @@ impl ScopedWorker {
 }
 fn verify_read(
     journal: &Journal,
-    isolation: &ValidatedIsolation,
+    contract: &WorkerContract,
     reference: &DiscoveryReadReference,
     operation: Uuid,
     instruction: &str,
@@ -589,14 +609,36 @@ fn verify_read(
         bytes,
     } = &reference.content
     {
+        let (root, repository) = contract.observed_source_root(path)?;
         let mut observed = None;
-        read_source(isolation, requested_path, |relative, data, _| {
-            observed = Some((
-                isolation.plan().repository.join(relative),
-                bytes_digest(data),
-                data.len() as u64,
-            ));
-        })?;
+        let observe = |relative: &str, data: &[u8], _: &Value| {
+            observed = Some((root.join(relative), bytes_digest(data), data.len() as u64));
+        };
+        if repository.is_none() {
+            read_source(&contract.isolation, requested_path, observe)?;
+        } else {
+            read_source_at(
+                &contract.isolation,
+                &root,
+                requested_path,
+                repository.as_deref(),
+                observe,
+            )?;
+        }
+        if repository.is_some() {
+            contract
+                .isolation
+                .plan()
+                .managed_execution
+                .as_ref()
+                .ok_or_else(|| {
+                    Error::new(
+                        "validation_read",
+                        "additional source has no original immutable observation",
+                    )
+                })?
+                .verify_resource_file(&root, path, digest, *bytes)?;
+        }
         if observed.as_ref() != Some(&(path.clone(), digest.clone(), *bytes)) {
             return Err(Error::new(
                 "validation_read_changed",
@@ -656,28 +698,42 @@ pub(super) fn validate_assignment_requirements(
                 "host validation assignment has malformed selected checks",
             )
         })?;
-        validate_configured_requirements(workflow, isolation, &selected, proposal)?;
+        let integrated = context
+            .pointer("/evidence/delivery_assignment/validation_assignment/kind")
+            .and_then(Value::as_str)
+            == Some("integrated");
+        validate_selected_requirements(workflow, isolation, &selected, proposal, integrated)?;
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) fn validate_configured_requirements(
     workflow: &Workflow,
     isolation: &ValidatedIsolation,
     selected: &[String],
     proposal: &ValidationProposal,
 ) -> Result<()> {
+    validate_selected_requirements(workflow, isolation, selected, proposal, false)
+}
+fn validate_selected_requirements(
+    workflow: &Workflow,
+    isolation: &ValidatedIsolation,
+    selected: &[String],
+    proposal: &ValidationProposal,
+    integrated: bool,
+) -> Result<()> {
     for name in selected {
-        let command = workflow
-            .front_matter
-            .checks
-            .local
-            .get(name)
-            .ok_or_else(|| {
-                Error::new(
-                    "validation_plan",
-                    "selected local obligation is absent from the actual workflow",
-                )
-            })?;
+        let checks = if integrated {
+            &workflow.front_matter.checks.integrated
+        } else {
+            &workflow.front_matter.checks.local
+        };
+        let command = checks.get(name).ok_or_else(|| {
+            Error::new(
+                "validation_plan",
+                "selected local obligation is absent from the actual workflow",
+            )
+        })?;
         let requirement = proposal
             .requirements
             .iter()
@@ -719,4 +775,46 @@ pub(super) fn refuse_cold_history(event: &Value) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+// Pure classification of already retained host facts, never an authority
+// constructor. The production caller first checks its actual permit work owner.
+pub(super) fn classify_discovery_scope(
+    role: AgentRole,
+    phase: &str,
+    isolation: ExecutionRole,
+    vector: Option<&str>,
+    context: &Value,
+) -> Result<CheckKind> {
+    let assignment = context.pointer("/evidence/delivery_assignment/validation_assignment");
+    match vector {
+        None if phase != "parent_integrated_validation"
+            && assignment
+                .and_then(|a| a.get("kind"))
+                .and_then(Value::as_str)
+                != Some("integrated") =>
+        {
+            Ok(CheckKind::Local)
+        }
+        Some(vector)
+            if role == AgentRole::Validation
+                && isolation == ExecutionRole::Validation
+                && phase == "parent_integrated_validation"
+                && assignment
+                    .and_then(|a| a.get("kind"))
+                    .and_then(Value::as_str)
+                    == Some("integrated")
+                && assignment
+                    .and_then(|a| a.get("vector"))
+                    .and_then(Value::as_str)
+                    == Some(vector) =>
+        {
+            crate::evidence::validate_digest(vector)?;
+            Ok(CheckKind::Integrated)
+        }
+        _ => Err(Error::new(
+            "validation_scope",
+            "integrated discovery requires the exact host E2E assignment, validation role and original candidate vector",
+        )),
+    }
 }
