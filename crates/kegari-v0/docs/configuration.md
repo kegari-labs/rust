@@ -101,10 +101,22 @@ refuses: use disjoint grants so read-only siblings are still observed. Reads
 wholly inside owned or admitted writable scopes retain their mutable semantics.
 Actual invocation evidence binds
 the selected executable, argv, cwd, rendered environment and isolation. These
-observations are not a user inventory or a `qualified` bit. The current worker
-still exposes named workflow checks; arbitrary worker-command invocation and
-the complete discovery/validation-obligation flow remain unfinished. Production
-repository commands still refuse missing native backend qualification.
+observations are not a user inventory or a `qualified` bit. Workers can select
+literal commands through `command_run` and enroll revision-bound obligations
+through `validation_propose` before `validation_run`. Named workflow checks remain
+optional inputs. Independent review assesses validation adequacy; a successful
+command alone never passes a delivery gate. Production repository commands still
+refuse missing native backend qualification.
+
+`context_read` with key `execution_environment` reports the effective command
+environment and host-issued handles for existing read resources. `resource_list`
+and `resource_read` inspect those handles without running code or requiring
+project-specific configuration. They accept a relative path, never a new host
+root. Exact-file grants stay exact; links, Git administration, unavailable access,
+changed observations and oversized results refuse explicitly. An empty listing
+means there were no visible non-Git children in its declared inspection scope,
+not that an inspection failed or the repository has no Git history.
+These observations cannot add tools or resources outside the admitted boundary.
 
 The unpublished `offline_cargo` configuration and schema-4 launch/check adapter
 are removed. Unknown obsolete fields/records are rejected without migration or

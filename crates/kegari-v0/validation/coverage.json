@@ -217,8 +217,23 @@
       "line": 57,
       "sha256": "e0d035baf554ad4ba77d0af53d4b811476fcd92cb8cd1778e59a25ce0bec3f8e",
       "excerpt": "Users MUST NOT be required to predefine execution commands, tool inventories, dependency/environment manifests or a Kegari-specific environment package before discovery or eligible",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-RESOURCE-INSPECTION.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Actual worker/Control/journal paths expose the original command environment and host-bound resource handles, bounded complete listings and text reads without probes or inventory prerequisites; settled observations are reread before plan enrollment and post-read authority/cutoff checks preserve refusal.",
+          "tests": [
+            "src/worker_resource_tests.rs::actual_resources_are_listed_without_probes_and_settle_exact_nonempty_and_empty_results",
+            "src/worker_resource_tests.rs::actual_revocation_after_bytes_or_environment_observation_prevents_settled_evidence",
+            "src/isolation_observation_tests.rs::environment_observation_uses_exact_command_environment_without_launch_or_lookup"
+          ],
+          "limits": "Final affected checks pass 6 worker and 17 core cases. Full source2 regression passed 1240 and failed one new FIFO fixture ordering; the unchanged assertion passes after moving it before the separate hardlink guard. Final source differs in that test and two independently reviewed equivalent guard collapses. No native, actual-agent, provider or human qualification; no atomic filesystem snapshot or new external access. CI onboarding, paging, empty/unborn baselines and discovered recovery remain incomplete.",
+          "class": "deterministic",
+          "source_digest": "sha256:d549c89024700ae66c9a3412538c0bed45e1be94926a742dd3919d1fa001da4e"
+        }
+      ]
     },
     {
       "id": "clause:1.4:e403ad23aac9",
@@ -2071,8 +2086,23 @@
       "line": 445,
       "sha256": "4caa6c0be2f92ca00d18b8b03d39e725eb5da721f4d4afdc93a5a5cccdd94a02",
       "excerpt": "An admitted agent MUST inspect the authorized repository and task before selecting implementation, preparation or validation commands. It MUST use applicable instructions, document",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-RESOURCE-INSPECTION.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Actual worker/Control/journal paths expose the original command environment and host-bound resource handles, bounded complete listings and text reads without probes or inventory prerequisites; settled observations are reread before plan enrollment and post-read authority/cutoff checks preserve refusal.",
+          "tests": [
+            "src/worker_resource_tests.rs::actual_resources_are_listed_without_probes_and_settle_exact_nonempty_and_empty_results",
+            "src/worker_resource_tests.rs::actual_revocation_after_bytes_or_environment_observation_prevents_settled_evidence",
+            "src/isolation_observation_tests.rs::environment_observation_uses_exact_command_environment_without_launch_or_lookup"
+          ],
+          "limits": "Final affected checks pass 6 worker and 17 core cases. Full source2 regression passed 1240 and failed one new FIFO fixture ordering; the unchanged assertion passes after moving it before the separate hardlink guard. Final source differs in that test and two independently reviewed equivalent guard collapses. No native, actual-agent, provider or human qualification; no atomic filesystem snapshot or new external access. CI onboarding, paging, empty/unborn baselines and discovered recovery remain incomplete.",
+          "class": "deterministic",
+          "source_digest": "sha256:d549c89024700ae66c9a3412538c0bed45e1be94926a742dd3919d1fa001da4e"
+        }
+      ]
     },
     {
       "id": "clause:7.6:33e64c12052a",
@@ -2146,6 +2176,20 @@
           "limits": "Real coordinator/worker/Control components use explicitly injected command outcomes; signed-description fixtures cannot mint native capabilities. No native, actual-agent, provider or human qualification. Not an atomic filesystem snapshot. Discovered recovery, compact full-history/all-attempt artifact retention, environment admission, output paging and empty/unborn baselines remain open.",
           "class": "deterministic",
           "source_digest": "sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216"
+        },
+        {
+          "reference": "validation/LOCAL-RESOURCE-INSPECTION.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Actual worker/Control/journal paths expose the original command environment and host-bound resource handles, bounded complete listings and text reads without probes or inventory prerequisites; settled observations are reread before plan enrollment and post-read authority/cutoff checks preserve refusal.",
+          "tests": [
+            "src/worker_resource_tests.rs::actual_resources_are_listed_without_probes_and_settle_exact_nonempty_and_empty_results",
+            "src/worker_resource_tests.rs::actual_revocation_after_bytes_or_environment_observation_prevents_settled_evidence",
+            "src/isolation_observation_tests.rs::environment_observation_uses_exact_command_environment_without_launch_or_lookup"
+          ],
+          "limits": "Final affected checks pass 6 worker and 17 core cases. Full source2 regression passed 1240 and failed one new FIFO fixture ordering; the unchanged assertion passes after moving it before the separate hardlink guard. Final source differs in that test and two independently reviewed equivalent guard collapses. No native, actual-agent, provider or human qualification; no atomic filesystem snapshot or new external access. CI onboarding, paging, empty/unborn baselines and discovered recovery remain incomplete.",
+          "class": "deterministic",
+          "source_digest": "sha256:d549c89024700ae66c9a3412538c0bed45e1be94926a742dd3919d1fa001da4e"
         }
       ]
     },
@@ -2280,6 +2324,20 @@
           "limits": "Descriptive archive/predicate and actual worker/Control fixtures with injected command outcomes; no native, actual-agent, provider or human qualification. Full regression source4 retained one no-op test-fixture failure; only that test file changed in final source5 and all 39 cases in its target pass. Production inputs are unchanged. Review/output paging beyond 1 MiB, cold discovery recovery, environment admission and empty/unborn baselines remain open.",
           "class": "deterministic",
           "source_digest": "sha256:ca62d5ff3c175ce85b59ed2b87cade9f08652186bdf029e35f2dffbc70d15fb5"
+        },
+        {
+          "reference": "validation/LOCAL-RESOURCE-INSPECTION.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Actual worker/Control/journal paths expose the original command environment and host-bound resource handles, bounded complete listings and text reads without probes or inventory prerequisites; settled observations are reread before plan enrollment and post-read authority/cutoff checks preserve refusal.",
+          "tests": [
+            "src/worker_resource_tests.rs::actual_resources_are_listed_without_probes_and_settle_exact_nonempty_and_empty_results",
+            "src/worker_resource_tests.rs::actual_revocation_after_bytes_or_environment_observation_prevents_settled_evidence",
+            "src/isolation_observation_tests.rs::environment_observation_uses_exact_command_environment_without_launch_or_lookup"
+          ],
+          "limits": "Final affected checks pass 6 worker and 17 core cases. Full source2 regression passed 1240 and failed one new FIFO fixture ordering; the unchanged assertion passes after moving it before the separate hardlink guard. Final source differs in that test and two independently reviewed equivalent guard collapses. No native, actual-agent, provider or human qualification; no atomic filesystem snapshot or new external access. CI onboarding, paging, empty/unborn baselines and discovered recovery remain incomplete.",
+          "class": "deterministic",
+          "source_digest": "sha256:d549c89024700ae66c9a3412538c0bed45e1be94926a742dd3919d1fa001da4e"
         }
       ]
     },

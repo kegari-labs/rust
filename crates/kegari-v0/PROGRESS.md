@@ -1,6 +1,55 @@
 # Kegari v0 build progress
 
 **Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-4.**
+This increment began on clean `main` at `902adc6eaa14e0e951f734778312d0a9113603e3`
+(`feat(kegari-v0): retain complete validation archives for compact evidence`).
+No minor milestone is complete. SPEC 1.4 and all native/live restrictions remain.
+
+Workers now inspect the effective command environment and original repository/
+test-resource handles without probes, tool catalogs or new grants. Bounded generic
+reads/listings retain actual settled provenance; proposal rereads, original
+cutoffs and post-read authority checks reject changed or unauthorized observations.
+Actual launch validation remains intact. Instruction assets advance to 7; package
+remains development 0.2.0-alpha.9. See [inspection evidence](validation/LOCAL-RESOURCE-INSPECTION.md).
+
+Independent reviews corrected directory offsets, forbidden-child metadata access,
+failed-read accounting, internal deadline renewal and post-read freshness. Full
+release regression on source2 finished **1,240 passed, one FIFO fixture-ordering
+failure, three native ignored**, across 40 groups. That test's unchanged assertion
+now precedes the separate hard-link guard. Strict lint identified two equivalent
+guard collapses, now applied without suppression. Independent review checked all
+746 inputs: only those three files differ from the full-run source.
+
+Final source is `sha256:d549c89024700ae66c9a3412538c0bed45e1be94926a742dd3919d1fa001da4e`.
+All six worker inspection tests and 17 core observation tests pass on that source;
+strict all-target lint, formatting, whitespace and inventory consistency pass.
+Inventory tests pass 11. The failed full run remains retained; unchanged passing
+targets were not relabelled as a final-source full pass. The exact-source development
+build succeeds; metadata agrees with the independently recomputed 346-input build
+identity. All 746 final inputs match after tests and build.
+
+Executable SHA-256: `2833729477093d9a8408c1f2d56454e1add387df4b9a3a855a39011ee2927a55`.
+Archive: `target/validation/m02-inspection-d549c8902470`, 531 files plus manifest
+SHA-256 `c4d019a26bf4d1d2ab4f1993ca3e56253691fd5cefc13a591708a5cdf3abd300`; all hashes verified.
+Complete source snapshots 1–4, failures, successful logs and development bytes
+are retained. Our Cargo/test handles and delegated work are terminal.
+
+Next: correct mandatory hosted-CI/no-change configuration ahead of independent
+discovery in `config.rs::Repository::validate`, preserving actual delivery gates.
+Then continue authenticated output/review paging and empty/unborn source identity.
+Cross-worker discovered continuation/reassembly remains open. Extra host resource
+access still needs legitimate authority; inspection cannot supply it. Fresh bounded
+native qualification requires separate explicit approval; earlier approvals are
+consumed. No native/live action, permission request, installation, remote mutation
+or coordinator activation occurred. Follow [MILESTONES.md](MILESTONES.md).
+
+This inspection/tool-contract increment is a separate commit boundary from the
+archive/storage increment. No history consolidation is performed; the remote-tracking
+ref now names the baseline commit, without any remote action by this work.
+
+### Previous authenticated-archive increment
+
+**Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-4.**
 This increment began on clean `main` after
 `93cdbb06638f028ea2a683dc58dae265aa7402ef`
 (`feat(kegari-v0): gate parent readiness on discovered validation review`).

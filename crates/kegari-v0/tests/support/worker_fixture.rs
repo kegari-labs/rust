@@ -71,7 +71,7 @@ impl Fixture {
         Self::with_hooks(role, "")
     }
     fn with_hooks(role: AgentRole, hooks: &str) -> Self {
-        Self::configured(role, hooks, None, None, false, false)
+        Self::configured(role, hooks, None, None, false, false, false)
     }
     #[allow(dead_code)] // Shared prelude also serves the unchanged worker target.
     fn with_bundle(mode: worker_bundle::Mode, configured: ConfiguredContract) -> Self {
@@ -82,15 +82,16 @@ impl Fixture {
             Some(configured),
             false,
             false,
+            false,
         )
     }
     #[allow(dead_code)]
     fn without_checks(role: AgentRole) -> Self {
-        Self::configured(role, "", None, None, true, false)
+        Self::configured(role, "", None, None, true, false, false)
     }
     #[allow(dead_code)]
     fn with_read_repository(role: AgentRole) -> Self {
-        Self::configured(role, "", None, None, true, true)
+        Self::configured(role, "", None, None, true, true, false)
     }
     fn configured(
         role: AgentRole,
@@ -99,6 +100,7 @@ impl Fixture {
         configured: Option<ConfiguredContract>,
         without_checks: bool,
         read_repository: bool,
+        test_resources: bool,
     ) -> Self {
         let temp = TempDir::new().unwrap();
         let base = temp.path().canonicalize().unwrap();
@@ -120,6 +122,18 @@ impl Fixture {
                 b"actual additional repository input\n",
             )
             .unwrap();
+        }
+        let resource_file = base.join("unfamiliar.recipe");
+        let resource_dir = base.join("unfamiliar-resource");
+        if test_resources {
+            std::fs::write(&resource_file, b"custom build instructions\n").unwrap();
+            std::fs::create_dir(&resource_dir).unwrap();
+            std::fs::write(
+                resource_dir.join("custom.rules"),
+                b"generic resource data\n",
+            )
+            .unwrap();
+            std::fs::create_dir(resource_dir.join("empty")).unwrap();
         }
         git_run(&source, &["init", "-b", "main"]);
         std::fs::write(source.join("a.txt"), "original\n").unwrap();
@@ -211,7 +225,11 @@ impl Fixture {
             } else {
                 vec![]
             },
-            test_resources: vec![],
+            test_resources: if test_resources {
+                vec!["recipe".into(), "data".into()]
+            } else {
+                vec![]
+            },
         };
         let parent = ParentProjection {
             workspace_id: id(3),
@@ -390,6 +408,18 @@ impl Fixture {
                 directory: true,
             });
         }
+        if test_resources {
+            plan.read_roots.extend([
+                PathGrant {
+                    path: resource_file.clone(),
+                    directory: false,
+                },
+                PathGrant {
+                    path: resource_dir.clone(),
+                    directory: true,
+                },
+            ]);
+        }
         if role.permits_repository_execution() {
             plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
         }
@@ -463,6 +493,25 @@ impl Fixture {
             repository: Some(repository.clone()),
             read_resources: if read_repository {
                 BTreeMap::from([(additional, ReadResource::Repository { id: "43".into() })])
+            } else if test_resources {
+                BTreeMap::from([
+                    (
+                        resource_file,
+                        ReadResource::TestResource {
+                            name: "recipe".into(),
+                            writable: false,
+                            disposable: false,
+                        },
+                    ),
+                    (
+                        resource_dir,
+                        ReadResource::TestResource {
+                            name: "data".into(),
+                            writable: false,
+                            disposable: false,
+                        },
+                    ),
+                ])
             } else {
                 BTreeMap::new()
             },

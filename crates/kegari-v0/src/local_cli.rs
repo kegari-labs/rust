@@ -375,7 +375,7 @@ pub fn guided_initial_setup(
         .map_err(|_| Error::invalid("guided setup configuration could not be encoded"))?;
     Config::parse(&document)?;
     writeln!(prompt.output,
-        "\nReview the complete initial configuration (no provider credentials):\n{document}\nThe Linear UUID above is supplied by you; a configured Linear connection must verify the provider identity.\nConfirming submits this configuration to the ordinary setup transaction: local registration and a macOS Keychain attestation key, with STOPPED intent. It does not install/start a service or dispatch agents.\nAfter setup: explicitly install/start the registered service, then use connection add with supported authentication and workspace add with exact IDs, selectors, profiles, repository/check contracts and an explicit release policy. Run status and config check before considering orchestration start. No scope or provider qualification is inferred from this draft.")
+        "\nReview the complete initial configuration (no provider credentials):\n{document}\nThe Linear UUID above is supplied by you; a configured Linear connection must verify the provider identity.\nConfirming submits this configuration to the ordinary setup transaction: local registration and a macOS Keychain attestation key, with STOPPED intent. It does not install/start a service or dispatch agents.\nAfter setup: explicitly install/start the registered service, then use connection add with supported authentication and workspace add with exact IDs, selectors, profiles, repository authority, hosted-validation policy and an explicit release policy. Run status and config check before considering orchestration start. No scope or provider qualification is inferred from this draft.")
         .map_err(|error| Error::io("write setup review", error))?;
     if prompt.ask("Type create to submit this reviewed setup, or /cancel: ")? != "create" {
         return Err(setup_cancelled());
@@ -398,7 +398,7 @@ pub fn guided_document(
             "kind, account_id, supported endpoint/credential_ref or Codex auth_home/argv, and optional max_agents"
         }
         GuidanceRequest::WorkspaceAdd { .. } => {
-            "id, connection names, workflow path, exact Linear/GitHub scope, actors, profiles, routing labels, limits, release policy, and repositories"
+            "id, connection names, optional workflow path (omit for installed generic guidance), exact Linear/GitHub scope, actors, profiles, routing labels, limits, release policy, and repositories"
         }
     };
     writeln!(output, "Enter the typed TOML document for {fields}.\nUse credential references only; import credentials separately with --secret-stdin.\nFinish with a line containing only a period. No changes are sent until the whole document validates.")

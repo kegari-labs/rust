@@ -56,6 +56,17 @@ The default declares no executable catalog, check commands or hooks. It directs
 the agent to discover relevant guidance, environment and validation from the
 actual permitted task/repository context, including an empty or unborn repository.
 This guidance does not establish an execution facility or missing source evidence.
+`context_read` with key `execution_environment` returns the effective command
+environment, its limitations and original resource handles. `resource_list` and
+`resource_read` accept a listed handle and normalized relative path. They inspect
+existing repositories/test resources without a process or a new permission; an
+exact-file grant supports only `.` for reading. Listings cover visible non-Git
+children within their declared scope; they are bounded and complete or explicitly
+refused. Original observations and their settled read references
+remain subject to current scope, input identity and the worker's original cutoff.
+Fixed OS command visibility does not grant model access to OS file contents, and
+ambient PATH or home contents are not imported. Tools outside existing authority
+remain an explicit access dependency.
 The worker's `command_run` accepts literal `argv` and `cwd` through its admitted
 generic boundary. It records actual source, environment and outcome observations;
 it does not mint check evidence or authorize broader access. Results include

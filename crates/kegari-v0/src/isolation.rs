@@ -392,6 +392,92 @@ impl ValidatedIsolation {
         }
         Ok(())
     }
+    /// Inspect a retained boundary under the caller's original cutoff. This
+    /// checks geometry, current root identities and retained resource metadata;
+    /// it does not scan writable descendants, read resource contents, or qualify
+    /// a launch. Actual command preparation retains its full validation path.
+    pub(crate) fn revalidate_inspection_until(&self, deadline: std::time::Instant) -> Result<()> {
+        self.revalidate_inspection_with_budget(&mut managed_resources::ResourceBudget::until(
+            deadline,
+        ))
+    }
+    fn revalidate_inspection_with_budget(
+        &self,
+        budget: &mut managed_resources::ResourceBudget,
+    ) -> Result<()> {
+        budget.check()?;
+        let plan = &self.plan;
+        if plan.read_roots.len() > 256
+            || plan.source_writes.len() > 256
+            || plan.resource_writes.len() > 256
+            || plan.forbidden_roots.len() > 256
+            || canonical_digest(1, plan)? != self.digest
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "retained inspection boundary changed or exceeds its finite bound",
+            ));
+        }
+        budget.check()?;
+        if let Some(origin) = &self.origin {
+            let mut geometry = plan.clone();
+            geometry.cwd = origin.plan.cwd.clone();
+            if canonical_digest(1, &origin.plan)? != origin.digest
+                || canonical_digest(1, &geometry)? != origin.digest
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "inspection changed the original cwd-only boundary",
+                ));
+            }
+            budget.check()?;
+        }
+        for path in [
+            &plan.execution_root,
+            &plan.repository,
+            &plan.scratch,
+            &plan.cwd,
+        ]
+        .into_iter()
+        .chain(self.origin.as_ref().map(|origin| &origin.plan.cwd))
+        {
+            budget.check()?;
+            if path.as_os_str().len() > MAX_COMMAND_CWD_BYTES
+                || canonical_target(path)? != *path
+                || !path.is_dir()
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "inspection root or cwd changed",
+                ));
+            }
+            budget.check()?;
+        }
+        for (path, directory) in plan
+            .read_roots
+            .iter()
+            .chain(&plan.source_writes)
+            .chain(&plan.resource_writes)
+            .map(|grant| (&grant.path, grant.directory))
+            .chain(plan.forbidden_roots.iter().map(|path| (path, false)))
+        {
+            budget.check()?;
+            if path.as_os_str().len() > MAX_COMMAND_CWD_BYTES
+                || canonical_target(path)? != *path
+                || (directory && !path.is_dir())
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "inspection grant or forbidden root changed",
+                ));
+            }
+            budget.check()?;
+        }
+        if let Some(domain) = &plan.managed_execution {
+            domain.validate_plan_with_budget(plan, budget)?;
+        }
+        budget.check()
+    }
     /// Full content observation belongs outside serialized Control callbacks.
     /// A successful observation binds resources; it does not qualify a workload.
     pub fn revalidate_resource_contents(&self) -> Result<()> {
@@ -765,6 +851,168 @@ pub struct CommandObservation {
     pub launch_digest: String,
     pub backend_policy_digest: String,
 }
+
+/// Description of the existing command boundary, not an environment request or
+/// a qualification/dispatch capability. No process, executable lookup, binary
+/// content inspection or ambient environment lookup is needed to produce it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentObservation {
+    #[serde(deserialize_with = "environment_observation_schema")]
+    pub schema_version: u32,
+    pub role: ExecutionRole,
+    pub original_cwd: PathBuf,
+    pub cwd: PathBuf,
+    pub original_isolation_digest: String,
+    pub isolation_digest: String,
+    pub original_domain_digest: String,
+    pub domain_digest: String,
+    pub original_backend_policy_digest: String,
+    pub backend_policy_digest: String,
+    pub search_path: Vec<PathBuf>,
+    pub environment: BTreeMap<String, String>,
+    pub limits: EnvironmentLimits,
+    /// Actual current preflight result. None would describe only that check,
+    /// never a permit, ownership, result or whole-runtime qualification.
+    pub native_prerequisite: Option<Error>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentLimits {
+    pub max_arguments: usize,
+    pub max_argument_bytes: usize,
+    pub max_argv_bytes: usize,
+    pub max_cwd_bytes: usize,
+    pub lifecycle: EnvironmentLifecycle,
+    pub network: EnvironmentNetwork,
+    pub detached_descendants: EnvironmentDetachedDescendants,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvironmentLifecycle {
+    OwnedGroupsAndRegisteredServices,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvironmentNetwork {
+    Denied,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvironmentDetachedDescendants {
+    OutsideGuarantee,
+}
+
+const MAX_ENVIRONMENT_OBSERVATION_BYTES: usize = 48 * 1024;
+
+fn environment_observation_schema<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<u32, D::Error> {
+    let schema = u32::deserialize(deserializer)?;
+    if schema != 1 {
+        return Err(serde::de::Error::custom(
+            "unsupported environment observation schema",
+        ));
+    }
+    Ok(schema)
+}
+
+/// Observe only the retained effective environment and boundary. Revalidation
+/// checks existing metadata; it never recaptures input bytes or adopts new
+/// roots. Callers retain their own operation/role and original time bounds.
+pub fn observe_environment(isolation: &ValidatedIsolation) -> Result<EnvironmentObservation> {
+    observe_environment_until(
+        isolation,
+        std::time::Instant::now() + Duration::from_secs(5),
+    )
+}
+
+/// Retains the caller's absolute cutoff throughout descriptive inspection.
+/// No default or renewed operation budget is substituted by this entry point.
+pub fn observe_environment_until(
+    isolation: &ValidatedIsolation,
+    deadline: std::time::Instant,
+) -> Result<EnvironmentObservation> {
+    let mut budget = managed_resources::ResourceBudget::until(deadline);
+    isolation.revalidate_inspection_with_budget(&mut budget)?;
+    let unavailable = || {
+        Error::new(
+            "execution_environment_unavailable",
+            "this operation has no admitted repository command domain",
+        )
+    };
+    let domain = isolation
+        .plan
+        .managed_execution
+        .as_ref()
+        .ok_or_else(unavailable)?;
+    let original_plan = isolation
+        .origin
+        .as_ref()
+        .map_or(&isolation.plan, |origin| &origin.plan);
+    let original_domain = original_plan
+        .managed_execution
+        .as_ref()
+        .ok_or_else(unavailable)?;
+    let native_prerequisite = match checked_repository_command_prerequisite(isolation) {
+        Ok(()) => None,
+        Err(error) if error.code == "managed_profile_unqualified" => Some(error),
+        Err(error) => return Err(error),
+    };
+    let observation = EnvironmentObservation {
+        schema_version: 1,
+        role: isolation.plan.role,
+        original_cwd: original_plan.cwd.clone(),
+        cwd: isolation.plan.cwd.clone(),
+        original_isolation_digest: isolation.original_digest().to_owned(),
+        isolation_digest: isolation.digest.clone(),
+        original_domain_digest: canonical_digest(1, original_domain)?,
+        domain_digest: canonical_digest(1, domain)?,
+        original_backend_policy_digest: original_domain.policy_digest().to_owned(),
+        backend_policy_digest: domain.policy_digest().to_owned(),
+        search_path: domain.search_roots().to_vec(),
+        environment: effective_environment_with_path(isolation, domain.command_path()?),
+        limits: EnvironmentLimits {
+            max_arguments: MAX_COMMAND_ARGS,
+            max_argument_bytes: MAX_COMMAND_ARG_BYTES,
+            max_argv_bytes: MAX_COMMAND_BYTES,
+            max_cwd_bytes: MAX_COMMAND_CWD_BYTES,
+            lifecycle: EnvironmentLifecycle::OwnedGroupsAndRegisteredServices,
+            network: EnvironmentNetwork::Denied,
+            detached_descendants: EnvironmentDetachedDescendants::OutsideGuarantee,
+        },
+        native_prerequisite,
+    };
+    // Count the encoded public result without allocating a second full copy.
+    // Existing domain bounds already bound the cloned path/metadata inventory.
+    budget.check()?;
+    struct SizeBound<'a>(usize, &'a managed_resources::ResourceBudget);
+    impl std::io::Write for SizeBound<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.1.check().map_err(std::io::Error::other)?;
+            if bytes.len() > MAX_ENVIRONMENT_OBSERVATION_BYTES.saturating_sub(self.0) {
+                return Err(std::io::Error::other("environment observation bound"));
+            }
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let encoded = serde_json::to_writer(&mut SizeBound(0, &budget), &observation);
+    budget.check()?;
+    encoded.map_err(|_| {
+        Error::new(
+            "execution_environment_limit",
+            "complete environment observation exceeds its public result bound",
+        )
+    })?;
+    Ok(observation)
+}
+
 fn command_observation_schema<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<u32, D::Error> {
@@ -811,6 +1059,31 @@ struct RenderedCommand {
     environment: BTreeMap<String, String>,
     profile: String,
 }
+/// One exact rendering for inspection and every actual repository invocation.
+/// Deliberately reads no inherited environment; PATH is the recorded domain.
+fn effective_environment(isolation: &ValidatedIsolation) -> Result<BTreeMap<String, String>> {
+    Ok(effective_environment_with_path(
+        isolation,
+        isolation.command_path()?,
+    ))
+}
+fn effective_environment_with_path(
+    isolation: &ValidatedIsolation,
+    path: String,
+) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("PATH".into(), path),
+        (
+            "HOME".into(),
+            isolation.plan.scratch.to_string_lossy().into_owned(),
+        ),
+        (
+            "TMPDIR".into(),
+            isolation.plan.scratch.to_string_lossy().into_owned(),
+        ),
+        ("LANG".into(), "C.UTF-8".into()),
+    ])
+}
 fn render_command(isolation: &ValidatedIsolation, argv: &[String]) -> Result<RenderedCommand> {
     if argv.is_empty()
         || argv.len() > MAX_COMMAND_ARGS
@@ -830,18 +1103,7 @@ fn render_command(isolation: &ValidatedIsolation, argv: &[String]) -> Result<Ren
     }
     isolation.revalidate()?;
     let executable = isolation.resolve_executable(&argv[0])?;
-    let environment = BTreeMap::from([
-        ("PATH".into(), isolation.command_path()?),
-        (
-            "HOME".into(),
-            isolation.plan.scratch.to_string_lossy().into_owned(),
-        ),
-        (
-            "TMPDIR".into(),
-            isolation.plan.scratch.to_string_lossy().into_owned(),
-        ),
-        ("LANG".into(), "C.UTF-8".into()),
-    ]);
+    let environment = effective_environment(isolation)?;
     let profile = isolation.seatbelt_profile()?;
     Ok(RenderedCommand {
         executable,
@@ -897,6 +1159,9 @@ fn observe_rendered_command(
 /// command boundary. Removing a specialized profile does not qualify its replacement.
 pub fn repository_command_prerequisite(isolation: &ValidatedIsolation) -> Result<()> {
     isolation.revalidate()?;
+    checked_repository_command_prerequisite(isolation)
+}
+fn checked_repository_command_prerequisite(isolation: &ValidatedIsolation) -> Result<()> {
     match &isolation.plan.managed_execution {
         None => Err(Error::new(
             "process_tree_unverified",

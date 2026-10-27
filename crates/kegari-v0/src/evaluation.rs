@@ -2063,6 +2063,9 @@ pub(crate) async fn run_live_trial_until(
     );
     // Keep remaining unchanged for the exact original LiveRequest budget.
     // The separate absolute cutoff cannot renew that budget after setup.
+    operation
+        .host
+        .bind_inspection_deadline(collection_deadline.into_std());
     suite.validate()?;
     verify_trial_declaration(suite, variant, &trial)?;
     let mut report = TrialReport::unrun(

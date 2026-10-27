@@ -36,6 +36,22 @@ pub enum DiscoveryReadContent {
         digest: String,
         bytes: u64,
     },
+    Resource {
+        handle: String,
+        resource_binding: String,
+        path: String,
+        digest: String,
+        bytes: u64,
+        version_digest: String,
+    },
+    Directory {
+        handle: String,
+        resource_binding: String,
+        path: String,
+        digest: String,
+        bytes: u64,
+        version_digest: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -100,6 +116,40 @@ impl DiscoveryReadReference {
             }
             DiscoveryReadContent::Context { key, digest, bytes } => {
                 text(key, 256)?;
+                (digest, bytes)
+            }
+            DiscoveryReadContent::Resource {
+                handle,
+                resource_binding,
+                path,
+                digest,
+                bytes,
+                version_digest,
+            }
+            | DiscoveryReadContent::Directory {
+                handle,
+                resource_binding,
+                path,
+                digest,
+                bytes,
+                version_digest,
+            } => {
+                for identity in [handle, resource_binding, version_digest] {
+                    validate_digest(identity)?;
+                }
+                text(path, 4096)?;
+                if path != "."
+                    && (path.contains('\\')
+                        || path.split('/').any(|part| {
+                            part.is_empty()
+                                || matches!(part, "." | "..")
+                                || part.eq_ignore_ascii_case(".git")
+                        }))
+                {
+                    return Err(invalid(
+                        "resource observation requires a normalized non-Git relative path",
+                    ));
+                }
                 (digest, bytes)
             }
         };

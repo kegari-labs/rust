@@ -62,7 +62,8 @@ impl DomainContext {
             forbidden: plan.forbidden_roots.clone(),
         }
     }
-    fn validate(&self) -> Result<()> {
+    fn validate(&self, budget: &mut ResourceBudget) -> Result<()> {
+        budget.check()?;
         if matches!(
             self.role,
             ExecutionRole::Coordination | ExecutionRole::IndependentReview
@@ -84,6 +85,7 @@ impl DomainContext {
             .chain(self.writable_resources.iter().map(|g| &g.path))
             .chain(&self.forbidden)
         {
+            budget.check()?;
             safe_absolute(path)?;
             if path.as_os_str().len() > MAX_PATH_BYTES || canonical_target(path)? != *path {
                 return Err(Error::new(
@@ -93,6 +95,7 @@ impl DomainContext {
             }
         }
         for path in [&self.repository, &self.scratch] {
+            budget.check()?;
             if !path.is_dir()
                 || contained_path(&self.execution_root, path)? != *path
                 || self.forbidden.iter().any(|f| overlap(f, path))
@@ -104,6 +107,7 @@ impl DomainContext {
             return Err(changed());
         }
         for grant in &self.reads {
+            budget.check()?;
             if grant.path.parent().is_none()
                 || self.forbidden.iter().any(|f| overlap(f, &grant.path))
             {
@@ -112,6 +116,7 @@ impl DomainContext {
             observe_root(grant)?;
         }
         for write in &self.writable_resources {
+            budget.check()?;
             if !self.reads.contains(write)
                 || overlap(&write.path, &self.repository)
                 || overlap(&write.path, &self.scratch)
@@ -120,6 +125,7 @@ impl DomainContext {
             }
         }
         for grant in &self.reads {
+            budget.check()?;
             if (overlap(&grant.path, &self.repository) || overlap(&grant.path, &self.scratch))
                 && !self.owned_scope_covers(grant)
             {
@@ -144,7 +150,7 @@ impl DomainContext {
                 ));
             }
         }
-        Ok(())
+        budget.check()
     }
     fn owned_scope_covers(&self, grant: &PathGrant) -> bool {
         grant.path.starts_with(&self.repository) || grant.path.starts_with(&self.scratch)
@@ -187,10 +193,14 @@ fn observe_root(grant: &PathGrant) -> Result<RootObservation> {
         inode: metadata.ino(),
     })
 }
-fn domain_roots(context: &DomainContext) -> Result<Vec<RootObservation>> {
+fn domain_roots(
+    context: &DomainContext,
+    budget: &mut ResourceBudget,
+) -> Result<Vec<RootObservation>> {
     let mut roots = Vec::new();
     let mut seen = BTreeSet::new();
     for path in OS_READ_ROOTS.iter().chain(OS_COMMAND_ROOTS) {
+        budget.check()?;
         let path = match Path::new(path).canonicalize() {
             Ok(path) => path,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -216,11 +226,13 @@ fn domain_roots(context: &DomainContext) -> Result<Vec<RootObservation>> {
     .iter()
     .chain(&context.reads)
     {
+        budget.check()?;
         if seen.insert(grant.path.clone()) {
             roots.push(observe_root(grant)?);
         }
     }
     for root in &roots {
+        budget.check()?;
         if context
             .forbidden
             .iter()
@@ -232,6 +244,7 @@ fn domain_roots(context: &DomainContext) -> Result<Vec<RootObservation>> {
             ));
         }
     }
+    budget.check()?;
     Ok(roots)
 }
 fn search_path(context: &DomainContext) -> Vec<PathBuf> {
@@ -283,9 +296,9 @@ impl BoundManagedExecution {
     /// Full resource observation is allowed only in preparation outside Control.
     pub fn automatic(plan: &IsolationPlan) -> Result<Self> {
         let context = DomainContext::from_plan(plan);
-        context.validate()?;
-        let roots = domain_roots(&context)?;
         let mut budget = ResourceBudget::new();
+        context.validate(&mut budget)?;
+        let roots = domain_roots(&context, &mut budget)?;
         let resources = context
             .immutable_reads()
             .into_iter()
@@ -311,11 +324,12 @@ impl BoundManagedExecution {
         self.revalidate_binding_with_budget(&mut ResourceBudget::new())
     }
     fn revalidate_binding_with_budget(&self, budget: &mut ResourceBudget) -> Result<()> {
+        budget.check()?;
         if self.schema_version != SCHEMA || self.policy_digest != Self::automatic_policy_digest()? {
             return Err(changed());
         }
-        self.context.validate()?;
-        if self.roots != domain_roots(&self.context)?
+        self.context.validate(budget)?;
+        if self.roots != domain_roots(&self.context, budget)?
             || self.search_path != search_path(&self.context)
         {
             return Err(changed());
@@ -327,7 +341,7 @@ impl BoundManagedExecution {
         for (grant, resource) in reads.into_iter().zip(&self.resources) {
             resource.validate_binding_with_budget(grant, budget)?;
         }
-        Ok(())
+        budget.check()
     }
     /// Original resource versions are checked at the dispatch boundary. This
     /// reads bounded metadata only; full contents stay outside Control.
@@ -353,6 +367,8 @@ impl BoundManagedExecution {
     }
     /// Compare a read with the original immutable resource snapshot. Current
     /// resource bytes must still be revalidated separately before acceptance.
+    /// Legacy source-read callers retain their existing local metadata bound;
+    /// this wrapper does not represent an original worker inspection cutoff.
     pub(crate) fn verify_resource_file(
         &self,
         root: &Path,
@@ -360,7 +376,25 @@ impl BoundManagedExecution {
         digest: &str,
         bytes: u64,
     ) -> Result<()> {
-        self.revalidate_binding()?;
+        self.verify_resource_file_until(
+            root,
+            path,
+            digest,
+            bytes,
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        )
+    }
+    /// New inspection operations must retain their caller's absolute cutoff.
+    pub(crate) fn verify_resource_file_until(
+        &self,
+        root: &Path,
+        path: &Path,
+        digest: &str,
+        bytes: u64,
+        deadline: std::time::Instant,
+    ) -> Result<()> {
+        let mut budget = ResourceBudget::until(deadline);
+        self.revalidate_binding_with_budget(&mut budget)?;
         let mut matching = self
             .resources
             .iter()
@@ -369,13 +403,22 @@ impl BoundManagedExecution {
         if matching.next().is_some() {
             return Err(changed());
         }
-        resource.verify_file(path, digest, bytes)
+        resource.verify_file_with_budget(path, digest, bytes, &budget)?;
+        budget.check()
     }
     pub(super) fn validate_plan(&self, plan: &IsolationPlan) -> Result<()> {
+        self.validate_plan_with_budget(plan, &mut ResourceBudget::new())
+    }
+    pub(super) fn validate_plan_with_budget(
+        &self,
+        plan: &IsolationPlan,
+        budget: &mut ResourceBudget,
+    ) -> Result<()> {
+        budget.check()?;
         if self.context != DomainContext::from_plan(plan) {
             return Err(changed());
         }
-        self.revalidate_binding()
+        self.revalidate_binding_with_budget(budget)
     }
     pub(super) fn execution_grants(&self) -> impl Iterator<Item = &PathGrant> {
         self.roots.iter().map(|root| &root.grant)
@@ -390,6 +433,11 @@ impl BoundManagedExecution {
             })
             .collect::<Result<Vec<_>>>()
             .map(|parts| parts.join(":"))
+    }
+    /// The recorded search order only. Returning it does not grant access to a
+    /// path or inspect, enumerate or execute any program within it.
+    pub(super) fn search_roots(&self) -> &[PathBuf] {
+        &self.search_path
     }
     pub(super) fn resolve(&self, cwd: &Path, name: &str) -> Result<PathBuf> {
         if name.is_empty() || name.len() > MAX_PATH_BYTES || name.contains('\0') {

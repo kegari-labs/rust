@@ -13,6 +13,8 @@ mod command;
 mod command_history;
 #[path = "worker_read_sources.rs"]
 mod read_sources;
+#[path = "worker_resources.rs"]
+mod resources;
 #[path = "worker_validation.rs"]
 mod validation;
 pub(crate) use broker_observation::CaptureBudget;
@@ -709,6 +711,19 @@ pub fn operation_tool_definitions(
             ),
         ),
     ];
+    for (name, description) in [
+        (
+            "resource_list",
+            "List all admitted non-Git children of a directory using a host resource handle from context_read execution_environment. A complete bounded listing or an error; no code execution, caller roots or new permissions.",
+        ),
+        (
+            "resource_read",
+            "Read a bounded UTF-8 regular file using a host resource handle from context_read execution_environment. Use '.' only for an exact file grant. No symlinks, Git administration, caller roots or new permissions.",
+        ),
+    ] {
+        result.push((name, ToolCapability::ContextRead, tool(name, description,
+            json!({"handle":{"type":"string","minLength":1,"maxLength":128},"path":{"type":"string","minLength":1,"maxLength":4096}}), &["handle", "path"])));
+    }
     if role.permits_repository_execution() && executable {
         result.push(("git_inspect",ToolCapability::ContextRead,tool("git_inspect","Inspect status, diff or one exact-commit file using the host's restricted Git reader. No arbitrary arguments or mutations.",json!({"inspection":{"oneOf":[{"type":"object","properties":{"kind":{"const":"status"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"diff"},"staged":{"type":"boolean"}},"required":["kind","staged"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"show_file"},"commit":{"type":"string"},"path":{"type":"string"}},"required":["kind","commit","path"],"additionalProperties":false}]}}), &["inspection"])));
         result.push(("command_run",ToolCapability::CommandExecution,tool("command_run","Run a literal argv and repository-relative or absolute cwd through the current admitted command boundary. No shell is added, environment overrides or new permissions. Returns bounded invocation facts and protected output references; exit status does not satisfy a validation obligation.",json!({"argv":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":128},"cwd":{"type":"string","minLength":1}}), &["argv","cwd"])));
@@ -1245,6 +1260,10 @@ pub struct ScopedWorker {
     check_records: Vec<Value>,
     command_records: Vec<Value>,
     validation: validation::DiscoveryState,
+    resources: resources::ResourceState,
+    // Per-owner deterministic race seam; never present in production builds.
+    #[cfg(test)]
+    inspection_observed: Option<Arc<dyn Fn() + Send + Sync>>,
     retained: Arc<Mutex<Vec<RetainedArtifact>>>,
     effects: Vec<String>,
     evidence: Vec<String>,
@@ -1308,6 +1327,7 @@ impl ScopedWorker {
                 .authority
                 .compare(&host.current_authority(&contract.authority)?)
         })?;
+        let resources = resources::ResourceState::new(&contract)?;
         let journal = Arc::new(Journal::create(journal, &contract)?);
         Ok(Self {
             contract,
@@ -1335,6 +1355,9 @@ impl ScopedWorker {
             check_records: vec![],
             command_records: vec![],
             validation: validation::DiscoveryState::default(),
+            resources,
+            #[cfg(test)]
+            inspection_observed: None,
             retained: Arc::new(Mutex::new(Vec::new())),
             effects: vec![],
             evidence: vec![],
@@ -1807,6 +1830,8 @@ impl ScopedWorker {
                     self.validation_evidence()
                 } else if a.key == "read_sources" {
                     self.read_sources()
+                } else if a.key == "execution_environment" {
+                    self.execution_environment()
                 } else {
                     let v = self.contract.context.get(&a.key).ok_or_else(|| {
                         Error::new("missing_context", "named context entry unavailable")
@@ -1835,6 +1860,8 @@ impl ScopedWorker {
                                     "owner_validation_evidence"
                                 } else if a.key == "read_sources" {
                                     "owner_read_sources"
+                                } else if a.key == "execution_environment" {
+                                    "owner_execution_environment"
                                 } else {
                                     "contract_context"
                                 }
@@ -1848,6 +1875,7 @@ impl ScopedWorker {
                 }
                 result
             }
+            "resource_list" | "resource_read" => self.inspect_resource(call, id),
             "source_read" => {
                 let a: SourceRead = parse(&call.arguments)?;
                 let root = self.contract.read_source_root(a.repository_id.as_deref())?;
@@ -3149,6 +3177,9 @@ fn open_source(path: &Path) -> Result<std::fs::File> {
         let flags = libc::O_RDONLY
             | libc::O_NOFOLLOW
             | libc::O_CLOEXEC
+            // A replaced FIFO/device must not block before the regular-file
+            // check. Ordinary regular-file and directory reads are unchanged.
+            | libc::O_NONBLOCK
             | if index + 1 == parts.len() {
                 0
             } else {

@@ -56,7 +56,7 @@ they are not an installation or handover procedure. `__handover-info` validates
 the embedded instruction catalog before reporting its version and asset hashes.
 The runtime guidance, generic default workflow and optional starter are embedded
 in the executable, so they do not require a companion checkout. Instruction asset
-version `6` and persisted
+version `7` and persisted
 schema versions are independent of the application's prerelease version.
 
 `--version` reports the application version and source/profile build digest.

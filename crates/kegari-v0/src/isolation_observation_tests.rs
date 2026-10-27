@@ -454,3 +454,295 @@ fn invocation_rendered_output_bounds_utf8_and_redaction_without_exposing_matched
         "isolation_unavailable"
     );
 }
+
+#[test]
+fn environment_observation_uses_exact_command_environment_without_launch_or_lookup() {
+    let fixture = Fixture::new();
+    let marker = fixture.isolation.plan.scratch.join("must-not-be-created");
+    let program = fixture.program(
+        "unfamiliar-environment-fixture",
+        format!("#!/bin/sh\nprintf launched > '{}'\n", marker.display()).as_bytes(),
+    );
+    let original = canonical_digest(1, fixture.isolation.plan()).unwrap();
+    let observation = observe_environment(&fixture.isolation).unwrap();
+    let rendered = render_command(
+        &fixture.isolation,
+        &[program.to_str().unwrap().to_owned(), "literal $HOME".into()],
+    )
+    .unwrap();
+    assert_eq!(observation.environment, rendered.environment);
+    assert_eq!(observation.environment.len(), 4);
+    assert_eq!(
+        observation
+            .environment
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["HOME", "LANG", "PATH", "TMPDIR"]
+    );
+    assert_eq!(
+        observation.environment["HOME"],
+        fixture.isolation.plan.scratch.to_str().unwrap()
+    );
+    assert_eq!(
+        observation.environment["TMPDIR"],
+        observation.environment["HOME"]
+    );
+    assert_eq!(observation.environment["LANG"], "C.UTF-8");
+    assert_eq!(
+        observation.search_path,
+        observation.environment["PATH"]
+            .split(':')
+            .map(PathBuf::from)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(observation.limits.max_arguments, MAX_COMMAND_ARGS);
+    assert_eq!(observation.limits.max_argument_bytes, MAX_COMMAND_ARG_BYTES);
+    assert_eq!(observation.limits.max_argv_bytes, MAX_COMMAND_BYTES);
+    assert_eq!(observation.limits.max_cwd_bytes, MAX_COMMAND_CWD_BYTES);
+    assert_eq!(observation.limits.network, EnvironmentNetwork::Denied);
+    assert_eq!(
+        observation.limits.detached_descendants,
+        EnvironmentDetachedDescendants::OutsideGuarantee
+    );
+    assert_eq!(
+        observation.native_prerequisite.as_ref().unwrap().code,
+        "managed_profile_unqualified"
+    );
+    assert_eq!(
+        canonical_digest(1, fixture.isolation.plan()).unwrap(),
+        original
+    );
+    assert!(!marker.exists());
+    // The observation does not enumerate a software catalog: a program can be
+    // removed without making observation itself require executable resolution.
+    fs::remove_file(program).unwrap();
+    assert_eq!(
+        observe_environment(&fixture.isolation).unwrap(),
+        observation
+    );
+}
+
+#[test]
+fn environment_observation_retains_original_cwd_and_domain_across_derivation() {
+    let fixture = Fixture::new();
+    let original = observe_environment(&fixture.isolation).unwrap();
+    let nested = fixture
+        .isolation
+        .with_cwd(Path::new("nested/deeper"))
+        .unwrap();
+    let derived = observe_environment(&nested).unwrap();
+    assert_eq!(derived.original_cwd, original.cwd);
+    assert_eq!(
+        derived.cwd,
+        fixture.isolation.plan.repository.join("nested/deeper")
+    );
+    assert_eq!(derived.original_isolation_digest, original.isolation_digest);
+    assert_ne!(derived.isolation_digest, original.isolation_digest);
+    assert_eq!(derived.original_domain_digest, original.domain_digest);
+    assert_eq!(derived.domain_digest, original.domain_digest);
+    assert_eq!(
+        derived.original_backend_policy_digest,
+        original.backend_policy_digest
+    );
+    assert_eq!(
+        derived.backend_policy_digest,
+        original.backend_policy_digest
+    );
+    assert_eq!(derived.search_path, original.search_path);
+    assert_eq!(derived.environment, original.environment);
+    assert_eq!(derived.role, ExecutionRole::Child);
+}
+
+#[test]
+fn environment_observation_missing_domain_is_unavailable_and_changed_boundary_is_error() {
+    let fixture = Fixture::new();
+    for role in [
+        ExecutionRole::Coordination,
+        ExecutionRole::IndependentReview,
+        ExecutionRole::Review,
+        ExecutionRole::Child,
+    ] {
+        let mut plan = fixture.isolation.plan.clone();
+        plan.role = role;
+        plan.managed_execution = None;
+        let isolation = plan.validate().unwrap();
+        assert_eq!(
+            observe_environment(&isolation).unwrap_err().code,
+            "execution_environment_unavailable"
+        );
+    }
+    let mut forged = fixture.isolation.with_cwd(Path::new("nested")).unwrap();
+    forged.plan.source_writes.push(PathGrant {
+        path: forged.plan.cwd.clone(),
+        directory: true,
+    });
+    forged.digest = canonical_digest(1, &forged.plan).unwrap();
+    assert_eq!(
+        observe_environment(&forged).unwrap_err().code,
+        "scope_violation"
+    );
+    // Even identical directory contents cannot adopt a replacement root.
+    let original = fixture.resource.with_file_name("original-resource");
+    fs::rename(&fixture.resource, &original).unwrap();
+    fs::create_dir(&fixture.resource).unwrap();
+    fs::write(fixture.resource.join("input"), b"original").unwrap();
+    assert_eq!(
+        observe_environment(&fixture.isolation).unwrap_err().code,
+        "identity_mismatch"
+    );
+}
+
+#[test]
+fn environment_observation_does_not_recapture_or_attest_resource_contents() {
+    let fixture = Fixture::new();
+    let original = observe_environment(&fixture.isolation).unwrap();
+    fs::write(
+        fixture.resource.join("input"),
+        b"changed immutable resource",
+    )
+    .unwrap();
+    // This reports the originally bound domain and effective environment only.
+    // It neither updates that digest nor substitutes for execution preflight or
+    // the full content checks required before source/read/result acceptance.
+    assert_eq!(observe_environment(&fixture.isolation).unwrap(), original);
+    assert!(fixture.isolation.revalidate_resource_contents().is_err());
+    assert!(
+        fixture
+            .isolation
+            .plan
+            .managed_execution
+            .as_ref()
+            .unwrap()
+            .revalidate_resource_versions_until(std::time::Instant::now() + Duration::from_secs(1))
+            .is_err()
+    );
+}
+
+#[test]
+fn environment_observation_has_closed_descriptive_schema_and_bounded_public_size() {
+    let fixture = Fixture::new();
+    let observation = observe_environment(&fixture.isolation).unwrap();
+    let value = serde_json::to_value(&observation).unwrap();
+    assert_eq!(
+        serde_json::from_value::<EnvironmentObservation>(value.clone()).unwrap(),
+        observation
+    );
+    for (field, changed) in [
+        ("schema_version", serde_json::json!(2)),
+        ("qualified", serde_json::json!(true)),
+    ] {
+        let mut invalid = value.clone();
+        invalid[field] = changed;
+        assert!(serde_json::from_value::<EnvironmentObservation>(invalid).is_err());
+    }
+    let mut invalid = value;
+    invalid["limits"]["network"] = serde_json::json!("allowed");
+    assert!(serde_json::from_value::<EnvironmentObservation>(invalid).is_err());
+    let mut plan = fixture.isolation.plan.clone();
+    plan.read_roots.clear();
+    for index in 0..150 {
+        let path = fixture
+            .resource
+            .join(format!("root-{index:03}-{}", "x".repeat(180)));
+        fs::create_dir(&path).unwrap();
+        plan.read_roots.push(PathGrant {
+            path,
+            directory: true,
+        });
+    }
+    plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
+    let large = plan.validate().unwrap();
+    assert_eq!(
+        observe_environment(&large).unwrap_err().code,
+        "execution_environment_limit"
+    );
+}
+
+#[test]
+fn environment_inspection_and_original_file_membership_never_renew_expired_cutoff() {
+    let fixture = Fixture::new();
+    let deadline = std::time::Instant::now() - Duration::from_secs(1);
+    assert_eq!(
+        observe_environment_until(&fixture.isolation, deadline)
+            .unwrap_err()
+            .code,
+        "managed_resource_limit"
+    );
+    assert_eq!(
+        fixture
+            .isolation
+            .revalidate_inspection_until(deadline)
+            .unwrap_err()
+            .code,
+        "managed_resource_limit"
+    );
+    let domain = fixture.isolation.plan.managed_execution.as_ref().unwrap();
+    let path = fixture.resource.join("input");
+    let digest = bytes_digest(b"original");
+    assert_eq!(
+        domain
+            .verify_resource_file_until(&fixture.resource, &path, &digest, 8, deadline)
+            .unwrap_err()
+            .code,
+        "managed_resource_limit"
+    );
+    domain
+        .verify_resource_file_until(
+            &fixture.resource,
+            &path,
+            &digest,
+            8,
+            std::time::Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+    assert!(
+        domain
+            .verify_resource_file_until(
+                &fixture.resource,
+                &path,
+                &bytes_digest(b"changed!"),
+                8,
+                std::time::Instant::now() + Duration::from_secs(5),
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn environment_inspection_does_not_scan_writable_descendants_or_qualify_their_launch() {
+    let fixture = Fixture::new();
+    let mut plan = fixture.isolation.plan.clone();
+    plan.source_writes.push(PathGrant {
+        path: plan.repository.clone(),
+        directory: true,
+    });
+    let isolation = plan.validate().unwrap();
+    let original = observe_environment(&isolation).unwrap();
+    let source = isolation.plan.repository.join("new-source");
+    fs::write(&source, b"mutable source").unwrap();
+    fs::hard_link(&source, isolation.plan.repository.join("linked-source")).unwrap();
+    // Description still refers only to the original boundary; inspecting it
+    // must not recursively walk newly created mutable source descendants.
+    assert_eq!(
+        observe_environment_until(
+            &isolation,
+            std::time::Instant::now() + Duration::from_secs(5)
+        )
+        .unwrap(),
+        original
+    );
+    assert_eq!(
+        original.native_prerequisite.unwrap().code,
+        "managed_profile_unqualified"
+    );
+    // The actual command path retains the existing full writable-tree guard.
+    assert_eq!(isolation.revalidate().unwrap_err().code, "scope_violation");
+    assert_eq!(
+        render_command(&isolation, &["anything".into()])
+            .err()
+            .unwrap()
+            .code,
+        "scope_violation"
+    );
+}

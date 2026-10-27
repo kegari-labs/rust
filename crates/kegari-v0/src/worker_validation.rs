@@ -303,6 +303,24 @@ impl ScopedWorker {
             },
         )
     }
+    pub(super) fn retain_resource_read(
+        &mut self,
+        call: &ToolCall,
+        id: Uuid,
+        value: &Value,
+        content: DiscoveryReadContent,
+    ) -> Result<()> {
+        if !matches!(
+            content,
+            DiscoveryReadContent::Resource { .. } | DiscoveryReadContent::Directory { .. }
+        ) {
+            return Err(Error::new(
+                "validation_read",
+                "resource callback supplied another content kind",
+            ));
+        }
+        self.retain_read(call, id, value, content)
+    }
     pub(super) fn retain_source_read(
         &mut self,
         call: &ToolCall,
@@ -554,6 +572,14 @@ impl ScopedWorker {
         let host = self.host.clone();
         let permit = self.permit.clone();
         let previous = self.validation.current.clone();
+        let resources = self.resources.clone();
+        // One cutoff for every new resource/environment reread in this proposal;
+        // neither the supporting-reference count nor retries extend the owner.
+        let resource_deadline = if references.iter().any(|reference| matches!(&reference.content,
+            DiscoveryReadContent::Resource{..}|DiscoveryReadContent::Directory{..})
+            || matches!(&reference.content, DiscoveryReadContent::Context{key,..} if key=="execution_environment")) {
+            Some(resources.deadline()?)
+        } else {None};
         self.validation.pending_enrollments.insert(id);
         let write_attempted = Arc::new(AtomicBool::new(false));
         let writing = write_attempted.clone();
@@ -561,9 +587,26 @@ impl ScopedWorker {
             let binding = effective.as_ref().map_or(&execution.binding, |effective| effective.binding());
             if expected.work() != Some(&binding.work) { return Err(Error::new("correction_execution_binding", "validation discovery requires the acknowledged current input")); }
             for reference in &references {
-                verify_read(&journal, &contract, reference, permit.operation_id, &contract.assembled.manifest_digest, &context_digest)?;
+                if let Some(deadline)=resource_deadline { resources.check_deadline(deadline)?; }
+                verify_read(&journal, &contract, reference, permit.operation_id, &contract.assembled.manifest_digest, &context_digest, resource_deadline)?;
+                if let Some(deadline)=resource_deadline {
+                    match &reference.content {
+                        DiscoveryReadContent::Resource{..}|DiscoveryReadContent::Directory{..}=>resources.verify(&contract,&reference.content,deadline)?,
+                        DiscoveryReadContent::Context{key,digest,..} if key=="execution_environment"
+                            && canonical_digest(1,&resources.environment(&contract,deadline)?)? != *digest => {
+                            return Err(Error::new("validation_read_changed","original execution environment changed"));
+                        }
+                        _=>{}
+                    }
+                }
             }
             let source = execution.executor(&contract.isolation).validation_source(binding, effective.as_ref())?;
+            if let Some(deadline)=resource_deadline {
+                for reference in &references {
+                    if matches!(&reference.content,DiscoveryReadContent::Resource{..}|DiscoveryReadContent::Directory{..}) {resources.verify(&contract,&reference.content,deadline)?;}
+                }
+                if std::time::Instant::now()>=deadline {return Err(Error::new("timeout","original discovery inspection cutoff exhausted"));}
+            }
             for reference in &references {
                 if let DiscoveryReadContent::Source { path, digest, .. } = &reference.content
                     && path.starts_with(&contract.isolation.plan().repository)
@@ -579,9 +622,12 @@ impl ScopedWorker {
                 tool_contract_digest:contract.tools.digest().into(), context_digest, source_digest:source.digest()?,
             };
             control.validate_permit_observed(&permit, |_| {
+                if let Some(deadline)=resource_deadline { resources.check_deadline(deadline)?; }
                 host.verify_owner(&permit.lease)?;
                 expected.compare(&effective_authority(host.as_ref(), permit.operation_id, &contract.authority)?)?;
+                if let Some(deadline)=resource_deadline { resources.check_deadline(deadline)?; }
                 let plan = ValidationPlan::enroll(enrollment, proposal, references, previous.as_ref())?;
+                if let Some(deadline)=resource_deadline { resources.check_deadline(deadline)?; }
                 writing.store(true, Ordering::SeqCst);
                 journal.append("validation_plan", &json!({"call_id":id,"plan_digest":plan.digest(),"record":plan.record()}))?;
                 Ok(plan)
@@ -603,6 +649,7 @@ fn verify_read(
     operation: Uuid,
     instruction: &str,
     input: &str,
+    inspection_deadline: Option<std::time::Instant>,
 ) -> Result<()> {
     reference.digest()?;
     if reference.operation_id != operation
@@ -662,7 +709,7 @@ fn verify_read(
             )?;
         }
         if repository.is_some() {
-            contract
+            let domain = contract
                 .isolation
                 .plan()
                 .managed_execution
@@ -672,8 +719,13 @@ fn verify_read(
                         "validation_read",
                         "additional source has no original immutable observation",
                     )
-                })?
-                .verify_resource_file(&root, path, digest, *bytes)?;
+                })?;
+            match inspection_deadline {
+                Some(deadline) => {
+                    domain.verify_resource_file_until(&root, path, digest, *bytes, deadline)?
+                }
+                None => domain.verify_resource_file(&root, path, digest, *bytes)?,
+            }
         }
         if observed.as_ref() != Some(&(path.clone(), digest.clone(), *bytes)) {
             return Err(Error::new(

@@ -1,4 +1,4 @@
-# Permitted validation and evidence preparation — version 5
+# Permitted validation and evidence preparation — version 6
 
 Validate the exact isolated candidate/repository tree vector, declared test
 resources and artifact identities supplied by the host. Do not validate a shared
@@ -10,8 +10,14 @@ pass or an execution grant. Record obligations and their revision; never drop
 failures or select an easier subset. Source changes, including test repairs,
 require the scoped child implementation path and repeated gates.
 
-For child-local and assigned integrated validation, use `source_read` and `context_read` to
-inspect the actual task, instructions, configuration and scripts. Read
+For child-local and assigned integrated validation, use `source_read` and
+`context_read` to inspect the actual task, instructions, configuration and scripts.
+The `execution_environment` context entry reports the actual environment and
+original resource handles. Inspect them with `resource_list` or `resource_read`,
+supplying the exact `handle` and relative `path`; `.` selects the resource root.
+Inspection does not execute probes, admit new paths or establish qualification.
+Do not treat a size, access or stale-observation refusal as an empty inventory.
+Read
 `context_read` with key `validation_evidence` to obtain the host's retained read
 references and current plan. Submit `validation_propose` with `previous` (the
 current plan digest, or null initially), a concrete `reason`, `supporting_reads`

@@ -1,4 +1,4 @@
-# Scoped child implementation, testing and documentation — version 3
+# Scoped child implementation, testing and documentation — version 4
 
 Read the complete child specification, parent intent, acceptance criteria,
 authorized write repository/paths, read/test resources, dependency results,
@@ -6,6 +6,16 @@ current corrections and prior actual results. Follow applicable repository
 instructions within their authority. Required inaccessible context is a blocker.
 Check that your responsibility and permitted boundary can fulfill the requested
 outcome before changing files.
+
+Read `context_read` with key `execution_environment` for the host's actual
+command environment, limitations and resource handles. Use `resource_list` and
+`resource_read` with a listed `handle` and relative `path` to inspect accessible
+files without executing code. `.` lists a directory resource's root or reads an
+exact-file resource. These tools do not add access to host installations or
+import the operator's environment. A missing tool or resource needs a precise
+capability/access diagnosis, not a new tool catalog. An empty listing describes
+its visible non-Git children; it does not establish an unborn Git baseline.
+A refused or incomplete inspection is not an empty result.
 
 Implementation children make only the product changes needed for their assigned
 outcome and relevant correctness. Testing children implement assigned tests only

@@ -1635,6 +1635,7 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
     } = task;
     let start = tokio::time::Instant::now();
     let deadline = start + Duration::from_secs(options.max_seconds);
+    broker.bind_inspection_deadline(deadline.into_std());
     let mut client = None;
     let mut core = Box::pin(async {
         hooks.before(&permit).await?;

@@ -172,7 +172,18 @@ impl BoundManagedResource {
 
     /// Membership in the original observation only. This does not observe
     /// current contents, grant access or replace full resource revalidation.
-    pub(super) fn verify_file(&self, path: &Path, digest: &str, bytes: u64) -> Result<()> {
+    #[cfg(test)]
+    fn verify_file(&self, path: &Path, digest: &str, bytes: u64) -> Result<()> {
+        self.verify_file_with_budget(path, digest, bytes, &ResourceBudget::new())
+    }
+    pub(super) fn verify_file_with_budget(
+        &self,
+        path: &Path,
+        digest: &str,
+        bytes: u64,
+        budget: &ResourceBudget,
+    ) -> Result<()> {
+        budget.check()?;
         let suffix = path.strip_prefix(&self.root).map_err(|_| changed())?;
         let name = if suffix.as_os_str().is_empty() {
             "."
@@ -185,18 +196,19 @@ impl BoundManagedResource {
             }
             suffix.to_str().ok_or_else(changed)?
         };
-        match self
-            .entries
-            .iter()
-            .find(|entry| entry.path == name)
-            .map(|entry| &entry.kind)
-        {
-            Some(EntryKind::File {
-                bytes: original_bytes,
-                digest: original_digest,
-            }) if *original_bytes == bytes && original_digest == digest => Ok(()),
-            _ => Err(changed()),
+        for entry in &self.entries {
+            budget.check()?;
+            if entry.path == name {
+                return match &entry.kind {
+                    EntryKind::File {
+                        bytes: original_bytes,
+                        digest: original_digest,
+                    } if *original_bytes == bytes && original_digest == digest => Ok(()),
+                    _ => Err(changed()),
+                };
+            }
         }
+        Err(changed())
     }
 
     pub(super) fn capture(input: &PathGrant, budget: &mut ResourceBudget) -> Result<Self> {
@@ -240,6 +252,7 @@ impl BoundManagedResource {
         }
         validate_entries(&self.root, input.directory, &self.entries, budget.deadline)?;
         for (entry, version) in self.entries.iter().zip(&self.versions) {
+            budget.check()?;
             let matches = match &entry.kind {
                 EntryKind::Directory => version.is(libc::S_IFDIR),
                 EntryKind::File { bytes, .. } => {
