@@ -806,6 +806,7 @@ pub struct ChildReviewAssignment {
     config_revision: String,
     workflow_digest: String,
     validation: Option<Box<evidence::ValidationEvidence>>,
+    validation_archive: Option<evidence::ValidationArchiveReference>,
 }
 impl ChildReviewAssignment {
     pub(super) fn matches_worker(&self, admission: &DeliveryAdmission) -> Result<()> {
@@ -866,6 +867,7 @@ impl DeliveryCoordinator {
             config_revision: admission.gate.config_revision().into(),
             workflow_digest: admission.gate.workflow_digest().into(),
             validation: None,
+            validation_archive: None,
         };
         let assignment =
             self.child_review_worker_assignment(admission, claim, source, completion, &review)?;
@@ -947,6 +949,7 @@ impl DeliveryCoordinator {
             config_revision: admission.gate.config_revision().into(),
             workflow_digest: admission.gate.workflow_digest().into(),
             validation: None,
+            validation_archive: None,
         })
     }
     /// Binds the exact original validation inventory before composing the
@@ -963,7 +966,29 @@ impl DeliveryCoordinator {
         let mut assignment = self.prepare_child_review(admission, claim, target, base_context)?;
         if let Some(validation) = &local.validation {
             validation.validate(&admission.scope.work, &admission.scope.revision)?;
-            assignment.validation = Some(validation.clone());
+            let mut resolved_archive = None;
+            if let Some(archive) = &local.validation_archive {
+                let resolved = crate::validation_archive::read(
+                    &self.records,
+                    &self.key,
+                    &crate::validation_archive::ValidationArchiveNamespace {
+                        workspace_id: admission.gate.workspace_id(),
+                        runtime_id: admission.scope.runtime_id,
+                    },
+                    archive.reference(),
+                )?;
+                if resolved.evidence().digest()? != validation.digest()? {
+                    return Err(Error::new(
+                        "validation_archive",
+                        "review input differs from original retained validation",
+                    ));
+                }
+                assignment.validation_archive = Some(resolved.reference().clone());
+                assignment.validation = Some(Box::new(resolved.evidence().clone()));
+                resolved_archive = Some(resolved);
+            } else {
+                assignment.validation = Some(validation.clone());
+            }
             let context = assignment
                 .context
                 .get_mut("delivery_review")
@@ -988,6 +1013,11 @@ impl DeliveryCoordinator {
                 "unresolved_findings":[],"supporting_links":[],"validation":{"evidence_digest":validation.digest()?,
                     "sufficient":false,"rationale":"assessment of the complete history and validation sufficiency",
                     "requirements":validation.current()?.requirements.iter().map(|r| (r.id.clone(), json!({"sufficient":false,"rationale":"assessment with actual evidence","evidence_digests":[]}))).collect::<BTreeMap<_,_>>()}}));
+            if let Some(archive) = &resolved_archive {
+                let artifacts =
+                    super::discovered_validation::review_artifacts(archive, &assignment.context)?;
+                assignment.context["delivery_review"]["validation_artifacts"] = artifacts;
+            }
             if serde_json::to_vec(&assignment.context)
                 .map_err(|_| Error::invalid("encode review context"))?
                 .len()
@@ -1119,7 +1149,9 @@ impl DeliveryCoordinator {
         let signed = self.key.sign(
             "codex_review",
             &evidence::ReviewAttestation {
-                schema_version: if assignment.validation.is_some() {
+                schema_version: if assignment.validation_archive.is_some() {
+                    3
+                } else if assignment.validation.is_some() {
                     2
                 } else {
                     1
@@ -1140,6 +1172,14 @@ impl DeliveryCoordinator {
                             Error::new("review_gate", "review lacks actual thread")
                         })?;
                     match (&assignment.validation, claim.validation) {
+                        (Some(_), Some(assessment)) if assignment.validation_archive.is_some() => {
+                            evidence::ReviewKind::AgentValidationArchive {
+                                session_id,
+                                instruction_manifest: worker.instruction_digest.clone(),
+                                archive: assignment.validation_archive.clone().expect("checked"),
+                                assessment,
+                            }
+                        }
                         (Some(validation), Some(assessment)) => {
                             evidence::ReviewKind::AgentValidation {
                                 session_id,
@@ -1509,6 +1549,7 @@ mod tests {
         let admission = DeliveryAdmission::bind(permit, gate.clone(), scope).unwrap();
         let assignment = ChildReviewAssignment {
             validation: None,
+            validation_archive: None,
             work: gate.work().clone(),
             revision,
             delta_digest: bytes_digest(b"actual fixture delta identity"),

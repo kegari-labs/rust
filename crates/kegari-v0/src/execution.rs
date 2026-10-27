@@ -833,6 +833,19 @@ impl FailedCheckExecution {
     ) -> Result<Vec<RetainedArtifact>> {
         VerifiedCheckExecution::retain_record_outputs(&self.record, boundary, directory)
     }
+    pub(crate) fn retain_outputs_into(
+        &self,
+        boundary: &ValidatedIsolation,
+        directory: &crate::storage::PrivateDir,
+        retain: impl FnMut(RetainedArtifact) -> Result<()>,
+    ) -> Result<()> {
+        VerifiedCheckExecution::retain_record_outputs_into(
+            &self.record,
+            boundary,
+            directory,
+            retain,
+        )
+    }
 }
 #[derive(Debug)]
 pub enum CheckCompletion {
@@ -840,12 +853,15 @@ pub enum CheckCompletion {
     Failed(FailedCheckExecution),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RetainedArtifact {
     original: ArtifactProof,
     retained_paths: Vec<PathBuf>,
 }
 impl RetainedArtifact {
+    pub(crate) fn matches_reference(&self, expected: &ArtifactProof) -> bool {
+        &self.original == expected
+    }
     pub(crate) fn verify_reference(&self, expected: &ArtifactProof) -> Result<()> {
         if &self.original != expected {
             return Err(Error::new(
@@ -853,9 +869,27 @@ impl RetainedArtifact {
                 "retained artifact identity differs from requested evidence",
             ));
         }
-        self.verify(expected.bytes)
+        self.read_verified(expected).map(|_| ())
+    }
+    pub(crate) fn read_verified(&self, expected: &ArtifactProof) -> Result<Vec<u8>> {
+        if &self.original != expected {
+            return Err(Error::new(
+                "artifact_conflict",
+                "retained artifact identity differs from requested evidence",
+            ));
+        }
+        self.read(expected.bytes)
+    }
+    pub(crate) fn inventory_digest(&self) -> Result<String> {
+        canonical_digest(1, &(&self.original, &self.retained_paths))
+    }
+    pub(crate) fn proof_digest(&self) -> Result<String> {
+        canonical_digest(1, &self.original)
     }
     fn verify(&self, maximum: u64) -> Result<()> {
+        self.read(maximum).map(|_| ())
+    }
+    fn read(&self, maximum: u64) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
         for path in &self.retained_paths {
             let chunk = file_bytes(path, 4 * 1024 * 1024)?;
@@ -874,7 +908,7 @@ impl RetainedArtifact {
                 "retained prior artifact does not reproduce its evidence digest",
             ));
         }
-        Ok(())
+        Ok(bytes)
     }
     pub fn retained_paths(&self) -> &[PathBuf] {
         &self.retained_paths
@@ -914,11 +948,32 @@ impl VerifiedCheckExecution {
     ) -> Result<Vec<RetainedArtifact>> {
         Self::retain_record_outputs(&self.record, boundary, directory)
     }
+    pub(crate) fn retain_outputs_into(
+        &self,
+        boundary: &ValidatedIsolation,
+        directory: &crate::storage::PrivateDir,
+        retain: impl FnMut(RetainedArtifact) -> Result<()>,
+    ) -> Result<()> {
+        Self::retain_record_outputs_into(&self.record, boundary, directory, retain)
+    }
     fn retain_record_outputs(
         record: &CheckExecutionRecord,
         boundary: &ValidatedIsolation,
         directory: &crate::storage::PrivateDir,
     ) -> Result<Vec<RetainedArtifact>> {
+        let mut retained = Vec::new();
+        Self::retain_record_outputs_into(record, boundary, directory, |proof| {
+            retained.push(proof);
+            Ok(())
+        })?;
+        Ok(retained)
+    }
+    fn retain_record_outputs_into(
+        record: &CheckExecutionRecord,
+        boundary: &ValidatedIsolation,
+        directory: &crate::storage::PrivateDir,
+        mut retain: impl FnMut(RetainedArtifact) -> Result<()>,
+    ) -> Result<()> {
         boundary.revalidate()?;
         let private = directory.path();
         if std::iter::once(&boundary.plan().repository)
@@ -931,7 +986,6 @@ impl VerifiedCheckExecution {
                 "retained evidence must be outside all worker-readable roots",
             ));
         }
-        let mut retained = Vec::new();
         for original in &record.artifacts {
             let bytes = file_bytes(&original.path, original.bytes)?;
             if bytes_digest(&bytes) != original.digest {
@@ -967,9 +1021,11 @@ impl VerifiedCheckExecution {
                 retained_paths,
             };
             proof.verify(original.bytes)?;
-            retained.push(proof);
+            // Hand each completed retention to the original owner before any
+            // later artifact or acknowledgement can fail.
+            retain(proof)?;
         }
-        Ok(retained)
+        Ok(())
     }
 }
 

@@ -75,3 +75,5 @@ pub mod host_process;
 pub(crate) mod test_process_probe;
 
 pub mod evaluation_provider;
+
+pub(crate) mod validation_archive;

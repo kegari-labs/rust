@@ -2161,6 +2161,7 @@ async fn changed_candidate_from(
     };
     let criteria = BTreeSet::from(["outcome".into()]);
     let evidence = ChildEvidence {
+        validation_selected: None,
         schema_version: 1,
         work: child_work.clone(),
         revision: child_revision.clone(),
@@ -2242,6 +2243,7 @@ async fn changed_candidate_from(
         publication: child_publication,
     };
     let mut manifest = ParentEvidence {
+        archived_integrated_validation: None,
         integrated_validation: None,
         schema_version: 1,
         work: f.admission.scope.work.clone(),

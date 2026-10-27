@@ -224,12 +224,13 @@ impl DeliveryCoordinator {
             .child_gates
             .get(&contract.e2e_child)
             .ok_or_else(|| Error::new("integrated_gate", "current E2E authority missing"))?;
-        let integrated = IntegratedEvidence {
-            signed: self.records.read(&format!(
+        let integrated = self.resolve_integrated_record(
+            self.records.read(&format!(
                 "parent-integrated-{}.json",
                 &signed.payload.integrated_digest[7..]
             ))?,
-        };
+            contract.gate.workspace_id(),
+        )?;
         if integrated.digest()? != signed.payload.integrated_digest {
             return Err(Error::new(
                 "integrated_gate",
@@ -237,9 +238,9 @@ impl DeliveryCoordinator {
             ));
         }
         self.reverify_integrated_record(contract, &vector, e2e.work(), &integrated)?;
+        integrated.matches_parent_projection(&signed.payload.evidence)?;
         if signed.payload.evidence.baselines != vector.baselines()
             || signed.payload.evidence.candidates != vector.candidates()
-            || signed.payload.evidence.integrated_results != integrated.runs()
         {
             return Err(Error::new(
                 "stale_result",

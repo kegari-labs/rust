@@ -56,7 +56,7 @@ they are not an installation or handover procedure. `__handover-info` validates
 the embedded instruction catalog before reporting its version and asset hashes.
 The runtime guidance, generic default workflow and optional starter are embedded
 in the executable, so they do not require a companion checkout. Instruction asset
-version `4` and persisted
+version `6` and persisted
 schema versions are independent of the application's prerelease version.
 
 `--version` reports the application version and source/profile build digest.
@@ -66,8 +66,14 @@ have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
 running coordinator. The rejected offline Cargo execution adapter has been removed.
-Generic execution and agent-led discovery now follow
-SPEC 1.4 and MILESTONES.md. The historical [alpha.8 resource binding](validation/MANAGED-RESOURCES.md)
+Generic execution and agent-led discovery now follow SPEC 1.4 and MILESTONES.md.
+Discovered child and integrated validation require independent adequacy review.
+Compact publications resolve complete private archives, including failed-attempt
+artifacts. Review receives the original history and bounded artifact contents;
+inputs exceeding the full 1 MiB prompt limit remain blocked until paging exists.
+See [the archive evidence](validation/LOCAL-VALIDATION-ARCHIVES.md) for exact local
+checks and retained limits. These records do not confer native qualification.
+The historical [alpha.8 resource binding](validation/MANAGED-RESOURCES.md)
 records bounded SDK/library observations and explicit mappings, with 1,117
 passing tests for that source. It does not establish SPEC 1.4 conformance.
 The [alpha.7 loader correction](validation/LOADER-BOOTSTRAP.md)

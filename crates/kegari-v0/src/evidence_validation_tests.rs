@@ -562,3 +562,216 @@ fn integrated_configuration_is_optional_but_selected_constraints_remain_exact() 
             .is_err()
     );
 }
+
+#[test]
+fn compact_review_resolves_large_complete_history_before_child_predicates() {
+    use crate::validation_archive::{self, tests::descriptive_fixture};
+    let temp = tempfile::tempdir().unwrap();
+    let records =
+        crate::storage::PrivateDir::create(&temp.path().canonicalize().unwrap().join("records"))
+            .unwrap();
+    let key = AttestationKey::new("compact-test".into(), vec![43; 32]).unwrap();
+    let (namespace, mut history, artifacts) = descriptive_fixture();
+    // Larger than both the former remote publication and local leaf bounds.
+    history.attempts[0].command.stdout = "retained failed output\n".repeat(16_000);
+    history.attempts[0]
+        .discovered
+        .as_mut()
+        .unwrap()
+        .output_bytes = 1024 * 1024;
+    assert!(serde_json::to_vec(&history).unwrap().len() > 256 * 1024);
+    let archive = validation_archive::retain(&records, &key, namespace, &history, |proof| {
+        Ok(artifacts[&canonical_digest(1, proof)?].clone())
+    })
+    .unwrap();
+    let current = history.current().unwrap();
+    let work = current.binding.work.clone();
+    let revision = RevisionBinding {
+        repository: current.binding.repository.clone(),
+        base: current.binding.revision.commit.clone(),
+        head: current.binding.revision.commit.clone(),
+        tested_commit: current.binding.revision.commit.clone(),
+        tested_tree: current.binding.revision.tree.clone(),
+    };
+    let criteria = BTreeSet::from(["behavior".into()]);
+    let reason = "descriptive no-change fixture";
+    let delta = no_change_digest(&work, &revision, &criteria, reason).unwrap();
+    let mut adequacy = assessment(&history);
+    adequacy
+        .requirements
+        .get_mut("behavior")
+        .unwrap()
+        .evidence_digests = history.selected_digests().unwrap();
+    let signed = key
+        .sign(
+            "codex_review",
+            &ReviewAttestation {
+                schema_version: 3,
+                runtime_id: current.binding.runtime_id,
+                owner_generation: 1,
+                operation_id: Uuid::from_u128(41),
+                work: work.clone(),
+                revision: revision.clone(),
+                pull_request: None,
+                delta_digest: delta.clone(),
+                verdict: Verdict::Pass,
+                unresolved_findings: vec![],
+                supporting_links: vec!["https://review.invalid/context".into()],
+                review: ReviewKind::AgentValidationArchive {
+                    session_id: "original review".into(),
+                    instruction_manifest: bytes_digest(b"instructions"),
+                    archive: archive.reference().clone(),
+                    assessment: adequacy,
+                },
+            },
+        )
+        .unwrap();
+    assert!(serde_json::to_vec(&signed).unwrap().len() < 60 * 1024);
+    let publication = Publication {
+        provider: "linear".into(),
+        record_id: "review".into(),
+        writer_account_id: "writer".into(),
+        payload_digest: canonical_digest(1, &signed).unwrap(),
+        observed_at: at(10),
+        url: "https://review.invalid/record".into(),
+    };
+    let requirements = || ReviewRequirements {
+        work: &work,
+        revision: &revision,
+        delta_digest: &delta,
+        writer: "writer",
+    };
+    assert_eq!(
+        verify_review(&signed, &publication, None, &key, requirements())
+            .unwrap_err()
+            .code,
+        "validation_archive"
+    );
+    let review = verify_review_resolved(
+        &signed,
+        &publication,
+        None,
+        &key,
+        requirements(),
+        Some(archive.clone()),
+    )
+    .unwrap();
+    assert_eq!(review.validation().unwrap(), &history);
+    assert!(!review.validation().unwrap().attempts[0].successful);
+    let local = history.runs(&revision).unwrap();
+    let mut hosted = local[0].clone();
+    hosted.id = "ci".into();
+    hosted.kind = CheckKind::HostedCi;
+    hosted.runner = Runner::GitHubHosted;
+    hosted.workflow_id = Some(1);
+    hosted.run_id = Some(1);
+    let child = ChildEvidence {
+        schema_version: 3,
+        validation_selected: Some(history.selected_digests().unwrap()),
+        work: work.clone(),
+        revision: revision.clone(),
+        fulfilled_criteria: criteria.clone(),
+        outcome: ChildOutcome::NoChange {
+            reason: reason.into(),
+            change_gates_inapplicable: BTreeSet::from([
+                "branch".into(),
+                "pull_request".into(),
+                "staging_merge".into(),
+            ]),
+            exact_sha_validation: "actual descriptive check".into(),
+        },
+        checks: CheckSnapshot {
+            pagination_complete: true,
+            observed_at: at(10),
+            runs: vec![hosted],
+        },
+        review_digest: review.digest.clone(),
+        results_for_dependents: local[0].artifacts.clone(),
+    };
+    let mut checks = history.requirements().unwrap();
+    checks.push(CheckRequirement {
+        id: "ci".into(),
+        kind: CheckKind::HostedCi,
+        workflow_id: Some(1),
+        command: vec![],
+    });
+    let contexts = BTreeSet::new();
+    let required = || ChildRequirements {
+        work: &work,
+        criteria: &criteria,
+        revision: &revision,
+        checks: &checks,
+        required_contexts: &contexts,
+    };
+    validate_child_candidate(&child, required(), &review, None).unwrap();
+    let mut changed = child.clone();
+    changed.validation_selected.as_mut().unwrap().clear();
+    assert!(validate_child_candidate(&changed, required(), &review, None).is_err());
+    let mut changed = child.clone();
+    changed.checks.runs.extend(local);
+    assert!(validate_child_candidate(&changed, required(), &review, None).is_err());
+    let mut changed = child;
+    changed.checks.runs.clear();
+    assert_eq!(
+        validate_child_candidate(&changed, required(), &review, None)
+            .unwrap_err()
+            .code,
+        "validation_gate"
+    );
+}
+
+#[test]
+fn compact_integrated_selection_resolves_original_records_and_rejects_substitution() {
+    use crate::validation_archive::{self, ValidationArchiveNamespace};
+    let temp = tempfile::tempdir().unwrap();
+    let records =
+        crate::storage::PrivateDir::create(&temp.path().canonicalize().unwrap().join("records"))
+            .unwrap();
+    let key = AttestationKey::new("integrated-compact".into(), vec![44; 32]).unwrap();
+    let (mut original, parent, vector, candidate, _) = integrated_description();
+    let bytes = b"descriptive fixture";
+    original.validation.attempts[0].artifacts[0].bytes = bytes.len() as u64;
+    original.review.assessment = assessment(&original.validation);
+    let archive = validation_archive::retain(
+        &records,
+        &key,
+        ValidationArchiveNamespace {
+            workspace_id: Uuid::from_u128(9),
+            runtime_id: original.validation.history[0].binding.runtime_id,
+        },
+        &original.validation,
+        |_| Ok(bytes.to_vec()),
+    )
+    .unwrap();
+    let compact = ArchivedIntegratedValidation {
+        archive: archive.reference().clone(),
+        selected: original.validation.selected_digests().unwrap(),
+        test_resources: BTreeSet::from(["test-db".into()]),
+        review: original.review.clone(),
+    };
+    let runs = compact.runs(&archive).unwrap();
+    assert_eq!(
+        runs[0].command,
+        original.validation.attempts[0].command.argv
+    );
+    assert_eq!(runs[0].test_resources, compact.test_resources);
+    assert_eq!(runs[0].artifacts[0].digest, bytes_digest(bytes));
+    let resolved = ReviewedIntegratedValidation {
+        validation: archive.evidence().clone(),
+        review: compact.review.clone(),
+    };
+    resolved
+        .verify(
+            &parent,
+            original.review.work.child.unwrap(),
+            &vector,
+            std::slice::from_ref(&candidate),
+        )
+        .unwrap();
+    let mut changed = compact.clone();
+    changed.selected[0] = bytes_digest(b"substituted record");
+    assert!(changed.runs(&archive).is_err());
+    let mut changed = compact;
+    changed.archive.evidence_digest = bytes_digest(b"substituted full history");
+    assert!(changed.runs(&archive).is_err());
+}

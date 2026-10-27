@@ -1245,7 +1245,7 @@ pub struct ScopedWorker {
     check_records: Vec<Value>,
     command_records: Vec<Value>,
     validation: validation::DiscoveryState,
-    retained: Vec<RetainedArtifact>,
+    retained: Arc<Mutex<Vec<RetainedArtifact>>>,
     effects: Vec<String>,
     evidence: Vec<String>,
 }
@@ -1335,7 +1335,7 @@ impl ScopedWorker {
             check_records: vec![],
             command_records: vec![],
             validation: validation::DiscoveryState::default(),
-            retained: vec![],
+            retained: Arc::new(Mutex::new(Vec::new())),
             effects: vec![],
             evidence: vec![],
         })
@@ -2142,7 +2142,17 @@ impl ScopedWorker {
         let control = self.control.clone();
         let host = self.host.clone();
         let permit = self.permit.clone();
-        let prior = self.retained.clone();
+        let prior = self
+            .retained
+            .lock()
+            .map_err(|_| {
+                Error::new(
+                    "artifact_conflict",
+                    "retained artifact inventory lock failed",
+                )
+            })?
+            .clone();
+        let retained_owner = self.retained.clone();
         let request = self.mutation(id, "worker_validation", call.arguments.clone());
         let handle = tokio::runtime::Handle::current();
         let executions = self.executions.clone();
@@ -2321,21 +2331,32 @@ impl ScopedWorker {
                 let completion = handle.block_on(executor.complete_check(running, persist))?;
                 (ValidationEffect::Single(Box::new(effect)), completion)
             };
-            let (value, verified, failed, retained) = match completion {
+            let retain = |artifact| {
+                let mut retained = retained_owner.lock().map_err(|_| {
+                    Error::new(
+                        "artifact_conflict",
+                        "retained artifact inventory lock failed",
+                    )
+                })?;
+                if !retained.contains(&artifact) {
+                    retained.push(artifact);
+                }
+                Ok(())
+            };
+            let (value, verified, failed) = match completion {
                 crate::execution::CheckCompletion::Passed(checked) => {
-                    let retained = checked.retain_outputs(&contract.isolation, &journal.dir)?;
+                    checked.retain_outputs_into(&contract.isolation, &journal.dir, retain)?;
                     let value = serde_json::to_value(checked.record())
                         .map_err(|_| Error::invalid("check receipt encoding"))?;
-                    (value, Some(checked), None, retained)
+                    (value, Some(checked), None)
                 }
                 crate::execution::CheckCompletion::Failed(failed) => {
-                    let retained = failed.retain_outputs(&contract.isolation, &journal.dir)?;
+                    failed.retain_outputs_into(&contract.isolation, &journal.dir, retain)?;
                     (
                         serde_json::to_value(failed.record())
                             .map_err(|_| Error::invalid("check receipt encoding"))?,
                         None,
                         Some(failed),
-                        retained,
                     )
                 }
             };
@@ -2371,7 +2392,7 @@ impl ScopedWorker {
                 )?;
             }
             executions.remove(permit.operation_id, id)?;
-            Ok::<_, Error>((receipt, verified, failed, retained))
+            Ok::<_, Error>((receipt, verified, failed))
         })
         .await
         .map_err(|_| Error::new("operation_uncertain", "validation dispatcher interrupted"))
@@ -2383,8 +2404,7 @@ impl ScopedWorker {
                 &task_result.as_ref().map(|_| ()).map_err(Clone::clone),
             );
         }
-        let (receipt, verified, failed, retained) = task_result?;
-        self.retained.extend(retained);
+        let (receipt, verified, failed) = task_result?;
         let record = receipt.observed_result.unwrap_or(Value::Null);
         if discovered {
             let actual = self.validation_attempt_record(id)?;
@@ -2721,6 +2741,13 @@ impl TrialHost for ScopedWorker {
             for artifact in record.artifacts {
                 if !self
                     .retained
+                    .lock()
+                    .map_err(|_| {
+                        Error::new(
+                            "artifact_conflict",
+                            "retained artifact inventory lock failed",
+                        )
+                    })?
                     .iter()
                     .any(|retained| retained.verify_reference(&artifact).is_ok())
                 {

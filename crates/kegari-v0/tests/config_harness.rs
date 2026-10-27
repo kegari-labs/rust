@@ -700,6 +700,56 @@ fn literal_workflow_cannot_omit_admitted_task_corrections_or_prior_results() {
     );
 }
 #[test]
+fn complete_read_only_review_history_must_fit_with_the_instruction_envelope() {
+    // This exercises production assembly, not archive authentication or an
+    // actual model review. A compact publication must not become a truncated
+    // reviewer prompt when the resolved history is too large.
+    let mut fixture = AssemblyFixture::new();
+    fixture.workflow =
+        Workflow::parse("Review the complete supplied evidence.", "/workflow").unwrap();
+    fixture.context["phase"] = json!("parent_integrated_review");
+    fixture.context["evidence"] = json!({
+        "attempts": [
+            {"result":"failed", "details":"earlier-failure-must-remain-visible"},
+            {"result":"passed", "details":"later-pass-does-not-erase-failure"}
+        ],
+        "history": "h".repeat(64 * 1024)
+    });
+    fn review_input(fixture: &AssemblyFixture) -> AssemblyInput<'_> {
+        let mut input = fixture.input();
+        input.role = AgentRole::Review;
+        input.phase = "parent_integrated_review";
+        input.permissions.source_write_paths.clear();
+        input.permissions.repository_code_execution = false;
+        input
+    }
+    let assembled = assemble(review_input(&fixture)).unwrap();
+    let structured = assembled
+        .prompt
+        .split("# Admitted work context (structured task data)\n\n")
+        .nth(1)
+        .unwrap()
+        .split("\n\n# Applicable repository-owned guidance")
+        .next()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(structured).unwrap(),
+        fixture.context
+    );
+    assert!(!assembled.manifest.permissions.repository_code_execution);
+    assert!(assembled.manifest.permissions.source_write_paths.is_empty());
+
+    fixture.context["evidence"]["history"] = json!("");
+    let envelope = serde_json::to_vec(&fixture.context).unwrap().len();
+    fixture.context["evidence"]["history"] = json!("h".repeat(MAX_CONTEXT_BYTES - envelope - 1));
+    assert!(serde_json::to_vec(&fixture.context).unwrap().len() < MAX_CONTEXT_BYTES);
+    assert_eq!(
+        assemble(review_input(&fixture)).unwrap_err().code,
+        "context_too_large",
+        "the entire prompt must fit; a digest or truncated history is no fallback"
+    );
+}
+#[test]
 fn scratch_cannot_overlap_repository_in_either_direction() {
     let fixture = AssemblyFixture::new();
     for scratch in [
@@ -898,6 +948,114 @@ fn escaped_secret_strings_do_not_evade_context_exclusion() {
     let mut input = fixture.input();
     input.known_secrets = &secrets;
     assert!(assemble(input).is_err());
+}
+fn review_artifact(bytes: &[u8], encoding: &str) -> Value {
+    use base64::Engine;
+    let proof = kegari_v0::execution::ArtifactProof {
+        path: PathBuf::from("/owned/scratch/original-artifact.bin"),
+        digest: bytes_digest(bytes),
+        bytes: bytes.len() as u64,
+        validation_operation: id(7),
+        candidate_vector_digest: None,
+    };
+    json!({"proof_digest":canonical_digest(1,&proof).unwrap(),"proof":proof,"encoding":encoding,
+        "data":if encoding == "utf8" { std::str::from_utf8(bytes).unwrap().to_owned() }
+            else { base64::engine::general_purpose::STANDARD.encode(bytes) }})
+}
+fn install_review_artifacts(fixture: &mut AssemblyFixture, artifacts: Value) {
+    fixture.workflow = Workflow::parse("Review the exact supplied history.", "/workflow").unwrap();
+    fixture.context["evidence"] = json!({"delivery_assignment":{"integrated_validation_review":{
+        "validation_artifacts":artifacts}}});
+}
+fn readonly_input(fixture: &AssemblyFixture) -> AssemblyInput<'_> {
+    let mut input = fixture.input();
+    input.role = AgentRole::Review;
+    input.permissions.source_write_paths.clear();
+    input.permissions.repository_code_execution = false;
+    input
+}
+#[test]
+fn review_artifact_decoding_preserves_binary_nul_and_refuses_known_secret_bytes() {
+    let secret = "only-original-decoded-secret".to_owned();
+    let secrets = vec![secret.clone()];
+    for (bytes, encoding) in [
+        (secret.as_bytes().to_vec(), "utf8"),
+        (
+            [vec![0xff, 0], secret.as_bytes().to_vec()].concat(),
+            "base64",
+        ),
+    ] {
+        let mut fixture = AssemblyFixture::new();
+        install_review_artifacts(&mut fixture, json!([review_artifact(&bytes, encoding)]));
+        let mut input = readonly_input(&fixture);
+        input.known_secrets = &secrets;
+        assert_eq!(assemble(input).unwrap_err().code, "access_denied");
+    }
+    let mut fixture = AssemblyFixture::new();
+    install_review_artifacts(
+        &mut fixture,
+        json!([review_artifact(&[0xff, 0, 1, 2], "base64")]),
+    );
+    let result = assemble(readonly_input(&fixture)).unwrap();
+    assert!(!result.prompt.contains('\0'));
+    assert!(!result.manifest.permissions.repository_code_execution);
+    let input = result
+        .prompt
+        .split("# Admitted work context (structured task data)\n\n")
+        .nth(1)
+        .unwrap()
+        .split("\n\n# Applicable repository-owned guidance")
+        .next()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(input).unwrap(),
+        fixture.context
+    );
+}
+#[test]
+fn review_artifact_identity_shape_encoding_and_aggregate_are_checked_before_assembly() {
+    let original = review_artifact(b"original", "base64");
+    for kind in 0..6 {
+        let mut fixture = AssemblyFixture::new();
+        let mut changed = original.clone();
+        match kind {
+            0 => changed["proof_digest"] = json!(canonical_digest(1, &"different").unwrap()),
+            1 => changed["data"] = json!("!!!!"),
+            2 => changed["encoding"] = json!("hex"),
+            3 => changed["qualified"] = json!(true),
+            4 => {
+                changed["proof"]["bytes"] = json!(original["proof"]["bytes"].as_u64().unwrap() + 1);
+                changed["proof_digest"] = json!(canonical_digest(1, &changed["proof"]).unwrap());
+            }
+            _ => changed["data"] = json!("ZGlmZmVyZW50"),
+        }
+        assert_ne!(
+            changed, original,
+            "negative case {kind} must alter the fixture"
+        );
+        install_review_artifacts(&mut fixture, json!([changed]));
+        assert_eq!(
+            assemble(readonly_input(&fixture)).unwrap_err().code,
+            "invalid_context"
+        );
+    }
+    let mut fixture = AssemblyFixture::new();
+    install_review_artifacts(
+        &mut fixture,
+        json!([
+            review_artifact(&vec![b'a'; 600_000], "utf8"),
+            review_artifact(&vec![b'b'; 600_000], "utf8")
+        ]),
+    );
+    assert_eq!(
+        assemble(readonly_input(&fixture)).unwrap_err().code,
+        "context_too_large"
+    );
+    install_review_artifacts(&mut fixture, json!([original.clone(), original]));
+    assert_eq!(
+        assemble(readonly_input(&fixture)).unwrap_err().code,
+        "invalid_context"
+    );
 }
 #[cfg(unix)]
 #[test]

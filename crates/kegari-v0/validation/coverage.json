@@ -2184,6 +2184,19 @@
           "limits": "Real coordinator/worker/Control components use explicitly injected command outcomes; signed-description fixtures cannot mint native capabilities. No native, actual-agent, provider or human qualification. Not an atomic filesystem snapshot. Discovered recovery, compact full-history/all-attempt artifact retention, environment admission, output paging and empty/unborn baselines remain open.",
           "class": "deterministic",
           "source_digest": "sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216"
+        },
+        {
+          "reference": "validation/LOCAL-VALIDATION-ARCHIVES.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Compact publications resolve complete history and all-attempt artifacts before adequacy predicates. Actual review input retains full projected history and bounded original artifact bodies, with decoded-byte secret checks.",
+          "tests": [
+            "src/evidence_validation_tests.rs::compact_review_resolves_large_complete_history_before_child_predicates",
+            "src/instructions.rs::validation_review_assembly_tests::complete_authenticated_history_uses_existing_public_projection_and_readonly_assembly"
+          ],
+          "limits": "Descriptive archive/predicate and actual worker/Control fixtures with injected command outcomes; no native, actual-agent, provider or human qualification. Full regression source4 retained one no-op test-fixture failure; only that test file changed in final source5 and all 39 cases in its target pass. Production inputs are unchanged. Review/output paging beyond 1 MiB, cold discovery recovery, environment admission and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:ca62d5ff3c175ce85b59ed2b87cade9f08652186bdf029e35f2dffbc70d15fb5"
         }
       ]
     },
@@ -2254,6 +2267,19 @@
           "limits": "Real coordinator/worker/Control components use explicitly injected command outcomes; signed-description fixtures cannot mint native capabilities. No native, actual-agent, provider or human qualification. Not an atomic filesystem snapshot. Discovered recovery, compact full-history/all-attempt artifact retention, environment admission, output paging and empty/unborn baselines remain open.",
           "class": "deterministic",
           "source_digest": "sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216"
+        },
+        {
+          "reference": "validation/LOCAL-VALIDATION-ARCHIVES.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Archive namespace, original/current binding, candidate vector and ordered full-history identities are authenticated; changed or substituted reference/chunk data cannot resolve.",
+          "tests": [
+            "src/validation_archive_tests.rs::namespace_key_reference_and_unknown_fields_cannot_substitute_owner",
+            "src/validation_archive_tests.rs::integrated_archive_binds_entire_vector_and_signed_manifest_to_full_history"
+          ],
+          "limits": "Descriptive archive/predicate and actual worker/Control fixtures with injected command outcomes; no native, actual-agent, provider or human qualification. Full regression source4 retained one no-op test-fixture failure; only that test file changed in final source5 and all 39 cases in its target pass. Production inputs are unchanged. Review/output paging beyond 1 MiB, cold discovery recovery, environment admission and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:ca62d5ff3c175ce85b59ed2b87cade9f08652186bdf029e35f2dffbc70d15fb5"
         }
       ]
     },
@@ -2306,6 +2332,20 @@
           "limits": "Real coordinator/worker/Control components use explicitly injected command outcomes; signed-description fixtures cannot mint native capabilities. No native, actual-agent, provider or human qualification. Not an atomic filesystem snapshot. Discovered recovery, compact full-history/all-attempt artifact retention, environment admission, output paging and empty/unborn baselines remain open.",
           "class": "deterministic",
           "source_digest": "sha256:969d688a092dfddf63a1cf40c605670aed6718c18ae167751aea8e6711cc9216"
+        },
+        {
+          "reference": "validation/LOCAL-VALIDATION-ARCHIVES.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Original worker seals preserve all retained output capabilities through later artifact/ACK failures. Delivery reads only original bytes, including failed/superseded attempts, without mutable scratch fallback.",
+          "tests": [
+            "src/worker_validation_tests.rs::retained_failed_and_superseded_output_bytes_survive_overwrite_and_scratch_removal",
+            "src/worker_validation_tests.rs::retained_artifacts_survive_ack_persistence_failure_with_sticky_history_error",
+            "src/worker_validation_tests.rs::retained_nonrepair_artifacts_require_original_bytes_not_current_scratch_fallback"
+          ],
+          "limits": "Descriptive archive/predicate and actual worker/Control fixtures with injected command outcomes; no native, actual-agent, provider or human qualification. Full regression source4 retained one no-op test-fixture failure; only that test file changed in final source5 and all 39 cases in its target pass. Production inputs are unchanged. Review/output paging beyond 1 MiB, cold discovery recovery, environment admission and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:ca62d5ff3c175ce85b59ed2b87cade9f08652186bdf029e35f2dffbc70d15fb5"
         }
       ]
     },
@@ -2516,8 +2556,22 @@
       "line": 511,
       "sha256": "59663e4e9e0bdf5e673953c7c8861642efe98b5e8c1e50c1f8953b515edbf4d8",
       "excerpt": "- Parent ID, authorization/definition/correction generation and complete required-child inventory, with each child's outcome and any justified no-change case.\n- Executive summary, ",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-VALIDATION-ARCHIVES.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Schema-3 parent/integrated projections require exact selected attempts, original complete archived history and separate adequacy. Historical origin capture includes the same authenticated artifact reads, including failed outputs.",
+          "tests": [
+            "src/evidence_validation_tests.rs::compact_integrated_selection_resolves_original_records_and_rejects_substitution",
+            "src/delivery_parent_run_origin_tests.rs::original_history_capture_includes_failed_archive_bytes_and_refuses_later_changes"
+          ],
+          "limits": "Descriptive archive/predicate and actual worker/Control fixtures with injected command outcomes; no native, actual-agent, provider or human qualification. Full regression source4 retained one no-op test-fixture failure; only that test file changed in final source5 and all 39 cases in its target pass. Production inputs are unchanged. Review/output paging beyond 1 MiB, cold discovery recovery, environment admission and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:ca62d5ff3c175ce85b59ed2b87cade9f08652186bdf029e35f2dffbc70d15fb5"
+        }
+      ]
     },
     {
       "id": "clause:8.5:e9640e89091b",
@@ -3738,8 +3792,22 @@
       "line": 760,
       "sha256": "0555afb3db445753134696ef0644199629fa80bdd6a8482b5c5a527624287073",
       "excerpt": "Default retention is preserve. Startup, terminal tracker states, claim release, force-stop, successful release and account removal MUST NOT automatically delete execution directori",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-VALIDATION-ARCHIVES.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Complete archived history and artifact bytes remain independently readable after original scratch paths disappear; missing/changed failed artifacts refuse instead of silently reducing history.",
+          "tests": [
+            "src/validation_archive_tests.rs::complete_history_and_failed_artifacts_roundtrip_without_scratch_paths",
+            "src/validation_archive_tests.rs::missing_failed_artifact_and_manifest_cannot_be_hidden_by_latest_success"
+          ],
+          "limits": "Descriptive archive/predicate and actual worker/Control fixtures with injected command outcomes; no native, actual-agent, provider or human qualification. Full regression source4 retained one no-op test-fixture failure; only that test file changed in final source5 and all 39 cases in its target pass. Production inputs are unchanged. Review/output paging beyond 1 MiB, cold discovery recovery, environment admission and empty/unborn baselines remain open.",
+          "class": "deterministic",
+          "source_digest": "sha256:ca62d5ff3c175ce85b59ed2b87cade9f08652186bdf029e35f2dffbc70d15fb5"
+        }
+      ]
     },
     {
       "id": "clause:11.5:2be1767bbb57",

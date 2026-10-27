@@ -905,3 +905,252 @@ async fn integrated_selected_constraints_use_integrated_table_and_keep_primary_c
         .is_err()
     );
 }
+
+// This helper moves actual worker-owned capabilities into the same descriptive
+// completion fields as worker_run. It does not assert a native or joined run.
+fn take_artifact_completion(f: &mut Fixture) -> crate::worker_run::RunCompletion {
+    let validation_history = Some(f.worker.seal_validation_history());
+    let validation_error = f.worker.validation_history_error();
+    crate::worker_run::RunCompletion {
+        operation_id: f.permit.operation_id,
+        state: f.state.clone(),
+        outcome: crate::worker_run::RunOutcome::Completed,
+        error: None,
+        elapsed_ms: 0,
+        hook_error: None,
+        checks: f.worker.take_verified_checks(),
+        failed_checks: f.worker.take_failed_checks(),
+        validation_plan: f.worker.take_validation_plan(),
+        validation_attempts: f.worker.take_validation_attempts(),
+        validation_artifacts: f.worker.take_validation_artifacts(),
+        validation_error,
+        validation_history,
+        execution: f.execution.clone(),
+        contract: Some(f.contract.clone()),
+        local_exit_confirmed: false,
+    }
+}
+async fn enroll_artifact(f: &mut Fixture, missing: bool) -> String {
+    let reference = read(f, "source_read", json!({"path":"a.txt"})).await;
+    let mut obligation = requirement("behavior");
+    let mut artifacts = vec![f.input.isolation.plan().scratch.join("check.json")];
+    if missing {
+        artifacts.push(f.input.isolation.plan().scratch.join("absent.json"));
+    }
+    obligation["artifacts"] = json!(artifacts);
+    let proposed = proposal(f, &[reference], None, vec![obligation]);
+    f.worker.call(&proposed).await.unwrap()["plan_digest"]
+        .as_str()
+        .unwrap()
+        .into()
+}
+
+#[tokio::test]
+async fn retained_failed_and_superseded_output_bytes_survive_overwrite_and_scratch_removal() {
+    let mut f = Fixture::without_checks(AgentRole::Implementation);
+    let plan = enroll_artifact(&mut f, false).await;
+    f.boundary.fail.store(true, Ordering::SeqCst);
+    run(&mut f, &plan, "behavior").await.unwrap();
+    let path = f.input.isolation.plan().scratch.join("check.json");
+    let failed_bytes = std::fs::read(&path).unwrap();
+    let reference = read(&mut f, "context_read", json!({"key":"issue"})).await;
+    let mut obligation = requirement("behavior");
+    obligation["artifacts"] = json!([path]);
+    let revised = proposal(&f, &[reference], Some(&plan), vec![obligation]);
+    let current = f.worker.call(&revised).await.unwrap()["plan_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    f.boundary.fail.store(false, Ordering::SeqCst);
+    run(&mut f, &current, "behavior").await.unwrap();
+    let passed_bytes = std::fs::read(&path).unwrap();
+    assert_ne!(failed_bytes, passed_bytes);
+    let mut completion = take_artifact_completion(&mut f);
+    assert_eq!(
+        completion.validation_plan.as_ref().unwrap().history().len(),
+        2
+    );
+    assert_eq!(completion.validation_attempts.len(), 2);
+    let failed = completion
+        .validation_attempts
+        .iter()
+        .find(|a| !a.successful)
+        .unwrap();
+    let failed_proof = failed
+        .artifacts
+        .iter()
+        .find(|a| a.path == path)
+        .unwrap()
+        .clone();
+    let passed = completion
+        .validation_attempts
+        .iter()
+        .find(|a| a.successful)
+        .unwrap();
+    let passed_proof = passed
+        .artifacts
+        .iter()
+        .find(|a| a.path == path)
+        .unwrap()
+        .clone();
+    std::fs::remove_dir_all(f.input.isolation.plan().scratch.clone()).unwrap();
+    assert_eq!(
+        completion
+            .validation_artifact_reader()
+            .unwrap()
+            .read(&failed_proof)
+            .unwrap(),
+        failed_bytes
+    );
+    assert_eq!(
+        completion
+            .validation_artifact_reader()
+            .unwrap()
+            .read(&passed_proof)
+            .unwrap(),
+        passed_bytes
+    );
+    assert_eq!(
+        completion.checks[0].production_evidence().unwrap_err().code,
+        "unqualified_fixture"
+    );
+    let actual = completion.validation_artifacts.pop().unwrap();
+    assert_eq!(
+        completion.validation_artifact_reader().err().unwrap().code,
+        "validation_history_binding"
+    );
+    completion.validation_artifacts.push(actual);
+    let mut foreign = failed_proof.clone();
+    foreign.validation_operation = Uuid::new_v4();
+    assert_eq!(
+        completion
+            .validation_artifact_reader()
+            .unwrap()
+            .read(&foreign)
+            .unwrap_err()
+            .code,
+        "artifact_conflict"
+    );
+    completion.validation_attempts.retain(|a| a.successful);
+    assert_eq!(
+        completion.validation_artifact_reader().err().unwrap().code,
+        "validation_history_binding"
+    );
+}
+
+#[tokio::test]
+async fn retained_nonrepair_artifacts_require_original_bytes_not_current_scratch_fallback() {
+    let mut f = Fixture::without_checks(AgentRole::Implementation);
+    let plan = enroll_artifact(&mut f, true).await;
+    assert_eq!(
+        run(&mut f, &plan, "behavior").await.unwrap()["successful"],
+        false
+    );
+    let completion = take_artifact_completion(&mut f);
+    let record = &completion.validation_attempts[0];
+    assert_eq!(record.command.exit_code, Some(0));
+    assert!(!record.successful); // Missing artifact cannot become a repair trigger.
+    let proof = record
+        .artifacts
+        .iter()
+        .find(|a| a.path.ends_with("check.json"))
+        .unwrap();
+    let expected = std::fs::read(&proof.path).unwrap();
+    assert_eq!(
+        completion
+            .validation_artifact_reader()
+            .unwrap()
+            .read(proof)
+            .unwrap(),
+        expected
+    );
+    let retained = completion
+        .validation_artifacts
+        .iter()
+        .find(|a| a.matches_reference(proof))
+        .unwrap();
+    let chunk = &retained.retained_paths()[0];
+    std::fs::write(chunk, b"different retained bytes").unwrap();
+    assert_eq!(
+        completion
+            .validation_artifact_reader()
+            .unwrap()
+            .read(proof)
+            .unwrap_err()
+            .code,
+        "artifact_conflict"
+    );
+    std::fs::remove_file(chunk).unwrap();
+    assert!(
+        completion
+            .validation_artifact_reader()
+            .unwrap()
+            .read(proof)
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(&proof.path).unwrap(),
+        expected,
+        "intact scratch is not a fallback capability"
+    );
+}
+
+#[tokio::test]
+async fn retained_artifacts_survive_ack_persistence_failure_with_sticky_history_error() {
+    let mut f = Fixture::without_checks(AgentRole::Implementation);
+    let plan = enroll_artifact(&mut f, false).await;
+    let first = *f.worker.journal.next.lock().unwrap();
+    run(&mut f, &plan, "behavior").await.unwrap();
+    // Use the actual preceding identical invocation's chunk sequence to locate
+    // the ACK, and assert the second invocation reaches this exact boundary.
+    let ack_leaf = events(&f)
+        .into_iter()
+        .find(|(_, e)| e["kind"] == "validation_attempt_ack")
+        .unwrap()
+        .0;
+    let ack_index: u64 = ack_leaf
+        .strip_prefix("event-")
+        .unwrap()
+        .strip_suffix(".json")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let offset = ack_index - first;
+    let next = *f.worker.journal.next.lock().unwrap();
+    std::fs::create_dir(
+        f.worker
+            .journal
+            .dir
+            .path()
+            .join(format!("event-{:08}.json", next + offset)),
+    )
+    .unwrap();
+    assert!(run(&mut f, &plan, "behavior").await.is_err());
+    assert!(f.worker.validation_history_error().is_some());
+    assert_eq!(*f.worker.journal.next.lock().unwrap(), next + offset);
+    assert_eq!(validation_receipts(&f).len(), 2);
+    assert!(
+        validation_receipts(&f)
+            .iter()
+            .all(|r| r.phase == ReceiptPhase::Acknowledged)
+    );
+    let completion = take_artifact_completion(&mut f);
+    assert_eq!(completion.validation_attempts.len(), 2);
+    assert!(completion.validation_error.is_some());
+    for proof in completion
+        .validation_attempts
+        .iter()
+        .flat_map(|a| &a.artifacts)
+    {
+        assert_eq!(
+            bytes_digest(
+                &completion
+                    .validation_artifact_reader()
+                    .unwrap()
+                    .read(proof)
+                    .unwrap()
+            ),
+            proof.digest
+        );
+    }
+}

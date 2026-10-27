@@ -684,6 +684,7 @@ fn completed_validation(
         checks: vec![],
         failed_checks: vec![],
         validation_plan: None,
+        validation_artifacts: vec![],
         validation_attempts: vec![],
         validation_error: None,
         validation_history: None,

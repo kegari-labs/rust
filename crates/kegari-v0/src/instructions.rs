@@ -322,6 +322,7 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
         ));
     }
     reject_secret_fields(input.context)?;
+    validate_review_artifact_bytes(input.context, input.known_secrets)?;
     check_context_strings(input.context, input.known_secrets)?;
     let serialized_context = serde_json::to_string(input.context)
         .map_err(|_| Error::invalid("cannot encode instruction context"))?;
@@ -704,6 +705,105 @@ fn check_text(text: &str, secrets: &[String]) -> Result<()> {
     }
     Ok(())
 }
+// These are the two host-created reviewer input fields, after assignment
+// binding. Encoded project artifacts are data, never an execution capability.
+// Do not decode arbitrary user strings or relax the ordinary credential guard.
+fn validate_review_artifact_bytes(context: &Value, secrets: &[String]) -> Result<()> {
+    use base64::Engine;
+    use std::borrow::Cow;
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct InlineArtifact<'a> {
+        #[serde(borrow)]
+        proof_digest: &'a str,
+        proof: crate::execution::ArtifactProof,
+        #[serde(borrow)]
+        encoding: &'a str,
+        #[serde(borrow)]
+        data: &'a str,
+    }
+    let invalid = || {
+        Error::new(
+            "invalid_context",
+            "host review artifact encoding or identity differs",
+        )
+    };
+    let limit = || {
+        Error::new(
+            "context_too_large",
+            "decoded review artifacts exceed the shared input bound",
+        )
+    };
+    let mut encoded = 0usize;
+    let mut decoded = 0usize;
+    let mut seen = BTreeSet::new();
+    for pointer in [
+        "/evidence/delivery_assignment/delivery_review/validation_artifacts",
+        "/evidence/delivery_assignment/integrated_validation_review/validation_artifacts",
+    ] {
+        let Some(value) = context.pointer(pointer) else {
+            continue;
+        };
+        let entries = value.as_array().ok_or_else(invalid)?;
+        if entries.len() > 4096 {
+            return Err(limit());
+        }
+        for value in entries {
+            let entry = InlineArtifact::deserialize(value).map_err(|_| invalid())?;
+            encoded = encoded
+                .checked_add(entry.data.len())
+                .filter(|total| *total <= MAX_CONTEXT_BYTES)
+                .ok_or_else(limit)?;
+            if entry.proof.bytes > MAX_CONTEXT_BYTES.saturating_sub(decoded) as u64 {
+                return Err(limit());
+            }
+            if entry.proof.validation_operation.is_nil()
+                || !entry.proof.path.is_absolute()
+                || canonical_digest(1, &entry.proof)? != entry.proof_digest
+                || !seen.insert(entry.proof_digest)
+            {
+                return Err(invalid());
+            }
+            if let Some(vector) = &entry.proof.candidate_vector_digest {
+                crate::evidence::validate_digest(vector).map_err(|_| invalid())?;
+            }
+            // Both declared and encoded lengths are bounded before allocation.
+            // Binary NUL is allowed only inside the explicit base64 value.
+            let bytes: Cow<'_, [u8]> = match entry.encoding {
+                "utf8" if !entry.data.contains('\0') => Cow::Borrowed(entry.data.as_bytes()),
+                "base64" => Cow::Owned(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(entry.data)
+                        .map_err(|_| invalid())?,
+                ),
+                _ => return Err(invalid()),
+            };
+            if bytes.len() as u64 != entry.proof.bytes || bytes_digest(&bytes) != entry.proof.digest
+            {
+                return Err(invalid());
+            }
+            decoded = decoded
+                .checked_add(bytes.len())
+                .filter(|total| *total <= MAX_CONTEXT_BYTES)
+                .ok_or_else(limit)?;
+            if secrets
+                .iter()
+                .filter(|secret| !secret.is_empty())
+                .any(|secret| {
+                    bytes
+                        .windows(secret.len())
+                        .any(|part| part == secret.as_bytes())
+                })
+            {
+                return Err(Error::new(
+                    "access_denied",
+                    "decoded review artifact contains a protected value; no prompt was assembled",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 fn reject_secret_fields(value: &Value) -> Result<()> {
     match value {
         Value::Object(map) => {
@@ -848,4 +948,126 @@ fn check_context_strings(value: &Value, secrets: &[String]) -> Result<()> {
         _ => (),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod validation_review_assembly_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn complete_authenticated_history_uses_existing_public_projection_and_readonly_assembly() {
+        // Production protected archive I/O, original public context projection,
+        // and instruction assembly. Descriptive data creates no worker/exec cap.
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let repository = base.join("repository");
+        let scratch = base.join("scratch");
+        let auth = base.join("auth");
+        for path in [&repository, &scratch, &auth] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let records = crate::storage::PrivateDir::create(&base.join("records")).unwrap();
+        let key =
+            crate::evidence::AttestationKey::new("assembly-fixture".into(), vec![9; 32]).unwrap();
+        let (namespace, evidence, artifacts) =
+            crate::validation_archive::tests::descriptive_fixture();
+        let archive = crate::validation_archive::retain(
+            &records,
+            &key,
+            namespace.clone(),
+            &evidence,
+            |proof| Ok(artifacts[&canonical_digest(1, proof)?].clone()),
+        )
+        .unwrap();
+        let bodies: Vec<_> = archive.evidence().attempts.iter().flat_map(|attempt| &attempt.artifacts)
+            .map(|proof| json!({"proof_digest":canonical_digest(1,proof).unwrap(),"proof":proof,"encoding":"utf8",
+                "data":String::from_utf8(archive.read_artifact(proof).unwrap()).unwrap()})).collect();
+        let original = json!({"delivery_review":{"validation":archive.evidence(),"validation_artifacts":bodies}});
+        let public = crate::delivery::public_model_context(&original).unwrap();
+        assert!(original.pointer("/delivery_review/validation/history/0/original_binding/work/generation/authorization").is_some());
+        assert!(public.pointer("/delivery_review/validation/history/0/original_binding/work/generation/authorization").is_none());
+        assert_eq!(public.pointer("/delivery_review/validation/history/0/original_binding/work/generation/authorization_digest"),
+            original.pointer("/delivery_review/validation/history/0/original_binding/work/generation/authorization"));
+        let profile = Profile {
+            tool: "codex".into(),
+            model: "fixture-model".into(),
+            reasoning: "high".into(),
+            speed: crate::config::Speed::Standard,
+        };
+        let operation = Uuid::new_v4();
+        let context = json!({"issue":{"description":"Assess every actual attempt"},"parent":{},"children":[],
+            "workspace":{"id":namespace.workspace_id},"scope":{},"dependencies":[],"corrections":[],
+            "evidence":{"delivery_assignment":public},"attempt":1,"phase":"child_review","profile":profile,"operation":{"id":operation}});
+        let workflow = Workflow::parse(
+            "Review the complete supplied history.",
+            base.join("WORKFLOW.md"),
+        )
+        .unwrap();
+        let input = |context| AssemblyInput {
+            workflow: &workflow,
+            role: AgentRole::Review,
+            phase: "child_review",
+            context,
+            workspace_id: namespace.workspace_id,
+            operation_id: operation,
+            work_generation: "work",
+            correction_revision: "correction",
+            profile: &profile,
+            cwd: &repository,
+            codex_home: &auth,
+            codex_version: SUPPORTED_CODEX_VERSION,
+            repository: Some(RepositoryContext {
+                root: repository.clone(),
+                revision: "a".repeat(40),
+                scope_paths: vec![".".into()],
+            }),
+            required_context: &[],
+            project_doc_max_bytes: 32768,
+            permissions: PermissionManifest {
+                read_roots: vec![repository.clone()],
+                resource_write_paths: vec![],
+                source_write_paths: vec![],
+                scratch_roots: vec![scratch.clone()],
+                repository_code_execution: false,
+                enforcement_profile: "fixture-readonly".into(),
+                network: WorkerNetwork::BrokerOnly,
+            },
+            tools: vec![ExposedTool {
+                name: "outcome_submit".into(),
+                capability: ToolCapability::OutcomeSubmit,
+            }],
+            provider_discovery: ProviderDiscovery::Unavailable {
+                reason: "no native model observation in component test".into(),
+            },
+            known_secrets: &[],
+        };
+        let assembled = assemble(input(&context)).unwrap();
+        let structured = assembled
+            .prompt
+            .split("# Admitted work context (structured task data)\n\n")
+            .nth(1)
+            .unwrap()
+            .split("\n\n# Applicable repository-owned guidance")
+            .next()
+            .unwrap();
+        assert_eq!(serde_json::from_str::<Value>(structured).unwrap(), context);
+        assert_eq!(
+            context
+                .pointer("/evidence/delivery_assignment/delivery_review/validation/attempts")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(!assembled.manifest.permissions.repository_code_execution);
+        assert!(assembled.manifest.permissions.source_write_paths.is_empty());
+        let mut credential_context = context.clone();
+        credential_context["issue"]["authorization"] = json!("Bearer credential-shaped-value");
+        assert_eq!(
+            assemble(input(&credential_context)).unwrap_err().code,
+            "access_denied"
+        );
+    }
 }

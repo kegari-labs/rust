@@ -564,6 +564,7 @@ impl DeliveryCoordinator {
             workflow_digest: workflow.digest.clone(),
             checks,
             validation: None,
+            validation_archive: None,
         })
     }
 }
@@ -710,6 +711,7 @@ pub struct LocalPassed {
     workflow_digest: String,
     checks: Vec<CheckRun>,
     validation: Option<Box<evidence::ValidationEvidence>>,
+    validation_archive: Option<crate::validation_archive::ResolvedValidationArchive>,
 }
 impl LocalPassed {
     pub fn checks(&self) -> &[CheckRun] {
@@ -1756,6 +1758,28 @@ impl DeliveryCoordinator {
                 "signed review does not belong to current admitted phase",
             ));
         }
+        if matches!(a.schema_version, 2 | 3) {
+            discovered_validation::publication_bounds("codex_review", signed)?;
+        }
+        // Resolve the original archive before any publication effect. A signed
+        // reference alone is not sufficient when local retained history is gone.
+        if let Some(reference) = a.review.archive_reference() {
+            let archive = crate::validation_archive::read(
+                &self.records,
+                &self.key,
+                &crate::validation_archive::ValidationArchiveNamespace {
+                    workspace_id: admission.gate.workspace_id(),
+                    runtime_id: admission.scope.runtime_id,
+                },
+                reference,
+            )?;
+            archive.evidence().validate(&a.work, &a.revision)?;
+            if let evidence::ReviewKind::AgentValidationArchive { assessment, .. } = &a.review {
+                archive
+                    .evidence()
+                    .verify_assessment(assessment, a.verdict == evidence::Verdict::Pass)?;
+            }
+        }
         let contract = self.contract(admission)?;
         let (publication, status) = if let Some(pr) = a.pull_request {
             let receipt = self
@@ -1880,11 +1904,11 @@ impl DeliveryCoordinator {
         if let Some(check) = &extra {
             check(admission.fresh_gate())?;
         }
-        let verified = evidence::verify_review(
+        let verified = self.verify_review_archive(
             signed,
             &publication,
             status.as_ref(),
-            &self.key,
+            admission.gate.workspace_id(),
             evidence::ReviewRequirements {
                 work: &admission.scope.work,
                 revision: &admission.scope.revision,
@@ -2026,11 +2050,11 @@ impl DeliveryCoordinator {
                 ));
             }
         }
-        evidence::verify_review(
+        self.verify_review_archive(
             &reviewed.signed,
             &publication,
             reviewed.status.as_ref(),
-            &self.key,
+            admission.gate.workspace_id(),
             evidence::ReviewRequirements {
                 work: &admission.scope.work,
                 revision: &admission.scope.revision,
@@ -2390,6 +2414,12 @@ impl DeliveryCoordinator {
         });
         let child = evidence::ChildEvidence {
             schema_version: completion.local.child_schema(),
+            validation_selected: completion
+                .local
+                .validation_archive
+                .as_ref()
+                .map(|archive| archive.evidence().selected_digests())
+                .transpose()?,
             work: admission.scope.work.clone(),
             revision: admission.scope.revision.clone(),
             fulfilled_criteria: completion.criteria.clone(),
@@ -2400,7 +2430,14 @@ impl DeliveryCoordinator {
             checks: CheckSnapshot {
                 pagination_complete: true,
                 observed_at: self.operation_time(admission, "child-result")?,
-                runs: checks,
+                runs: if completion.local.validation_archive.is_some() {
+                    checks
+                        .into_iter()
+                        .filter(|r| r.kind != CheckKind::Local)
+                        .collect()
+                } else {
+                    checks
+                },
             },
             review_digest: completion.review.verified.digest().into(),
             results_for_dependents: results,
@@ -2435,7 +2472,7 @@ impl DeliveryCoordinator {
             Error::new("scope_violation", "only a child may publish a child result")
         })?;
         self.validate_child_draft(admission, workflow, criteria, &signed)?;
-        if signed.payload.schema_version == 2 {
+        if matches!(signed.payload.schema_version, 2 | 3) {
             discovered_validation::publication_bounds("child_result", &signed)?;
         }
         let receipt = self
@@ -2483,14 +2520,7 @@ impl DeliveryCoordinator {
     )> {
         self.key.verify("child_result", signed)?;
         let r = &signed.payload;
-        let expected_schema = if matches!(
-            r.review.payload.review,
-            evidence::ReviewKind::AgentValidation { .. }
-        ) {
-            2
-        } else {
-            1
-        };
+        let expected_schema = r.review.payload.review.schema();
         if r.schema_version != expected_schema
             || r.evidence.schema_version != expected_schema
             || r.runtime_id != admission.scope.runtime_id
@@ -2504,11 +2534,11 @@ impl DeliveryCoordinator {
                 "child publication has stale configuration or runtime identity",
             ));
         }
-        let review = evidence::verify_review(
+        let review = self.verify_review_archive(
             &r.review,
             &r.review_publication,
             r.review_status.as_ref(),
-            &self.key,
+            admission.gate.workspace_id(),
             evidence::ReviewRequirements {
                 work: &admission.scope.work,
                 revision: &admission.scope.revision,
@@ -2550,18 +2580,17 @@ impl DeliveryCoordinator {
                 ));
             }
         }
-        let mut required = match &review.attestation().review {
-            evidence::ReviewKind::AgentValidation { validation, .. } => {
-                if validation.current()?.workflow_digest != workflow.digest {
-                    return Err(Error::new(
-                        "stale_result",
-                        "discovered validation workflow changed",
-                    ));
-                }
-                validation.verify_configured(&contract.configuration.local_checks, workflow)?;
-                validation.requirements()?
+        let mut required = if let Some(validation) = review.validation() {
+            if validation.current()?.workflow_digest != workflow.digest {
+                return Err(Error::new(
+                    "stale_result",
+                    "discovered validation workflow changed",
+                ));
             }
-            _ => local_requirements(contract, workflow)?,
+            validation.verify_configured(&contract.configuration.local_checks, workflow)?;
+            validation.requirements()?
+        } else {
+            local_requirements(contract, workflow)?
         };
         if matches!(r.evidence.outcome, evidence::ChildOutcome::NoChange { .. }) {
             required.extend(exact_requirements(contract)?);
@@ -3047,6 +3076,12 @@ impl DeliveryCoordinator {
             .collect();
         let child = evidence::ChildEvidence {
             schema_version: completion.local.child_schema(),
+            validation_selected: completion
+                .local
+                .validation_archive
+                .as_ref()
+                .map(|archive| archive.evidence().selected_digests())
+                .transpose()?,
             work: admission.scope.work.clone(),
             revision: admission.scope.revision.clone(),
             fulfilled_criteria: completion.criteria.clone(),
@@ -3062,7 +3097,14 @@ impl DeliveryCoordinator {
             checks: CheckSnapshot {
                 pagination_complete: true,
                 observed_at: self.operation_time(admission, "child-result")?,
-                runs: checks,
+                runs: if completion.local.validation_archive.is_some() {
+                    checks
+                        .into_iter()
+                        .filter(|r| r.kind != CheckKind::Local)
+                        .collect()
+                } else {
+                    checks
+                },
             },
             review_digest: completion.review.verified.digest().into(),
             results_for_dependents: results,

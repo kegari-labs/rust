@@ -339,6 +339,12 @@ pub enum ReviewKind {
         validation: Box<ValidationEvidence>,
         assessment: ValidationAssessment,
     },
+    AgentValidationArchive {
+        session_id: String,
+        instruction_manifest: String,
+        archive: ValidationArchiveReference,
+        assessment: ValidationAssessment,
+    },
     Derived {
         source_attestations: Vec<String>,
         selected_patches: Vec<String>,
@@ -346,11 +352,29 @@ pub enum ReviewKind {
     },
 }
 
+impl ReviewKind {
+    pub(crate) fn archive_reference(&self) -> Option<&ValidationArchiveReference> {
+        match self {
+            Self::AgentValidationArchive { archive, .. } => Some(archive),
+            _ => None,
+        }
+    }
+    pub(crate) fn schema(&self) -> u32 {
+        match self {
+            Self::AgentValidationArchive { .. } => 3,
+            Self::AgentValidation { .. } => 2,
+            _ => 1,
+        }
+    }
+}
+use crate::validation_archive::ResolvedValidationArchive;
+pub use crate::validation_archive::ValidationArchiveReference;
+
 #[path = "evidence_validation.rs"]
-mod validation;
+pub(crate) mod validation;
 pub use validation::{
-    IntegratedAdequacyReview, ReviewedIntegratedValidation, ValidationAssessment,
-    ValidationEvidence, ValidationRequirementAssessment,
+    ArchivedIntegratedValidation, IntegratedAdequacyReview, ReviewedIntegratedValidation,
+    ValidationAssessment, ValidationEvidence, ValidationRequirementAssessment,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -385,9 +409,26 @@ pub struct ReviewStatus {
 pub struct VerifiedReview {
     attestation: ReviewAttestation,
     digest: String,
+    validation_archive: Option<ResolvedValidationArchive>,
 }
 
 impl VerifiedReview {
+    pub(crate) fn validation(&self) -> Option<&ValidationEvidence> {
+        match &self.attestation.review {
+            ReviewKind::AgentValidation { validation, .. } => Some(validation),
+            ReviewKind::AgentValidationArchive { .. } => {
+                self.validation_archive.as_ref().map(|a| a.evidence())
+            }
+            _ => None,
+        }
+    }
+    pub(crate) fn assessment(&self) -> Option<&ValidationAssessment> {
+        match &self.attestation.review {
+            ReviewKind::AgentValidation { assessment, .. }
+            | ReviewKind::AgentValidationArchive { assessment, .. } => Some(assessment),
+            _ => None,
+        }
+    }
     pub fn attestation(&self) -> &ReviewAttestation {
         &self.attestation
     }
@@ -412,6 +453,16 @@ pub fn verify_review(
     key: &AttestationKey,
     requirements: ReviewRequirements<'_>,
 ) -> Result<VerifiedReview> {
+    verify_review_resolved(signed, publication, status, key, requirements, None)
+}
+pub(crate) fn verify_review_resolved(
+    signed: &Signed<ReviewAttestation>,
+    publication: &Publication,
+    status: Option<&ReviewStatus>,
+    key: &AttestationKey,
+    requirements: ReviewRequirements<'_>,
+    validation_archive: Option<ResolvedValidationArchive>,
+) -> Result<VerifiedReview> {
     let ReviewRequirements {
         work: expected_work,
         revision: expected_revision,
@@ -423,12 +474,7 @@ pub fn verify_review(
     a.work.validate()?;
     a.revision.validate()?;
     validate_digest(&a.delta_digest)?;
-    if a.schema_version
-        != if matches!(a.review, ReviewKind::AgentValidation { .. }) {
-            2
-        } else {
-            1
-        }
+    if a.schema_version != a.review.schema()
         || a.runtime_id.is_nil()
         || a.operation_id.is_nil()
         || a.owner_generation == 0
@@ -472,6 +518,28 @@ pub fn verify_review(
             validate_digest(instruction_manifest)?;
             validation.validate(&a.work, &a.revision)?;
             validation.verify_assessment(assessment, true)?;
+        }
+        ReviewKind::AgentValidationArchive {
+            session_id,
+            instruction_manifest,
+            archive,
+            assessment,
+        } => {
+            let resolved = validation_archive.as_ref().ok_or_else(|| {
+                Error::new(
+                    "validation_archive",
+                    "compact review requires its complete authenticated archive",
+                )
+            })?;
+            if resolved.reference() != archive || session_id.is_empty() || a.work.child.is_none() {
+                return Err(Error::new(
+                    "validation_archive",
+                    "compact review archive or original session differs",
+                ));
+            }
+            validate_digest(instruction_manifest)?;
+            resolved.evidence().validate(&a.work, &a.revision)?;
+            resolved.evidence().verify_assessment(assessment, true)?;
         }
         ReviewKind::Derived {
             source_attestations,
@@ -523,7 +591,14 @@ pub fn verify_review(
             "no-change review must be published to its child without a fictional PR status",
         ));
     }
+    if a.review.archive_reference().is_none() && validation_archive.is_some() {
+        return Err(Error::new(
+            "validation_archive",
+            "unexpected archive for inline review",
+        ));
+    }
     Ok(VerifiedReview {
+        validation_archive,
         attestation: a.clone(),
         digest: signed.digest()?,
     })
@@ -796,6 +871,8 @@ pub enum ChildOutcome {
 #[serde(deny_unknown_fields)]
 pub struct ChildEvidence {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_selected: Option<Vec<String>>,
     pub work: WorkIdentity,
     pub revision: RevisionBinding,
     pub fulfilled_criteria: BTreeSet<String>,
@@ -910,15 +987,8 @@ fn validate_child_candidate_inner(
 ) -> Result<()> {
     evidence.work.validate()?;
     evidence.revision.validate()?;
-    if evidence.schema_version
-        != if matches!(
-            review.attestation.review,
-            ReviewKind::AgentValidation { .. }
-        ) {
-            2
-        } else {
-            1
-        }
+    if evidence.schema_version != review.attestation.review.schema()
+        || (evidence.schema_version == 3) != evidence.validation_selected.is_some()
         || evidence.work.child.is_none()
         || &evidence.work != requirements.work
         || &evidence.revision != requirements.revision
@@ -937,35 +1007,52 @@ fn validate_child_candidate_inner(
     for reference in &evidence.results_for_dependents {
         reference.validate()?;
     }
-    if let ReviewKind::AgentValidation {
-        validation,
-        assessment,
-        ..
-    } = &review.attestation.review
-    {
+    let mut complete_checks = evidence.checks.clone();
+    if let (Some(validation), Some(assessment)) = (review.validation(), review.assessment()) {
         validation.validate(&evidence.work, &evidence.revision)?;
         validation.verify_assessment(assessment, true)?;
-        let actual: Vec<_> = evidence
-            .checks
-            .runs
-            .iter()
-            .filter(|r| r.kind == CheckKind::Local)
-            .cloned()
-            .collect();
-        if canonical_digest(1, &actual)?
-            != canonical_digest(1, &validation.runs(&evidence.revision)?)?
-            || canonical_digest(
-                1,
-                &requirements
-                    .checks
-                    .iter()
-                    .filter(|r| r.kind == CheckKind::Local)
-                    .collect::<Vec<_>>(),
-            )? != canonical_digest(1, &validation.requirements()?)?
+        let expected_runs = validation.runs(&evidence.revision)?;
+        if evidence.schema_version == 3 {
+            if evidence
+                .checks
+                .runs
+                .iter()
+                .any(|r| r.kind == CheckKind::Local)
+                || evidence.validation_selected.as_ref() != Some(&validation.selected_digests()?)
+            {
+                return Err(Error::new(
+                    "validation_adequacy",
+                    "compact child selected references differ from complete reviewed history",
+                ));
+            }
+            complete_checks.runs = expected_runs;
+            complete_checks.runs.extend(evidence.checks.runs.clone());
+        } else {
+            let actual = evidence
+                .checks
+                .runs
+                .iter()
+                .filter(|r| r.kind == CheckKind::Local)
+                .collect::<Vec<_>>();
+            if canonical_digest(1, &actual)? != canonical_digest(1, &expected_runs)? {
+                return Err(Error::new(
+                    "validation_adequacy",
+                    "published local evidence differs from reviewed obligations",
+                ));
+            }
+        }
+        if canonical_digest(
+            1,
+            &requirements
+                .checks
+                .iter()
+                .filter(|r| r.kind == CheckKind::Local)
+                .collect::<Vec<_>>(),
+        )? != canonical_digest(1, &validation.requirements()?)?
         {
             return Err(Error::new(
                 "validation_adequacy",
-                "published local evidence differs from independently reviewed obligations",
+                "required local obligations differ from reviewed complete history",
             ));
         }
     }
@@ -986,7 +1073,7 @@ fn validate_child_candidate_inner(
         requirements.checks,
         &evidence.work,
         &evidence.revision,
-        &evidence.checks,
+        &complete_checks,
     )?;
     match &evidence.outcome {
         ChildOutcome::Changed {
@@ -1071,7 +1158,9 @@ fn validate_child_candidate_inner(
                 || delta.review_digest()? != review.attestation.delta_digest
                 || !matches!(
                     review.attestation.review,
-                    ReviewKind::Agent { .. } | ReviewKind::AgentValidation { .. }
+                    ReviewKind::Agent { .. }
+                        | ReviewKind::AgentValidation { .. }
+                        | ReviewKind::AgentValidationArchive { .. }
                 )
                 || staged.work != evidence.work
                 || staged.fulfilled_criteria != evidence.fulfilled_criteria
@@ -1119,7 +1208,9 @@ fn validate_child_candidate_inner(
                     )?
                 || !matches!(
                     review.attestation.review,
-                    ReviewKind::Agent { .. } | ReviewKind::AgentValidation { .. }
+                    ReviewKind::Agent { .. }
+                        | ReviewKind::AgentValidation { .. }
+                        | ReviewKind::AgentValidationArchive { .. }
                 )
             {
                 return Err(Error::new(
@@ -1332,6 +1423,8 @@ pub struct ParentEvidence {
     pub integrated_results: Vec<IntegratedRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrated_validation: Option<Box<ReviewedIntegratedValidation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_integrated_validation: Option<Box<ArchivedIntegratedValidation>>,
     pub visual: bool,
     pub video: Option<VideoEvidence>,
     pub publication_operation: Uuid,
@@ -1392,9 +1485,64 @@ pub fn verify_parent(
     publication: &Publication,
     linear_writer: &str,
 ) -> Result<VerifiedParent> {
+    verify_parent_resolved(
+        evidence,
+        requirements,
+        children,
+        publication,
+        linear_writer,
+        None,
+    )
+}
+pub(crate) fn verify_parent_resolved(
+    evidence: &ParentEvidence,
+    requirements: ParentRequirements<'_>,
+    children: &[VerifiedChild],
+    publication: &Publication,
+    linear_writer: &str,
+    archive: Option<&ResolvedValidationArchive>,
+) -> Result<VerifiedParent> {
     evidence.work.validate()?;
+    let archived_review;
+    let archived_runs;
+    let reviewed = if let Some(compact) = &evidence.archived_integrated_validation {
+        let resolved = archive.ok_or_else(|| {
+            Error::new(
+                "validation_archive",
+                "compact parent requires complete authenticated archive",
+            )
+        })?;
+        if evidence.integrated_validation.is_some() || !evidence.integrated_results.is_empty() {
+            return Err(Error::new(
+                "validation_archive",
+                "compact parent mixes inline validation evidence",
+            ));
+        }
+        compact.verify_reference(resolved)?;
+        archived_review = ReviewedIntegratedValidation {
+            validation: resolved.evidence().clone(),
+            review: compact.review.clone(),
+        };
+        Some(&archived_review)
+    } else {
+        if archive.is_some() {
+            return Err(Error::new(
+                "validation_archive",
+                "unexpected parent archive",
+            ));
+        }
+        evidence.integrated_validation.as_deref()
+    };
+    let integrated_runs = if let Some(compact) = &evidence.archived_integrated_validation {
+        archived_runs = compact.runs(archive.expect("resolved above"))?;
+        &archived_runs
+    } else {
+        &evidence.integrated_results
+    };
     if evidence.schema_version
-        != if evidence.integrated_validation.is_some() {
+        != if evidence.archived_integrated_validation.is_some() {
+            3
+        } else if evidence.integrated_validation.is_some() {
             2
         } else {
             1
@@ -1608,7 +1756,7 @@ pub fn verify_parent(
     validate_digest(&evidence.dependency_snapshot_digest)?;
     let vector = evidence.candidate_vector_digest()?;
     let discovered_commands;
-    let commands = if let Some(reviewed) = &evidence.integrated_validation {
+    let commands = if let Some(reviewed) = reviewed {
         reviewed.verify(
             requirements.work,
             requirements.e2e_child,
@@ -1640,7 +1788,7 @@ pub fn verify_parent(
         ));
     }
     let mut integrated_ids = BTreeSet::new();
-    for run in &evidence.integrated_results {
+    for run in integrated_runs {
         if !integrated_ids.insert(&run.id) {
             return Err(Error::new(
                 "integrated_gate",
@@ -1648,15 +1796,14 @@ pub fn verify_parent(
             ));
         }
     }
-    if evidence.integrated_validation.is_some() && integrated_ids != commands.keys().collect() {
+    if reviewed.is_some() && integrated_ids != commands.keys().collect() {
         return Err(Error::new(
             "integrated_gate",
             "integrated result inventory differs from reviewed obligations",
         ));
     }
     for (id, command) in commands {
-        let run = evidence
-            .integrated_results
+        let run = integrated_runs
             .iter()
             .find(|r| &r.id == id)
             .ok_or_else(|| {
@@ -1682,7 +1829,7 @@ pub fn verify_parent(
                 "integrated validation is failed, unperformed or belongs to another candidate/resource set",
             ));
         }
-        if let Some(reviewed) = &evidence.integrated_validation {
+        if let Some(reviewed) = reviewed {
             let selected = reviewed
                 .validation
                 .selected()?
@@ -1738,8 +1885,7 @@ pub fn verify_parent(
             || video.parent_association_id.is_empty()
             || video.associated_parent != evidence.work.parent
             || !video.playback_verified
-            || !evidence
-                .integrated_results
+            || !integrated_runs
                 .iter()
                 .any(|r| r.operation_id == video.validation_operation)
         {
@@ -2684,7 +2830,9 @@ pub fn derive_review(
                     && r.attestation.unresolved_findings.is_empty()
                     && matches!(
                         r.attestation.review,
-                        ReviewKind::Agent { .. } | ReviewKind::AgentValidation { .. }
+                        ReviewKind::Agent { .. }
+                            | ReviewKind::AgentValidation { .. }
+                            | ReviewKind::AgentValidationArchive { .. }
                     )
             })
             .collect();

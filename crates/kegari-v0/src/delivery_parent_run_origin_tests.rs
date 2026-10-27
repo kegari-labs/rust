@@ -7,6 +7,82 @@ fn storage() -> (tempfile::TempDir, PrivateDir) {
 }
 
 #[test]
+fn original_history_capture_includes_failed_archive_bytes_and_refuses_later_changes() {
+    // Actual protected archive I/O through the production origin collector;
+    // the descriptive fixture creates no parent/worker/readiness capability.
+    let (_temp, records) = storage();
+    let key = AttestationKey::new("archive-origin-fixture".into(), vec![7; 32]).unwrap();
+    let (namespace, evidence, artifacts) = crate::validation_archive::tests::descriptive_fixture();
+    let archive =
+        crate::validation_archive::retain(&records, &key, namespace.clone(), &evidence, |proof| {
+            Ok(artifacts[&canonical_digest(1, proof)?].clone())
+        })
+        .unwrap();
+    let failed = &evidence
+        .attempts
+        .iter()
+        .find(|a| !a.successful)
+        .unwrap()
+        .artifacts[0];
+    let failed_bytes = &artifacts[&canonical_digest(1, failed).unwrap()];
+    let failed_leaf = archive
+        .retained_files()
+        .iter()
+        .find(|(_, digest)| **digest == bytes_digest(failed_bytes))
+        .unwrap()
+        .0;
+    let mut files = BTreeMap::new();
+    retain_validation_archive(
+        &records,
+        &key,
+        namespace.workspace_id,
+        namespace.runtime_id,
+        archive.reference(),
+        &mut files,
+    )
+    .unwrap();
+    assert_eq!(&files, archive.retained_files());
+    let before = files.clone();
+    records
+        .write_bytes(failed_leaf, b"changed failed output")
+        .unwrap();
+    assert!(
+        retain_validation_archive(
+            &records,
+            &key,
+            namespace.workspace_id,
+            namespace.runtime_id,
+            archive.reference(),
+            &mut files,
+        )
+        .is_err()
+    );
+    assert_eq!(
+        files, before,
+        "failed capture must not replace original hashes"
+    );
+
+    records.write_bytes(failed_leaf, failed_bytes).unwrap();
+    files.insert(
+        failed_leaf.clone(),
+        bytes_digest(b"different original capture"),
+    );
+    let conflict = files.clone();
+    assert!(
+        retain_validation_archive(
+            &records,
+            &key,
+            namespace.workspace_id,
+            namespace.runtime_id,
+            archive.reference(),
+            &mut files,
+        )
+        .is_err()
+    );
+    assert_eq!(files, conflict);
+}
+
+#[test]
 fn original_digest_refuses_chunk_mutation_before_first_history_capture() {
     // Actual protected file I/O and the production byte collector only. No
     // parent origin, joined worker, signed seal or cold capability is created.

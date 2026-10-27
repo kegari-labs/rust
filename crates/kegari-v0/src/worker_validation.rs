@@ -15,10 +15,15 @@ pub struct ValidationHistorySeal {
     plan: Option<String>,
     attempts: Option<String>,
     error: Option<String>,
+    artifacts: Option<String>,
 }
 impl ValidationHistorySeal {
     pub(crate) fn digest(&self) -> Result<String> {
-        if self.plan.is_none() || self.attempts.is_none() || self.error.is_none() {
+        if self.plan.is_none()
+            || self.attempts.is_none()
+            || self.error.is_none()
+            || self.artifacts.is_none()
+        {
             return Err(Error::new(
                 "validation_history_binding",
                 "original validation history cannot be sealed",
@@ -26,8 +31,8 @@ impl ValidationHistorySeal {
         }
         canonical_digest(
             1,
-            &json!({"schema_version":1,"operation":self.operation,
-            "plan":self.plan,"attempts":self.attempts,"error":self.error}),
+            &json!({"schema_version":2,"operation":self.operation,
+            "plan":self.plan,"attempts":self.attempts,"error":self.error,"artifacts":self.artifacts}),
         )
     }
 
@@ -53,6 +58,25 @@ impl ValidationHistorySeal {
         }
         Ok(())
     }
+    pub(crate) fn verify_artifacts(&self, artifacts: &[RetainedArtifact]) -> Result<()> {
+        let expected = artifact_inventory_digest(artifacts)?;
+        if self.artifacts.as_deref() != Some(expected.as_str()) {
+            return Err(Error::new(
+                "validation_history_binding",
+                "retained artifact inventory differs from its original worker seal",
+            ));
+        }
+        Ok(())
+    }
+}
+fn artifact_inventory_digest(artifacts: &[RetainedArtifact]) -> Result<String> {
+    canonical_digest(
+        1,
+        &artifacts
+            .iter()
+            .map(RetainedArtifact::inventory_digest)
+            .collect::<Result<Vec<_>>>()?,
+    )
 }
 fn plan_inventory_digest(plan: Option<&ValidationPlan>) -> Result<String> {
     canonical_digest(
@@ -397,17 +421,29 @@ impl ScopedWorker {
                 canonical_digest(1, &records.values().collect::<Vec<_>>()).ok()
             }),
             error: canonical_digest(1, &error).ok(),
+            artifacts: self
+                .retained
+                .lock()
+                .ok()
+                .and_then(|artifacts| artifact_inventory_digest(&artifacts).ok()),
         }
     }
     pub(crate) fn take_validation_plan(&mut self) -> Option<ValidationPlan> {
         self.validation.current.take()
+    }
+    pub(crate) fn take_validation_artifacts(&mut self) -> Vec<RetainedArtifact> {
+        self.retained
+            .lock()
+            .map(|mut artifacts| std::mem::take(&mut *artifacts))
+            .unwrap_or_default()
     }
     pub(crate) fn validation_history_error(&self) -> Option<Error> {
         self.validation.failure.clone().or_else(|| {
             (!self.validation.pending_attempts.is_empty()
                 || !self.validation.pending_plans.is_empty()
                 || !self.validation.pending_enrollments.is_empty()
-                || self.validation.attempts.is_poisoned())
+                || self.validation.attempts.is_poisoned()
+                || self.retained.is_poisoned())
             .then(|| {
                 Error::new(
                     "validation_history_uncertain",

@@ -370,23 +370,48 @@ pub(crate) struct IntegratedRecord {
     validation: Option<Box<evidence::ValidationEvidence>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     review: Option<evidence::IntegratedAdequacyReview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    archive: Option<evidence::ValidationArchiveReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    selected: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    test_resources: BTreeSet<String>,
 }
 #[derive(Clone, Debug)]
 pub struct IntegratedEvidence {
     signed: Signed<IntegratedRecord>,
+    archive: Option<crate::validation_archive::ResolvedValidationArchive>,
+    derived_runs: Vec<IntegratedRun>,
 }
 impl IntegratedEvidence {
     pub(crate) fn has_discovered_validation(&self) -> bool {
-        self.signed.payload.validation.is_some()
+        self.signed.payload.validation.is_some() || self.signed.payload.archive.is_some()
     }
     fn reviewed_validation(&self) -> Option<evidence::ReviewedIntegratedValidation> {
         Some(evidence::ReviewedIntegratedValidation {
-            validation: self.signed.payload.validation.as_deref()?.clone(),
+            validation: self
+                .archive
+                .as_ref()
+                .map(|a| a.evidence())
+                .or(self.signed.payload.validation.as_deref())?
+                .clone(),
+            review: self.signed.payload.review.clone()?,
+        })
+    }
+    fn archived_review(&self) -> Option<evidence::ArchivedIntegratedValidation> {
+        Some(evidence::ArchivedIntegratedValidation {
+            archive: self.signed.payload.archive.clone()?,
+            selected: self.signed.payload.selected.clone(),
+            test_resources: self.signed.payload.test_resources.clone(),
             review: self.signed.payload.review.clone()?,
         })
     }
     pub fn runs(&self) -> &[IntegratedRun] {
-        &self.signed.payload.runs
+        if self.signed.payload.archive.is_some() {
+            &self.derived_runs
+        } else {
+            &self.signed.payload.runs
+        }
     }
     pub fn digest(&self) -> Result<String> {
         canonical_digest(1, &self.signed)
@@ -443,6 +468,8 @@ impl DeliveryCoordinator {
             ));
         }
         Ok(IntegratedEvidence {
+            archive: None,
+            derived_runs: vec![],
             signed: self
                 .retain_integrated_execution(contract, e2e_gate, vector, observer, executions, None)
                 .await?,
@@ -456,7 +483,7 @@ impl DeliveryCoordinator {
         vector: &ParentCandidateVector,
         observer: &ProductionObserver,
         executions: &[&VerifiedCheckExecution],
-        validation: Option<Box<evidence::ValidationEvidence>>,
+        archive: Option<&crate::validation_archive::ResolvedValidationArchive>,
     ) -> Result<Signed<IntegratedRecord>> {
         (self.current_gate)(e2e_gate)?;
         if e2e_gate.work().parent != contract.work().parent
@@ -474,8 +501,9 @@ impl DeliveryCoordinator {
         }
         self.reobserve_parent_vector(contract, observer, vector)
             .await?;
-        let commands = match &validation {
-            Some(evidence) => evidence
+        let commands = match archive {
+            Some(archive) => archive
+                .evidence()
                 .current()?
                 .requirements
                 .iter()
@@ -484,7 +512,7 @@ impl DeliveryCoordinator {
             None => contract.integrated_commands.clone(),
         };
         let mut record = IntegratedRecord {
-            schema_version: if validation.is_some() { 2 } else { 1 },
+            schema_version: if archive.is_some() { 3 } else { 1 },
             runtime_id: vector.signed.payload.runtime_id,
             contract_digest: contract.digest()?,
             vector_digest: vector.digest.clone(),
@@ -492,7 +520,19 @@ impl DeliveryCoordinator {
             records: vec![],
             outputs: vec![],
             runs: vec![],
-            validation,
+            selected: archive
+                .map(|a| a.evidence().selected_digests())
+                .transpose()?
+                .unwrap_or_default(),
+            test_resources: if archive.is_some() {
+                contract.test_resources.clone()
+            } else {
+                BTreeSet::new()
+            },
+            archive: archive.map(|a| a.reference().clone()),
+            // Schema 2 remains a historical reader format; new discovered
+            // records refer to the complete authenticated archive only.
+            validation: None,
             review: None,
         };
         let mut names = BTreeSet::new();
@@ -542,6 +582,18 @@ impl DeliveryCoordinator {
                         "integrated output identity is duplicate or differs from its command",
                     ));
                 }
+                if let Some(archive) = archive {
+                    archive.read_artifact(artifact)?;
+                    artifacts.push(ArtifactReference {
+                        reference: format!(
+                            "retained-validation:{}:{}",
+                            archive.reference().manifest_digest,
+                            artifact.digest
+                        ),
+                        digest: artifact.digest.clone(),
+                    });
+                    continue;
+                }
                 let bytes = actual_artifact(artifact)?;
                 let mut chunks = Vec::new();
                 for (index, chunk) in bytes.chunks(4 * 1024 * 1024).enumerate() {
@@ -570,26 +622,28 @@ impl DeliveryCoordinator {
                     chunks,
                 });
             }
-            record.runs.push(IntegratedRun {
-                id: check.check_name.clone(),
-                operation_id: check.binding.operation_id,
-                e2e_child: contract.e2e_child,
-                candidate_vector_digest: vector.digest.clone(),
-                command: check.command.argv.clone(),
-                test_resources: contract.test_resources.clone(),
-                started_at: check.started_at,
-                completed_at: check.completed_at,
-                conclusion: Conclusion::Success,
-                after_staging_integration: true,
-                artifacts,
-            });
-            record.records.push(
-                serde_json::from_value(
-                    serde_json::to_value(check)
-                        .map_err(|_| Error::invalid("encode check evidence"))?,
-                )
-                .map_err(|_| Error::invalid("retain check evidence"))?,
-            );
+            if archive.is_none() {
+                record.runs.push(IntegratedRun {
+                    id: check.check_name.clone(),
+                    operation_id: check.binding.operation_id,
+                    e2e_child: contract.e2e_child,
+                    candidate_vector_digest: vector.digest.clone(),
+                    command: check.command.argv.clone(),
+                    test_resources: contract.test_resources.clone(),
+                    started_at: check.started_at,
+                    completed_at: check.completed_at,
+                    conclusion: Conclusion::Success,
+                    after_staging_integration: true,
+                    artifacts,
+                });
+                record.records.push(
+                    serde_json::from_value(
+                        serde_json::to_value(check)
+                            .map_err(|_| Error::invalid("encode check evidence"))?,
+                    )
+                    .map_err(|_| Error::invalid("retain check evidence"))?,
+                );
+            }
         }
         if names != commands.keys().cloned().collect() {
             return Err(Error::new(
@@ -625,45 +679,96 @@ impl DeliveryCoordinator {
         self.key
             .verify("parent_integrated_execution", &integrated.signed)?;
         let record = &integrated.signed.payload;
-        if record.schema_version != if record.validation.is_some() { 2 } else { 1 }
-            || (record.validation.is_some() != record.review.is_some())
+        let resolved;
+        let validation = if let Some(reference) = &record.archive {
+            if record.schema_version != 3
+                || record.validation.is_some()
+                || !record.records.is_empty()
+                || !record.outputs.is_empty()
+                || !record.runs.is_empty()
+                || record.test_resources != contract.test_resources
+            {
+                return Err(Error::new(
+                    "validation_archive",
+                    "compact integrated schema mixes inline records or resource sets",
+                ));
+            }
+            resolved = crate::validation_archive::read(
+                &self.records,
+                &self.key,
+                &crate::validation_archive::ValidationArchiveNamespace {
+                    workspace_id: contract.gate.workspace_id(),
+                    runtime_id: record.runtime_id,
+                },
+                reference,
+            )?;
+            if resolved.evidence().selected_digests()? != record.selected
+                || integrated
+                    .archive
+                    .as_ref()
+                    .is_none_or(|a| a.reference() != reference)
+                || evidence::validation::integrated_archive_runs(&resolved, &record.test_resources)?
+                    != integrated.derived_runs
+            {
+                return Err(Error::new(
+                    "validation_archive",
+                    "compact integrated selection differs from complete retained data",
+                ));
+            }
+            Some(resolved.evidence())
+        } else {
+            if record.schema_version != if record.validation.is_some() { 2 } else { 1 }
+                || !record.selected.is_empty()
+                || !record.test_resources.is_empty()
+                || integrated.archive.is_some()
+                || !integrated.derived_runs.is_empty()
+                || record.records.len()
+                    != match &record.validation {
+                        Some(v) => v.current()?.requirements.len(),
+                        None => contract.integrated_commands.len(),
+                    }
+                || record.runs.len() != record.records.len()
+            {
+                return Err(Error::new(
+                    "integrated_gate",
+                    "retained inline integrated history is incomplete",
+                ));
+            }
+            record.validation.as_deref()
+        };
+        if validation.is_some() != record.review.is_some()
             || record.runtime_id != vector.signed.payload.runtime_id
             || record.contract_digest != contract.digest()?
             || record.vector_digest != vector.digest
             || &record.e2e_work != e2e_work
-            || record.records.len()
-                != match &record.validation {
-                    Some(v) => v.current()?.requirements.len(),
-                    None => contract.integrated_commands.len(),
-                }
-            || record.runs.len() != record.records.len()
         {
             return Err(Error::new(
                 "integrated_gate",
-                "retained execution evidence is stale or incomplete",
+                "retained execution evidence is stale, unreviewed or incomplete",
             ));
         }
-        if let (Some(validation), Some(review)) = (&record.validation, &record.review) {
-            let reviewed = evidence::ReviewedIntegratedValidation {
-                validation: validation.as_ref().clone(),
+        if let (Some(validation), Some(review)) = (validation, &record.review) {
+            evidence::ReviewedIntegratedValidation {
+                validation: validation.clone(),
                 review: review.clone(),
-            };
-            reviewed.verify(
+            }
+            .verify(
                 contract.work(),
                 contract.e2e_child,
                 vector.digest(),
                 vector.candidates(),
             )?;
-            if validation
-                .selected()?
-                .into_iter()
-                .map(|r| canonical_digest(1, r))
-                .collect::<Result<BTreeSet<_>>>()?
-                != record
-                    .records
-                    .iter()
+            if record.archive.is_none()
+                && validation
+                    .selected()?
+                    .into_iter()
                     .map(|r| canonical_digest(1, r))
                     .collect::<Result<BTreeSet<_>>>()?
+                    != record
+                        .records
+                        .iter()
+                        .map(|r| canonical_digest(1, r))
+                        .collect::<Result<BTreeSet<_>>>()?
             {
                 return Err(Error::new(
                     "integrated_gate",
@@ -679,7 +784,7 @@ impl DeliveryCoordinator {
                 {
                     return Err(Error::new(
                         "integrated_gate",
-                        "reviewed integrated history omitted a configured constraint",
+                        "reviewed history omitted configured constraint",
                     ));
                 }
             }
@@ -764,7 +869,7 @@ impl DeliveryCoordinator {
         let signed: Signed<IntegratedRecord> = self
             .records
             .read(&format!("parent-integrated-{}.json", &digest[7..]))?;
-        let integrated = IntegratedEvidence { signed };
+        let integrated = self.resolve_integrated_record(signed, e2e_gate.workspace_id())?;
         if integrated.digest()? != digest {
             return Err(Error::new(
                 "integrated_gate",
@@ -818,10 +923,12 @@ impl DeliveryCoordinator {
         let signed: Signed<ParentResultRecord> =
             evidence::decode_signed_publication(body, "parent_result", key)?;
         let record = signed.payload;
-        if !matches!(record.schema_version, 1 | 2)
+        if !matches!(record.schema_version, 1..=3)
             || record.runtime_id.is_nil()
             || record.evidence.schema_version != record.schema_version
             || (record.schema_version == 2) != record.evidence.integrated_validation.is_some()
+            || (record.schema_version == 3)
+                != record.evidence.archived_integrated_validation.is_some()
         {
             return Err(Error::new(
                 "invalid_attestation",
@@ -1029,10 +1136,36 @@ impl DeliveryCoordinator {
             .await?;
         let contributions =
             self.parent_contributions(contract, &children, input.production_integrations)?;
+        let mut child_validation_results = Vec::new();
+        for child in &children {
+            if let Some(reference) = child
+                .signed
+                .payload
+                .review
+                .payload
+                .review
+                .archive_reference()
+            {
+                let archive = crate::validation_archive::read(
+                    &self.records,
+                    &self.key,
+                    &crate::validation_archive::ValidationArchiveNamespace {
+                        workspace_id: contract.gate.workspace_id(),
+                        runtime_id: child.signed.payload.runtime_id,
+                    },
+                    reference,
+                )?;
+                let evidence = child.verified.evidence();
+                child_validation_results.push(json!({"child":evidence.work.child,
+                    "review_digest":evidence.review_digest,"archive":reference,
+                    "selected_runs":archive.evidence().runs(&evidence.revision)?}));
+            }
+        }
         let context = json!({"task":base_context,"parent_delivery":{"schema_version":1,"work":contract.work(),
             "required_children":contract.required_children(),"e2e_child":contract.e2e_child,
             "vector_digest":input.vector.digest(),"baselines":input.vector.baselines(),"candidates":input.vector.candidates(),
             "child_results":children.iter().map(|c|c.verified.evidence()).collect::<Vec<_>>(),
+            "child_validation_results":child_validation_results,
             "required_contributions":contributions,"integrated_results":input.integrated.runs(),
             "integrated_digest":input.integrated.digest()?,"integrated_validation":input.integrated.reviewed_validation(),"test_resources":contract.test_resources,
             "production_targets":contract.production_targets,"visual":contract.visual,
@@ -1095,7 +1228,7 @@ impl DeliveryCoordinator {
         self.key.verify("parent_result", record)?;
         let r = &record.payload;
         if r.schema_version != r.evidence.schema_version
-            || !matches!(r.schema_version, 1 | 2)
+            || !matches!(r.schema_version, 1..=3)
             || r.runtime_id != self.host.snapshot()?.intent.runtime_id
             || r.contract_digest != contract.digest()?
             || r.evidence.work != *contract.work()
@@ -1111,7 +1244,23 @@ impl DeliveryCoordinator {
         let contributions = self.parent_contributions(contract, children, integrations)?;
         let mut inner = publication.clone();
         inner.payload_digest = canonical_digest(1, &r.evidence)?;
-        evidence::verify_parent(
+        let archived = r
+            .evidence
+            .archived_integrated_validation
+            .as_ref()
+            .map(|compact| {
+                crate::validation_archive::read(
+                    &self.records,
+                    &self.key,
+                    &crate::validation_archive::ValidationArchiveNamespace {
+                        workspace_id: contract.gate.workspace_id(),
+                        runtime_id: r.runtime_id,
+                    },
+                    &compact.archive,
+                )
+            })
+            .transpose()?;
+        evidence::verify_parent_resolved(
             &r.evidence,
             evidence::ParentRequirements {
                 work: contract.work(),
@@ -1131,6 +1280,7 @@ impl DeliveryCoordinator {
                 .collect::<Vec<_>>(),
             &inner,
             &publication.writer_account_id,
+            archived.as_ref(),
         )
     }
     pub async fn publish_parent_result(
@@ -1282,7 +1432,9 @@ impl DeliveryCoordinator {
             ));
         }
         let evidence = evidence::ParentEvidence {
-            schema_version: if assignment.integrated.signed.payload.validation.is_some() {
+            schema_version: if assignment.integrated.signed.payload.archive.is_some() {
+                3
+            } else if assignment.integrated.signed.payload.validation.is_some() {
                 2
             } else {
                 1
@@ -1309,8 +1461,17 @@ impl DeliveryCoordinator {
             candidates: assignment.vector.candidates().to_vec(),
             dependency_snapshot_digest: contract.gate.dependency_digest().into(),
             production_targets: contract.production_targets.clone(),
-            integrated_results: assignment.integrated.runs().to_vec(),
-            integrated_validation: assignment.integrated.reviewed_validation().map(Box::new),
+            integrated_results: if assignment.integrated.archive.is_some() {
+                vec![]
+            } else {
+                assignment.integrated.runs().to_vec()
+            },
+            integrated_validation: if assignment.integrated.archive.is_some() {
+                None
+            } else {
+                assignment.integrated.reviewed_validation().map(Box::new)
+            },
+            archived_integrated_validation: assignment.integrated.archived_review().map(Box::new),
             visual: contract.visual,
             video: input.video.map(|v| v.evidence.clone()),
             publication_operation: admission.operation_id(),
@@ -1330,7 +1491,13 @@ impl DeliveryCoordinator {
                 evidence,
             },
         )?;
-        if signed.payload.evidence.integrated_validation.is_some() {
+        if signed.payload.evidence.integrated_validation.is_some()
+            || signed
+                .payload
+                .evidence
+                .archived_integrated_validation
+                .is_some()
+        {
             super::discovered_validation::publication_bounds("parent_result", &signed)?;
         }
         let receipt = self
@@ -1429,9 +1596,9 @@ impl DeliveryCoordinator {
                 &signed.payload.integrated_digest,
             )
             .await?;
+        integrated.matches_parent_projection(&signed.payload.evidence)?;
         if signed.payload.evidence.baselines != vector.baselines()
             || signed.payload.evidence.candidates != vector.candidates()
-            || signed.payload.evidence.integrated_results != integrated.runs()
         {
             return Err(Error::new(
                 "stale_result",
@@ -2084,11 +2251,83 @@ mod integrated_validation;
 pub use integrated_validation::{IntegratedReviewAssignment, PreparedIntegratedValidation};
 
 fn require_new_integrated_publication(record: &IntegratedRecord) -> Result<()> {
-    if record.schema_version != 2 || record.validation.is_none() || record.review.is_none() {
+    if !matches!(record.schema_version, 2 | 3)
+        || (record.validation.is_none() && record.archive.is_none())
+        || record.review.is_none()
+    {
         return Err(Error::new(
             "validation_adequacy",
             "new parent publication requires original discovered integrated execution and separate read-only adequacy review; historical named evidence remains read-only",
         ));
     }
     Ok(())
+}
+
+impl IntegratedEvidence {
+    pub(crate) fn has_archived_validation(&self) -> bool {
+        self.signed.payload.archive.is_some()
+    }
+    pub(crate) fn matches_parent_projection(
+        &self,
+        parent: &evidence::ParentEvidence,
+    ) -> Result<()> {
+        if self.has_archived_validation() {
+            if !parent.integrated_results.is_empty()
+                || parent.integrated_validation.is_some()
+                || parent.archived_integrated_validation.as_deref()
+                    != self.archived_review().as_ref()
+            {
+                return Err(Error::new(
+                    "validation_archive",
+                    "parent compact projection differs from authenticated integrated history",
+                ));
+            }
+        } else if parent.archived_integrated_validation.is_some()
+            || parent.integrated_results != self.runs()
+            || parent.integrated_validation.as_deref() != self.reviewed_validation().as_ref()
+        {
+            return Err(Error::new(
+                "integrated_gate",
+                "parent inline projection differs from authenticated integrated history",
+            ));
+        }
+        Ok(())
+    }
+}
+impl DeliveryCoordinator {
+    pub(super) fn resolve_integrated_record(
+        &self,
+        signed: Signed<IntegratedRecord>,
+        workspace_id: Uuid,
+    ) -> Result<IntegratedEvidence> {
+        self.key.verify("parent_integrated_execution", &signed)?;
+        let archive = signed
+            .payload
+            .archive
+            .as_ref()
+            .map(|reference| {
+                crate::validation_archive::read(
+                    &self.records,
+                    &self.key,
+                    &crate::validation_archive::ValidationArchiveNamespace {
+                        workspace_id,
+                        runtime_id: signed.payload.runtime_id,
+                    },
+                    reference,
+                )
+            })
+            .transpose()?;
+        let derived_runs = archive
+            .as_ref()
+            .map(|a| {
+                evidence::validation::integrated_archive_runs(a, &signed.payload.test_resources)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        Ok(IntegratedEvidence {
+            signed,
+            archive,
+            derived_runs,
+        })
+    }
 }

@@ -128,6 +128,44 @@ fn retain_artifact_chunks(
     Ok(())
 }
 
+/// Archive resolution authenticates the complete manifest, history and artifact
+/// inventory. Keep the hashes of those exact reads in the original assignment,
+/// so later retirement cannot accept a compact reference after its bytes vanish.
+fn retain_validation_archive(
+    records: &PrivateDir,
+    key: &AttestationKey,
+    workspace: Uuid,
+    runtime: Uuid,
+    reference: &crate::validation_archive::ValidationArchiveReference,
+    files: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let archive = crate::validation_archive::read(
+        records,
+        key,
+        &crate::validation_archive::ValidationArchiveNamespace {
+            workspace_id: workspace,
+            runtime_id: runtime,
+        },
+        reference,
+    )?;
+    retain_authenticated_files(files, archive.retained_files())
+}
+
+fn retain_authenticated_files(
+    files: &mut BTreeMap<String, String>,
+    captured: &BTreeMap<String, String>,
+) -> Result<()> {
+    for (leaf, digest) in captured {
+        if files.get(leaf).is_some_and(|prior| prior != digest) {
+            return Err(invalid(
+                "validation archive changed across original references",
+            ));
+        }
+    }
+    files.extend(captured.clone());
+    Ok(())
+}
+
 impl ParentAssignmentOrigin {
     pub(in crate::delivery) fn capture(
         coordinator: &DeliveryCoordinator,
@@ -291,6 +329,16 @@ impl ParentAssignmentOrigin {
                     &mut files,
                 )?;
             }
+            if let Some(archive) = &integrated.payload.archive {
+                retain_validation_archive(
+                    records,
+                    &coordinator.key,
+                    workspace,
+                    vector.signed.payload.runtime_id,
+                    archive,
+                    &mut files,
+                )?;
+            }
         }
         if let Some(review) = review {
             let receipts = coordinator.host.operations()?;
@@ -304,6 +352,22 @@ impl ParentAssignmentOrigin {
                     return Err(invalid(
                         "retained child evidence differs from reviewed original",
                     ));
+                }
+                if let Some(archive) = signed_child
+                    .payload
+                    .review
+                    .payload
+                    .review
+                    .archive_reference()
+                {
+                    retain_validation_archive(
+                        records,
+                        &coordinator.key,
+                        workspace,
+                        vector.signed.payload.runtime_id,
+                        archive,
+                        &mut files,
+                    )?;
                 }
                 refs.retain_file(
                     CarryNamespace::Workspace { workspace },

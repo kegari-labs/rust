@@ -347,6 +347,8 @@ pub struct RunCompletion {
     pub validation_plan: Option<crate::validation::ValidationPlan>,
     /// All completed discovered attempts, including failures that cannot grant repair.
     pub validation_attempts: Vec<crate::execution::CheckExecutionRecord>,
+    /// Original retained byte capabilities, including failed and superseded attempts.
+    pub validation_artifacts: Vec<crate::execution::RetainedArtifact>,
     /// Missing or unsettled attempt evidence blocks delivery without erasing the run.
     pub validation_error: Option<Error>,
     /// Original worker inventory seal; public descriptive vectors cannot erase attempts.
@@ -359,8 +361,81 @@ pub struct RunCompletion {
     pub local_exit_confirmed: bool,
 }
 impl RunCompletion {
+    pub(crate) fn validation_artifact_reader(&self) -> Result<ValidationArtifactReader<'_>> {
+        let seal = self.validation_history.as_ref().ok_or_else(|| {
+            Error::new(
+                "validation_history_binding",
+                "original validation history seal is missing",
+            )
+        })?;
+        seal.verify(
+            self.operation_id,
+            self.validation_plan.as_ref(),
+            &self.validation_attempts,
+            self.validation_error.as_ref(),
+        )?;
+        seal.verify_artifacts(&self.validation_artifacts)?;
+        let mut retained = std::collections::BTreeMap::new();
+        for artifact in &self.validation_artifacts {
+            if retained
+                .insert(artifact.proof_digest()?, artifact)
+                .is_some()
+            {
+                return Err(Error::new(
+                    "artifact_conflict",
+                    "duplicate original retained artifact capability",
+                ));
+            }
+        }
+        let mut artifacts = std::collections::BTreeMap::new();
+        for proof in self
+            .validation_attempts
+            .iter()
+            .flat_map(|attempt| &attempt.artifacts)
+        {
+            let digest = crate::digest::canonical_digest(1, proof)?;
+            let original = retained
+                .get(&digest)
+                .filter(|artifact| artifact.matches_reference(proof))
+                .ok_or_else(|| {
+                    Error::new(
+                        "artifact_conflict",
+                        "original retained artifact bytes are unavailable",
+                    )
+                })?;
+            artifacts.insert(digest, (proof, *original));
+        }
+        Ok(ValidationArtifactReader { artifacts })
+    }
     pub fn observation(&self) -> Value {
         json!({"operation_id":self.operation_id,"outcome":self.outcome,"error":self.error,"hook_error":self.hook_error,"session":self.state,"elapsed_ms":self.elapsed_ms,"verified_check_count":self.checks.len(),"failed_check_count":self.failed_checks.len(),"validation_plan_digest":self.validation_plan.as_ref().map(|plan|plan.digest()),"validation_attempt_count":self.validation_attempts.len(),"validation_error":self.validation_error,"local_exit_confirmed":self.local_exit_confirmed,"completion":"worker_claim_requires_host_delivery_verification"})
+    }
+}
+/// Borrowed access to original retained bytes after one complete membership
+/// verification. This is not an execution, validation, or readiness capability.
+pub(crate) struct ValidationArtifactReader<'a> {
+    artifacts: std::collections::BTreeMap<
+        String,
+        (
+            &'a crate::execution::ArtifactProof,
+            &'a crate::execution::RetainedArtifact,
+        ),
+    >,
+}
+impl ValidationArtifactReader<'_> {
+    pub(crate) fn read(&self, expected: &crate::execution::ArtifactProof) -> Result<Vec<u8>> {
+        let digest = crate::digest::canonical_digest(1, expected)?;
+        let (proof, original) = self
+            .artifacts
+            .get(&digest)
+            .filter(|(proof, _)| *proof == expected)
+            .ok_or_else(|| {
+                Error::new(
+                    "artifact_conflict",
+                    "artifact is not a member of the original validation attempt history",
+                )
+            })?;
+        original.read_verified(proof)
     }
 }
 struct Cancellation {
@@ -1197,6 +1272,7 @@ impl AdmittedTrial {
         let failed_checks = session.broker.take_failed_checks();
         let validation_plan = session.broker.take_validation_plan();
         let validation_attempts = session.broker.take_validation_attempts();
+        let validation_artifacts = session.broker.take_validation_artifacts();
         let session = self.session.take().expect("validated retained session");
         Ok(VerifiedTrialCompletion {
             completion: RunCompletion {
@@ -1210,6 +1286,7 @@ impl AdmittedTrial {
                 failed_checks,
                 validation_plan,
                 validation_attempts,
+                validation_artifacts,
                 validation_error,
                 validation_history,
                 execution: session.execution,
@@ -1768,6 +1845,7 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
         failed_checks: broker.take_failed_checks(),
         validation_plan: broker.take_validation_plan(),
         validation_attempts: broker.take_validation_attempts(),
+        validation_artifacts: broker.take_validation_artifacts(),
         validation_error,
         validation_history,
         execution,

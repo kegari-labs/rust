@@ -1493,6 +1493,7 @@ fn verified_child(
     )
     .unwrap();
     let evidence = ChildEvidence {
+        validation_selected: None,
         schema_version: 1,
         work: w.clone(),
         revision: revision.clone(),
@@ -1627,6 +1628,7 @@ impl GateFixture {
         );
         children.push(e2e);
         let mut manifest = ParentEvidence {
+            archived_integrated_validation: None,
             integrated_validation: None,
             schema_version: 1,
             work: parent_work.clone(),
@@ -2172,6 +2174,7 @@ fn replacement_fixture(
     )
     .unwrap();
     let evidence = ChildEvidence {
+        validation_selected: None,
         schema_version: 1,
         work: w.clone(),
         revision: binding.clone(),
@@ -2270,6 +2273,7 @@ fn parent_fixture_for_candidates(
     children.push(e2e);
     let now = Utc::now();
     let mut manifest = ParentEvidence {
+        archived_integrated_validation: None,
         integrated_validation: None,
         schema_version: 1,
         work: work(parent_id, None),

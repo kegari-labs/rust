@@ -1108,6 +1108,7 @@ async fn retained_child_fixture(f: &DeliveryFixture) -> Uuid {
         contract_digest: scope.contract_digest.clone(),
         workflow_digest: workflow().digest,
         evidence: ChildEvidence {
+            validation_selected: None,
             schema_version: 1,
             work: scope.work.clone(),
             revision: scope.revision.clone(),

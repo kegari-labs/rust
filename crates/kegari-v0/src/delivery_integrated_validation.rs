@@ -8,6 +8,7 @@ use crate::worker_run::RunCompletion;
 #[derive(Clone, Debug)]
 pub struct PreparedIntegratedValidation {
     signed: Signed<IntegratedRecord>,
+    archive: crate::validation_archive::ResolvedValidationArchive,
 }
 #[derive(Clone, Debug)]
 pub struct IntegratedReviewAssignment {
@@ -27,8 +28,9 @@ impl IntegratedReviewAssignment {
         vector: &ParentCandidateVector,
     ) -> Result<()> {
         let input = &self.prepared.signed.payload;
-        if input.schema_version != 2
-            || input.validation.is_none()
+        if input.schema_version != 3
+            || input.archive.as_ref() != Some(self.prepared.archive.reference())
+            || input.validation.is_some()
             || input.review.is_some()
             || input.contract_digest != contract.digest()?
             || input.vector_digest != vector.digest()
@@ -178,17 +180,21 @@ impl DeliveryCoordinator {
                 .ok_or_else(|| Error::new("validation_plan_binding", "selected integrated success has no original current-plan execution capability"))?;
             selected.push(cap);
         }
+        let artifacts = completion.validation_artifact_reader()?;
+        let archive = crate::validation_archive::retain(
+            &self.records,
+            &self.key,
+            crate::validation_archive::ValidationArchiveNamespace {
+                workspace_id: e2e.workspace_id(),
+                runtime_id: current.binding.runtime_id,
+            },
+            &validation,
+            |artifact| artifacts.read(artifact),
+        )?;
         let signed = self
-            .retain_integrated_execution(
-                contract,
-                e2e,
-                vector,
-                observer,
-                &selected,
-                Some(Box::new(validation)),
-            )
+            .retain_integrated_execution(contract, e2e, vector, observer, &selected, Some(&archive))
             .await?;
-        Ok(PreparedIntegratedValidation { signed })
+        Ok(PreparedIntegratedValidation { signed, archive })
     }
 
     pub async fn prepare_integrated_review(
@@ -211,13 +217,17 @@ impl DeliveryCoordinator {
                 "integrated review E2E authority changed",
             ));
         }
-        let validation = prepared.signed.payload.validation.as_ref().ok_or_else(|| {
-            Error::new(
-                "validation_adequacy",
-                "integrated input has no complete history",
-            )
-        })?;
-        let context = json!({"task":task,"integrated_validation_review":{
+        let resolved = crate::validation_archive::read(
+            &self.records,
+            &self.key,
+            &crate::validation_archive::ValidationArchiveNamespace {
+                workspace_id: e2e.workspace_id(),
+                runtime_id: prepared.signed.payload.runtime_id,
+            },
+            prepared.archive.reference(),
+        )?;
+        let validation = resolved.evidence();
+        let mut context = json!({"task":task,"integrated_validation_review":{
             "schema_version":1,"work":e2e.work(),"parent":contract.work(),"vector_digest":vector.digest(),
             "candidates":vector.candidates(),"baselines":vector.baselines(),"test_resources":contract.test_resources(),
             "validation":validation,"validation_evidence_digest":validation.digest()?,"validation_attempt_references":validation.attempt_references()?,
@@ -225,6 +235,8 @@ impl DeliveryCoordinator {
             "required_result_schema":{"schema_version":2,"verdict":"pass | findings | blocked","unresolved_findings":[],"supporting_links":[],
                 "validation":{"evidence_digest":validation.digest()?,"sufficient":false,"rationale":"complete-vector sufficiency and history reasoning",
                 "requirements":validation.current()?.requirements.iter().map(|r| (r.id.clone(), json!({"sufficient":false,"rationale":"assessment with actual evidence","evidence_digests":[]}))).collect::<BTreeMap<_,_>>()}}}});
+        let artifacts = super::super::discovered_validation::review_artifacts(&resolved, &context)?;
+        context["integrated_validation_review"]["validation_artifacts"] = artifacts;
         if serde_json::to_vec(&context)
             .map_err(|_| Error::invalid("encode integrated review context"))?
             .len()
@@ -269,14 +281,17 @@ impl DeliveryCoordinator {
             || canonical_digest(1, &worker.instructions.profile)?
                 != canonical_digest(1, e2e.profile())?
             || worker.instructions.repository_revision.as_deref()
-                != assignment
-                    .prepared
-                    .signed
-                    .payload
-                    .validation
-                    .as_ref()
-                    .map(|v| v.current().map(|p| p.binding.revision.commit.as_str()))
-                    .transpose()?
+                != Some(
+                    assignment
+                        .prepared
+                        .archive
+                        .evidence()
+                        .current()?
+                        .binding
+                        .revision
+                        .commit
+                        .as_str(),
+                )
             || worker.instructions.role != AgentRole::Review
             || worker.instructions.workflow_digest != contract.gate.workflow_digest()
             || worker.instructions.permissions.repository_code_execution
@@ -332,12 +347,7 @@ impl DeliveryCoordinator {
             )
         })?;
         let mut record = assignment.prepared.signed.payload.clone();
-        let validation = record.validation.as_ref().ok_or_else(|| {
-            Error::new(
-                "validation_adequacy",
-                "prepared integrated history is missing",
-            )
-        })?;
+        let validation = assignment.prepared.archive.evidence();
         validation.verify_assessment(&assessment, true)?;
         record.review = Some(evidence::IntegratedAdequacyReview {
             schema_version: 1,
@@ -358,7 +368,7 @@ impl DeliveryCoordinator {
         });
         let signed = self.key.sign("parent_integrated_execution", &record)?;
         integrated_record_bound(&signed)?;
-        let evidence = IntegratedEvidence { signed };
+        let evidence = self.resolve_integrated_record(signed, e2e.workspace_id())?;
         self.reverify_integrated_record(contract, vector, e2e.work(), &evidence)?;
         self.records.write(
             &format!("parent-integrated-{}.json", &evidence.digest()?[7..]),
@@ -400,6 +410,9 @@ mod tests {
             runs: vec![],
             validation: None,
             review: None,
+            archive: None,
+            selected: vec![],
+            test_resources: BTreeSet::new(),
         };
         let key =
             crate::evidence::AttestationKey::new("historical-test".into(), vec![9; 32]).unwrap();

@@ -188,6 +188,12 @@ impl ValidationEvidence {
         Ok(())
     }
 
+    pub(crate) fn selected_digests(&self) -> Result<Vec<String>> {
+        self.selected()?
+            .into_iter()
+            .map(|record| canonical_digest(1, record))
+            .collect()
+    }
     pub(crate) fn selected(&self) -> Result<Vec<&CheckExecutionRecord>> {
         let mut result = Vec::new();
         for requirement in &self.current()?.requirements {
@@ -470,3 +476,73 @@ fn bounded_reason(value: &str) -> bool {
 #[cfg(test)]
 #[path = "evidence_validation_tests.rs"]
 mod tests;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchivedIntegratedValidation {
+    pub archive: ValidationArchiveReference,
+    pub selected: Vec<String>,
+    pub test_resources: BTreeSet<String>,
+    pub review: IntegratedAdequacyReview,
+}
+impl ArchivedIntegratedValidation {
+    pub(crate) fn verify_reference(&self, resolved: &ResolvedValidationArchive) -> Result<()> {
+        if resolved.reference() != &self.archive
+            || resolved.evidence().selected_digests()? != self.selected
+        {
+            return Err(Error::new(
+                "validation_archive",
+                "compact integrated references differ from complete authenticated history",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn runs(&self, resolved: &ResolvedValidationArchive) -> Result<Vec<IntegratedRun>> {
+        self.verify_reference(resolved)?;
+        integrated_archive_runs(resolved, &self.test_resources)
+    }
+}
+pub(crate) fn integrated_archive_runs(
+    resolved: &ResolvedValidationArchive,
+    resources: &BTreeSet<String>,
+) -> Result<Vec<IntegratedRun>> {
+    resolved
+        .evidence()
+        .selected()?
+        .into_iter()
+        .map(|record| {
+            Ok(IntegratedRun {
+                id: record.check_name.clone(),
+                operation_id: record.binding.operation_id,
+                e2e_child: record
+                    .binding
+                    .work
+                    .child
+                    .ok_or_else(|| Error::new("validation_archive", "integrated child absent"))?,
+                candidate_vector_digest: record
+                    .binding
+                    .candidate_vector_digest
+                    .clone()
+                    .ok_or_else(|| Error::new("validation_archive", "integrated vector absent"))?,
+                command: record.command.argv.clone(),
+                test_resources: resources.clone(),
+                started_at: record.started_at,
+                completed_at: record.completed_at,
+                conclusion: Conclusion::Success,
+                after_staging_integration: true,
+                artifacts: record
+                    .artifacts
+                    .iter()
+                    .map(|a| ArtifactReference {
+                        reference: format!(
+                            "retained-validation:{}:{}",
+                            resolved.reference().manifest_digest,
+                            a.digest
+                        ),
+                        digest: a.digest.clone(),
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
+}

@@ -223,6 +223,7 @@ fn verified_child(
     )
     .unwrap();
     let evidence = ChildEvidence {
+        validation_selected: None,
         schema_version: 1,
         work: w.clone(),
         revision: revision.clone(),
@@ -317,6 +318,7 @@ pub fn parent(
     let child_id = child_work.child.unwrap();
     let now = Utc::now();
     let mut manifest = ParentEvidence {
+        archived_integrated_validation: None,
         integrated_validation: None,
         schema_version: 1,
         work: parent_work.clone(),

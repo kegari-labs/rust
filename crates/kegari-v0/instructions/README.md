@@ -79,11 +79,25 @@ Discovered-plan continuation/recovery, complete output paging and empty/unborn
 Git runtime support remain implementation work. Parent reassembly cannot reset
 discovered obligations or omit the distinct adequacy phase; unsupported lineage
 refuses before replacement work begins.
-Current review history travels inline and must fit the actual prompt/publication
-bounds; oversized histories refuse rather than disappearing. Empty configured
-check sets are valid undiscovered inputs; missing or unrun obligations still
-block dependent delivery. These local paths do not qualify the native
-backend, actual-agent behavior or the complete default-workflow lifecycle.
+New discovered review, child and parent publications use schema 3 with compact
+references to an authenticated private archive. Verification resolves the full
+plan/attempt history and all retained artifact bytes before applying the gates;
+an unresolved reference cannot establish readiness. Earlier signed formats keep
+their original encodings and verification rules.
+
+Independent review receives the complete history and original artifact contents
+from failed, superseded and selected attempts. Text uses UTF-8; other bytes use
+explicit base64 with digest/length verification and decoded secret checks. Binary
+byte access does not establish visual inspection. The complete prompt still has
+a 1 MiB admission limit. Larger review inputs refuse until paging is implemented;
+compaction never truncates them. Archives bound history to 8 MiB, unique artifacts
+to 256 MiB total and 4,096 proofs, and their signed manifest to 256 KiB. Publication
+bodies retain the 60 KiB limit. These are finite host bounds, not operator-authored
+environment specifications.
+
+Empty configured check sets are valid undiscovered inputs; missing or unrun
+obligations still block dependent delivery. These local paths do not qualify the
+native backend, actual-agent behavior or the complete default-workflow lifecycle.
 
 A file workflow records its actual canonical path and byte digest. The installed
 default records an explicit embedded version/digest and has no filesystem path.

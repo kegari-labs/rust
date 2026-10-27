@@ -2,6 +2,69 @@
 
 **Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-4.**
 This increment began on clean `main` after
+`93cdbb06638f028ea2a683dc58dae265aa7402ef`
+(`feat(kegari-v0): gate parent readiness on discovered validation review`).
+No minor milestone is complete. SPEC 1.4 and native/live restrictions remain.
+
+Discovered review, child, integrated and parent publications now use schema 3
+with compact authenticated archive references. Full plan/attempt history and
+all observed artifact bytes, including failed and superseded attempts, must
+resolve before the existing gates. Original worker seals retain byte capabilities
+through output replacement and acknowledgement failure. No scratch fallback or
+reconstructed execution authority is permitted. Parent origin/history retains
+and rechecks the exact archive closure.
+
+Actual independent-review input contains complete history and bounded original
+artifact bodies. UTF-8/base64 input is checked for exact proof, length, digest and
+decoded known secrets. Existing credential guards and generation projection are
+unchanged. Parent synthesis retains authenticated local-result details. Review
+still requires a complete prompt within 1 MiB; larger inputs need paging. Assets
+remain version 6 and the package remains development `0.2.0-alpha.9`.
+
+Independent reviews corrected schema-3 publication preflight, parent-review
+input omission and artifact-content access. The first compiler check found import
+and visibility errors; strict lint found a redundant argument, now removed. Full
+release regression on source 4 finished **1,227 passed, one failed, three native
+ignored**, across 40 groups. The sole failure was a new negative fixture setting
+an eight-byte artifact's length to eight. The correction changes it to the actual
+length plus one, asserts every negative input differs, and retains the rejection
+assertion. **All 39 tests in that target now pass.** Production code is unchanged;
+all **1,228 distinct executed cases** now have passing evidence (22 added cases).
+The failed full-run result remains recorded; unchanged passing targets were not
+needlessly rerun. See [the archive report](validation/LOCAL-VALIDATION-ARCHIVES.md).
+
+Final source is
+`sha256:ca62d5ff3c175ce85b59ed2b87cade9f08652186bdf029e35f2dffbc70d15fb5`
+(744 logical inputs); only the corrected test file differs from the full-run
+source. Strict all-target Clippy passes on that unchanged production source;
+strict lint of the corrected target also passes. Formatting, whitespace and
+inventory consistency pass; inventory tests pass 11. The exact-source development
+build passes. Executable SHA-256:
+`236febfaea22c9015fb2c35acc6e33cb80c19301d98de5aa1c6515dffad90c63`.
+Static metadata matches the independently recomputed 344-input build identity
+`sha256:defc76f235316b66e2455f8077ac6baddb2f0af3bb8c845cbb21f27447fcab65`.
+
+Evidence archive: `target/validation/m02-archives-ca62d5ff3c17`, 534 files plus
+manifest SHA-256 `6078a4bf2d98d0b16209edc0cb76d93d3c56f197004247434b66b6fb644136bc`.
+All hashes are verified. Complete source snapshots 2–5 share 506 content blobs;
+failed/successful logs, preliminary manifests, metadata and development bytes
+remain available. Our Cargo/test handles and delegated work are terminal.
+
+Next: audit and complete generic environment admission without operator tool or
+command inventories, then continue authenticated output/review paging and
+empty/unborn baselines. Cross-worker discovered continuation/reassembly remains
+open. Fresh bounded native qualification needs separate explicit approval;
+previous approvals remain consumed. No native/live action, permission request,
+installation, remote mutation or coordinator activation occurred.
+
+This archive/storage/schema change is a separate commit boundary from the prior
+parent workflow. No history consolidation is performed. Follow
+[MILESTONES.md](MILESTONES.md); local verification does not close 0.2.0 or the Goal.
+
+### Previous integrated-discovery increment
+
+**Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-4.**
+This increment began on clean `main` after
 `fd907516649f4a3db50f00bc757cef855c4776cb`
 (`feat(kegari-v0): bind discovered child validation to independent review`).
 No minor milestone is complete. SPEC 1.4 and all native/live restrictions remain.

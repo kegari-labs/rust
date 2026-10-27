@@ -124,6 +124,17 @@ impl DeliveryCoordinator {
                 ));
             }
         }
+        let artifacts = completion.validation_artifact_reader()?;
+        let archive = crate::validation_archive::retain(
+            &self.records,
+            &self.key,
+            crate::validation_archive::ValidationArchiveNamespace {
+                workspace_id: admission.gate.workspace_id(),
+                runtime_id: admission.scope.runtime_id,
+            },
+            &validation,
+            |artifact| artifacts.read(artifact),
+        )?;
         let checks = validation.runs(&admission.scope.revision)?;
         evidence::verify_checks(
             &validation.requirements()?,
@@ -141,6 +152,7 @@ impl DeliveryCoordinator {
             workflow_digest: workflow.digest.clone(),
             checks,
             validation: Some(Box::new(validation)),
+            validation_archive: Some(archive),
         })
     }
 }
@@ -242,15 +254,12 @@ pub(super) fn retain_attempt(
 
 impl LocalPassed {
     pub(super) fn verify_review_adequacy(&self, review: &PublishedReview) -> Result<()> {
-        match (&self.validation, &review.verified.attestation().review) {
-            (
-                Some(expected),
-                evidence::ReviewKind::AgentValidation {
-                    validation,
-                    assessment,
-                    ..
-                },
-            ) => {
+        match (
+            &self.validation,
+            review.verified.validation(),
+            review.verified.assessment(),
+        ) {
+            (Some(expected), Some(validation), Some(assessment)) => {
                 if expected.digest()? != validation.digest()? {
                     return Err(Error::new(
                         "validation_adequacy",
@@ -260,15 +269,21 @@ impl LocalPassed {
                 validation.validate(&self.work, &self.revision)?;
                 validation.verify_assessment(assessment, true)
             }
-            (None, evidence::ReviewKind::AgentValidation { .. }) | (Some(_), _) => Err(Error::new(
+            (None, None, None) => Ok(()),
+            _ => Err(Error::new(
                 "validation_adequacy",
-                "legacy review cannot satisfy discovered validation",
+                "review and original discovered validation differ",
             )),
-            (None, _) => Ok(()),
         }
     }
     pub(super) fn child_schema(&self) -> u32 {
-        if self.validation.is_some() { 2 } else { 1 }
+        if self.validation_archive.is_some() {
+            3
+        } else if self.validation.is_some() {
+            2
+        } else {
+            1
+        }
     }
 }
 
@@ -294,5 +309,241 @@ mod tests {
         );
         assert!(serde_json::to_vec(&large).unwrap().len() < 256 * 1024);
         assert!(record_body("codex_review", &large).unwrap().len() > 60 * 1024);
+    }
+}
+
+impl DeliveryCoordinator {
+    pub(super) fn verify_review_archive(
+        &self,
+        signed: &Signed<evidence::ReviewAttestation>,
+        publication: &Publication,
+        status: Option<&evidence::ReviewStatus>,
+        workspace_id: Uuid,
+        requirements: evidence::ReviewRequirements<'_>,
+    ) -> Result<evidence::VerifiedReview> {
+        let resolved = signed
+            .payload
+            .review
+            .archive_reference()
+            .map(|reference| {
+                crate::validation_archive::read(
+                    &self.records,
+                    &self.key,
+                    &crate::validation_archive::ValidationArchiveNamespace {
+                        workspace_id,
+                        runtime_id: self.host.snapshot()?.intent.runtime_id,
+                    },
+                    reference,
+                )
+            })
+            .transpose()?;
+        evidence::verify_review_resolved(
+            signed,
+            publication,
+            status,
+            &self.key,
+            requirements,
+            resolved,
+        )
+    }
+}
+
+// This is an input limit, not a promise that the final prompt will fit. The
+// instruction assembler independently bounds its complete envelope to 1 MiB.
+const REVIEW_INPUT_BYTES: usize = 1024 * 1024;
+
+fn review_bytes<T: Serialize>(value: &T, limit: usize) -> Result<usize> {
+    struct Count {
+        bytes: usize,
+        limit: usize,
+    }
+    impl std::io::Write for Count {
+        fn write(&mut self, input: &[u8]) -> std::io::Result<usize> {
+            let next = self
+                .bytes
+                .checked_add(input.len())
+                .filter(|n| *n <= self.limit)
+                .ok_or_else(|| std::io::Error::other("review input bound"))?;
+            self.bytes = next;
+            Ok(input.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count { bytes: 0, limit };
+    serde_json::to_writer(&mut count, value).map_err(|_| {
+        Error::new(
+            "bounded_input",
+            "complete artifact review input requires paging beyond its finite bound",
+        )
+    })?;
+    Ok(count.bytes)
+}
+
+/// Original bytes for every attempt, including superseded and failed attempts.
+/// Duplicate exact proofs share one body; the full history retains all uses.
+/// Base64 is byte access, not evidence of visual or semantic inspection.
+pub(super) fn review_artifacts(
+    archive: &crate::validation_archive::ResolvedValidationArchive,
+    context: &Value,
+) -> Result<Value> {
+    use base64::Engine;
+    // Charge the field name, separators, array and full existing context first.
+    let mut used = review_bytes(context, REVIEW_INPUT_BYTES)?
+        .checked_add(32)
+        .ok_or_else(|| Error::invalid("review input overflow"))?;
+    let mut seen = BTreeSet::new();
+    let mut entries = Vec::new();
+    for proof in archive
+        .evidence()
+        .attempts
+        .iter()
+        .flat_map(|a| &a.artifacts)
+    {
+        let identity = canonical_digest(1, proof)?;
+        if !seen.insert(identity.clone()) {
+            continue;
+        }
+        let remaining = REVIEW_INPUT_BYTES.saturating_sub(used);
+        // Refuse large cached artifacts before copying any original bytes.
+        if proof.bytes > remaining as u64 {
+            return Err(Error::new(
+                "bounded_input",
+                "original artifact exceeds remaining review input budget",
+            ));
+        }
+        let bytes = archive.read_artifact(proof)?;
+        let text = std::str::from_utf8(&bytes)
+            .ok()
+            .filter(|s| !s.contains('\0'));
+        let encoding = if text.is_some() { "utf8" } else { "base64" };
+        let mut entry =
+            json!({"proof_digest":identity,"proof":proof,"encoding":encoding,"data":""});
+        let overhead = review_bytes(&entry, remaining)? + 1;
+        let available = remaining.saturating_sub(overhead);
+        let data_bytes = if let Some(text) = text {
+            review_bytes(&text, available.saturating_add(2))?.saturating_sub(2)
+        } else {
+            bytes
+                .len()
+                .div_ceil(3)
+                .checked_mul(4)
+                .filter(|n| *n <= available)
+                .ok_or_else(|| {
+                    Error::new(
+                        "bounded_input",
+                        "encoded artifact exceeds review input budget",
+                    )
+                })?
+        };
+        if overhead > remaining || data_bytes > available {
+            return Err(Error::new(
+                "bounded_input",
+                "artifact metadata exceeds review input budget",
+            ));
+        }
+        // Allocation happens only after charging the exact encoded size.
+        entry["data"] = Value::String(match text {
+            Some(text) => text.to_owned(),
+            None => base64::engine::general_purpose::STANDARD.encode(&bytes),
+        });
+        used += overhead + data_bytes;
+        entries.push(entry);
+    }
+    Ok(Value::Array(entries))
+}
+
+#[cfg(test)]
+mod archive_context_tests {
+    use super::*;
+    use crate::validation_archive::{self, ResolvedValidationArchive};
+    fn archive(bodies: [Vec<u8>; 2]) -> (tempfile::TempDir, ResolvedValidationArchive) {
+        let temp = tempfile::tempdir().unwrap();
+        let records =
+            PrivateDir::create(&temp.path().canonicalize().unwrap().join("records")).unwrap();
+        let key = AttestationKey::new("review-artifact-input".into(), vec![45; 32]).unwrap();
+        let (namespace, mut evidence, _) = validation_archive::tests::descriptive_fixture();
+        let mut original = BTreeMap::new();
+        for (attempt, bytes) in evidence.attempts.iter_mut().zip(bodies) {
+            let proof = &mut attempt.artifacts[0];
+            proof.bytes = bytes.len() as u64;
+            proof.digest = bytes_digest(&bytes);
+            original.insert(canonical_digest(1, proof).unwrap(), bytes);
+        }
+        let archive = validation_archive::retain(&records, &key, namespace, &evidence, |proof| {
+            Ok(original[&canonical_digest(1, proof)?].clone())
+        })
+        .unwrap();
+        (temp, archive)
+    }
+    #[test]
+    fn reviewer_receives_original_failed_and_selected_text_binary_and_nul_bytes() {
+        use base64::Engine;
+        for binary in [b"valid UTF8 with\0NUL".to_vec(), vec![0xff, 0xfe, 0, 1]] {
+            let failed = b"original failed transcript\n".to_vec();
+            let (_temp, archive) = archive([failed.clone(), binary.clone()]);
+            let input =
+                review_artifacts(&archive, &json!({"validation":archive.evidence()})).unwrap();
+            let entries = input.as_array().unwrap();
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0]["encoding"], "utf8");
+            assert_eq!(entries[0]["data"].as_str().unwrap().as_bytes(), failed);
+            assert_eq!(entries[1]["encoding"], "base64");
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(entries[1]["data"].as_str().unwrap())
+                    .unwrap(),
+                binary
+            );
+            for (entry, attempt) in entries.iter().zip(&archive.evidence().attempts) {
+                assert_eq!(
+                    entry["proof"],
+                    serde_json::to_value(&attempt.artifacts[0]).unwrap()
+                );
+                assert_eq!(
+                    entry["proof_digest"],
+                    canonical_digest(1, &attempt.artifacts[0]).unwrap()
+                );
+            }
+            assert!(!archive.evidence().attempts[0].successful);
+            assert!(archive.evidence().attempts[1].successful);
+        }
+    }
+    #[test]
+    fn reviewer_artifacts_share_context_budget_and_encoded_expansion_is_bounded() {
+        for bodies in [
+            [vec![b'a'; 600_000], vec![b'b'; 600_000]],
+            [vec![1; 200_000], vec![b'b'; 1]],
+            [vec![0xff; 900_000], vec![b'b'; 1]],
+        ] {
+            let (_temp, archive) = archive(bodies);
+            assert_eq!(
+                review_artifacts(&archive, &json!({})).unwrap_err().code,
+                "bounded_input"
+            );
+        }
+        let (_temp, archive) = archive([b"failed".to_vec(), b"passed".to_vec()]);
+        assert_eq!(
+            review_artifacts(
+                &archive,
+                &json!({"existing": "x".repeat(REVIEW_INPUT_BYTES)})
+            )
+            .unwrap_err()
+            .code,
+            "bounded_input"
+        );
+    }
+    #[test]
+    fn schema_three_publication_retains_remote_bound_after_history_compaction() {
+        let key = AttestationKey::new("compact-publication-bound".into(), vec![46; 32]).unwrap();
+        let signed = key.sign("child_result", &json!({"schema_version":3,
+            "validation_selected":[bytes_digest(b"selected")],"review_assessment":"x".repeat(60*1024)})).unwrap();
+        assert_eq!(
+            publication_bounds("child_result", &signed)
+                .unwrap_err()
+                .code,
+            "bounded_input"
+        );
     }
 }
