@@ -21,7 +21,7 @@ pub struct CheckBundleMemberResult {
     pub outcome: Option<CommandOutcome>,
     pub error: Option<Error>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceExecutionRecord {
     pub name: String,
@@ -31,7 +31,7 @@ pub struct ServiceExecutionRecord {
     pub terminal: CommandOutcome,
     pub stopped: isolation::ServiceObservation,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckBundleExecutionRecord {
     pub schema_version: u32,
@@ -103,6 +103,9 @@ pub struct CheckBundleOwner {
 }
 impl CheckBundleOwner {
     fn new(plan: CheckBundlePlan, timeout: Duration, output_limit: usize) -> Arc<Self> {
+        Self::new_until(plan, Instant::now() + timeout, output_limit)
+    }
+    fn new_until(plan: CheckBundlePlan, deadline: Instant, output_limit: usize) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(OwnerState {
                 attempted: 0,
@@ -111,7 +114,7 @@ impl CheckBundleOwner {
                 slots: (0..plan.steps().len()).map(|_| Slot::default()).collect(),
             }),
             plan,
-            deadline: Instant::now() + timeout,
+            deadline,
             cleanup_deadline: OnceLock::new(),
             uncertain: AtomicBool::new(false),
             output_budget: Arc::new(isolation::CommandOutputBudget::new(output_limit)),
@@ -396,6 +399,17 @@ impl LocalExecutor<'_> {
         prepared: PreparedCheck,
         effect_id: Uuid,
     ) -> Result<PreparedCheckBundle> {
+        let command_isolation = prepared.command_isolation(self.isolation);
+        if prepared
+            .discovered
+            .as_ref()
+            .is_some_and(|discovered| discovered.provenance.invocation_id != effect_id)
+        {
+            return Err(Error::new(
+                "check_bundle_identity",
+                "discovered bundle differs from its original invocation",
+            ));
+        }
         if prepared.resolved.services.is_empty()
             || self
                 .isolation
@@ -425,12 +439,12 @@ impl LocalExecutor<'_> {
                     service.readiness.timeout_ms,
                 ),
             ] {
-                self.isolation.resolve_executable(&argv[0])?;
+                command_isolation.resolve_executable(&argv[0])?;
                 specs.push(CheckBundleStepSpec {
                     process_id: Uuid::new_v4(),
                     kind,
                     service: Some(service.name.clone()),
-                    launch_digest: launch_digest(self.isolation, argv)?,
+                    launch_digest: launch_digest(command_isolation, argv)?,
                 });
                 members.push(ResolvedMember {
                     argv: argv.clone(),
@@ -442,7 +456,7 @@ impl LocalExecutor<'_> {
             process_id: Uuid::new_v4(),
             kind: CheckMemberKind::Check,
             service: None,
-            launch_digest: launch_digest(self.isolation, &prepared.resolved.argv)?,
+            launch_digest: launch_digest(command_isolation, &prepared.resolved.argv)?,
         });
         members.push(ResolvedMember {
             argv: prepared.resolved.argv.clone(),
@@ -452,33 +466,49 @@ impl LocalExecutor<'_> {
             effect_id,
             prepared.binding.operation_id,
             prepared.binding.runtime_id,
-            canonical_digest(
-                1,
-                &(
-                    &prepared.binding,
-                    &prepared.workflow_digest,
-                    &prepared.check_name,
-                    &prepared.resolved.services,
-                    // Only check execution/capture bounds belong to this
-                    // identity. Media-tool limits include floating point
-                    // duration and do not govern any bundle member or snapshot.
-                    serde_json::json!({
-                        "command_timeout_ms": self.limits.command_timeout_ms,
-                        "output_bytes": self.limits.output_bytes,
-                        "artifact_bytes": self.limits.artifact_bytes,
-                        "source_bytes": self.limits.source_bytes,
-                        "source_files": self.limits.source_files,
-                    }),
-                ),
-            )?,
-            self.isolation.digest().into(),
+            {
+                let context = canonical_digest(
+                    1,
+                    &(
+                        &prepared.binding,
+                        &prepared.workflow_digest,
+                        &prepared.check_name,
+                        &prepared.resolved.services,
+                        // Only check execution/capture bounds belong to this
+                        // identity. Media-tool limits include floating point
+                        // duration and do not govern any bundle member or snapshot.
+                        serde_json::json!({
+                            "command_timeout_ms": self.limits.command_timeout_ms,
+                            "output_bytes": self.limits.output_bytes,
+                            "artifact_bytes": self.limits.artifact_bytes,
+                            "source_bytes": self.limits.source_bytes,
+                            "source_files": self.limits.source_files,
+                        }),
+                    ),
+                )?;
+                match &prepared.discovered {
+                    Some(discovered) => canonical_digest(
+                        1,
+                        &serde_json::json!({"context":context,"discovered":discovered.provenance}),
+                    )?,
+                    None => context,
+                }
+            },
+            command_isolation.digest().into(),
             specs,
         )?;
-        let owner = CheckBundleOwner::new(
-            plan.clone(),
-            Duration::from_millis(self.limits.command_timeout_ms),
-            self.limits.output_bytes,
-        );
+        let owner = match &prepared.discovered {
+            Some(discovered) => CheckBundleOwner::new_until(
+                plan.clone(),
+                discovered.deadline,
+                self.limits.output_bytes,
+            ),
+            None => CheckBundleOwner::new(
+                plan.clone(),
+                Duration::from_millis(self.limits.command_timeout_ms),
+                self.limits.output_bytes,
+            ),
+        };
         Ok(PreparedCheckBundle {
             prepared,
             plan,
@@ -488,13 +518,14 @@ impl LocalExecutor<'_> {
     }
     pub(crate) fn preflight_bundle(&self, bundle: &PreparedCheckBundle) -> Result<()> {
         self.preflight_check(&bundle.prepared)?;
+        let isolation = bundle.prepared.command_isolation(self.isolation);
         if self
             .isolation
             .plan()
             .managed_execution
             .as_ref()
             .is_none_or(|policy| !policy.supports_check_bundles())
-            || bundle.plan.isolation_digest() != self.isolation.digest()
+            || bundle.plan.isolation_digest() != isolation.digest()
         {
             return Err(Error::new(
                 "unsupported_check_bundle",
@@ -503,7 +534,7 @@ impl LocalExecutor<'_> {
         }
         bundle.owner.remaining()?;
         for member in &bundle.members {
-            self.isolation.resolve_executable(&member.argv[0])?;
+            isolation.resolve_executable(&member.argv[0])?;
         }
         Ok(())
     }
@@ -512,6 +543,14 @@ impl LocalExecutor<'_> {
         bundle: &PreparedCheckBundle,
         launch: CheckBundleLaunch,
     ) -> Result<()> {
+        let isolation = bundle.prepared.command_isolation(self.isolation);
+        if let Some(discovered) = &bundle.prepared.discovered {
+            discovered.preflight(
+                self,
+                &bundle.prepared.binding,
+                bundle.prepared.effective.as_ref(),
+            )?;
+        }
         let ordinal = launch.ordinal() as usize;
         let step = bundle
             .plan
@@ -521,10 +560,10 @@ impl LocalExecutor<'_> {
         let resolved = &bundle.members[ordinal];
         if launch.plan_digest() != bundle.plan.digest()
             || launch.process_id() != step.process_id()
-            || launch.launch_digest() != launch_digest(self.isolation, &resolved.argv)?
+            || launch.launch_digest() != launch_digest(isolation, &resolved.argv)?
             || launch.permit().operation_id != bundle.prepared.binding.operation_id
             || launch.permit().lease.runtime_id != bundle.prepared.binding.runtime_id
-            || self.isolation.digest() != bundle.plan.isolation_digest()
+            || isolation.digest() != bundle.plan.isolation_digest()
         {
             return Err(Error::new(
                 "check_bundle_identity",
@@ -532,7 +571,7 @@ impl LocalExecutor<'_> {
             ));
         }
         let timeout = resolved.timeout.min(bundle.owner.remaining()?);
-        self.boundary.preflight(self.isolation)?;
+        self.boundary.preflight(isolation)?;
         let mut state = bundle.owner.lock()?;
         if state.sealed || state.cancel_requested || ordinal != state.attempted {
             return Err(Error::new(
@@ -544,7 +583,7 @@ impl LocalExecutor<'_> {
         // No await or fallible lock separates the returned handle and retention.
         state.attempted += 1;
         let command = match self.boundary.start_bundle_member(
-            self.isolation,
+            isolation,
             &resolved.argv,
             isolation::BundleCommandLimits {
                 timeout,
@@ -573,7 +612,8 @@ impl LocalExecutor<'_> {
     ) -> Result<()> {
         if outcome.argv != bundle.members[ordinal].argv
             || outcome.cwd != bundle.prepared.resolved.cwd
-            || outcome.isolation_digest != self.isolation.digest()
+            || outcome.isolation_digest
+                != bundle.prepared.command_isolation(self.isolation).digest()
         {
             return Err(Error::new(
                 "execution_identity",

@@ -2609,7 +2609,7 @@ impl RuntimeDelivery {
                         source: required(&child.source, "sealed source")?,
                     }
                 };
-                let review=coordinator.prepare_child_review(&admission,&child.claim,target,json!({"claim":child.claim.claim(),"purpose":"review the exact isolated child contribution and prepared criteria"}))?;
+                let review=coordinator.prepare_child_review_with_validation(&admission,&child.claim,target,required(&child.local,"local validation")?,json!({"claim":child.claim.claim(),"purpose":"review the exact isolated child contribution and prepared criteria"}))?;
                 let assignment = coordinator.child_review_worker_assignment(
                     &admission,
                     &child.claim,

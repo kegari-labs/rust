@@ -2,6 +2,9 @@
 // Shared integration fixture helpers name this crate from nested test modules.
 #[cfg(test)]
 extern crate self as kegari_v0;
+#[cfg(test)]
+#[path = "../tests/support/pinned_git.rs"]
+pub(crate) mod test_pinned_git;
 /// Deterministic identity of compiled runtime sources, assets and dependency lock.
 /// The installed executable also has a separate exact-byte digest in owner metadata.
 pub const BUILD_ID: &str = env!("KEGARI_BUILD_ID");
@@ -59,6 +62,7 @@ pub mod snapshot;
 pub mod storage;
 pub mod supervisor;
 pub mod transport;
+pub mod validation;
 pub mod worker;
 pub mod worker_run;
 pub mod workflow;

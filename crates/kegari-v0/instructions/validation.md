@@ -1,4 +1,4 @@
-# Permitted validation and evidence preparation — version 3
+# Permitted validation and evidence preparation — version 4
 
 Validate the exact isolated candidate/repository tree vector, declared test
 resources and artifact identities supplied by the host. Do not validate a shared
@@ -9,6 +9,36 @@ role-permitted commands through actual host tools; an absent catalog is not a
 pass or an execution grant. Record obligations and their revision; never drop
 failures or select an easier subset. Source changes, including test repairs,
 require the scoped child implementation path and repeated gates.
+
+For child-local validation, use ordinary `source_read` and `context_read` to
+inspect the actual task, instructions, configuration and scripts. Read
+`context_read` with key `validation_evidence` to obtain the host's retained read
+references and current plan. Submit `validation_propose` with `previous` (the
+current plan digest, or null initially), a concrete `reason`, `supporting_reads`
+(the observed reference digests), and `requirements`. Each requirement has a
+stable `id`, a behavior `statement`, an evidence-based `rationale`, exact `argv`
+and `cwd`, optional `services`, and optional `artifacts`. Do not invent references.
+The first plan must explain why its checks cover the task; each revision must
+explain what changed. Retain every prior obligation ID and all failure history.
+Repository guidance can be stale or incomplete: assess the actual changed
+behavior and missing tests instead of merely copying a documented command.
+
+Run each enrolled obligation with `validation_run` using the returned
+`plan_digest` and `obligation_id`. This tool checks the exact clean admitted
+source and keeps actual execution evidence. Ordinary stdout-only commands need
+no report wrapper: the host retains its own transcript. Optional artifact paths
+must be under admitted scratch; no source output exclusions or permission
+expansion are implied. Services require explicit bounded lifecycle/readiness
+commands under the same authority. A new plan invalidates completion of an older
+plan until its obligations have actually run. `command_run` may support discovery
+and preparation, but its successful exit never satisfies a validation obligation.
+If the current phase does not support discovered checks, report that actual
+capability limitation; do not fabricate a configured check name or success.
+
+Independent review receives the plan history and actual attempts and must assess
+their adequacy. Mechanical check completion alone does not establish that the
+suite covers the required behavior. Unknown execution, inaccessible prerequisites,
+or lineage that cannot be recovered blocks the affected gate.
 
 Record command argv, cwd, environment identity, operation/generation, tested
 revision, start/end, exit/outcome and current-run artifact references. Missing,

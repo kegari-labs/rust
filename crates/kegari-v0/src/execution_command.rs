@@ -175,9 +175,10 @@ fn path_stamp(path: &Path, full: bool) -> Result<Stamp> {
     }
     Ok(observed)
 }
-struct Anchors(BTreeMap<PathBuf, (Stamp, bool)>);
+#[derive(Debug)]
+pub(super) struct Anchors(BTreeMap<PathBuf, (Stamp, bool)>);
 impl Anchors {
-    fn tree(root: &Path, limit: usize, deadline: Instant) -> Result<Self> {
+    pub(super) fn tree(root: &Path, limit: usize, deadline: Instant) -> Result<Self> {
         let mut retained = BTreeMap::new();
         let mut pending = vec![root.to_path_buf()];
         while let Some(path) = pending.pop() {
@@ -228,7 +229,7 @@ impl Anchors {
         }
         Ok(Self(retained))
     }
-    fn paths(paths: &[&Path]) -> Result<Self> {
+    pub(super) fn paths(paths: &[&Path]) -> Result<Self> {
         let mut retained = BTreeMap::new();
         for path in paths {
             // Alias/parent versions are retained as well as the canonical target.
@@ -247,7 +248,7 @@ impl Anchors {
         }
         Ok(Self(retained))
     }
-    fn verify(&self, deadline: Option<Instant>) -> Result<()> {
+    pub(super) fn verify(&self, deadline: Option<Instant>) -> Result<()> {
         for (path, (original, full)) in &self.0 {
             if let Some(deadline) = deadline {
                 current(deadline)?;
@@ -261,7 +262,7 @@ impl Anchors {
         }
         Ok(())
     }
-    fn verify_git(&self, repository: &Path) -> Result<()> {
+    pub(super) fn verify_git(&self, repository: &Path) -> Result<()> {
         let git = repository.join(".git");
         for (path, (original, full)) in &self.0 {
             if path.starts_with(&git) && &path_stamp(path, *full)? != original {

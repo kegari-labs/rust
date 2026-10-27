@@ -36,9 +36,10 @@ impl CheckExecutionRecord {
     /// the private producer and its enclosing original workflow/Control gates.
     pub(crate) fn validate_shape(&self) -> Result<()> {
         let schema_matches = match self.schema_version {
-            1 => self.correction.is_none() && self.bundle.is_none(),
-            2 => self.correction.is_some() && self.bundle.is_none(),
-            3 => self.bundle.is_some(),
+            1 => self.discovered.is_none() && self.correction.is_none() && self.bundle.is_none(),
+            2 => self.discovered.is_none() && self.correction.is_some() && self.bundle.is_none(),
+            3 => self.discovered.is_none() && self.bundle.is_some(),
+            4 => self.discovered.is_some(),
             _ => false,
         };
         if !schema_matches
@@ -53,7 +54,14 @@ impl CheckExecutionRecord {
         }
         crate::evidence::validate_digest(&self.binding.isolation_digest)?;
         crate::evidence::validate_digest(&self.workflow_digest)?;
-        outcome_shape(&self.command, &self.binding.isolation_digest)?;
+        let command_isolation = match &self.discovered {
+            Some(discovered) => {
+                discovered.validate_record(self)?;
+                &discovered.observation.isolation_digest
+            }
+            None => &self.binding.isolation_digest,
+        };
+        outcome_shape(&self.command, command_isolation)?;
         if let Some(correction) = &self.correction {
             for digest in [
                 &correction.original_binding_digest,
@@ -100,7 +108,7 @@ impl CheckExecutionRecord {
                 ));
             }
             for outcome in [&service.readiness, &service.terminal] {
-                outcome_shape(outcome, &self.binding.isolation_digest)?;
+                outcome_shape(outcome, command_isolation)?;
                 if outcome.cwd != self.command.cwd || !clean(outcome) {
                     return Err(malformed(
                         "check service is not a clean result in the same boundary",
@@ -141,6 +149,7 @@ mod tests {
             elapsed_ms: 1,
         };
         CheckExecutionRecord {
+            discovered: None,
             schema_version: schema,
             correction: (schema == 2).then(|| CorrectionExecutionProvenance {
                 original_binding_digest: digest.clone(),

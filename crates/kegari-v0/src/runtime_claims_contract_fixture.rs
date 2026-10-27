@@ -80,6 +80,7 @@ pub(crate) fn test_completed_contract_fixture(
         .insert(turn.clone(), "completed".into());
     session.last_completed_turn = Some(turn.clone());
     let outcome = WorkerOutcome {
+        validation_history_digest: None,
         schema_version: 1,
         runtime_id: admission.runtime_id,
         operation_id: admission.operation_id,

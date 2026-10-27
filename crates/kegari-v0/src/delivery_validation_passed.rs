@@ -248,6 +248,7 @@ impl DeliveryCoordinator {
                 "passed validation uses another actual control host",
             ));
         }
+        super::super::discovered_validation::require_legacy_continuation(completed.completion())?;
         self.current(source.admission, &[DeliveryPhase::LocalValidation])?;
         local.matches(source.admission)?;
         completed

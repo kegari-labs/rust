@@ -343,6 +343,14 @@ pub struct RunCompletion {
     pub hook_error: Option<Error>,
     pub checks: Vec<VerifiedCheckExecution>,
     pub failed_checks: Vec<crate::execution::FailedCheckExecution>,
+    /// Current host-enrolled plan, including revisions with no executed checks.
+    pub validation_plan: Option<crate::validation::ValidationPlan>,
+    /// All completed discovered attempts, including failures that cannot grant repair.
+    pub validation_attempts: Vec<crate::execution::CheckExecutionRecord>,
+    /// Missing or unsettled attempt evidence blocks delivery without erasing the run.
+    pub validation_error: Option<Error>,
+    /// Original worker inventory seal; public descriptive vectors cannot erase attempts.
+    pub validation_history: Option<crate::worker::ValidationHistorySeal>,
     /// Original host-owned checkout capability, retained for separately admitted source sealing.
     pub execution: Option<Arc<WorkerExecution>>,
     pub contract: Option<Arc<WorkerContract>>,
@@ -352,7 +360,7 @@ pub struct RunCompletion {
 }
 impl RunCompletion {
     pub fn observation(&self) -> Value {
-        json!({"operation_id":self.operation_id,"outcome":self.outcome,"error":self.error,"hook_error":self.hook_error,"session":self.state,"elapsed_ms":self.elapsed_ms,"verified_check_count":self.checks.len(),"failed_check_count":self.failed_checks.len(),"local_exit_confirmed":self.local_exit_confirmed,"completion":"worker_claim_requires_host_delivery_verification"})
+        json!({"operation_id":self.operation_id,"outcome":self.outcome,"error":self.error,"hook_error":self.hook_error,"session":self.state,"elapsed_ms":self.elapsed_ms,"verified_check_count":self.checks.len(),"failed_check_count":self.failed_checks.len(),"validation_plan_digest":self.validation_plan.as_ref().map(|plan|plan.digest()),"validation_attempt_count":self.validation_attempts.len(),"validation_error":self.validation_error,"local_exit_confirmed":self.local_exit_confirmed,"completion":"worker_claim_requires_host_delivery_verification"})
     }
 }
 struct Cancellation {
@@ -1183,8 +1191,12 @@ impl AdmittedTrial {
         let (outcome, error, hook_error) = observation.into_result();
         let hook_error = hook_error.or_else(|| after.as_ref().err().cloned());
         drop(terminal);
+        let validation_history = Some(session.broker.seal_validation_history());
+        let validation_error = session.broker.validation_history_error();
         let checks = session.broker.take_verified_checks();
         let failed_checks = session.broker.take_failed_checks();
+        let validation_plan = session.broker.take_validation_plan();
+        let validation_attempts = session.broker.take_validation_attempts();
         let session = self.session.take().expect("validated retained session");
         Ok(VerifiedTrialCompletion {
             completion: RunCompletion {
@@ -1196,6 +1208,10 @@ impl AdmittedTrial {
                 hook_error,
                 checks,
                 failed_checks,
+                validation_plan,
+                validation_attempts,
+                validation_error,
+                validation_history,
                 execution: session.execution,
                 contract: Some(session.prepared.contract),
                 local_exit_confirmed: true,
@@ -1739,6 +1755,8 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
         Err(_) if state.turns_started == 0 => RunOutcome::Blocked,
         Err(_) => RunOutcome::Failed,
     };
+    let validation_history = Some(broker.seal_validation_history());
+    let validation_error = broker.validation_history_error();
     Ok(RunCompletion {
         operation_id: permit.operation_id,
         state,
@@ -1748,6 +1766,10 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
         hook_error,
         checks: broker.take_verified_checks(),
         failed_checks: broker.take_failed_checks(),
+        validation_plan: broker.take_validation_plan(),
+        validation_attempts: broker.take_validation_attempts(),
+        validation_error,
+        validation_history,
         execution,
         contract: Some(prepared.contract.clone()),
         local_exit_confirmed: false,

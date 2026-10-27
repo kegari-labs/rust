@@ -24,6 +24,8 @@ pub use corrections::{CorrectionExecutionProvenance, EffectiveExecutionBinding};
 mod check_bundle;
 #[path = "execution_command.rs"]
 mod command;
+#[path = "execution_discovered.rs"]
+mod discovered;
 #[path = "execution_record_validation.rs"]
 mod record_validation;
 pub use check_bundle::{
@@ -33,6 +35,7 @@ pub use command::{
     CommandExecutionRecord, CommandJournalEntry, CommandPreparationRecord, CommandRequest,
     PreparedCommand, RunningCommand,
 };
+pub use discovered::{DiscoveredCheckProvenance, DiscoveredServiceObservation};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -719,10 +722,12 @@ fn executable_role(boundary: &ValidatedIsolation) -> Result<()> {
     boundary.revalidate()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckExecutionRecord {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovered: Option<DiscoveredCheckProvenance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correction: Option<CorrectionExecutionProvenance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -747,6 +752,8 @@ pub struct CheckExecutionRecord {
 pub enum CheckJournalEntry {
     Started {
         binding: Box<ExecutionBinding>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        discovered: Option<Box<DiscoveredCheckProvenance>>,
         correction: Option<CorrectionExecutionProvenance>,
         workflow_digest: String,
         check_name: String,
@@ -770,14 +777,19 @@ pub enum CheckJournalEntry {
 pub struct VerifiedCheckExecution {
     record: CheckExecutionRecord,
     effective: Option<EffectiveExecutionBinding>,
+    validation_plan: Option<crate::validation::ValidationPlan>,
 }
 
 #[derive(Debug)]
 pub struct FailedCheckExecution {
     record: CheckExecutionRecord,
     effective: Option<EffectiveExecutionBinding>,
+    validation_plan: Option<crate::validation::ValidationPlan>,
 }
 impl FailedCheckExecution {
+    pub fn validation_plan(&self) -> Option<&crate::validation::ValidationPlan> {
+        self.validation_plan.as_ref()
+    }
     pub fn effective_binding(&self) -> Option<&EffectiveExecutionBinding> {
         self.effective.as_ref()
     }
@@ -794,6 +806,7 @@ impl FailedCheckExecution {
             ));
         }
         self.record.validate_shape()?;
+        discovered::verify_capability(&self.record, self.validation_plan.as_ref())?;
         if self
             .record
             .bundle
@@ -868,6 +881,9 @@ impl RetainedArtifact {
     }
 }
 impl VerifiedCheckExecution {
+    pub fn validation_plan(&self) -> Option<&crate::validation::ValidationPlan> {
+        self.validation_plan.as_ref()
+    }
     pub fn effective_binding(&self) -> Option<&EffectiveExecutionBinding> {
         self.effective.as_ref()
     }
@@ -885,6 +901,7 @@ impl VerifiedCheckExecution {
             ));
         }
         self.record.validate_shape()?;
+        discovered::verify_capability(&self.record, self.validation_plan.as_ref())?;
         Ok(&self.record)
     }
     /// Preserve bytes outside every worker read/write root before permitting a
@@ -977,6 +994,7 @@ pub struct LocalExecutor<'a> {
 }
 #[derive(Debug)]
 pub struct PreparedCheck {
+    discovered: Option<discovered::PreparedDiscovered>,
     binding: ExecutionBinding,
     effective: Option<EffectiveExecutionBinding>,
     workflow_digest: String,
@@ -994,6 +1012,11 @@ pub struct RunningCheck {
     command: Box<dyn StartedCommand>,
 }
 impl PreparedCheck {
+    fn command_isolation<'a>(&'a self, original: &'a ValidatedIsolation) -> &'a ValidatedIsolation {
+        self.discovered
+            .as_ref()
+            .map_or(original, |value| &value.isolation)
+    }
     pub(crate) fn requires_bundle(&self) -> bool {
         !self.resolved.services.is_empty()
     }
@@ -1141,6 +1164,7 @@ impl LocalExecutor<'_> {
         let started_at = Utc::now();
         persist(&CheckJournalEntry::Started {
             binding: Box::new(invocation.binding.clone()),
+            discovered: None,
             correction: effective
                 .as_ref()
                 .map(EffectiveExecutionBinding::provenance)
@@ -1151,6 +1175,7 @@ impl LocalExecutor<'_> {
             started_at,
         })?;
         Ok(PreparedCheck {
+            discovered: None,
             binding: invocation.binding.clone(),
             effective,
             workflow_digest: invocation.workflow.digest.clone(),
@@ -1166,6 +1191,9 @@ impl LocalExecutor<'_> {
     }
     /// Recheck known no-spawn failures before reserving the effect's owned slot.
     pub fn preflight_check(&self, prepared: &PreparedCheck) -> Result<()> {
+        if let Some(discovered) = &prepared.discovered {
+            discovered.preflight(self, &prepared.binding, prepared.effective.as_ref())?;
+        }
         let original =
             self.check_ownership_binding(&prepared.binding, prepared.effective.as_ref())?;
         self.launch_identity(original)?;
@@ -1217,7 +1245,8 @@ impl LocalExecutor<'_> {
                 ));
             }
         }
-        self.boundary.preflight(self.isolation)
+        self.boundary
+            .preflight(prepared.command_isolation(self.isolation))
     }
     /// Synchronous actual process creation. The host persists sent/unknown and
     /// reserves cancellation ownership in the same serialized effect gate.
@@ -1229,12 +1258,21 @@ impl LocalExecutor<'_> {
             ));
         }
         self.preflight_check(&prepared)?;
-        let command = self.boundary.start(
-            self.isolation,
-            &prepared.resolved.argv,
-            Duration::from_millis(self.limits.command_timeout_ms),
-            self.limits.output_bytes,
-        )?;
+        let command = if let Some(discovered) = &prepared.discovered {
+            self.boundary.start_until(
+                &discovered.isolation,
+                &prepared.resolved.argv,
+                discovered.deadline,
+                self.limits.output_bytes,
+            )?
+        } else {
+            self.boundary.start(
+                self.isolation,
+                &prepared.resolved.argv,
+                Duration::from_millis(self.limits.command_timeout_ms),
+                self.limits.output_bytes,
+            )?
+        };
         Ok(RunningCheck { prepared, command })
     }
     /// Wait outside the control mutex. The host must revalidate/finalize its
@@ -1245,6 +1283,7 @@ impl LocalExecutor<'_> {
         mut persist: impl FnMut(&CheckJournalEntry) -> Result<()>,
     ) -> Result<CheckCompletion> {
         let RunningCheck { prepared, command } = running;
+        let cancellation = command.cancellation();
         let command = match command.wait().await {
             Ok(result) => result,
             Err(error) => {
@@ -1255,6 +1294,25 @@ impl LocalExecutor<'_> {
                 return Err(error);
             }
         };
+        if prepared.discovered.is_some() {
+            let closed = cancellation.exited().and_then(|closed| {
+                if closed {
+                    Ok(())
+                } else {
+                    Err(Error::new(
+                        "operation_uncertain",
+                        "discovered check lacks original command closure",
+                    ))
+                }
+            });
+            if let Err(error) = closed {
+                persist(&CheckJournalEntry::Uncertain {
+                    operation_id: prepared.binding.operation_id,
+                    error_code: error.code.clone(),
+                })?;
+                return Err(error);
+            }
+        }
         self.complete_check_result(prepared, command, None, persist)
     }
     fn complete_check_result(
@@ -1264,7 +1322,27 @@ impl LocalExecutor<'_> {
         bundle: Option<CheckBundleExecutionRecord>,
         mut persist: impl FnMut(&CheckJournalEntry) -> Result<()>,
     ) -> Result<CheckCompletion> {
+        let operation_id = prepared.binding.operation_id;
+        match self.complete_check_result_inner(prepared, command, bundle, &mut persist) {
+            Ok(completed) => Ok(completed),
+            Err(error) => {
+                persist(&CheckJournalEntry::Uncertain {
+                    operation_id,
+                    error_code: error.code.clone(),
+                })?;
+                Err(error)
+            }
+        }
+    }
+    fn complete_check_result_inner(
+        &self,
+        prepared: PreparedCheck,
+        command: CommandOutcome,
+        bundle: Option<CheckBundleExecutionRecord>,
+        mut persist: impl FnMut(&CheckJournalEntry) -> Result<()>,
+    ) -> Result<CheckCompletion> {
         let PreparedCheck {
+            discovered,
             binding,
             effective,
             workflow_digest,
@@ -1277,21 +1355,26 @@ impl LocalExecutor<'_> {
             started_at,
             evidence_class,
         } = prepared;
-        let after = match self
+        let no_exclusions = BTreeSet::new();
+        let after = self
             .check_ownership_binding(&binding, effective.as_ref())
             .and_then(|original| self.preflight(original))
             .and_then(|()| self.isolation.revalidate_resource_contents())
-            .and_then(|()| source_snapshot(self.git, self.isolation, &self.limits, &outputs))
-        {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                persist(&CheckJournalEntry::Uncertain {
-                    operation_id: binding.operation_id,
-                    error_code: error.code.clone(),
-                })?;
-                return Err(error);
-            }
-        };
+            .and_then(|()| {
+                source_snapshot(
+                    self.git,
+                    self.isolation,
+                    &self.limits,
+                    if discovered.is_some() {
+                        &no_exclusions
+                    } else {
+                        &outputs
+                    },
+                )
+            })?;
+        if let Some(discovered) = &discovered {
+            discovered.finish(self, &command, &after)?;
+        }
         let mut artifacts = Vec::new();
         let mut blocker = None;
         for path in &outputs {
@@ -1332,15 +1415,22 @@ impl LocalExecutor<'_> {
         }
         if command.argv != resolved.argv
             || command.cwd != resolved.cwd
-            || command.isolation_digest != self.isolation.digest()
+            || command.isolation_digest
+                != discovered
+                    .as_ref()
+                    .map_or(self.isolation.digest(), |value| value.isolation.digest())
         {
             return Err(Error::new(
                 "execution_identity",
                 "command receipt differs from the admitted command boundary",
             ));
         }
+        let validation_plan = discovered.as_ref().map(|value| value.plan.clone());
         let record = CheckExecutionRecord {
-            schema_version: if bundle.is_some() {
+            discovered: discovered.map(|value| value.provenance),
+            schema_version: if validation_plan.is_some() {
+                4
+            } else if bundle.is_some() {
                 3
             } else if effective.is_some() {
                 2
@@ -1376,11 +1466,13 @@ impl LocalExecutor<'_> {
             return Ok(CheckCompletion::Failed(FailedCheckExecution {
                 record: *record,
                 effective,
+                validation_plan,
             }));
         }
         Ok(CheckCompletion::Passed(VerifiedCheckExecution {
             record: *record,
             effective,
+            validation_plan,
         }))
     }
 }

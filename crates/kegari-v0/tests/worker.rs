@@ -1,5 +1,7 @@
 //! Production composition with deterministic provider/process observations only.
 //! Does not qualify OS confinement or launch any model/provider action.
+#[path = "support/pinned_git.rs"]
+mod pinned_git;
 include!("support/worker_fixture.rs");
 
 #[test]
@@ -14,7 +16,8 @@ fn roles_expose_no_implementation_or_execution_to_parent_or_review() {
             !tools
                 .iter()
                 .any(|(e, _)| e.capability == ToolCapability::SourceWrite
-                    || e.capability == ToolCapability::ValidationResult)
+                    || e.capability == ToolCapability::ValidationResult
+                    || e.capability == ToolCapability::ValidationProposal)
         );
         assert!(!role.permits(ToolCapability::SourceWrite));
     }

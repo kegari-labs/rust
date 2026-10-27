@@ -1,5 +1,63 @@
 # Kegari v0 build progress
 
+**Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-4.**
+This increment began on `main` with a clean index/tree after
+`9b5a3c1cae3069cac1564b4872ef2d01b529a6e1`
+(`feat(kegari-v0): add bounded generic command invocations`). No history rewrite
+or consolidation is planned: discovered obligations and adequacy form a separate
+reviewable boundary from nonqualifying generic invocations. SPEC 1.4 and all
+native/live restrictions remain unchanged. No minor milestone is complete.
+
+Implemented the bounded child-local discovery/validation path: actual settled
+read references, host-enrolled current plans with preserved obligations/history,
+generic checks and registered services, fresh transcripts, full attempted-result
+inventory and sticky uncertainty. Original worker seals plus protected outcome
+markers prevent pruning failures or clearing discovery metadata. Independent
+schema-2 adequacy review gates staging and final child readiness. Instruction
+assets are version 5; package remains development `0.2.0-alpha.9`.
+
+Independent reviews identified pending-plan persistence ownership, incomplete
+attempt inventory, public-history pruning and a selected-check context mismatch.
+All were corrected and rereviewed. The first broader focused run passed 51 and
+failed one new tagged-JSON assertion; its exact failure and corrected assertion
+are retained. Strict all-target Clippy and the full release regression now pass
+on frozen source `sha256:a9a22171ef5f703a0265afd6782627e6632c7698027eda63579e118ea74a4a09`:
+**1,185 passed, zero failed, three native ignored**, 40 result groups. All 738
+inputs matched after testing. No assertion was removed and no warning suppressed.
+
+Final documentation corrects the instruction README's status; that is the only
+logical-input change after the full run. Final source is
+`sha256:1a985269882a349933b0ca583611c2d8119ec388959896b31f993b398d1b0c04`.
+The exact-source development build passed; executable SHA-256 is
+`b4195c51319083275357fdd9800014e7799024340b7c9b6940a863e80af2a4dd`.
+Static metadata agrees with independently recomputed build identity
+`sha256:31202830790a08e50130ec998a793f5ca9e6948169cf554a8a963963c443fa70`
+(340 build inputs). Formatting, whitespace, inventory consistency and all 11
+inventory tests passed. All Cargo/test handles are terminal. Evidence archive:
+`target/validation/m02-discovered-1a985269882a`, 188 files plus manifest SHA-256
+`a09fe9066301ce32c6fef3b507fb3780c9b894f7b6ac1e7f86c072ff4f69b9dc`.
+No new release package or native qualification is claimed. See [the evidence report](validation/LOCAL-DISCOVERED-VALIDATION.md) and
+[MILESTONES.md](MILESTONES.md). Delegated implementation and reviews are complete.
+
+Next: remove the parent's mandatory integrated-check prerequisite together with
+actual integrated plan execution, full candidate-vector provenance and a separate
+read-only adequacy stage before readiness. Preserve the E2E prepared-source cycle
+break and all existing parent authority/dependency gates. Parent Coordination
+synthesis cannot substitute for independent adequacy. Then replace bulky inline
+publication with compact authenticated references backed by retained, verified
+full history and actual reviewer access; current publication is limited to 60 KiB
+and complete prompt assembly to 1 MiB. Neither limit may silently drop evidence.
+
+Discovered-plan continuation/recovery currently refuses rather than losing prior
+obligations. Generic environment admission, full output paging, empty/unborn
+baselines and wider actual-agent validation remain incomplete. Native viability
+still requires a separately approved bounded plan; approvals already consumed
+remain consumed. No native/live action, permission request, installation or
+runtime activation occurred. Root owns the authorized local commit; final build, inventory and source checks
+are complete. No history consolidation is performed.
+
+### Previous generic-invocation increment
+
 **Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-3.**
 The previous increment committed the automatic generic command domain as
 `aba782808a17693bd3c3bb8a29c7020ec7c21e3c`

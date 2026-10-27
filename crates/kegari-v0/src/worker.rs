@@ -11,9 +11,12 @@ mod broker_observation;
 mod command;
 #[path = "worker_command_history.rs"]
 mod command_history;
+#[path = "worker_validation.rs"]
+mod validation;
 pub(crate) use broker_observation::CaptureBudget;
 use broker_observation::{BrokerCapture, BrokerJournalReference, BrokerSemantic};
 pub use broker_observation::{BrokerControlBatch, BrokerInventory, IndependentBrokerObservation};
+pub use validation::ValidationHistorySeal;
 
 use crate::codex::{SessionState, ToolBroker, ToolCall};
 use crate::control::{Actor, ControlHost, Lease, MutationRequest, Permit};
@@ -337,6 +340,19 @@ impl ExecutionRegistry {
                 .active
                 .lock()
                 .map_err(|_| Error::new("ownership_conflict", "execution registry lock failed"))?;
+            // Discovered validation additionally owns its exact protected
+            // completion/ACK record. A terminal Control receipt alone cannot
+            // prune that owner during the subsequent journal write window.
+            if self
+                .command_settlements
+                .lock()
+                .map_err(|_| {
+                    Error::new("ownership_conflict", "command settlement registry failed")
+                })?
+                .contains(&(operation, effect))
+            {
+                continue;
+            }
             if let Some(effects) = active.get_mut(&operation) {
                 if effects
                     .get(&effect)
@@ -595,6 +611,10 @@ pub struct WorkerOutcome {
     pub processed_correction: Option<ProcessedCorrection>,
     pub claim: Value,
     pub artifact_refs: Vec<String>,
+    /// Original host inventory marker; absence is retained only for historical
+    /// readers. New production outcomes always bind their actual history seal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_history_digest: Option<String>,
     pub checks: Vec<Value>,
 }
 pub trait OutcomeSink: Send + Sync {
@@ -689,7 +709,16 @@ pub fn operation_tool_definitions(
     if role.permits_repository_execution() && executable {
         result.push(("git_inspect",ToolCapability::ContextRead,tool("git_inspect","Inspect status, diff or one exact-commit file using the host's restricted Git reader. No arbitrary arguments or mutations.",json!({"inspection":{"oneOf":[{"type":"object","properties":{"kind":{"const":"status"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"diff"},"staged":{"type":"boolean"}},"required":["kind","staged"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"show_file"},"commit":{"type":"string"},"path":{"type":"string"}},"required":["kind","commit","path"],"additionalProperties":false}]}}), &["inspection"])));
         result.push(("command_run",ToolCapability::CommandExecution,tool("command_run","Run a literal argv and repository-relative or absolute cwd through the current admitted command boundary. No shell is added, environment overrides or new permissions. Returns bounded invocation facts and protected output references; exit status does not satisfy a validation obligation.",json!({"argv":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":128},"cwd":{"type":"string","minLength":1}}), &["argv","cwd"])));
-        result.push(("validation_run",ToolCapability::ValidationResult,tool("validation_run","Run one named configured local or integrated check on the exact admitted revision through the enforced execution boundary. Returns actual evidence; no arbitrary command or artifact path.",json!({"name":{"type":"string","minLength":1},"kind":{"type":"string","enum":["local","integrated"]}}), &["name","kind"])));
+        result.push((
+            "validation_propose",
+            ToolCapability::ValidationProposal,
+            validation::proposal_tool(),
+        ));
+        result.push((
+            "validation_run",
+            ToolCapability::ValidationResult,
+            validation::run_tool(),
+        ));
     }
     if writable && role.permits_source_writes() {
         result.push(("source_write",ToolCapability::SourceWrite,tool("source_write","Replace one regular UTF-8 source file within the child's exact write grants after matching its previous digest; null means the file must not exist. Does not authorize commits or scope expansion.",json!({"path":{"type":"string"},"expected_digest":{"type":["string","null"]},"content":{"type":"string"},"executable":{"type":"boolean"}}), &["path","expected_digest","content","executable"])));
@@ -1211,6 +1240,7 @@ pub struct ScopedWorker {
     failed_checks: Vec<crate::execution::FailedCheckExecution>,
     check_records: Vec<Value>,
     command_records: Vec<Value>,
+    validation: validation::DiscoveryState,
     retained: Vec<RetainedArtifact>,
     effects: Vec<String>,
     evidence: Vec<String>,
@@ -1300,6 +1330,7 @@ impl ScopedWorker {
             failed_checks: vec![],
             check_records: vec![],
             command_records: vec![],
+            validation: validation::DiscoveryState::default(),
             retained: vec![],
             effects: vec![],
             evidence: vec![],
@@ -1768,6 +1799,8 @@ impl ScopedWorker {
                         .map_err(|_| Error::invalid("correction reference encoding"))
                 } else if a.key == "command_history" {
                     self.command_history()
+                } else if a.key == "validation_evidence" {
+                    self.validation_evidence()
                 } else {
                     let v = self.contract.context.get(&a.key).ok_or_else(|| {
                         Error::new("missing_context", "named context entry unavailable")
@@ -1775,6 +1808,7 @@ impl ScopedWorker {
                     bounded_value(v.clone())
                 };
                 if let Ok(value) = &result {
+                    self.retain_context_read(call, id, &a.key, value)?;
                     match canonical_digest(1, value).and_then(|digest| {
                         Ok((
                             digest,
@@ -1791,6 +1825,8 @@ impl ScopedWorker {
                                     "owner_correction_state"
                                 } else if a.key == "command_history" {
                                     "owner_command_history"
+                                } else if a.key == "validation_evidence" {
+                                    "owner_validation_evidence"
                                 } else {
                                     "contract_context"
                                 }
@@ -1821,7 +1857,12 @@ impl ScopedWorker {
                     });
                 if let Some(fact) = fact {
                     match fact {
-                        Ok(fact) => self.broker_semantic(id, fact),
+                        Ok(fact) => {
+                            if let Ok(value) = &result {
+                                self.retain_source_read(call, id, &fact, value)?;
+                            }
+                            self.broker_semantic(id, fact);
+                        }
                         Err(error) => self.broker_gap(&error),
                     }
                 }
@@ -2037,6 +2078,7 @@ impl ScopedWorker {
                 )
             }
             "command_run" => self.run_command(call, id).await,
+            "validation_propose" => self.propose_validation(call, id).await,
             "validation_run" => self.run_validation(call, id).await,
             _ => Err(Error::new(
                 "unsupported_tool",
@@ -2045,17 +2087,8 @@ impl ScopedWorker {
         }
     }
     async fn run_validation(&mut self, call: &ToolCall, id: Uuid) -> Result<Value> {
-        let a: ValidationArgs = parse(&call.arguments)?;
-        let kind = match a.kind.as_str() {
-            "local" => CheckKind::Local,
-            "integrated" => CheckKind::Integrated,
-            _ => {
-                return Err(Error::new(
-                    "invalid_input",
-                    "only configured local/integrated checks are executable",
-                ));
-            }
-        };
+        let selected = self.select_validation(parse(&call.arguments)?)?;
+        let attempt = selected.attempt(id);
         let execution = self
             .execution
             .clone()
@@ -2095,31 +2128,80 @@ impl ScopedWorker {
         let request = self.mutation(id, "worker_validation", call.arguments.clone());
         let handle = tokio::runtime::Handle::current();
         let executions = self.executions.clone();
-        let (receipt, verified, failed, retained) = tokio::task::spawn_blocking(move || {
+        let discovered = attempt.is_some();
+        let attempt_records = discovered.then(|| self.start_validation_attempt(id));
+        let dispatched = Arc::new(AtomicBool::new(false));
+        let dispatched_in_task = dispatched.clone();
+        let task_result = tokio::task::spawn_blocking(move || {
             let executor = execution.executor(&contract.isolation);
-            let outputs = execution
-                .check_outputs
-                .get(&a.name)
-                .cloned()
-                .unwrap_or_default();
-            let invocation = CheckInvocation {
-                binding: effective
-                    .as_ref()
-                    .map_or(&execution.binding, |binding| binding.binding()),
-                workflow: &contract.workflow,
-                name: &a.name,
-                kind,
-                additional_outputs: &outputs,
-                previous_outputs: &prior,
-            };
+            let completed_entry = Mutex::new(None);
             let persist = |entry: &crate::execution::CheckJournalEntry| {
-                journal.append("check", entry).map(|_| ())
-            };
-            let prepared = match &effective {
-                Some(effective) => {
-                    executor.prepare_effective_check(invocation, effective, persist)?
+                if discovered {
+                    if let crate::execution::CheckJournalEntry::Finished(record) = entry {
+                        attempt_records
+                            .as_ref()
+                            .expect("discovered owner")
+                            .lock()
+                            .map_err(|_| {
+                                Error::new("journal_failed", "validation observation lock failed")
+                            })?
+                            .insert(id, (**record).clone());
+                    }
+                    let reference = journal.append_scoped_entry(
+                        id,
+                        entry,
+                        "validation_check_chunk",
+                        "validation_check_entry",
+                    )?;
+                    if matches!(entry, crate::execution::CheckJournalEntry::Finished(_)) {
+                        *completed_entry.lock().map_err(|_| {
+                            Error::new("journal_failed", "validation reference lock failed")
+                        })? = Some(reference);
+                    }
+                    Ok(())
+                } else {
+                    journal.append("check", entry).map(|_| ())
                 }
-                None => executor.prepare_check(invocation, persist)?,
+            };
+            if let Some(attempt) = &attempt {
+                journal.append("validation_attempt", attempt)?;
+            }
+            let prepared = match &selected {
+                validation::SelectedRun::Configured { name, kind } => {
+                    let outputs = execution
+                        .check_outputs
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_default();
+                    let invocation = CheckInvocation {
+                        binding: effective
+                            .as_ref()
+                            .map_or(&execution.binding, |binding| binding.binding()),
+                        workflow: &contract.workflow,
+                        name,
+                        kind: kind.clone(),
+                        additional_outputs: &outputs,
+                        previous_outputs: &prior,
+                    };
+                    match &effective {
+                        Some(effective) => {
+                            executor.prepare_effective_check(invocation, effective, persist)?
+                        }
+                        None => executor.prepare_check(invocation, persist)?,
+                    }
+                }
+                validation::SelectedRun::Discovered { plan, obligation } => executor
+                    .prepare_discovered_check(
+                        effective
+                            .as_ref()
+                            .map_or(&execution.binding, |binding| binding.binding()),
+                        plan,
+                        obligation,
+                        id,
+                        &prior,
+                        effective.as_ref(),
+                        persist,
+                    )?,
             };
             let current = || {
                 host.verify_owner(&permit.lease)?;
@@ -2148,12 +2230,16 @@ impl ScopedWorker {
                         // Known no-spawn refusals precede reservation. The
                         // aggregate owner is attached before any member starts.
                         executor.preflight_bundle(&prepared)?;
-                        let reservation =
-                            executions.reserve(permit.operation_id, receipt.operation_id)?;
+                        let reservation = if attempt.is_some() {
+                            executions.reserve_command(permit.operation_id, receipt.operation_id)?
+                        } else {
+                            executions.reserve(permit.operation_id, receipt.operation_id)?
+                        };
                         reservation.attach(owner.clone())?;
                         Ok(())
                     },
                 )?;
+                dispatched_in_task.store(true, Ordering::SeqCst);
                 let completed = handle.block_on(executor.complete_bundle(
                     prepared,
                     |prepared, ordinal| {
@@ -2165,7 +2251,7 @@ impl ScopedWorker {
                             |launch| executor.launch_bundle_member(prepared, launch),
                         )
                     },
-                    |entry| journal.append("check", entry).map(|_| ()),
+                    persist,
                 ));
                 let completion = match completed {
                     Ok(completion) => completion,
@@ -2176,7 +2262,13 @@ impl ScopedWorker {
                         match control
                             .complete_check_bundle_failure(bundle, &permit, &owner, current, &error)
                         {
-                            Ok(_) => {
+                            Ok(receipt) => {
+                                if let Some(attempt) = &attempt {
+                                    journal.append(
+                                        "validation_attempt_ack",
+                                        &json!({"attempt":attempt,"receipt":receipt,"error":error}),
+                                    )?;
+                                }
                                 executions.remove(permit.operation_id, id)?;
                                 return Err(error);
                             }
@@ -2197,17 +2289,18 @@ impl ScopedWorker {
                 let (effect, running) =
                     control.begin_effect(request, &permit, current, |receipt| {
                         executor.preflight_check(&prepared)?;
-                        let reservation =
-                            executions.reserve(permit.operation_id, receipt.operation_id)?;
+                        let reservation = if attempt.is_some() {
+                            executions.reserve_command(permit.operation_id, receipt.operation_id)?
+                        } else {
+                            executions.reserve(permit.operation_id, receipt.operation_id)?
+                        };
+                        dispatched_in_task.store(true, Ordering::SeqCst);
                         let running = executor.start_check(prepared)?;
                         reservation.attach(running.cancellation())?;
                         Ok(running)
                     })?;
                 // No Control mutex is held across output or process waits.
-                let completion =
-                    handle.block_on(executor.complete_check(running, |entry| {
-                        journal.append("check", entry).map(|_| ())
-                    }))?;
+                let completion = handle.block_on(executor.complete_check(running, persist))?;
                 (ValidationEffect::Single(Box::new(effect)), completion)
             };
             let (value, verified, failed, retained) = match completion {
@@ -2228,25 +2321,61 @@ impl ScopedWorker {
                     )
                 }
             };
+            let value = if discovered {
+                let reference = completed_entry
+                    .into_inner()
+                    .map_err(|_| Error::new("journal_failed", "validation reference lock failed"))?
+                    .ok_or_else(|| {
+                        Error::new(
+                            "journal_failed",
+                            "validation completion has no protected record reference",
+                        )
+                    })?;
+                validation::result_summary(&value, &reference)?
+            } else {
+                value
+            };
             let receipt = match effect {
                 ValidationEffect::Single(effect) => {
-                    executions.remove(permit.operation_id, id)?;
+                    if attempt.is_none() {
+                        executions.remove(permit.operation_id, id)?;
+                    }
                     control.complete_effect(*effect, &permit, current, value)?
                 }
                 ValidationEffect::Bundle(bundle, owner) => {
-                    let receipt =
-                        control.complete_check_bundle(*bundle, &permit, &owner, current, value)?;
-                    executions.remove(permit.operation_id, id)?;
-                    receipt
+                    control.complete_check_bundle(*bundle, &permit, &owner, current, value)?
                 }
             };
+            if let Some(attempt) = &attempt {
+                journal.append(
+                    "validation_attempt_ack",
+                    &json!({"attempt":attempt,"receipt":receipt}),
+                )?;
+            }
+            executions.remove(permit.operation_id, id)?;
             Ok::<_, Error>((receipt, verified, failed, retained))
         })
         .await
-        .map_err(|_| Error::new("operation_uncertain", "validation dispatcher interrupted"))??;
+        .map_err(|_| Error::new("operation_uncertain", "validation dispatcher interrupted"))
+        .and_then(|result| result);
+        if discovered {
+            self.finish_validation_attempt(
+                id,
+                dispatched.load(Ordering::SeqCst),
+                &task_result.as_ref().map(|_| ()).map_err(Clone::clone),
+            );
+        }
+        let (receipt, verified, failed, retained) = task_result?;
         self.retained.extend(retained);
         let record = receipt.observed_result.unwrap_or(Value::Null);
-        if record.get("successful").is_some_and(Value::is_boolean) {
+        if discovered {
+            let actual = self.validation_attempt_record(id)?;
+            self.evidence.push(canonical_digest(1, &actual)?);
+            self.check_records.push(
+                serde_json::to_value(actual)
+                    .map_err(|_| Error::invalid("validation record encoding"))?,
+            );
+        } else if record.get("successful").is_some_and(Value::is_boolean) {
             self.evidence.push(canonical_digest(1, &record)?);
             self.check_records.push(record.clone());
         }
@@ -2313,6 +2442,7 @@ impl ScopedWorker {
                     .map(|p| p.current_authority().digest())
                     .unwrap_or_else(|| self.contract.authority.digest())?,
                 processed_correction: proposal.processed_correction.clone(),
+                validation_history_digest: Some(self.seal_validation_history().digest()?),
                 claim: proposal.claim.clone(),
                 artifact_refs: proposal.artifact_refs.clone(),
                 checks: self.check_records.clone(),
@@ -2504,6 +2634,7 @@ impl ToolBroker for ScopedWorker {
                     return Err(error);
                 }
             };
+            self.settle_validation_call(id, &finished, &result)?;
             let actual = self.calls.get_mut(&key).expect("inserted call");
             if let Some(capture) = &mut self.broker_capture {
                 capture.finished(actual.operation, finished);
@@ -3031,12 +3162,6 @@ struct SourceArgs {
 struct GitArgs {
     inspection: GitInspection,
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ValidationArgs {
-    name: String,
-    kind: String,
-}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct RecoveredWorkerSession {
@@ -3213,6 +3338,7 @@ pub fn recover_session(
                 "complete worker history exceeds the finite recovery byte bound",
             ));
         }
+        validation::refuse_cold_history(&event)?;
         if command_history.observe(&file, &event)? {
             after_hook_is_latest = false;
             continue;

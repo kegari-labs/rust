@@ -45,7 +45,7 @@ fn exact_identity_entrypoints_report_the_bound_build_and_assets() {
     assert_eq!(actual["workflow_source_schema"], 1);
     assert_eq!(actual["process_schema"], 3);
     assert_eq!(actual["managed_execution_schema"], 5);
-    assert_eq!(actual["asset_version"], "4");
+    assert_eq!(actual["asset_version"], "5");
     assert_eq!(
         actual,
         serde_json::to_value(kegari_v0::housekeeping::handover_info().unwrap()).unwrap()

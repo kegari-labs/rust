@@ -49,6 +49,53 @@ pub(super) fn completed_run(
     completion: &RunCompletion,
 ) -> Result<()> {
     let claim = outcome.outcome();
+    // The protected outcome fixes the existence and membership of the original
+    // worker's history. Public completion vectors cannot be pruned, nor can all
+    // discovery fields be cleared to enter the legacy named-check branch.
+    match claim.validation_history_digest.as_deref() {
+        Some(expected) => {
+            let seal = completion.validation_history.as_ref().ok_or_else(|| {
+                Error::new(
+                    "validation_history_binding",
+                    "protected worker outcome requires its original validation history seal",
+                )
+            })?;
+            if seal.digest()? != expected {
+                return Err(Error::new(
+                    "validation_history_binding",
+                    "validation seal differs from the protected worker outcome",
+                ));
+            }
+            seal.verify(
+                completion.operation_id,
+                completion.validation_plan.as_ref(),
+                &completion.validation_attempts,
+                completion.validation_error.as_ref(),
+            )?;
+        }
+        None if completion.validation_history.is_some()
+            || completion.validation_plan.is_some()
+            || completion.validation_error.is_some()
+            || completion
+                .validation_attempts
+                .iter()
+                .any(|r| r.discovered.is_some())
+            || completion
+                .checks
+                .iter()
+                .any(|c| c.validation_plan().is_some())
+            || completion
+                .failed_checks
+                .iter()
+                .any(|c| c.validation_plan().is_some()) =>
+        {
+            return Err(Error::new(
+                "validation_history_binding",
+                "discovered completion has no matching protected history marker",
+            ));
+        }
+        None => (),
+    }
     if completion.operation_id != claim.operation_id
         || !matches!(completion.outcome, RunOutcome::Completed)
         || completion.error.is_some()
@@ -278,6 +325,39 @@ impl DeliveryCoordinator {
                     return Err(Error::new(
                         "validation_gate",
                         "local validation needs a current completed exact-commit validation session",
+                    ));
+                }
+                if let Some(plan) = &completion.validation_plan {
+                    if validation.outcome().validation_history_digest.is_none() {
+                        return Err(Error::new(
+                            "validation_history_binding",
+                            "discovered validation requires a protected outcome history marker",
+                        ));
+                    }
+                    if let Some(error) = &completion.validation_error {
+                        return Err(error.clone());
+                    }
+                    return Ok(ChildDeliveryProgress::Local(
+                        self.verify_discovered_local(admission, workflow, completion, plan)?,
+                    ));
+                }
+                if completion.validation_error.is_some()
+                    || completion
+                        .validation_attempts
+                        .iter()
+                        .any(|r| r.discovered.is_some())
+                    || completion
+                        .checks
+                        .iter()
+                        .any(|c| c.validation_plan().is_some())
+                    || completion
+                        .failed_checks
+                        .iter()
+                        .any(|c| c.validation_plan().is_some())
+                {
+                    return Err(Error::new(
+                        "validation_plan_binding",
+                        "discovered history lost its current enrollment or remains uncertain",
                     ));
                 }
                 let required = local_requirements(self.contract(admission)?, workflow)?;
@@ -725,6 +805,7 @@ pub struct ChildReviewAssignment {
     context: Value,
     config_revision: String,
     workflow_digest: String,
+    validation: Option<Box<evidence::ValidationEvidence>>,
 }
 impl ChildReviewAssignment {
     pub(super) fn matches_worker(&self, admission: &DeliveryAdmission) -> Result<()> {
@@ -751,6 +832,8 @@ pub struct ReviewResultClaim {
     pub verdict: evidence::Verdict,
     pub unresolved_findings: Vec<String>,
     pub supporting_links: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<evidence::ValidationAssessment>,
 }
 impl DeliveryCoordinator {
     /// Component fixture only: supplies the upstream PR-assignment fact after a
@@ -782,6 +865,7 @@ impl DeliveryCoordinator {
             context: json!({"fixture_upstream_pr_assignment":true,"revision":admission.scope.revision,"claim":claim.claim()}),
             config_revision: admission.gate.config_revision().into(),
             workflow_digest: admission.gate.workflow_digest().into(),
+            validation: None,
         };
         let assignment =
             self.child_review_worker_assignment(admission, claim, source, completion, &review)?;
@@ -862,7 +946,60 @@ impl DeliveryCoordinator {
             context,
             config_revision: admission.gate.config_revision().into(),
             workflow_digest: admission.gate.workflow_digest().into(),
+            validation: None,
         })
+    }
+    /// Binds the exact original validation inventory before composing the
+    /// read-only reviewer. Preliminary mechanical completion is not adequacy.
+    pub fn prepare_child_review_with_validation(
+        &self,
+        admission: &DeliveryAdmission,
+        claim: &CompletedChildClaim,
+        target: ChildReviewTarget<'_>,
+        local: &LocalPassed,
+        base_context: Value,
+    ) -> Result<ChildReviewAssignment> {
+        local.matches(admission)?;
+        let mut assignment = self.prepare_child_review(admission, claim, target, base_context)?;
+        if let Some(validation) = &local.validation {
+            validation.validate(&admission.scope.work, &admission.scope.revision)?;
+            assignment.validation = Some(validation.clone());
+            let context = assignment
+                .context
+                .get_mut("delivery_review")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| Error::invalid("review context is not an object"))?;
+            context.insert("schema_version".into(), json!(2));
+            context.insert(
+                "validation".into(),
+                serde_json::to_value(validation)
+                    .map_err(|_| Error::invalid("encode validation review"))?,
+            );
+            context.insert(
+                "validation_evidence_digest".into(),
+                json!(validation.digest()?),
+            );
+            context.insert(
+                "validation_attempt_references".into(),
+                validation.attempt_references()?,
+            );
+            context.insert("validation_review_requirement".into(), json!("Assess sufficiency against the task and supporting repository context. Address every obligation, earlier failed attempts and all plan changes. Exit zero is an execution fact, not proof of semantic completeness. Reference actual attempt digests."));
+            context.insert("required_result_schema".into(), json!({"schema_version":2,"verdict":"pass | findings | blocked",
+                "unresolved_findings":[],"supporting_links":[],"validation":{"evidence_digest":validation.digest()?,
+                    "sufficient":false,"rationale":"assessment of the complete history and validation sufficiency",
+                    "requirements":validation.current()?.requirements.iter().map(|r| (r.id.clone(), json!({"sufficient":false,"rationale":"assessment with actual evidence","evidence_digests":[]}))).collect::<BTreeMap<_,_>>()}}));
+            if serde_json::to_vec(&assignment.context)
+                .map_err(|_| Error::invalid("encode review context"))?
+                .len()
+                > 8 * 1024 * 1024
+            {
+                return Err(Error::new(
+                    "bounded_input",
+                    "complete validation review context exceeds finite limit",
+                ));
+            }
+        }
+        Ok(assignment)
     }
     pub(super) fn completed_review_claim(
         admission: &DeliveryAdmission,
@@ -919,7 +1056,12 @@ impl DeliveryCoordinator {
         )?;
         let claim: ReviewResultClaim = serde_json::from_value(worker.claim.clone())
             .map_err(|_| Error::new("worker_claim", "review result has no supported schema"))?;
-        if claim.schema_version != 1
+        let schema = if assignment.validation.is_some() {
+            2
+        } else {
+            1
+        };
+        if claim.schema_version != schema
             || claim.unresolved_findings.len() > 256
             || claim.supporting_links.len() > 256
             || claim
@@ -933,6 +1075,20 @@ impl DeliveryCoordinator {
                 "review_gate",
                 "review result is inconsistent or exceeds finite bounds",
             ));
+        }
+        match (&assignment.validation, &claim.validation) {
+            (Some(validation), Some(assessment)) => {
+                validation.validate(&assignment.work, &assignment.revision)?;
+                validation
+                    .verify_assessment(assessment, claim.verdict == evidence::Verdict::Pass)?;
+            }
+            (None, None) => (),
+            _ => {
+                return Err(Error::new(
+                    "validation_adequacy",
+                    "review omits or invents discovered validation assessment",
+                ));
+            }
         }
         Ok(claim)
     }
@@ -960,29 +1116,55 @@ impl DeliveryCoordinator {
         )?;
         let claim = Self::completed_review_claim(admission, assignment, outcome, completion)?;
         let worker = outcome.outcome();
-        let signed =
-            self.key.sign(
-                "codex_review",
-                &evidence::ReviewAttestation {
-                    schema_version: 1,
-                    runtime_id: admission.scope.runtime_id,
-                    owner_generation: admission.permit.lease.owner_generation,
-                    operation_id: admission.operation_id(),
-                    work: assignment.work.clone(),
-                    revision: assignment.revision.clone(),
-                    pull_request: assignment.pull_request,
-                    delta_digest: assignment.delta_digest.clone(),
-                    verdict: claim.verdict,
-                    unresolved_findings: claim.unresolved_findings,
-                    supporting_links: claim.supporting_links,
-                    review: evidence::ReviewKind::Agent {
-                        session_id: worker.session.thread_id.clone().ok_or_else(|| {
-                            Error::new("review_gate", "review lacks actual thread")
-                        })?,
-                        instruction_manifest: worker.instruction_digest.clone(),
-                    },
+        let signed = self.key.sign(
+            "codex_review",
+            &evidence::ReviewAttestation {
+                schema_version: if assignment.validation.is_some() {
+                    2
+                } else {
+                    1
                 },
-            )?;
+                runtime_id: admission.scope.runtime_id,
+                owner_generation: admission.permit.lease.owner_generation,
+                operation_id: admission.operation_id(),
+                work: assignment.work.clone(),
+                revision: assignment.revision.clone(),
+                pull_request: assignment.pull_request,
+                delta_digest: assignment.delta_digest.clone(),
+                verdict: claim.verdict,
+                unresolved_findings: claim.unresolved_findings,
+                supporting_links: claim.supporting_links,
+                review: {
+                    let session_id =
+                        worker.session.thread_id.clone().ok_or_else(|| {
+                            Error::new("review_gate", "review lacks actual thread")
+                        })?;
+                    match (&assignment.validation, claim.validation) {
+                        (Some(validation), Some(assessment)) => {
+                            evidence::ReviewKind::AgentValidation {
+                                session_id,
+                                instruction_manifest: worker.instruction_digest.clone(),
+                                validation: validation.clone(),
+                                assessment,
+                            }
+                        }
+                        (None, None) => evidence::ReviewKind::Agent {
+                            session_id,
+                            instruction_manifest: worker.instruction_digest.clone(),
+                        },
+                        _ => {
+                            return Err(Error::new(
+                                "validation_adequacy",
+                                "completed review lost original validation assessment",
+                            ));
+                        }
+                    }
+                },
+            },
+        )?;
+        if assignment.validation.is_some() {
+            super::discovered_validation::publication_bounds("codex_review", &signed)?;
+        }
         self.records.write(&format!("completed-review-{}.json",admission.operation_id()),
             &self.key.sign("completed_review_provenance",&json!({"claim":outcome.digest(),"review":signed,
                 "context_digest":worker.instructions.context_digest,"completed_turn":worker.completed_turn}))?)?;
@@ -1242,6 +1424,44 @@ mod tests {
         );
     }
     #[test]
+    fn protected_history_marker_cannot_be_removed_with_public_completion_fields() {
+        let (_original, original, _) = fixture();
+        let digest = bytes_digest(b"protected original validation history");
+        let (_temp, claim, completion) = crate::runtime_claims::test_fixture_with_history_digest(
+            AgentRole::Implementation,
+            original.original_authority().work().clone(),
+            json!({"fixture":"protected history marker"}),
+            Some("a".repeat(40)),
+            json!({"fixture":"completed claim"}),
+            Some(digest.clone()),
+        );
+        assert_eq!(
+            claim.outcome().validation_history_digest.as_deref(),
+            Some(digest.as_str())
+        );
+        assert!(completion.validation_history.is_none());
+        assert!(completion.validation_plan.is_none());
+        assert!(completion.validation_attempts.is_empty());
+        assert!(completion.validation_error.is_none());
+        assert!(completion.checks.is_empty() && completion.failed_checks.is_empty());
+        assert_eq!(
+            completed_run(&claim, &completion).unwrap_err().code,
+            "validation_history_binding"
+        );
+        // This fixture passes real signature/contract/journal recovery, but
+        // intentionally has no original worker seal. No seal is fabricated.
+        let (_legacy_temp, legacy, legacy_completion) = fixture();
+        completed_run(&legacy, &legacy_completion).unwrap();
+        let mut legacy_completion =
+            Arc::try_unwrap(legacy_completion).unwrap_or_else(|_| panic!("shared fixture"));
+        legacy_completion.validation_error =
+            Some(Error::new("operation_uncertain", "unfinished validation"));
+        assert_eq!(
+            completed_run(&legacy, &legacy_completion).unwrap_err().code,
+            "validation_history_binding"
+        );
+    }
+    #[test]
     fn exact_review_validator_rejects_other_head_context_correction_and_unknown_exit() {
         let (_original_temp, original, _) = fixture();
         let context = json!({"patch":"exact protected review context"});
@@ -1288,6 +1508,7 @@ mod tests {
         };
         let admission = DeliveryAdmission::bind(permit, gate.clone(), scope).unwrap();
         let assignment = ChildReviewAssignment {
+            validation: None,
             work: gate.work().clone(),
             revision,
             delta_digest: bytes_digest(b"actual fixture delta identity"),

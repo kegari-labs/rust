@@ -425,6 +425,9 @@ impl VerifiedSessionResume {
                 .is_none_or(|error| error.code != "turn_incomplete")
             || !previous.checks.is_empty()
             || !previous.failed_checks.is_empty()
+            || previous.validation_plan.is_some()
+            || !previous.validation_attempts.is_empty()
+            || previous.validation_error.is_some()
             || previous.operation_id == manifest.operation_id
             || old.account_id() != next.contract.account_id()
             || execution.binding.operation_id != previous.operation_id

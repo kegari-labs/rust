@@ -2,11 +2,14 @@
 //! transport. Private test-seeded diagnostics are not evaluator enrollment.
 #![allow(dead_code)] // Reused fixture also supports the full integration target.
 
+use crate::test_pinned_git as pinned_git;
 include!("../tests/support/worker_fixture.rs");
 #[path = "worker_bundle_tests.rs"]
 mod bundle_tests;
 #[path = "worker_command_tests.rs"]
 mod command_tests;
+#[path = "worker_validation_tests.rs"]
+mod validation_tests;
 
 use super::super::{
     BrokerCapture, BrokerObservationState, BrokerReceiptState, CaptureBudget, OriginalRequest,

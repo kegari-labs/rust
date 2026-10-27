@@ -327,6 +327,7 @@ impl DeliveryCoordinator {
         request: ValidationRepairRequest<'_>,
         review: RepairReview,
     ) -> Result<UnfinishedChildWork> {
+        super::discovered_validation::require_legacy_continuation(&request.completion)?;
         let admission = request.source.admission;
         self.current(admission, &[DeliveryPhase::LocalValidation])?;
         self.repair_worker(
@@ -469,6 +470,12 @@ impl DeliveryCoordinator {
             request.outcome,
             &request.completion,
         )?;
+        if claim.validation.is_some() {
+            return Err(Error::new(
+                "validation_lineage_pending",
+                "discovered adequacy findings require obligation-preserving repair lineage before another implementation/validation session",
+            ));
+        }
         if claim.verdict != evidence::Verdict::Findings || claim.unresolved_findings.is_empty() {
             return Err(Error::new(
                 "no_work_trigger",
@@ -1952,6 +1959,7 @@ mod tests {
         };
         let isolation = bytes_digest(b"fixture isolation");
         CheckExecutionRecord {
+            discovered: None,
             schema_version: 1,
             correction: None,
             bundle: None,

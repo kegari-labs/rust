@@ -391,7 +391,8 @@ impl DeliveryCoordinator {
             .ok_or_else(|| Error::invalid("validation base context must be an object"))?;
         object.insert("validation_assignment".into(),json!({"work":admission.scope.work,"revision":admission.scope.revision,"source_claim":claim.digest(),
             "kind":"local","configured_checks":self.contract(admission)?.configuration.local_checks,
-            "outcome_claim":{"schema_version":1,"kind":"validation","summary":"actual configured check outcome"}}));
+            "discovery":"Read the actual task and repository context, inspect validation_evidence for settled supporting-read references, then validation_propose the complete revision-bound obligations. Configured required names remain exact argv/cwd/service constraints when present; an empty list is not a no-tests conclusion. Preserve prior attempts and explain every plan change. Run each current obligation using validation_run {plan_digest, obligation_id}. Results are execution facts; independent review assesses sufficiency. Generic command_run exit zero cannot satisfy validation.",
+            "outcome_claim":{"schema_version":1,"kind":"validation","summary":"actual discovered-obligation execution outcome and remaining blockers"}}));
         Ok(DeliveryWorkerAssignment {
             authority: admission.gate.clone(),
             phase: "child_local_validation".into(),

@@ -343,7 +343,7 @@ pub(crate) fn proposal_ids(records: &PrivateDir, admission: &Receipt) -> Result<
 #[cfg(test)]
 pub(crate) use tests::{
     test_coordination_fixture, test_coordination_fixture_with_proposal, test_fixture,
-    test_fixture_with_claim,
+    test_fixture_with_claim, test_fixture_with_history_digest,
 };
 #[cfg(test)]
 #[path = "runtime_claims_contract_fixture.rs"]
@@ -557,6 +557,7 @@ mod tests {
                 updated_at: Utc::now(),
             };
             let outcome = WorkerOutcome {
+                validation_history_digest: None,
                 schema_version: 1,
                 runtime_id: id(1),
                 operation_id: id(7),
@@ -803,8 +804,24 @@ mod tests {
         VerifiedAuthorizedOutcome,
         std::sync::Arc<crate::worker_run::RunCompletion>,
     ) {
+        test_fixture_with_history_digest(role, work, context, repository_revision, claim, None)
+    }
+    /// Signed descriptive marker fixture. It never creates a worker history seal.
+    pub(crate) fn test_fixture_with_history_digest(
+        role: AgentRole,
+        work: WorkIdentity,
+        context: Value,
+        repository_revision: Option<String>,
+        claim: Value,
+        history: Option<String>,
+    ) -> (
+        tempfile::TempDir,
+        VerifiedAuthorizedOutcome,
+        std::sync::Arc<crate::worker_run::RunCompletion>,
+    ) {
         let mut fixture = Fixture::with(role, Some(work), context, repository_revision);
         fixture.outcome.claim = claim;
+        fixture.outcome.validation_history_digest = history;
         fixture.save();
         let verified = recover_authorized(
             &fixture.key,
@@ -826,6 +843,10 @@ mod tests {
             hook_error: None,
             checks: vec![],
             failed_checks: vec![],
+            validation_plan: None,
+            validation_attempts: vec![],
+            validation_error: None,
+            validation_history: None,
             local_exit_confirmed: true,
         });
         (fixture._temp, verified, completion)

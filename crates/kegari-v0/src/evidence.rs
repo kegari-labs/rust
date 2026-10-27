@@ -333,12 +333,22 @@ pub enum ReviewKind {
         session_id: String,
         instruction_manifest: String,
     },
+    AgentValidation {
+        session_id: String,
+        instruction_manifest: String,
+        validation: Box<ValidationEvidence>,
+        assessment: ValidationAssessment,
+    },
     Derived {
         source_attestations: Vec<String>,
         selected_patches: Vec<String>,
         assembly_proof: String,
     },
 }
+
+#[path = "evidence_validation.rs"]
+mod validation;
+pub use validation::{ValidationAssessment, ValidationEvidence, ValidationRequirementAssessment};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -410,7 +420,12 @@ pub fn verify_review(
     a.work.validate()?;
     a.revision.validate()?;
     validate_digest(&a.delta_digest)?;
-    if a.schema_version != 1
+    if a.schema_version
+        != if matches!(a.review, ReviewKind::AgentValidation { .. }) {
+            2
+        } else {
+            1
+        }
         || a.runtime_id.is_nil()
         || a.operation_id.is_nil()
         || a.owner_generation == 0
@@ -438,6 +453,22 @@ pub fn verify_review(
                 ));
             }
             validate_digest(instruction_manifest)?;
+        }
+        ReviewKind::AgentValidation {
+            session_id,
+            instruction_manifest,
+            validation,
+            assessment,
+        } => {
+            if session_id.is_empty() || a.work.child.is_none() {
+                return Err(Error::new(
+                    "review_gate",
+                    "discovered child review lacks its original agent session",
+                ));
+            }
+            validate_digest(instruction_manifest)?;
+            validation.validate(&a.work, &a.revision)?;
+            validation.verify_assessment(assessment, true)?;
         }
         ReviewKind::Derived {
             source_attestations,
@@ -876,7 +907,15 @@ fn validate_child_candidate_inner(
 ) -> Result<()> {
     evidence.work.validate()?;
     evidence.revision.validate()?;
-    if evidence.schema_version != 1
+    if evidence.schema_version
+        != if matches!(
+            review.attestation.review,
+            ReviewKind::AgentValidation { .. }
+        ) {
+            2
+        } else {
+            1
+        }
         || evidence.work.child.is_none()
         || &evidence.work != requirements.work
         || &evidence.revision != requirements.revision
@@ -894,6 +933,38 @@ fn validate_child_candidate_inner(
     }
     for reference in &evidence.results_for_dependents {
         reference.validate()?;
+    }
+    if let ReviewKind::AgentValidation {
+        validation,
+        assessment,
+        ..
+    } = &review.attestation.review
+    {
+        validation.validate(&evidence.work, &evidence.revision)?;
+        validation.verify_assessment(assessment, true)?;
+        let actual: Vec<_> = evidence
+            .checks
+            .runs
+            .iter()
+            .filter(|r| r.kind == CheckKind::Local)
+            .cloned()
+            .collect();
+        if canonical_digest(1, &actual)?
+            != canonical_digest(1, &validation.runs(&evidence.revision)?)?
+            || canonical_digest(
+                1,
+                &requirements
+                    .checks
+                    .iter()
+                    .filter(|r| r.kind == CheckKind::Local)
+                    .collect::<Vec<_>>(),
+            )? != canonical_digest(1, &validation.requirements()?)?
+        {
+            return Err(Error::new(
+                "validation_adequacy",
+                "published local evidence differs from independently reviewed obligations",
+            ));
+        }
     }
     if !requirements
         .checks
@@ -995,7 +1066,10 @@ fn validate_child_candidate_inner(
                 || delta.validated_head.commit != evidence.revision.head
                 || delta.validated_head.tree != evidence.revision.tested_tree
                 || delta.review_digest()? != review.attestation.delta_digest
-                || !matches!(review.attestation.review, ReviewKind::Agent { .. })
+                || !matches!(
+                    review.attestation.review,
+                    ReviewKind::Agent { .. } | ReviewKind::AgentValidation { .. }
+                )
                 || staged.work != evidence.work
                 || staged.fulfilled_criteria != evidence.fulfilled_criteria
                 || mapping.staging_result_digest != gates.staged_result.digest()
@@ -1040,7 +1114,10 @@ fn validate_child_candidate_inner(
                         &evidence.fulfilled_criteria,
                         reason,
                     )?
-                || !matches!(review.attestation.review, ReviewKind::Agent { .. })
+                || !matches!(
+                    review.attestation.review,
+                    ReviewKind::Agent { .. } | ReviewKind::AgentValidation { .. }
+                )
             {
                 return Err(Error::new(
                     "no_change_gate",
@@ -2529,7 +2606,10 @@ pub fn derive_review(
                     && r.attestation.revision.repository == candidate.repository
                     && r.attestation.verdict == Verdict::Pass
                     && r.attestation.unresolved_findings.is_empty()
-                    && matches!(r.attestation.review, ReviewKind::Agent { .. })
+                    && matches!(
+                        r.attestation.review,
+                        ReviewKind::Agent { .. } | ReviewKind::AgentValidation { .. }
+                    )
             })
             .collect();
         if matching.len() != 1 {

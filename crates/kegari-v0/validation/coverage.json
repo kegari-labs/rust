@@ -2120,6 +2120,19 @@
           "limits": "Injected command outcomes in real scoped-worker/Control/executor/journal components; no native launch qualification or actual-agent discovery. Discovered obligations, environment admission, absent/unborn baselines, full-output paging and cold per-invocation process reconciliation remain incomplete. No check or repair capability is minted.",
           "class": "deterministic",
           "source_digest": "sha256:fb91d04590649f6f9ce668c0a864e64c0c64e268f5942b2ef14bfb7ce82bcf34"
+        },
+        {
+          "reference": "validation/LOCAL-DISCOVERED-VALIDATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Child-local plan enrollment binds actual settled source/context reads, original operation/correction, complete clean source and generic command/service observations before execution. No predefined check list is required.",
+          "tests": [
+            "src/worker_validation_tests.rs::empty_configured_checks_use_actual_enrollment_execution_chunks_and_ack",
+            "src/execution_discovered_tests.rs::stdout_only_discovered_check_retains_actual_transcript_plan_and_fixture_class"
+          ],
+          "limits": "Actual worker/Control/executor components use explicitly deterministic command outcomes; signed evidence predicate fixtures do not mint native capabilities. No native, actual-agent or human qualification. Parent integrated discovery, cross-worker lineage, large evidence transport, environment admission and empty/unborn baselines remain open. Final build differs from tested source only in instruction README prose.",
+          "class": "deterministic",
+          "source_digest": "sha256:a9a22171ef5f703a0265afd6782627e6632c7698027eda63579e118ea74a4a09"
         }
       ]
     },
@@ -2129,8 +2142,23 @@
       "line": 451,
       "sha256": "ad83f2c7eee0c0c24bd546b4ab74e3be86fa227f181d2770ae409f28ee9c7619",
       "excerpt": "The agent MUST derive a revision-bound validation-obligation record from the requested outcome, existing applicable tests/scripts/documentation, repository/CI policy and relevant d",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-DISCOVERED-VALIDATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Host-enrolled obligation histories preserve prior IDs and reasons; current-plan completeness and explicit independent adequacy are separate child gates. Protected outcome/history seals reject omitted later failures and cleared discovery metadata.",
+          "tests": [
+            "src/validation.rs::revisions_keep_obligations_and_original_history_without_catalog_or_artifact",
+            "src/worker_validation_tests.rs::original_worker_seal_refuses_omitted_failure_and_changed_plan_or_uncertainty",
+            "src/evidence_validation_tests.rs::adequacy_requires_complete_identity_current_attempt_and_explicit_sufficiency"
+          ],
+          "limits": "Actual worker/Control/executor components use explicitly deterministic command outcomes; signed evidence predicate fixtures do not mint native capabilities. No native, actual-agent or human qualification. Parent integrated discovery, cross-worker lineage, large evidence transport, environment admission and empty/unborn baselines remain open. Final build differs from tested source only in instruction README prose.",
+          "class": "deterministic",
+          "source_digest": "sha256:a9a22171ef5f703a0265afd6782627e6632c7698027eda63579e118ea74a4a09"
+        }
+      ]
     },
     {
       "id": "clause:7.6:fef549c8a38d",
@@ -2170,6 +2198,20 @@
           "limits": "Injected command outcomes in real scoped-worker/Control/executor/journal components; no native launch qualification or actual-agent discovery. Discovered obligations, environment admission, absent/unborn baselines, full-output paging and cold per-invocation process reconciliation remain incomplete. No check or repair capability is minted.",
           "class": "deterministic",
           "source_digest": "sha256:fb91d04590649f6f9ce668c0a864e64c0c64e268f5942b2ef14bfb7ce82bcf34"
+        },
+        {
+          "reference": "validation/LOCAL-DISCOVERED-VALIDATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Current-plan execution rejects changed reads/source, old plan IDs and unresolved persistence. Actual protected history binds every attempt, effective context and original owner; unsupported recovery refuses.",
+          "tests": [
+            "src/worker_validation_tests.rs::forged_read_changed_source_and_replaced_finished_record_refuse_enrollment",
+            "src/worker_validation_tests.rs::revisions_keep_obligation_history_old_attempts_and_reject_old_plan_execution",
+            "src/worker_validation_tests.rs::revised_plan_settlement_write_failure_keeps_original_pending_owner_and_old_evidence"
+          ],
+          "limits": "Actual worker/Control/executor components use explicitly deterministic command outcomes; signed evidence predicate fixtures do not mint native capabilities. No native, actual-agent or human qualification. Parent integrated discovery, cross-worker lineage, large evidence transport, environment admission and empty/unborn baselines remain open. Final build differs from tested source only in instruction README prose.",
+          "class": "deterministic",
+          "source_digest": "sha256:a9a22171ef5f703a0265afd6782627e6632c7698027eda63579e118ea74a4a09"
         }
       ]
     },
@@ -2195,6 +2237,20 @@
           "limits": "Injected command outcomes in real scoped-worker/Control/executor/journal components; no native launch qualification or actual-agent discovery. Discovered obligations, environment admission, absent/unborn baselines, full-output paging and cold per-invocation process reconciliation remain incomplete. No check or repair capability is minted.",
           "class": "deterministic",
           "source_digest": "sha256:fb91d04590649f6f9ce668c0a864e64c0c64e268f5942b2ef14bfb7ce82bcf34"
+        },
+        {
+          "reference": "validation/LOCAL-DISCOVERED-VALIDATION.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Discovered checks retain full bounded chunked completion evidence and fresh host transcripts after original process/service closure. Later failed/unknown attempts block earlier passes; schema2 adequacy remains separate from mechanical success.",
+          "tests": [
+            "src/worker_validation_tests.rs::discovered_service_bundle_joins_all_writers_before_artifact_and_transcript_capture",
+            "src/worker_validation_tests.rs::newer_failed_and_unknown_attempts_cannot_hide_behind_an_earlier_pass",
+            "src/evidence_validation_tests.rs::signed_review_schema_cannot_implicitly_promote_legacy_or_insufficient_assessment"
+          ],
+          "limits": "Actual worker/Control/executor components use explicitly deterministic command outcomes; signed evidence predicate fixtures do not mint native capabilities. No native, actual-agent or human qualification. Parent integrated discovery, cross-worker lineage, large evidence transport, environment admission and empty/unborn baselines remain open. Final build differs from tested source only in instruction README prose.",
+          "class": "deterministic",
+          "source_digest": "sha256:a9a22171ef5f703a0265afd6782627e6632c7698027eda63579e118ea74a4a09"
         }
       ]
     },

@@ -514,7 +514,8 @@ impl DeliveryCoordinator {
         let mut runs = Vec::new();
         for execution in executions {
             let record = execution.production_evidence()?;
-            if record.binding.work != admission.scope.work
+            if record.discovered.is_some()
+                || record.binding.work != admission.scope.work
                 || record.workflow_digest != workflow.digest
                 || record.binding.repository != admission.scope.repository
                 || record.binding.revision.commit != admission.scope.revision.tested_commit
@@ -562,6 +563,7 @@ impl DeliveryCoordinator {
             revision: admission.scope.revision.clone(),
             workflow_digest: workflow.digest.clone(),
             checks,
+            validation: None,
         })
     }
 }
@@ -707,6 +709,7 @@ pub struct LocalPassed {
     revision: RevisionBinding,
     workflow_digest: String,
     checks: Vec<CheckRun>,
+    validation: Option<Box<evidence::ValidationEvidence>>,
 }
 impl LocalPassed {
     pub fn checks(&self) -> &[CheckRun] {
@@ -2139,6 +2142,7 @@ impl DeliveryCoordinator {
         self.current(admission, &[DeliveryPhase::Staging])?;
         gates.pull_request.matches(admission)?;
         gates.local.matches(admission)?;
+        gates.local.verify_review_adequacy(gates.review)?;
         gates.hosted.matches(admission, CheckKind::HostedCi)?;
         gates.proposal.matches(admission)?;
         let proposed = gates.proposal.review();
@@ -2352,6 +2356,7 @@ impl DeliveryCoordinator {
     ) -> Result<PublishedChild> {
         self.current(admission, &[DeliveryPhase::Staging])?;
         completion.local.matches(admission)?;
+        completion.local.verify_review_adequacy(completion.review)?;
         completion.hosted.matches(admission, CheckKind::HostedCi)?;
         if completion.workflow.digest != admission.gate.workflow_digest()
             || completion.staged.delta.manifest.review_digest()?
@@ -2384,7 +2389,7 @@ impl DeliveryCoordinator {
             digest: completion.staged.delta.manifest.digest()?,
         });
         let child = evidence::ChildEvidence {
-            schema_version: 1,
+            schema_version: completion.local.child_schema(),
             work: admission.scope.work.clone(),
             revision: admission.scope.revision.clone(),
             fulfilled_criteria: completion.criteria.clone(),
@@ -2403,7 +2408,7 @@ impl DeliveryCoordinator {
         let signed = self.key.sign(
             "child_result",
             &ChildResultRecord {
-                schema_version: 1,
+                schema_version: completion.local.child_schema(),
                 runtime_id: admission.scope.runtime_id,
                 publication_operation: admission.operation_id(),
                 contract_digest: admission.scope.contract_digest.clone(),
@@ -2430,6 +2435,9 @@ impl DeliveryCoordinator {
             Error::new("scope_violation", "only a child may publish a child result")
         })?;
         self.validate_child_draft(admission, workflow, criteria, &signed)?;
+        if signed.payload.schema_version == 2 {
+            discovered_validation::publication_bounds("child_result", &signed)?;
+        }
         let receipt = self
             .effect(
                 admission,
@@ -2475,7 +2483,16 @@ impl DeliveryCoordinator {
     )> {
         self.key.verify("child_result", signed)?;
         let r = &signed.payload;
-        if r.schema_version != 1
+        let expected_schema = if matches!(
+            r.review.payload.review,
+            evidence::ReviewKind::AgentValidation { .. }
+        ) {
+            2
+        } else {
+            1
+        };
+        if r.schema_version != expected_schema
+            || r.evidence.schema_version != expected_schema
             || r.runtime_id != admission.scope.runtime_id
             || r.publication_operation.is_nil()
             || r.contract_digest != admission.scope.contract_digest
@@ -2533,7 +2550,19 @@ impl DeliveryCoordinator {
                 ));
             }
         }
-        let mut required = local_requirements(contract, workflow)?;
+        let mut required = match &review.attestation().review {
+            evidence::ReviewKind::AgentValidation { validation, .. } => {
+                if validation.current()?.workflow_digest != workflow.digest {
+                    return Err(Error::new(
+                        "stale_result",
+                        "discovered validation workflow changed",
+                    ));
+                }
+                validation.verify_configured(&contract.configuration.local_checks, workflow)?;
+                validation.requirements()?
+            }
+            _ => local_requirements(contract, workflow)?,
+        };
         if matches!(r.evidence.outcome, evidence::ChildOutcome::NoChange { .. }) {
             required.extend(exact_requirements(contract)?);
         } else {
@@ -2982,6 +3011,7 @@ impl DeliveryCoordinator {
     ) -> Result<PublishedChild> {
         self.current(admission, &[DeliveryPhase::NoChange])?;
         completion.local.matches(admission)?;
+        completion.local.verify_review_adequacy(completion.review)?;
         completion
             .exact
             .hosted
@@ -3016,7 +3046,7 @@ impl DeliveryCoordinator {
             .flat_map(|c| c.artifacts.iter().cloned())
             .collect();
         let child = evidence::ChildEvidence {
-            schema_version: 1,
+            schema_version: completion.local.child_schema(),
             work: admission.scope.work.clone(),
             revision: admission.scope.revision.clone(),
             fulfilled_criteria: completion.criteria.clone(),
@@ -3040,7 +3070,7 @@ impl DeliveryCoordinator {
         let signed = self.key.sign(
             "child_result",
             &ChildResultRecord {
-                schema_version: 1,
+                schema_version: completion.local.child_schema(),
                 runtime_id: admission.scope.runtime_id,
                 publication_operation: admission.operation_id(),
                 contract_digest: admission.scope.contract_digest.clone(),
@@ -4647,6 +4677,8 @@ pub use parent::*;
 pub(crate) use parent::{ParentOriginRecord, PreparedParentRunOrigin, read_parent_run_origin};
 #[path = "delivery_child.rs"]
 mod child;
+#[path = "delivery_discovered_validation.rs"]
+mod discovered_validation;
 pub use child::*;
 
 #[path = "delivery_release.rs"]

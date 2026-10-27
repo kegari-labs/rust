@@ -811,6 +811,7 @@ impl DeliveryCoordinator {
     }
 }
 fn failed_validation(completion: &RunCompletion) -> Result<()> {
+    super::discovered_validation::require_legacy_continuation(completion)?;
     if !completion.local_exit_confirmed
         || !matches!(completion.outcome, RunOutcome::Failed)
         || completion.hook_error.is_some()

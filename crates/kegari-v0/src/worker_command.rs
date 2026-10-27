@@ -70,6 +70,15 @@ impl Journal {
         invocation_id: Uuid,
         entry: &CommandJournalEntry,
     ) -> Result<CommandEntryReference> {
+        self.append_scoped_entry(invocation_id, entry, "command_chunk", "command_entry")
+    }
+    pub(super) fn append_scoped_entry(
+        &self,
+        invocation_id: Uuid,
+        entry: &impl Serialize,
+        chunk_kind: &str,
+        entry_kind: &str,
+    ) -> Result<CommandEntryReference> {
         let mut bytes = EntryBytes(Vec::new());
         serde_json::to_writer(&mut bytes, entry).map_err(|_| {
             Error::new(
@@ -117,9 +126,9 @@ impl Journal {
                 index: index as u32,
                 payload_hex: hex::encode(payload),
             };
-            events.push(json!({"kind":"command_chunk","record":chunk,"observed_at":at}));
+            events.push(json!({"kind":chunk_kind,"record":chunk,"observed_at":at}));
         }
-        events.push(json!({"kind":"command_entry","record":reference,"observed_at":at}));
+        events.push(json!({"kind":entry_kind,"record":reference,"observed_at":at}));
         let total = events.iter().try_fold(0usize, |total, event| {
             let size = serde_json::to_vec(event)
                 .map_err(|_| Error::invalid("command event encoding"))?
@@ -143,7 +152,7 @@ impl Journal {
         Ok(reference)
     }
 }
-fn preview(text: &str) -> &str {
+pub(super) fn preview(text: &str) -> &str {
     let mut end = text.len().min(4096);
     while !text.is_char_boundary(end) {
         end -= 1;

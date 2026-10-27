@@ -61,10 +61,22 @@ generic boundary. It records actual source, environment and outcome observations
 it does not mint check evidence or authorize broader access. Results include
 bounded output previews and protected history references, also available through
 `context_read` with key `command_history`. Native qualification remains closed.
-Discovered validation obligations, complete output paging and empty/unborn Git
-runtime support remain separate implementation work. Empty configured check sets
-are accepted as undiscovered inputs; dependent validation/delivery gates still
-refuse missing obligations and do not count them as passes.
+Child-local workers use actual settled source/context reads to enroll obligations
+with `validation_propose`, then execute the current plan with `validation_run`.
+`context_read` with key `validation_evidence` supplies observed read references
+and the current plan identity. No configured check list or custom report format
+is needed; the host retains an actual command transcript. Plan revisions retain
+earlier obligations and attempts. Independent review must assess the exact
+history's adequacy before final staging/readiness. Commands and enrolled plans
+alone are not passes. See `validation.md` for the actual tool contract.
+
+Parent integrated discovery, discovered-plan continuation/recovery, complete
+output paging and empty/unborn Git runtime support remain implementation work.
+Current review history travels inline and must fit the actual prompt/publication
+bounds; oversized histories refuse rather than disappearing. Empty configured
+check sets are valid undiscovered inputs; missing or unrun obligations still
+block dependent delivery. This child-local increment does not qualify the native
+backend, actual-agent behavior or the complete default-workflow lifecycle.
 
 A file workflow records its actual canonical path and byte digest. The installed
 default records an explicit embedded version/digest and has no filesystem path.

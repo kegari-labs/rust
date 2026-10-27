@@ -1,5 +1,3 @@
-#[path = "pinned_git.rs"]
-mod pinned_git;
 #[path = "worker_bundle.rs"]
 #[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
 mod worker_bundle;

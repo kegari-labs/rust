@@ -17,7 +17,7 @@ mod resume;
 pub use resume::{ResumeSemantics, VerifiedResumeInstructions};
 
 pub const ASSEMBLY_SCHEMA: u32 = 1;
-pub const ASSET_VERSION: &str = "4";
+pub const ASSET_VERSION: &str = "5";
 pub const MAX_CONTEXT_BYTES: usize = 1_048_576;
 pub const SUPPORTED_CODEX_VERSION: &str = "0.164.0-alpha.11.1";
 pub const STARTER: &str = include_str!("../examples/WORKFLOW.md");
@@ -66,6 +66,7 @@ impl AgentRole {
                 matches!(self, Self::Review | Self::IndependentReview)
             }
             ToolCapability::CommandExecution => self.permits_repository_execution(),
+            ToolCapability::ValidationProposal => self.permits_repository_execution(),
             ToolCapability::ValidationResult => matches!(
                 self,
                 Self::Implementation | Self::Testing | Self::Documentation | Self::Validation
@@ -95,6 +96,7 @@ pub enum ToolCapability {
     ReviewFeedback,
     ValidationResult,
     CommandExecution,
+    ValidationProposal,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

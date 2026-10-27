@@ -598,7 +598,7 @@ pub fn execution_name(
     ))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandOutcome {
     pub schema_version: u32,
