@@ -65,6 +65,7 @@ impl AgentRole {
             ToolCapability::ReviewFeedback => {
                 matches!(self, Self::Review | Self::IndependentReview)
             }
+            ToolCapability::CommandExecution => self.permits_repository_execution(),
             ToolCapability::ValidationResult => matches!(
                 self,
                 Self::Implementation | Self::Testing | Self::Documentation | Self::Validation
@@ -93,6 +94,7 @@ pub enum ToolCapability {
     CorrectionProposal,
     ReviewFeedback,
     ValidationResult,
+    CommandExecution,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

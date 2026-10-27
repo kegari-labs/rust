@@ -1,5 +1,59 @@
 # Kegari v0 build progress
 
+**Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-3.**
+The previous increment committed the automatic generic command domain as
+`aba782808a17693bd3c3bb8a29c7020ec7c21e3c`
+(`feat(kegari-v0)!: replace tool catalogs with automatic command domains`).
+No commits were consolidated. This turn began on `main` with a clean index/tree.
+SPEC 1.4, native/live restrictions and the [milestone sequence](MILESTONES.md)
+remain unchanged. No minor milestone is complete.
+
+The generic invocation increment adds `command_run` with literal argv/cwd,
+automatic observations, original authority/deadline, bounded output and protected
+history. Command outcomes do not satisfy validation gates or mint repair
+capabilities. Corrected work retains its original admission and ownership;
+unsettled history blocks replay. See [the command evidence report](validation/LOCAL-GENERIC-COMMANDS.md).
+
+The first full run retained 1,148 passes, four reader failures and three native
+ignores. The schema-5 policy decoder mismatch was corrected; independent review
+also tightened retained correction scope and exact deadline equality. All 12
+focused worker tests then passed, followed by a full corrected run with **1,153
+passes, zero failures and three native ignores** on source
+`sha256:2339ab5060cbcb8fafba32a0ee2a97e7a2815798bfe974c10e7c4a9ac4a7ba28`.
+
+Final lint found duplicate shared test modules and two arithmetic style warnings.
+The test fixture is now included once; all 12 test bodies/assertions remain exact.
+The two remainder checks use the equivalent standard method. Independent
+four-file correspondence review reproduced all prior hashes. Final all-target
+clippy with `-D warnings` passed on source
+`sha256:fb91d04590649f6f9ce668c0a864e64c0c64e268f5942b2ef14bfb7ce82bcf34`.
+Final-source worker component tests passed 34; execution/resume/worker integration
+passed 71. Release-profile development build, formatting and inventory checks
+passed. All Cargo/test handles are terminal; reviews and delegated edits are done.
+The exact-source executable remains development `0.2.0-alpha.9`, SHA-256
+`168c9f0a55171a5d6b1285cf797cc676f9e7a842b8b8dbb88f4f1a06a5982fab`;
+its independently recomputed build identity is
+`sha256:50ec7a399074b414487bf36e8f4f462ecce82296caf969400511ebc1768543ab`.
+Evidence is retained in `target/validation/m02-command-fb91d0459064`, 29 files plus
+manifest SHA-256 `976d9d79b511477bfe0571aac4cee913a58813b3305dfd75c1cca3ff1603b87c`.
+Metadata remains handover 4 / managed 5 / process 3 / workflow-source 1 / assets 4.
+No new release package, installation, provider action or runtime activation.
+
+The invocation/effect lifecycle is a separate coherent increment from the prior
+configuration/domain migration. Preserve those distinct review/evidence boundaries;
+no history rewrite or consolidation is performed. Root owns the authorized local
+commit. Failed and uncertain disposable fixture evidence remains at paths in the
+retained logs; those injected outcomes do not represent a running native process.
+
+Next: bind discovered validation obligations to source/correction identities and
+independent adequacy review, then replace the transitional named-check gate.
+External environment admission, full output paging, empty/unborn baselines and
+cold invocation/process reconciliation also remain open. Native viability remains
+separately blocked pending explicit bounded approval; no native/live action or
+permission request is made while unattended. No minor milestone is complete.
+
+### Previous automatic-domain increment
+
 **Goal active and incomplete; unattended. Target: 0.2.0 / M02-1–M02-2.**
 The prior turn made verified progress in commits `820a618` (process guards) and
 `97a9d027915e28d95ec8f54c54c89e3d92143759` (installed generic workflow); no

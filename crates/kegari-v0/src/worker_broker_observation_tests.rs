@@ -16,6 +16,8 @@ fn journal(root: &PrivateDir) -> Journal {
         dir,
         _lock: lock,
         next: Mutex::new(0),
+        bytes: AtomicUsize::new(0),
+        failed: AtomicBool::new(false),
     }
 }
 #[test]

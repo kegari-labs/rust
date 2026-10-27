@@ -5,6 +5,8 @@
 include!("../tests/support/worker_fixture.rs");
 #[path = "worker_bundle_tests.rs"]
 mod bundle_tests;
+#[path = "worker_command_tests.rs"]
+mod command_tests;
 
 use super::super::{
     BrokerCapture, BrokerObservationState, BrokerReceiptState, CaptureBudget, OriginalRequest,

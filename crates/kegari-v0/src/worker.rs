@@ -7,6 +7,10 @@ pub(crate) use retirement::{ParentJournalHistory, capture_parent_journal};
 mod boundary;
 #[path = "worker_broker_observation.rs"]
 mod broker_observation;
+#[path = "worker_command.rs"]
+mod command;
+#[path = "worker_command_history.rs"]
+mod command_history;
 pub(crate) use broker_observation::CaptureBudget;
 use broker_observation::{BrokerCapture, BrokerJournalReference, BrokerSemantic};
 pub use broker_observation::{BrokerControlBatch, BrokerInventory, IndependentBrokerObservation};
@@ -59,6 +63,8 @@ type ActiveCommands =
 #[derive(Default)]
 pub struct ExecutionRegistry {
     active: Mutex<ActiveCommands>,
+    // Generic invocation closure includes its journal and Control acknowledgment.
+    command_settlements: Mutex<BTreeSet<(Uuid, Uuid)>>,
 }
 
 enum ReservedCommand {
@@ -158,6 +164,17 @@ impl ExecutionRegistry {
         Ok(Some(handle))
     }
     pub(crate) fn reserve(&self, operation: Uuid, effect: Uuid) -> Result<ExecutionReservation> {
+        self.reserve_inner(operation, effect, false)
+    }
+    fn reserve_command(&self, operation: Uuid, effect: Uuid) -> Result<ExecutionReservation> {
+        self.reserve_inner(operation, effect, true)
+    }
+    fn reserve_inner(
+        &self,
+        operation: Uuid,
+        effect: Uuid,
+        retain_until_settled: bool,
+    ) -> Result<ExecutionReservation> {
         let mut active = self
             .active
             .lock()
@@ -180,6 +197,14 @@ impl ExecutionRegistry {
                 "record_limit",
                 "owned command registry exceeds its finite inventory",
             ));
+        }
+        if retain_until_settled {
+            self.command_settlements
+                .lock()
+                .map_err(|_| {
+                    Error::new("ownership_conflict", "command settlement registry failed")
+                })?
+                .insert((operation, effect));
         }
         let slot = Arc::new(CommandSlot::default());
         active
@@ -213,6 +238,10 @@ impl ExecutionRegistry {
             .active
             .lock()
             .map_err(|_| Error::new("ownership_conflict", "execution registry lock failed"))?;
+        self.command_settlements
+            .lock()
+            .map_err(|_| Error::new("ownership_conflict", "command settlement registry failed"))?
+            .remove(&(operation, effect));
         if let Some(effects) = active.get_mut(&operation) {
             effects.remove(&effect);
             if effects.is_empty() {
@@ -238,6 +267,10 @@ impl ExecutionRegistry {
             .active
             .lock()
             .map_err(|_| Error::new("ownership_conflict", "execution registry lock failed"))?;
+        let settlements = self
+            .command_settlements
+            .lock()
+            .map_err(|_| Error::new("ownership_conflict", "command settlement registry failed"))?;
         let mut removed = 0;
         if let Some(effects) = active.get_mut(&operation) {
             let exited = effects
@@ -246,7 +279,9 @@ impl ExecutionRegistry {
                     // Process exit precedes bundle artifact capture and Control
                     // ACK. Keep that original owner until terminal-aware pruning
                     // or the worker's explicit post-ACK removal.
-                    if handle.check_bundle_owner().is_some() {
+                    if handle.check_bundle_owner().is_some()
+                        || settlements.contains(&(operation, *id))
+                    {
                         Ok((*id, false))
                     } else {
                         handle.exited().map(|exited| (*id, exited))
@@ -653,6 +688,7 @@ pub fn operation_tool_definitions(
     ];
     if role.permits_repository_execution() && executable {
         result.push(("git_inspect",ToolCapability::ContextRead,tool("git_inspect","Inspect status, diff or one exact-commit file using the host's restricted Git reader. No arbitrary arguments or mutations.",json!({"inspection":{"oneOf":[{"type":"object","properties":{"kind":{"const":"status"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"diff"},"staged":{"type":"boolean"}},"required":["kind","staged"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"show_file"},"commit":{"type":"string"},"path":{"type":"string"}},"required":["kind","commit","path"],"additionalProperties":false}]}}), &["inspection"])));
+        result.push(("command_run",ToolCapability::CommandExecution,tool("command_run","Run a literal argv and repository-relative or absolute cwd through the current admitted command boundary. No shell is added, environment overrides or new permissions. Returns bounded invocation facts and protected output references; exit status does not satisfy a validation obligation.",json!({"argv":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":128},"cwd":{"type":"string","minLength":1}}), &["argv","cwd"])));
         result.push(("validation_run",ToolCapability::ValidationResult,tool("validation_run","Run one named configured local or integrated check on the exact admitted revision through the enforced execution boundary. Returns actual evidence; no arbitrary command or artifact path.",json!({"name":{"type":"string","minLength":1},"kind":{"type":"string","enum":["local","integrated"]}}), &["name","kind"])));
     }
     if writable && role.permits_source_writes() {
@@ -1008,6 +1044,9 @@ struct Journal {
     dir: PrivateDir,
     _lock: ExclusiveLock,
     next: Mutex<u64>,
+    // Accessed only while `next` is locked; reservations never roll back after I/O.
+    bytes: std::sync::atomic::AtomicUsize,
+    failed: AtomicBool,
 }
 impl Journal {
     fn verify_scope(dir: &PrivateDir, contract: &WorkerContract) -> Result<()> {
@@ -1051,6 +1090,8 @@ impl Journal {
             dir,
             _lock: lock,
             next: Mutex::new(0),
+            bytes: std::sync::atomic::AtomicUsize::new(0),
+            failed: AtomicBool::new(false),
         })
     }
     fn append(&self, kind: &str, value: &impl Serialize) -> Result<String> {
@@ -1082,6 +1123,12 @@ impl Journal {
             .next
             .lock()
             .map_err(|_| Error::new("journal_failed", "worker journal serialization failed"))?;
+        if self.failed.load(Ordering::SeqCst) {
+            return Err(Error::new(
+                "journal_failed",
+                "prior worker journal write is unresolved",
+            ));
+        }
         if *seq >= 65_536 {
             return Err(Error::new(
                 "journal_limit",
@@ -1101,7 +1148,11 @@ impl Journal {
         if let Some(budget) = budget {
             budget.reserve(reference.bytes as usize)?;
         }
-        self.dir.write(&leaf, &written)?;
+        self.reserve_bytes(reference.bytes as usize)?;
+        if let Err(error) = self.dir.write(&leaf, &written) {
+            self.failed.store(true, Ordering::SeqCst);
+            return Err(error);
+        }
         *seq += 1;
         Ok(reference)
     }
@@ -1159,6 +1210,7 @@ pub struct ScopedWorker {
     checks: Vec<VerifiedCheckExecution>,
     failed_checks: Vec<crate::execution::FailedCheckExecution>,
     check_records: Vec<Value>,
+    command_records: Vec<Value>,
     retained: Vec<RetainedArtifact>,
     effects: Vec<String>,
     evidence: Vec<String>,
@@ -1247,6 +1299,7 @@ impl ScopedWorker {
             checks: vec![],
             failed_checks: vec![],
             check_records: vec![],
+            command_records: vec![],
             retained: vec![],
             effects: vec![],
             evidence: vec![],
@@ -1713,6 +1766,8 @@ impl ScopedWorker {
                 let result = if a.key == "correction_state" {
                     serde_json::to_value(self.correction_requirement())
                         .map_err(|_| Error::invalid("correction reference encoding"))
+                } else if a.key == "command_history" {
+                    self.command_history()
                 } else {
                     let v = self.contract.context.get(&a.key).ok_or_else(|| {
                         Error::new("missing_context", "named context entry unavailable")
@@ -1734,6 +1789,8 @@ impl ScopedWorker {
                                 key: a.key.clone(),
                                 origin: if a.key == "correction_state" {
                                     "owner_correction_state"
+                                } else if a.key == "command_history" {
+                                    "owner_command_history"
                                 } else {
                                     "contract_context"
                                 }
@@ -1979,6 +2036,7 @@ impl ScopedWorker {
                         .map_err(|_| Error::invalid("Git receipt encoding"))?,
                 )
             }
+            "command_run" => self.run_command(call, id).await,
             "validation_run" => self.run_validation(call, id).await,
             _ => Err(Error::new(
                 "unsupported_tool",
@@ -3127,6 +3185,8 @@ pub fn recover_session(
     let mut after_hook = None;
     let mut after_hook_error = false;
     let mut after_hook_is_latest = false;
+    let mut command_history =
+        command_history::CommandHistory::new(admission, &manifest, tool_contract);
     for (index, file) in files
         .into_iter()
         .filter(|file| file != "binding.json")
@@ -3152,6 +3212,10 @@ pub fn recover_session(
                 "journal_limit",
                 "complete worker history exceeds the finite recovery byte bound",
             ));
+        }
+        if command_history.observe(&file, &event)? {
+            after_hook_is_latest = false;
+            continue;
         }
         if event["kind"] == "after_hook" {
             if after_hook.is_some()
@@ -3285,6 +3349,7 @@ pub fn recover_session(
             resume_origin: None,
         });
     }
+    command_history.ensure_settled()?;
     if let Some(latest) = &mut latest {
         if intervention.is_some() {
             latest.state.intervention = intervention;
@@ -3345,16 +3410,33 @@ impl RecoveryJournal {
                 "recovery journal differs from its retained contract and candidate",
             ));
         }
-        let count = dir
-            .records_bounded(65_537)?
-            .into_iter()
-            .filter(|name| name != "binding.json")
-            .count();
+        let files = dir.records_bounded(65_537)?;
+        let mut bytes = 0usize;
+        let mut count = 0u64;
+        for name in files.into_iter().filter(|name| name != "binding.json") {
+            let value: Value = dir.read(&name)?;
+            bytes = bytes
+                .checked_add(
+                    serde_json::to_vec(&value)
+                        .map_err(|_| Error::invalid("journal encoding"))?
+                        .len(),
+                )
+                .ok_or_else(|| Error::new("journal_limit", "journal size overflow"))?;
+            count += 1;
+        }
+        if bytes > command::MAX_HISTORY_BYTES {
+            return Err(Error::new(
+                "journal_limit",
+                "worker history exceeds its recovery bound",
+            ));
+        }
         Ok(Self {
             journal: Journal {
                 dir,
                 _lock: lock,
-                next: Mutex::new(count as u64),
+                next: Mutex::new(count),
+                bytes: std::sync::atomic::AtomicUsize::new(bytes),
+                failed: AtomicBool::new(false),
             },
             candidate: actual,
             host,

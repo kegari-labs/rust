@@ -56,7 +56,12 @@ The default declares no executable catalog, check commands or hooks. It directs
 the agent to discover relevant guidance, environment and validation from the
 actual permitted task/repository context, including an empty or unborn repository.
 This guidance does not establish an execution facility or missing source evidence.
-Dynamic command admission, discovered validation obligations and empty/unborn Git
+The worker's `command_run` accepts literal `argv` and `cwd` through its admitted
+generic boundary. It records actual source, environment and outcome observations;
+it does not mint check evidence or authorize broader access. Results include
+bounded output previews and protected history references, also available through
+`context_read` with key `command_history`. Native qualification remains closed.
+Discovered validation obligations, complete output paging and empty/unborn Git
 runtime support remain separate implementation work. Empty configured check sets
 are accepted as undiscovered inputs; dependent validation/delivery gates still
 refuse missing obligations and do not count them as passes.

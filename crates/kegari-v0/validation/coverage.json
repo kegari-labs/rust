@@ -2106,6 +2106,20 @@
           "limits": "Domain construction and resolution only, not actual native command qualification. Generic worker argv/cwd invocation, complete non-secret environment discovery/admission, absent/unborn baselines and end-to-end automatically discovered obligations remain incomplete.",
           "class": "deterministic",
           "source_digest": "sha256:3a3f50e083b1e6a6785e14e2bbaf9d2906c771ff80473b761ac4ece957758979"
+        },
+        {
+          "reference": "validation/LOCAL-GENERIC-COMMANDS.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Actual ScopedWorker command_run accepts literal unfamiliar argv/cwd without configured checks, binds original Control authority, actual preparation/observation and exact protected completion/ACK, and denies nonexecuting/narrowed roles.",
+          "tests": [
+            "src/worker_command_tests.rs::unfamiliar_literal_command_without_checks_records_facts_and_replays_once",
+            "src/worker_command_tests.rs::parent_validation_command_retains_read_only_candidate_role",
+            "src/worker_command_tests.rs::command_refuses_parent_coordination_independent_and_narrowed_permissions"
+          ],
+          "limits": "Injected command outcomes in real scoped-worker/Control/executor/journal components; no native launch qualification or actual-agent discovery. Discovered obligations, environment admission, absent/unborn baselines, full-output paging and cold per-invocation process reconciliation remain incomplete. No check or repair capability is minted.",
+          "class": "deterministic",
+          "source_digest": "sha256:fb91d04590649f6f9ce668c0a864e64c0c64e268f5942b2ef14bfb7ce82bcf34"
         }
       ]
     },
@@ -2142,6 +2156,20 @@
           "limits": "This does not establish an atomic filesystem snapshot, symlink-target closure, native execution or full discovery/invocation recovery. Exact BUILD_ID binding conservatively refuses cross-build domain reuse/cleanup. Full run retained 21 fixture failures; the two corrected test files passed focused reruns without production changes.",
           "class": "deterministic",
           "source_digest": "sha256:3a3f50e083b1e6a6785e14e2bbaf9d2906c771ff80473b761ac4ece957758979"
+        },
+        {
+          "reference": "validation/LOCAL-GENERIC-COMMANDS.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Protected command history preserves actual input/preparation identities, exact original deadline, correction scope and ordered chunks. Uncertain closure, rewritten records or missing ACK cannot authorize replay.",
+          "tests": [
+            "src/worker_command_tests.rs::command_history_rejects_rewritten_authority_deadline_and_backend_schema",
+            "src/worker_command_tests.rs::unknown_command_retains_original_effect_registry_and_unsettled_history",
+            "src/worker_command_tests.rs::fenced_command_cancels_original_owner_but_does_not_claim_current_completion"
+          ],
+          "limits": "Injected command outcomes in real scoped-worker/Control/executor/journal components; no native launch qualification or actual-agent discovery. Discovered obligations, environment admission, absent/unborn baselines, full-output paging and cold per-invocation process reconciliation remain incomplete. No check or repair capability is minted.",
+          "class": "deterministic",
+          "source_digest": "sha256:fb91d04590649f6f9ce668c0a864e64c0c64e268f5942b2ef14bfb7ce82bcf34"
         }
       ]
     },
@@ -2151,8 +2179,24 @@
       "line": 455,
       "sha256": "682e6ebc4b7c23e568476a7dc3c798321515de4dd994e149f1726c03660a7bd7",
       "excerpt": "After observed completion and required writer/service closure, the host MUST record actual execution facts, including exit/signal/timeout, bounded output and artifact identities, s",
-      "status": "not_assessed",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        {
+          "reference": "validation/LOCAL-GENERIC-COMMANDS.md",
+          "status": "partial",
+          "verification": "verified_local_components_frozen_source",
+          "scope": "Actual worker/Control/executor components record nonzero outcomes and permitted source mutations separately from validation/repair capabilities, retain process/effect ownership until observed closure plus ACK and preserve bounded protected journal bytes.",
+          "tests": [
+            "src/worker_command_tests.rs::command_nonzero_is_observed_without_failed_check_or_repair_authority",
+            "src/worker_command_tests.rs::command_reports_changed_authorized_source_without_excluding_outputs",
+            "src/worker_command_tests.rs::command_chunks_share_total_journal_budget_and_reserve_before_any_write",
+            "src/worker_command_tests.rs::partial_command_chunk_write_retains_original_prefix_and_poisons_later_appends"
+          ],
+          "limits": "Injected command outcomes in real scoped-worker/Control/executor/journal components; no native launch qualification or actual-agent discovery. Discovered obligations, environment admission, absent/unborn baselines, full-output paging and cold per-invocation process reconciliation remain incomplete. No check or repair capability is minted.",
+          "class": "deterministic",
+          "source_digest": "sha256:fb91d04590649f6f9ce668c0a864e64c0c64e268f5942b2ef14bfb7ce82bcf34"
+        }
+      ]
     },
     {
       "id": "clause:8.1:aa4852876801",

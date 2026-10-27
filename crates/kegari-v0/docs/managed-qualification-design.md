@@ -72,9 +72,12 @@ The Cargo-specific parser, launch preparation and result adapter have been
 removed. The executable catalog is replaced by the host-produced schema-5 domain
 described in [configuration](configuration.md#generic-execution-migration): fixed
 OS resources, owned execution paths and already-admitted generic resources.
-Arbitrary worker-command invocation and the complete command-discovery and
-validation-obligation flow remain unfinished; named workflow checks still supply
-the current worker execution route. External host directories do not gain access
+Generic worker argv/cwd invocation now records actual commands through the
+original authority, deadline and ownership gates. Its deterministic component
+evidence is recorded in [the local command report](../validation/LOCAL-GENERIC-COMMANDS.md).
+Complete discovery and validation-obligation integration remain unfinished;
+named workflow checks remain a separate transitional validation route, and
+generic command results cannot satisfy it. External host directories do not gain access
 merely because a command needs them. The exact-build retained policy also refuses
 incompatible cleanup rather than migrating evidence or deleting owned state.
 

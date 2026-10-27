@@ -61,7 +61,21 @@ pub struct IsolationPlan {
 pub struct ValidatedIsolation {
     plan: IsolationPlan,
     digest: String,
+    // A cwd derivation keeps one original plan, never a recursive chain. This
+    // private anchor is not recoverable from a serialized observation.
+    origin: Option<std::sync::Arc<IsolationOrigin>>,
 }
+
+#[derive(Debug)]
+struct IsolationOrigin {
+    plan: IsolationPlan,
+    digest: String,
+}
+
+const MAX_COMMAND_ARGS: usize = 128;
+const MAX_COMMAND_ARG_BYTES: usize = 4096;
+const MAX_COMMAND_BYTES: usize = 65_536;
+const MAX_COMMAND_CWD_BYTES: usize = 4096;
 
 fn safe_absolute(path: &Path) -> Result<()> {
     if !path.is_absolute()
@@ -228,7 +242,11 @@ impl IsolationPlan {
             managed.validate_plan(&plan)?;
         }
         let digest = canonical_digest(1, &plan)?;
-        Ok(ValidatedIsolation { plan, digest })
+        Ok(ValidatedIsolation {
+            plan,
+            digest,
+            origin: None,
+        })
     }
 }
 
@@ -291,12 +309,86 @@ impl ValidatedIsolation {
     pub fn digest(&self) -> &str {
         &self.digest
     }
+    /// Derive only a working directory within the original repository. Relative
+    /// paths are anchored at the current cwd; filesystem aliases are resolved
+    /// before checking containment. No resource observation or grant is minted.
+    pub fn with_cwd(&self, cwd: &Path) -> Result<Self> {
+        self.revalidate()?;
+        let text = cwd
+            .to_str()
+            .ok_or_else(|| Error::invalid("cwd must be UTF-8"))?;
+        if text.is_empty() || text.len() > MAX_COMMAND_CWD_BYTES || text.contains('\0') {
+            return Err(Error::invalid("cwd is empty, excessive or contains NUL"));
+        }
+        let candidate = if cwd.is_absolute() {
+            cwd.to_owned()
+        } else {
+            self.plan.cwd.join(cwd)
+        };
+        let canonical = candidate
+            .canonicalize()
+            .map_err(|e| Error::io("resolve command cwd", e))?;
+        if canonical.as_os_str().len() > MAX_COMMAND_CWD_BYTES
+            || !canonical.is_dir()
+            || !canonical.starts_with(&self.plan.repository)
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "command cwd escapes the original repository",
+            ));
+        }
+        let mut plan = self.plan.clone();
+        plan.cwd = canonical;
+        let mut derived = plan.validate()?;
+        derived.origin = Some(self.origin.clone().unwrap_or_else(|| {
+            std::sync::Arc::new(IsolationOrigin {
+                plan: self.plan.clone(),
+                digest: self.digest.clone(),
+            })
+        }));
+        derived.verify_cwd_derivation(self)?;
+        Ok(derived)
+    }
+    /// Verify a derivation against the actual retained caller boundary. This is
+    /// a structural/metadata check, not a full resource-content recapture.
+    pub fn verify_cwd_derivation(&self, original: &ValidatedIsolation) -> Result<()> {
+        self.revalidate()?;
+        original.revalidate()?;
+        let mut candidate = self.plan.clone();
+        candidate.cwd = original.plan.cwd.clone();
+        if self.original_digest() != original.original_digest()
+            || canonical_digest(1, &candidate)? != original.digest
+        {
+            return Err(Error::new(
+                "scope_violation",
+                "command boundary is not a cwd-only derivation of the original",
+            ));
+        }
+        Ok(())
+    }
+    fn original_digest(&self) -> &str {
+        self.origin
+            .as_ref()
+            .map_or(&self.digest, |origin| &origin.digest)
+    }
     pub fn revalidate(&self) -> Result<()> {
         if self.plan.validate()?.digest != self.digest {
             return Err(Error::new(
                 "scope_violation",
                 "execution boundary changed since admission",
             ));
+        }
+        if let Some(origin) = &self.origin {
+            let mut original_geometry = self.plan.clone();
+            original_geometry.cwd = origin.plan.cwd.clone();
+            if origin.plan.validate()?.digest != origin.digest
+                || canonical_digest(1, &original_geometry)? != origin.digest
+            {
+                return Err(Error::new(
+                    "scope_violation",
+                    "cwd derivation changed the original execution boundary",
+                ));
+            }
         }
         Ok(())
     }
@@ -530,6 +622,44 @@ fn redact(mut value: String, secrets: &[String]) -> String {
     value
 }
 
+fn rendered_command_output(
+    out: &[u8],
+    err: &[u8],
+    secrets: &[String],
+    combined_limit: Option<usize>,
+) -> Result<(String, String, bool)> {
+    let mut stdout = redact(String::from_utf8_lossy(out).into_owned(), secrets);
+    let mut stderr = redact(String::from_utf8_lossy(err).into_owned(), secrets);
+    // Diagnose sandbox setup before optional output truncation can hide it.
+    if stderr.contains("sandbox-exec: sandbox_apply")
+        || stderr.contains("sandbox-exec: sandbox_init")
+    {
+        return Err(Error::new(
+            "isolation_unavailable",
+            "host policy prevented applying the execution sandbox",
+        ));
+    }
+    let mut truncated = false;
+    if let Some(limit) = combined_limit {
+        let mut remaining = limit;
+        // Redact before shortening: a rendered prefix must not reintroduce any
+        // bytes of a matched secret. Order is deterministic, not a chronology
+        // claim about the two independently drained streams.
+        for text in [&mut stdout, &mut stderr] {
+            if text.len() > remaining {
+                let mut end = remaining;
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+                truncated = true;
+            }
+            remaining -= text.len();
+        }
+    }
+    Ok((stdout, stderr, truncated))
+}
+
 /// One original retained-output allowance shared by all members of a bundle.
 /// Exhaustion truncates capture while actual pipes continue draining to EOF.
 pub struct CommandOutputBudget {
@@ -561,6 +691,13 @@ pub struct BundleCommandLimits {
     pub(crate) output_limit: usize,
     pub(crate) output_budget: std::sync::Arc<CommandOutputBudget>,
 }
+/// Original generic-invocation resource bounds. These are not launch authority;
+/// the actual journal, permit, isolation and qualification checks still apply.
+pub struct InvocationCommandLimits {
+    pub timeout: Duration,
+    pub deadline: std::time::Instant,
+    pub output_limit: usize,
+}
 fn remaining_bundle_timeout(
     timeout: Duration,
     started: std::time::Instant,
@@ -569,7 +706,7 @@ fn remaining_bundle_timeout(
     match deadline {
         Some(deadline) if deadline <= std::time::Instant::now() => Err(Error::new(
             "timeout",
-            "original check bundle deadline expired before process launch",
+            "original command deadline expired before process launch",
         )),
         Some(deadline) => Ok(timeout.min(deadline.saturating_duration_since(started))),
         None => Ok(timeout),
@@ -607,12 +744,65 @@ pub struct CommandLaunchIdentity {
     pub target: crate::platform::BinaryIdentity,
     pub argv_digest: String,
 }
+
+/// Descriptive, process-free evidence for one rendered invocation. Decoding this
+/// record never constructs an execution boundary, a permit or qualification.
+/// `launch_digest` is the existing CommandLaunchIdentity argv/profile/environment
+/// digest; cwd, original boundary and binary identities remain explicit fields.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CommandObservation {
+    #[serde(deserialize_with = "command_observation_schema")]
+    pub schema_version: u32,
+    pub requested_argv: Vec<String>,
+    pub selected_executable: PathBuf,
+    pub canonical_executable: crate::platform::BinaryIdentity,
+    pub launcher: crate::platform::BinaryIdentity,
+    pub cwd: PathBuf,
+    pub environment: BTreeMap<String, String>,
+    pub original_isolation_digest: String,
+    pub isolation_digest: String,
+    pub launch_digest: String,
+    pub backend_policy_digest: String,
+}
+fn command_observation_schema<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<u32, D::Error> {
+    let schema = u32::deserialize(deserializer)?;
+    if schema != 1 {
+        return Err(serde::de::Error::custom(
+            "unsupported command observation schema",
+        ));
+    }
+    Ok(schema)
+}
+impl CommandObservation {
+    /// A projection of recorded facts only. Callers still need the actual
+    /// admitted boundary and its live gate before starting any process.
+    pub fn launch_identity(&self) -> CommandLaunchIdentity {
+        CommandLaunchIdentity {
+            cwd: self.cwd.clone(),
+            launcher: self.launcher.clone(),
+            target: self.canonical_executable.clone(),
+            argv_digest: self.launch_digest.clone(),
+        }
+    }
+}
+
+/// Observe exact rendered facts without starting the launcher or the command.
+/// Executable bytes are read here; invoke outside serialized admission callbacks.
+pub fn observe_command(
+    isolation: &ValidatedIsolation,
+    argv: &[String],
+) -> Result<CommandObservation> {
+    let rendered = render_command(isolation, argv)?;
+    observe_rendered_command(isolation, &rendered)
+}
 pub fn command_launch_identity(
     isolation: &ValidatedIsolation,
     argv: &[String],
 ) -> Result<CommandLaunchIdentity> {
-    let rendered = render_command(isolation, argv)?;
-    rendered_launch_identity(isolation, &rendered)
+    Ok(observe_command(isolation, argv)?.launch_identity())
 }
 
 struct RenderedCommand {
@@ -622,10 +812,23 @@ struct RenderedCommand {
     profile: String,
 }
 fn render_command(isolation: &ValidatedIsolation, argv: &[String]) -> Result<RenderedCommand> {
-    isolation.revalidate()?;
-    if argv.is_empty() {
-        return Err(Error::invalid("command launch requires argv"));
+    if argv.is_empty()
+        || argv.len() > MAX_COMMAND_ARGS
+        || argv[0].is_empty()
+        || argv
+            .iter()
+            .any(|arg| arg.len() > MAX_COMMAND_ARG_BYTES || arg.contains('\0'))
+        || argv
+            .iter()
+            .try_fold(0usize, |total, arg| total.checked_add(arg.len() + 1))
+            .is_none_or(|total| total > MAX_COMMAND_BYTES)
+        || isolation.plan.cwd.as_os_str().len() > MAX_COMMAND_CWD_BYTES
+    {
+        return Err(Error::invalid(
+            "command argv or cwd exceeds its finite input bounds",
+        ));
     }
+    isolation.revalidate()?;
     let executable = isolation.resolve_executable(&argv[0])?;
     let environment = BTreeMap::from([
         ("PATH".into(), isolation.command_path()?),
@@ -647,28 +850,46 @@ fn render_command(isolation: &ValidatedIsolation, argv: &[String]) -> Result<Ren
         profile,
     })
 }
-fn rendered_launch_identity(
+fn observe_rendered_command(
     isolation: &ValidatedIsolation,
     rendered: &RenderedCommand,
-) -> Result<CommandLaunchIdentity> {
+) -> Result<CommandObservation> {
     let mut launch = serde_json::json!({"argv":rendered.argv,"profile":rendered.profile,"resolved":rendered.executable,"environment":rendered.environment});
     if let Some(managed) = &isolation.plan.managed_execution {
         launch["managed_execution"] = serde_json::json!(canonical_digest(1, managed)?);
     }
-    Ok(CommandLaunchIdentity {
+    Ok(CommandObservation {
+        schema_version: 1,
+        requested_argv: rendered.argv.clone(),
+        selected_executable: rendered.executable.clone(),
         cwd: isolation.plan.cwd.clone(),
         launcher: crate::platform::BinaryIdentity::inspect(
             Path::new("/usr/bin/sandbox-exec"),
             false,
         )?,
-        target: crate::platform::BinaryIdentity::inspect(
+        canonical_executable: crate::platform::BinaryIdentity::inspect(
             &rendered
                 .executable
                 .canonicalize()
                 .map_err(|error| Error::io("observe actual command target", error))?,
             false,
         )?,
-        argv_digest: canonical_digest(1, &launch)?,
+        environment: rendered.environment.clone(),
+        original_isolation_digest: isolation.original_digest().to_owned(),
+        isolation_digest: isolation.digest.clone(),
+        launch_digest: canonical_digest(1, &launch)?,
+        backend_policy_digest: isolation
+            .plan
+            .managed_execution
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    "scope_violation",
+                    "command observation requires the retained execution domain",
+                )
+            })?
+            .policy_digest()
+            .to_owned(),
     })
 }
 /// A resolved managed declaration is distinct from native qualification. Retain
@@ -688,10 +909,11 @@ pub fn repository_command_prerequisite(isolation: &ValidatedIsolation) -> Result
     }
 }
 enum CommandJournal {
-    Worker(
-        std::sync::Arc<crate::process_records::ProcessJournal>,
-        crate::control::Permit,
-    ),
+    Worker {
+        journal: std::sync::Arc<crate::process_records::ProcessJournal>,
+        permit: crate::control::Permit,
+        deadline: Option<std::time::Instant>,
+    },
     Guard(Box<crate::process_records::SpawnGuard>),
     Bundle {
         journal: std::sync::Arc<crate::process_records::ProcessJournal>,
@@ -699,6 +921,15 @@ enum CommandJournal {
         output_budget: std::sync::Arc<CommandOutputBudget>,
         deadline: std::time::Instant,
     },
+}
+impl CommandJournal {
+    fn deadline(&self) -> Option<std::time::Instant> {
+        match self {
+            Self::Worker { deadline, .. } => *deadline,
+            Self::Bundle { deadline, .. } => Some(*deadline),
+            Self::Guard(_) => None,
+        }
+    }
 }
 pub fn start_guarded_command(
     isolation: &ValidatedIsolation,
@@ -744,7 +975,32 @@ pub fn start_journaled_command(
         timeout,
         output_limit,
         secret_values,
-        Some(CommandJournal::Worker(journal, permit)),
+        Some(CommandJournal::Worker {
+            journal,
+            permit,
+            deadline: None,
+        }),
+    )
+}
+pub fn start_journaled_command_until(
+    isolation: &ValidatedIsolation,
+    argv: &[String],
+    limits: InvocationCommandLimits,
+    secret_values: &[String],
+    journal: std::sync::Arc<crate::process_records::ProcessJournal>,
+    permit: crate::control::Permit,
+) -> Result<OwnedCommand> {
+    start_command_inner(
+        isolation,
+        argv,
+        limits.timeout,
+        limits.output_limit,
+        secret_values,
+        Some(CommandJournal::Worker {
+            journal,
+            permit,
+            deadline: Some(limits.deadline),
+        }),
     )
 }
 pub(crate) fn start_bundle_command(
@@ -782,6 +1038,11 @@ fn start_command_inner(
     secret_values: &[String],
     journal: Option<CommandJournal>,
 ) -> Result<OwnedCommand> {
+    remaining_bundle_timeout(
+        timeout,
+        std::time::Instant::now(),
+        journal.as_ref().and_then(CommandJournal::deadline),
+    )?;
     isolation.revalidate()?;
     if matches!(
         isolation.plan.role,
@@ -832,8 +1093,11 @@ fn spawn_command_inner(
             "managed commands require an admitted durable process journal before spawn",
         ));
     }
+    let original_deadline = journal.as_ref().and_then(CommandJournal::deadline);
+    remaining_bundle_timeout(timeout, std::time::Instant::now(), original_deadline)?;
     let rendered = render_command(isolation, argv)?;
-    let identity = rendered_launch_identity(isolation, &rendered)?;
+    let observation = observe_rendered_command(isolation, &rendered)?;
+    let identity = observation.launch_identity();
     let mut command = Command::new("/usr/bin/sandbox-exec");
     command
         .args(["-p", &rendered.profile])
@@ -852,34 +1116,41 @@ fn spawn_command_inner(
         command.process_group(0);
     }
     let started = std::time::Instant::now();
-    let bundle_deadline = match &journal {
-        Some(CommandJournal::Bundle { deadline, .. }) => Some(*deadline),
-        _ => None,
-    };
-    remaining_bundle_timeout(timeout, started, bundle_deadline)?;
+    remaining_bundle_timeout(timeout, started, original_deadline)?;
     let service = matches!(&journal, Some(CommandJournal::Bundle { launch, .. })
         if matches!(launch.member().kind, crate::process_records::CheckMemberKind::Service));
     let output_budget = match &journal {
         Some(CommandJournal::Bundle { output_budget, .. }) => Some(output_budget.clone()),
+        Some(CommandJournal::Worker {
+            deadline: Some(_), ..
+        }) => Some(std::sync::Arc::new(CommandOutputBudget::new(output_limit))),
         _ => None,
     };
+    let rendered_output_limit = matches!(
+        journal.as_ref(),
+        Some(CommandJournal::Worker {
+            deadline: Some(_),
+            ..
+        })
+    )
+    .then_some(output_limit);
     let mut guard = match journal {
-        Some(CommandJournal::Worker(journal, permit)) => {
-            Some(journal.begin(crate::process_records::SpawnBinding {
-                operation_id: permit.operation_id,
-                effect_id: uuid::Uuid::new_v4(),
-                lease: Some(permit.lease),
-                control_owner: None,
-                work_key: permit.work_key,
-                scope_digest: permit.scope_digest,
-                cwd: identity.cwd.clone(),
-                executable: identity.launcher.clone(),
-                observed_executables: vec![identity.target.clone()],
-                argv_digest: identity.argv_digest.clone(),
-                kind: "repository_command".into(),
-                check_bundle: None,
-            })?)
-        }
+        Some(CommandJournal::Worker {
+            journal, permit, ..
+        }) => Some(journal.begin(crate::process_records::SpawnBinding {
+            operation_id: permit.operation_id,
+            effect_id: uuid::Uuid::new_v4(),
+            lease: Some(permit.lease),
+            control_owner: None,
+            work_key: permit.work_key,
+            scope_digest: permit.scope_digest,
+            cwd: identity.cwd.clone(),
+            executable: identity.launcher.clone(),
+            observed_executables: vec![identity.target.clone()],
+            argv_digest: identity.argv_digest.clone(),
+            kind: "repository_command".into(),
+            check_bundle: None,
+        })?),
         Some(CommandJournal::Bundle {
             journal, launch, ..
         }) => {
@@ -921,7 +1192,7 @@ fn spawn_command_inner(
     }
     // The original absolute cutoff survives preflight, journal I/O and lock
     // waits. Synchronous spawn itself cannot be preempted by an async timeout.
-    let timeout = remaining_bundle_timeout(timeout, started, bundle_deadline)?;
+    let timeout = remaining_bundle_timeout(timeout, started, original_deadline)?;
     let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_tokio_before(
         &mut command,
         Some(started + timeout),
@@ -958,7 +1229,8 @@ fn spawn_command_inner(
         },
         CommandProcess::new(child, group, guard, capture_error)
             .with_service(service)
-            .with_output_budget(output_budget),
+            .with_output_budget(output_budget)
+            .with_rendered_output_limit(rendered_output_limit),
         stdout,
         stderr,
         output_limit,
@@ -1137,6 +1409,7 @@ struct CommandProcess {
     service: bool,
     kill_escalated: bool,
     output_budget: Option<std::sync::Arc<CommandOutputBudget>>,
+    rendered_output_limit: Option<usize>,
 }
 impl CommandProcess {
     fn new(
@@ -1157,10 +1430,15 @@ impl CommandProcess {
             service: false,
             kill_escalated: false,
             output_budget: None,
+            rendered_output_limit: None,
         }
     }
     fn with_output_budget(mut self, budget: Option<std::sync::Arc<CommandOutputBudget>>) -> Self {
         self.output_budget = budget;
+        self
+    }
+    fn with_rendered_output_limit(mut self, limit: Option<usize>) -> Self {
+        self.rendered_output_limit = limit;
         self
     }
     fn with_service(mut self, service: bool) -> Self {
@@ -1297,6 +1575,7 @@ impl OwnedCommand {
         E: tokio::io::AsyncRead + Unpin + Send + 'static,
     {
         let outputs = process.outputs.clone();
+        let rendered_output_limit = process.rendered_output_limit;
         let tasks = CommandOutputTasks {
             stdout: Some(CommandOutputTasks::spawn(
                 stdout,
@@ -1322,7 +1601,10 @@ impl OwnedCommand {
         // streaming input is a Tokio pipe. Deadlines bound polling/retries and
         // cooperative async reads; they cannot preempt a blocked synchronous
         // OS or journal syscall. No arbitrary user callback runs in this task.
-        let supervisor = tokio::spawn(async move { run.supervise(cancellation, tasks).await });
+        let supervisor = tokio::spawn(async move {
+            run.supervise(cancellation, tasks, rendered_output_limit)
+                .await
+        });
         Self {
             process,
             supervisor: Some(supervisor),
@@ -1446,6 +1728,7 @@ impl CommandRun {
         self,
         cancellation: OwnedCommandCancellation,
         tasks: CommandOutputTasks,
+        rendered_output_limit: Option<usize>,
     ) -> Result<CommandOutcome> {
         let status = self.observe_until_exit(&cancellation).await;
         if status.is_err() {
@@ -1461,18 +1744,8 @@ impl CommandRun {
                 "managed command lacks durable group retirement and joined output; preserve ownership",
             ));
         }
-        let stderr = redact(
-            String::from_utf8_lossy(&err).into_owned(),
-            &self.secret_values,
-        );
-        if stderr.contains("sandbox-exec: sandbox_apply")
-            || stderr.contains("sandbox-exec: sandbox_init")
-        {
-            return Err(Error::new(
-                "isolation_unavailable",
-                "host policy prevented applying the execution sandbox",
-            ));
-        }
+        let (stdout, stderr, rendered_truncated) =
+            rendered_command_output(&out, &err, &self.secret_values, rendered_output_limit)?;
         #[cfg(unix)]
         let termination_signal = {
             use std::os::unix::process::ExitStatusExt;
@@ -1488,12 +1761,9 @@ impl CommandRun {
             exit_code: status.code(),
             termination_signal,
             timed_out,
-            stdout: redact(
-                String::from_utf8_lossy(&out).into_owned(),
-                &self.secret_values,
-            ),
+            stdout,
             stderr,
-            output_truncated: out_truncated || err_truncated,
+            output_truncated: out_truncated || err_truncated || rendered_truncated,
             elapsed_ms: self.started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         })
     }
@@ -1621,3 +1891,7 @@ mod owned_exit_tests {
 #[cfg(all(test, target_os = "macos"))]
 #[path = "isolation_command_tests.rs"]
 mod command_tests;
+
+#[cfg(test)]
+#[path = "isolation_observation_tests.rs"]
+mod observation_tests;

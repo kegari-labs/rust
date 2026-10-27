@@ -564,7 +564,9 @@ mod tests {
         );
         #[cfg(target_os = "macos")]
         {
-            let observed = super::super::rendered_launch_identity(&isolation, &rendered).unwrap();
+            let observed = super::super::observe_rendered_command(&isolation, &rendered)
+                .unwrap()
+                .launch_identity();
             assert_eq!(observed.target.path, target);
             let direct = super::super::command_launch_identity(
                 &isolation,

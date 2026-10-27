@@ -22,10 +22,16 @@ mod corrections;
 pub use corrections::{CorrectionExecutionProvenance, EffectiveExecutionBinding};
 #[path = "execution_check_bundle.rs"]
 mod check_bundle;
+#[path = "execution_command.rs"]
+mod command;
 #[path = "execution_record_validation.rs"]
 mod record_validation;
 pub use check_bundle::{
     CheckBundleExecutionRecord, CheckBundleMemberResult, CheckBundleOwner, ServiceExecutionRecord,
+};
+pub use command::{
+    CommandExecutionRecord, CommandJournalEntry, CommandPreparationRecord, CommandRequest,
+    PreparedCommand, RunningCommand,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -77,6 +83,23 @@ pub trait CommandBoundary: Send + Sync {
         timeout: Duration,
         output_limit: usize,
     ) -> Result<Box<dyn StartedCommand>>;
+    /// An original resource deadline, never authority to launch. Native
+    /// implementations must carry it through actual process creation.
+    fn start_until(
+        &self,
+        isolation: &ValidatedIsolation,
+        argv: &[String],
+        deadline: std::time::Instant,
+        output_limit: usize,
+    ) -> Result<Box<dyn StartedCommand>> {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|value| !value.is_zero())
+            .ok_or_else(|| {
+                Error::new("timeout", "original command deadline expired before start")
+            })?;
+        self.start(isolation, argv, remaining, output_limit)
+    }
     /// Only the original Control launch token selects a planned bundle member.
     fn start_bundle_member(
         &self,
@@ -165,6 +188,32 @@ impl JournaledSandboxBoundary {
     }
 }
 impl CommandBoundary for JournaledSandboxBoundary {
+    fn start_until(
+        &self,
+        isolation: &ValidatedIsolation,
+        argv: &[String],
+        deadline: std::time::Instant,
+        output_limit: usize,
+    ) -> Result<Box<dyn StartedCommand>> {
+        let timeout = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|value| !value.is_zero())
+            .ok_or_else(|| {
+                Error::new("timeout", "original command deadline expired before start")
+            })?;
+        Ok(Box::new(isolation::start_journaled_command_until(
+            isolation,
+            argv,
+            isolation::InvocationCommandLimits {
+                timeout,
+                deadline,
+                output_limit,
+            },
+            &[],
+            self.journal.clone(),
+            self.permit.clone(),
+        )?))
+    }
     fn start_bundle_member(
         &self,
         isolation: &ValidatedIsolation,
@@ -503,12 +552,41 @@ fn source_snapshot(
     limits: &ExecutionLimits,
     outputs: &BTreeSet<PathBuf>,
 ) -> Result<SourceSnapshot> {
+    let snapshot = observed_source_snapshot(git, boundary, limits, outputs)?;
+    git.verify_execution_tree(&boundary.plan().repository, &snapshot.revision, outputs)?;
+    Ok(snapshot)
+}
+
+/// Observe actual working contents. Generic commands can begin with permitted
+/// dirty source; only the existing validation path additionally requires a clean
+/// exact revision. The revision here is the observed HEAD, never a clean-tree claim.
+fn observed_source_snapshot(
+    git: &Git,
+    boundary: &ValidatedIsolation,
+    limits: &ExecutionLimits,
+    outputs: &BTreeSet<PathBuf>,
+) -> Result<SourceSnapshot> {
+    observed_source_snapshot_until(git, boundary, limits, outputs, None)
+}
+fn observed_source_snapshot_until(
+    git: &Git,
+    boundary: &ValidatedIsolation,
+    limits: &ExecutionLimits,
+    outputs: &BTreeSet<PathBuf>,
+    deadline: Option<std::time::Instant>,
+) -> Result<SourceSnapshot> {
     boundary.revalidate()?;
     let root = &boundary.plan().repository;
     let mut paths = vec![root.clone()];
     let mut files = BTreeMap::new();
     let mut bytes = 0u64;
     while let Some(path) = paths.pop() {
+        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            return Err(Error::new(
+                "timeout",
+                "original command deadline expired during source observation",
+            ));
+        }
         if path == root.join(".git") || outputs.contains(&path) {
             continue;
         }
@@ -516,6 +594,12 @@ fn source_snapshot(
             std::fs::symlink_metadata(&path).map_err(|e| Error::io("inspect actual source", e))?;
         if meta.is_dir() {
             for item in std::fs::read_dir(&path).map_err(|e| Error::io("read actual source", e))? {
+                if paths.len().saturating_add(files.len()) >= limits.source_files {
+                    return Err(Error::new(
+                        "source_limit",
+                        "source file inventory exceeds bound",
+                    ));
+                }
                 paths.push(item.map_err(|e| Error::io("read source entry", e))?.path());
             }
             if paths.len().saturating_add(files.len()) > limits.source_files {
@@ -564,7 +648,6 @@ fn source_snapshot(
         );
     }
     let revision = git.revision(root, "HEAD")?;
-    git.verify_execution_tree(root, &revision, outputs)?;
     Ok(SourceSnapshot { revision, files })
 }
 

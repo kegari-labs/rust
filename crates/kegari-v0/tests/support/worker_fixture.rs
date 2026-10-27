@@ -280,17 +280,28 @@ impl Fixture {
         Self::with_hooks(role, "")
     }
     fn with_hooks(role: AgentRole, hooks: &str) -> Self {
-        Self::configured(role, hooks, None, None)
+        Self::configured(role, hooks, None, None, false)
     }
     #[allow(dead_code)] // Shared prelude also serves the unchanged worker target.
     fn with_bundle(mode: worker_bundle::Mode, configured: ConfiguredContract) -> Self {
-        Self::configured(AgentRole::Implementation, "", Some(mode), Some(configured))
+        Self::configured(
+            AgentRole::Implementation,
+            "",
+            Some(mode),
+            Some(configured),
+            false,
+        )
+    }
+    #[allow(dead_code)]
+    fn without_checks(role: AgentRole) -> Self {
+        Self::configured(role, "", None, None, true)
     }
     fn configured(
         role: AgentRole,
         hooks: &str,
         bundle: Option<worker_bundle::Mode>,
         configured: Option<ConfiguredContract>,
+        without_checks: bool,
     ) -> Self {
         let temp = TempDir::new().unwrap();
         let base = temp.path().canonicalize().unwrap();
@@ -323,10 +334,16 @@ impl Fixture {
         } else {
             String::new()
         };
-        let workflow_text = format!(
-            "---\nschema_version: 1\n{hooks}checks:\n  local:\n    suite:\n      argv: [\"/usr/bin/true\"{main}]\n      result_artifact: \"{}/check.json\"\n{services}{integrated}---\nOutcome: {{{{ issue | json }}}}\n",
-            scratch.display()
-        );
+        let workflow_text = if without_checks {
+            format!(
+                "---\nschema_version: 1\n{hooks}checks: {{}}\n---\nOutcome: {{{{ issue | json }}}}\n"
+            )
+        } else {
+            format!(
+                "---\nschema_version: 1\n{hooks}checks:\n  local:\n    suite:\n      argv: [\"/usr/bin/true\"{main}]\n      result_artifact: \"{}/check.json\"\n{services}{integrated}---\nOutcome: {{{{ issue | json }}}}\n",
+                scratch.display()
+            )
+        };
         std::fs::write(source.join("WORKFLOW.md"), workflow_text).unwrap();
         git_run(&source, &["add", "."]);
         git_run(
@@ -685,7 +702,7 @@ impl Fixture {
             last_cancel: Mutex::new(None),
             bundle: bundle.map(worker_bundle::BundleBoundary::new),
         });
-        let execution = if child {
+        let execution = if role.permits_repository_execution() {
             Some(Arc::new(WorkerExecution {
                 git: git.clone(),
                 git_executable: pinned_git_path.clone(),

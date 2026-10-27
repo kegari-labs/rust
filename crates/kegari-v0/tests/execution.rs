@@ -1643,3 +1643,341 @@ fn retained_directory_identity_and_hardlinked_source_cannot_be_adopted() {
     );
     assert_eq!(fs::read(&source).unwrap(), b"original\n");
 }
+
+// Generic-command components use the actual LocalExecutor, owned source and
+// immutable binding. Their injected outcome/closure is explicitly synthetic.
+struct GenericBoundary {
+    inner: FakeBoundary,
+    closed: bool,
+    waited: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    remaining: Mutex<Vec<Duration>>,
+}
+impl GenericBoundary {
+    fn new(step: Step) -> Self {
+        Self {
+            inner: FakeBoundary::new(vec![step]),
+            closed: true,
+            waited: Default::default(),
+            cancelled: Default::default(),
+            remaining: Default::default(),
+        }
+    }
+}
+struct GenericCancellation {
+    closed: bool,
+    waited: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl CommandCancellation for GenericCancellation {
+    fn cancel(&self) -> Result<()> {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    fn exited(&self) -> Result<bool> {
+        Ok(self.closed && self.waited.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
+struct GenericStarted {
+    inner: Box<dyn StartedCommand>,
+    cancellation: std::sync::Arc<GenericCancellation>,
+}
+impl StartedCommand for GenericStarted {
+    fn cancellation(&self) -> std::sync::Arc<dyn CommandCancellation> {
+        self.cancellation.clone()
+    }
+    fn wait(self: Box<Self>) -> Pin<Box<dyn Future<Output = Result<CommandOutcome>> + Send>> {
+        Box::pin(async move {
+            let result = self.inner.wait().await;
+            self.cancellation
+                .waited
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            result
+        })
+    }
+}
+impl CommandBoundary for GenericBoundary {
+    fn evidence_class(&self) -> ExecutionEvidenceClass {
+        ExecutionEvidenceClass::DeterministicFixture
+    }
+    fn start(
+        &self,
+        isolation: &ValidatedIsolation,
+        argv: &[String],
+        timeout: Duration,
+        output_limit: usize,
+    ) -> Result<Box<dyn StartedCommand>> {
+        self.remaining.lock().unwrap().push(timeout);
+        let inner = self.inner.start(isolation, argv, timeout, output_limit)?;
+        Ok(Box::new(GenericStarted {
+            inner,
+            cancellation: std::sync::Arc::new(GenericCancellation {
+                closed: self.closed,
+                waited: self.waited.clone(),
+                cancelled: self.cancelled.clone(),
+            }),
+        }))
+    }
+}
+fn generic_executor<'a>(f: &'a Fixture, boundary: &'a dyn CommandBoundary) -> LocalExecutor<'a> {
+    LocalExecutor {
+        isolation: &f.boundary,
+        git: &f.git,
+        boundary,
+        limits: ExecutionLimits::default(),
+        ownership: &f.owner,
+    }
+}
+fn generic_request() -> CommandRequest {
+    CommandRequest {
+        argv: vec!["/usr/bin/true".into(), "literal $(not-a-shell)".into()],
+        cwd: ".".into(),
+    }
+}
+
+#[tokio::test]
+async fn generic_command_observes_dirty_authorized_source_without_issuing_check_evidence() {
+    let f = Fixture::new(ExecutionRole::Child);
+    let source = f.boundary.plan().repository.join("a.txt");
+    fs::write(&source, b"dirty candidate\n").unwrap();
+    let boundary = GenericBoundary::new(Step {
+        writes: vec![(source.clone(), b"implemented candidate\n".to_vec())],
+        ..Step::success()
+    });
+    let executor = generic_executor(&f, &boundary);
+    let invocation = Uuid::new_v4();
+    let mut events = Vec::new();
+    let prepared = executor
+        .prepare_command(&f.binding, &generic_request(), invocation, None, |e| {
+            events.push(e.clone());
+            Ok(())
+        })
+        .unwrap();
+    let running = executor
+        .start_command(prepared, |e| {
+            events.push(e.clone());
+            Ok(())
+        })
+        .unwrap();
+    assert!(!running.cancellation().exited().unwrap());
+    let record = executor
+        .complete_command(running, |e| {
+            events.push(e.clone());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(record.preparation.invocation_id, invocation);
+    assert_eq!(
+        record.preparation.evidence_class,
+        ExecutionEvidenceClass::DeterministicFixture
+    );
+    assert_eq!(
+        record.preparation.before.files["a.txt"].digest,
+        bytes_digest(b"dirty candidate\n")
+    );
+    assert_eq!(
+        record.after.files["a.txt"].digest,
+        bytes_digest(b"implemented candidate\n")
+    );
+    assert_eq!(record.after.revision, f.binding.revision);
+    assert_eq!(record.outcome.argv, generic_request().argv);
+    assert_eq!(
+        record.preparation_digest,
+        record.preparation.digest().unwrap()
+    );
+    assert!(matches!(
+        events.as_slice(),
+        [
+            CommandJournalEntry::Prepared { .. },
+            CommandJournalEntry::DispatchRequested { .. },
+            CommandJournalEntry::Started { .. },
+            CommandJournalEntry::Completed { .. }
+        ]
+    ));
+    assert_eq!(fs::read(f.source.join("a.txt")).unwrap(), b"original\n");
+    assert!(
+        boundary.remaining.lock().unwrap()[0]
+            < Duration::from_millis(executor.limits.command_timeout_ms)
+    );
+}
+
+#[tokio::test]
+async fn generic_parent_command_preserves_literal_argv_cwd_and_nonzero_or_timeout_facts() {
+    for (exit, timeout) in [(Some(7), false), (None, true)] {
+        let f = Fixture::new(ExecutionRole::Validation);
+        fs::create_dir(f.boundary.plan().repository.join("nested")).unwrap();
+        let boundary = GenericBoundary::new(Step {
+            exit,
+            timeout,
+            stdout: "observed output".into(),
+            ..Step::default()
+        });
+        let executor = generic_executor(&f, &boundary);
+        let mut request = generic_request();
+        request.cwd = "nested".into();
+        let prepared = executor
+            .prepare_command(&f.binding, &request, Uuid::new_v4(), None, |_| Ok(()))
+            .unwrap();
+        let running = executor.start_command(prepared, |_| Ok(())).unwrap();
+        let record = executor
+            .complete_command(running, |_| Ok(()))
+            .await
+            .unwrap();
+        assert_eq!(record.outcome.argv, request.argv);
+        assert_eq!(
+            record.outcome.cwd,
+            f.boundary.plan().repository.join("nested")
+        );
+        assert_eq!(record.outcome.exit_code, exit);
+        assert_eq!(record.outcome.timed_out, timeout);
+        assert_eq!(record.preparation.before_digest, record.after_digest);
+    }
+}
+
+#[test]
+fn generic_prepared_source_addition_refuses_before_dispatch_and_records_known_no_start() {
+    let f = Fixture::new(ExecutionRole::Child);
+    let boundary = GenericBoundary::new(Step::success());
+    let executor = generic_executor(&f, &boundary);
+    let prepared = executor
+        .prepare_command(&f.binding, &generic_request(), Uuid::new_v4(), None, |_| {
+            Ok(())
+        })
+        .unwrap();
+    fs::create_dir(f.boundary.plan().repository.join("new-directory")).unwrap();
+    let mut events = Vec::new();
+    let error = executor
+        .start_command(prepared, |e| {
+            events.push(e.clone());
+            Ok(())
+        })
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "stale_command");
+    assert!(boundary.inner.calls.lock().unwrap().is_empty());
+    assert!(matches!(
+        events.as_slice(),
+        [CommandJournalEntry::NotStarted { .. }]
+    ));
+}
+
+#[test]
+fn generic_native_prerequisite_and_cwd_escape_never_request_dispatch() {
+    let f = Fixture::new(ExecutionRole::Child);
+    let executor = generic_executor(&f, &SandboxBoundary);
+    let prepared = executor
+        .prepare_command(&f.binding, &generic_request(), Uuid::new_v4(), None, |_| {
+            Ok(())
+        })
+        .unwrap();
+    let error = executor.preflight_command(&prepared).unwrap_err();
+    assert_eq!(error.code, "process_journal_required");
+    let mut events = Vec::new();
+    executor
+        .refuse_command(prepared, error, |e| {
+            events.push(e.clone());
+            Ok(())
+        })
+        .unwrap();
+    assert!(matches!(
+        events.as_slice(),
+        [CommandJournalEntry::NotStarted { .. }]
+    ));
+    let mut request = generic_request();
+    request.cwd = f.source.to_string_lossy().into_owned();
+    assert!(
+        executor
+            .prepare_command(&f.binding, &request, Uuid::new_v4(), None, |_| panic!(
+                "no preparation for escaped cwd"
+            ))
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn generic_started_persistence_failure_keeps_owner_and_actual_outcome_until_waited() {
+    let f = Fixture::new(ExecutionRole::Child);
+    let boundary = GenericBoundary::new(Step::success());
+    let executor = generic_executor(&f, &boundary);
+    let prepared = executor
+        .prepare_command(&f.binding, &generic_request(), Uuid::new_v4(), None, |_| {
+            Ok(())
+        })
+        .unwrap();
+    let running = executor
+        .start_command(prepared, |e| {
+            if matches!(e, CommandJournalEntry::Started { .. }) {
+                Err(Error::new(
+                    "fixture_persistence",
+                    "injected started write refusal",
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+    assert!(boundary.cancelled.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!boundary.waited.load(std::sync::atomic::Ordering::SeqCst));
+    let mut events = Vec::new();
+    let error = executor
+        .complete_command(running, |e| {
+            events.push(e.clone());
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "fixture_persistence");
+    assert!(boundary.waited.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(matches!(
+        events.as_slice(),
+        [CommandJournalEntry::Uncertain {
+            outcome: Some(CommandOutcome {
+                exit_code: Some(0),
+                ..
+            }),
+            ..
+        }]
+    ));
+}
+
+#[tokio::test]
+async fn generic_unknown_closure_and_changed_read_resource_cannot_complete() {
+    for changed_resource in [false, true] {
+        let (f, resource) = Fixture::with_content_resource(ExecutionRole::Child);
+        let mut boundary = GenericBoundary::new(Step {
+            writes: if changed_resource {
+                vec![(resource, b"changed immutable resource\n".to_vec())]
+            } else {
+                vec![]
+            },
+            ..Step::success()
+        });
+        boundary.closed = changed_resource;
+        let executor = generic_executor(&f, &boundary);
+        let prepared = executor
+            .prepare_command(&f.binding, &generic_request(), Uuid::new_v4(), None, |_| {
+                Ok(())
+            })
+            .unwrap();
+        let running = executor.start_command(prepared, |_| Ok(())).unwrap();
+        let mut events = Vec::new();
+        assert!(
+            executor
+                .complete_command(running, |e| {
+                    events.push(e.clone());
+                    Ok(())
+                })
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [CommandJournalEntry::Uncertain {
+                outcome: Some(_),
+                ..
+            }]
+        ));
+    }
+}

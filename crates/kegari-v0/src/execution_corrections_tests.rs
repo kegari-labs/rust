@@ -298,6 +298,75 @@ async fn native_correction_check_keeps_original_marker_and_historical_evidence()
             )
             .is_err()
     );
+    // Generic preparation consumes the same actual signed transition. This is
+    // a no-dispatch component assertion, not a corrected-worker/native launch.
+    let request = CommandRequest {
+        argv: vec!["/usr/bin/true".into()],
+        cwd: ".".into(),
+    };
+    assert!(
+        executor
+            .prepare_command(
+                &original,
+                &request,
+                Uuid::new_v4(),
+                Some(&effective),
+                |_| Ok(())
+            )
+            .is_err()
+    );
+    assert!(
+        executor
+            .prepare_command(effective.binding(), &request, Uuid::new_v4(), None, |_| Ok(
+                ()
+            ))
+            .is_err()
+    );
+    let mut command_events = Vec::new();
+    let prepared = executor
+        .prepare_command(
+            effective.binding(),
+            &request,
+            Uuid::new_v4(),
+            Some(&effective),
+            |entry| {
+                command_events.push(entry.clone());
+                Ok(())
+            },
+        )
+        .unwrap();
+    executor.preflight_command(&prepared).unwrap();
+    executor
+        .refuse_command(
+            prepared,
+            Error::new("fixture_no_dispatch", "component ends before launch"),
+            |entry| {
+                command_events.push(entry.clone());
+                Ok(())
+            },
+        )
+        .unwrap();
+    let CommandJournalEntry::Prepared {
+        preparation,
+        operation_id,
+        ..
+    } = &command_events[0]
+    else {
+        panic!("expected actual preparation")
+    };
+    assert_eq!(*operation_id, original.operation_id);
+    assert_eq!(preparation.original_binding, original);
+    assert_eq!(&preparation.binding, effective.binding());
+    assert_eq!(
+        preparation.correction.as_ref(),
+        Some(&effective.provenance().unwrap())
+    );
+    assert!(matches!(
+        command_events[1],
+        CommandJournalEntry::NotStarted { .. }
+    ));
+    assert_eq!(*runner.calls.lock().unwrap(), 2);
+    assert_eq!(fs::read(ownership.marker()).unwrap(), marker);
     assert!(
         EffectiveExecutionBinding::new(effective.binding(), &ownership, &isolation, transition)
             .is_err()
