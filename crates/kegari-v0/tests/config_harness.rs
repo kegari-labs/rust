@@ -995,7 +995,7 @@ fn delivered_starter_and_embedded_assets_assemble_without_development_checkout()
     assert!(assembled.prompt.contains("Root project convention"));
     assert!(assembled.prompt.contains("Nested project convention"));
     assert!(assembled.prompt.contains("Global scoped convention"));
-    assert!(assembled.prompt.contains("Repository work for Fixture"));
+    assert!(assembled.prompt.contains("# Generic repository work"));
     assert_eq!(assembled.manifest.supplied_files.len(), 3);
     assert!(matches!(
         assembled.manifest.provider_discovery,
@@ -1279,7 +1279,7 @@ fn host_path_resolution_is_transactional_and_workflow_check_references_are_verif
     let fixture = TempDir::new().unwrap();
     let mut config = configured();
     let before = config.revision().unwrap();
-    config.workspaces.get_mut("example").unwrap().workflow = "$WORKFLOW".into();
+    config.workspaces.get_mut("example").unwrap().workflow = Some("$WORKFLOW".into());
     let symbolic = config.revision().unwrap();
     assert!(config.resolve_paths(fixture.path(), |_| None).is_err());
     assert_eq!(symbolic, config.revision().unwrap());
@@ -1325,4 +1325,73 @@ fn deployment_environment_ids_are_canonical_provider_ids_not_names() {
             "accepted noncanonical environment {environment}"
         );
     }
+}
+
+#[test]
+fn omitted_workflow_and_check_catalog_use_installed_guidance_without_file_lookup() {
+    let mut value = serde_json::to_value(configured()).unwrap();
+    value["workspaces"]["example"]
+        .as_object_mut()
+        .unwrap()
+        .remove("workflow");
+    let repository = value["workspaces"]["example"]["repositories"]["101"]
+        .as_object_mut()
+        .unwrap();
+    repository.remove("local_checks");
+    repository.remove("integrated_checks");
+    let config: Config = serde_json::from_value(value).unwrap();
+    config.validate().unwrap();
+    let loaded = config.load_workflows().unwrap();
+    let workflow = &loaded[&id(2)];
+    assert!(workflow.path.is_none());
+    assert!(workflow.embedded.is_some());
+    assert!(workflow.front_matter.checks.local.is_empty());
+    assert!(workflow.front_matter.checks.integrated.is_empty());
+    assert!(
+        serde_json::to_value(&config).unwrap()["workspaces"]["example"]
+            .get("workflow")
+            .is_none()
+    );
+    // Absence is descriptive and grants neither a passed check nor execution.
+    let mut selected = config.clone();
+    let dir = TempDir::new().unwrap();
+    selected.workspaces.get_mut("example").unwrap().workflow =
+        Some(dir.path().join("missing.md").to_str().unwrap().into());
+    assert!(selected.load_workflows().is_err());
+    let invalid = dir.path().join("invalid.md");
+    std::fs::write(&invalid, "---\nunknown: true\n---\nTask").unwrap();
+    selected.workspaces.get_mut("example").unwrap().workflow =
+        Some(invalid.to_str().unwrap().into());
+    assert!(selected.load_workflows().is_err());
+}
+#[test]
+fn installed_workflow_assembly_records_an_asset_origin_and_preserves_required_context() {
+    let mut fixture = AssemblyFixture::new();
+    fixture.workflow = Workflow::installed_default().unwrap();
+    let assembled = assemble(fixture.input()).unwrap();
+    assert!(assembled.manifest.workflow_path.is_none());
+    let embedded = assembled.manifest.workflow_embedded.as_ref().unwrap();
+    assert_eq!(embedded.digest, assembled.manifest.workflow_digest);
+    assert_eq!(
+        assembled.manifest.assets["default_workflow"],
+        embedded.digest
+    );
+    assert!(
+        assembled
+            .prompt
+            .contains("Implement scoped boundary behavior")
+    );
+    assert!(assembled.prompt.contains("Root project convention"));
+    assert!(assembled.prompt.contains("empty or unborn repository"));
+    assert_eq!(
+        assembled
+            .prompt
+            .matches("# Generic repository work")
+            .count(),
+        1
+    );
+    let encoded = serde_json::to_value(&assembled.manifest).unwrap();
+    assert!(encoded.get("workflow_path").is_none());
+    fixture.workflow.path = Some(fixture.repository.join("pretended.md"));
+    assert!(assemble(fixture.input()).is_err());
 }

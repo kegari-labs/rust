@@ -159,7 +159,7 @@ pub(super) async fn fixture_authorization_with_provider_fixture(
     fs::write(&workflow,"---\nchecks:\n  local:\n    local:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/local.json'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/e2e.json'\n---\nExplicit synthetic provider fixture\n").unwrap();
     let mut configuration = wire::CacheConfiguration(wire::config()).snapshot().unwrap();
     let selected = configuration.workspaces.get_mut("example").unwrap();
-    selected.workflow = workflow.to_str().unwrap().into();
+    selected.workflow = Some(workflow.to_str().unwrap().into());
     selected.repositories.get_mut("42").unwrap().source = source.to_str().unwrap().into();
     adjust(&mut configuration);
     let data = wire::Fixture::new();
@@ -523,7 +523,8 @@ async fn admitted_delivery_gate_survives_harmless_reload_but_not_permission_revo
         .max_agents = 3;
     let workflow = fixture.configuration.snapshot().unwrap().workspaces["example"]
         .workflow
-        .clone();
+        .clone()
+        .unwrap();
     let mut contents = fs::read_to_string(&workflow).unwrap();
     contents.push_str("\nNew instructions apply only to new admissions.\n");
     fs::write(workflow, contents).unwrap();
@@ -566,7 +567,8 @@ async fn parent_progression_reselects_current_observation_between_admissions() {
         .max_agents = 3;
     let workflow = fixture.configuration.snapshot().unwrap().workspaces["example"]
         .workflow
-        .clone();
+        .clone()
+        .unwrap();
     let mut contents = fs::read_to_string(&workflow).unwrap();
     contents.push_str("\nA new admission must use this current workflow revision.\n");
     fs::write(workflow, contents).unwrap();

@@ -729,6 +729,12 @@ fn local_requirements(
     contract: &RepositoryContract,
     workflow: &Workflow,
 ) -> Result<Vec<CheckRequirement>> {
+    if contract.configuration.local_checks.is_empty() {
+        return Err(Error::new(
+            "validation_obligations_pending",
+            "local validation obligations have not been established for this repository",
+        ));
+    }
     contract
         .configuration
         .local_checks
@@ -4585,6 +4591,12 @@ impl DeliveryCoordinator {
         let mut commands = BTreeMap::new();
         for repository in &repositories {
             let contract = &self.contracts[repository];
+            if contract.configuration.integrated_checks.is_empty() {
+                return Err(Error::new(
+                    "validation_obligations_pending",
+                    "integrated validation obligations have not been established for every repository",
+                ));
+            }
             for name in &contract.configuration.integrated_checks {
                 let command = workflow
                     .front_matter

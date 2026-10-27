@@ -28,7 +28,7 @@ impl Harness {
         std::fs::write(&workflow,"---\nchecks:\n  local:\n    local:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/local.json'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/e2e.json'\n---\nFixture correction coordination\n").unwrap();
         let mut config = config();
         let workspace = config.workspaces.get_mut("example").unwrap();
-        workspace.workflow = workflow.to_str().unwrap().into();
+        workspace.workflow = Some(workflow.to_str().unwrap().into());
         workspace.actors.correctors = BTreeSet::from([id(6)]);
         let config = Arc::new(CacheConfiguration(config));
         let wire = Fixture::new();

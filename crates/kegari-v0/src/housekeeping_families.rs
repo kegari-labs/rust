@@ -163,6 +163,7 @@ impl EnrolledDirectoryReuse {
             || current.marker != self.registration.marker
             || current.directory_digest != self.registration.directory_digest
             || current.workflow_path != self.registration.workflow_path
+            || current.workflow_embedded != self.registration.workflow_embedded
             || current.workflow_digest != self.registration.workflow_digest
             || canonical_digest(1, &current.isolation)?
                 != canonical_digest(1, &self.registration.isolation)?
@@ -214,6 +215,7 @@ impl EnrolledDirectoryReuse {
             || current.marker != self.registration.marker
             || current.directory_digest != self.registration.directory_digest
             || current.workflow_path != self.registration.workflow_path
+            || current.workflow_embedded != self.registration.workflow_embedded
             || current.workflow_digest != self.registration.workflow_digest
             || canonical_digest(1, &current.isolation)?
                 != canonical_digest(1, &self.registration.isolation)?
@@ -262,12 +264,14 @@ fn execution_work_key(binding: &ExecutionBinding) -> Result<String> {
     .identity()
 }
 fn immutable_registration(value: &ExecutionRegistration) -> Result<String> {
-    canonical_digest(
-        1,
-        &json!({"schema":value.schema_version,"binding":value.binding,
+    let mut identity = json!({"schema":value.schema_version,"binding":value.binding,
         "isolation":value.isolation,"marker":value.marker,"directory":value.directory_digest,
-        "workflow_path":value.workflow_path,"workflow_digest":value.workflow_digest,"family":value.family_id,"hook_location":value.hook_location_digest}),
-    )
+        "workflow_path":value.workflow_path,"workflow_digest":value.workflow_digest,"family":value.family_id,"hook_location":value.hook_location_digest});
+    if let Some(embedded) = &value.workflow_embedded {
+        identity["workflow_embedded"] = serde_json::to_value(embedded)
+            .map_err(|_| Error::invalid("cannot encode installed workflow identity"))?;
+    }
+    canonical_digest(1, &identity)
 }
 
 impl Housekeeping {
@@ -322,18 +326,17 @@ impl Housekeeping {
             let configured_root = Path::new(&configuration.runtime.execution_root)
                 .canonicalize()
                 .map_err(|e| Error::io("resolve configured execution root", e))?;
-            let configured_workflow = Path::new(&workspace.workflow)
-                .canonicalize()
-                .map_err(|e| Error::io("resolve retained execution configured workflow", e))?;
+            let configured_workflow = workspace.load_workflow()?;
             if configuration.runtime.id != binding.runtime_id
                 || registration.binding != *binding
                 || registration.directory_digest != directory.digest()
                 || registration.marker != directory.marker()
                 || registration.workflow_path != workflow.path
+                || registration.workflow_embedded != workflow.embedded
                 || registration.workflow_digest != workflow.digest
                 || canonical_digest(1, &registration.isolation)?
                     != canonical_digest(1, isolation.plan())?
-                || configured_workflow != workflow.path
+                || !configured_workflow.same_source(workflow)
                 || !isolation
                     .plan()
                     .execution_root
@@ -435,6 +438,7 @@ impl Housekeeping {
                 || registration.directory_digest != directory.digest()
                 || registration.marker != directory.marker()
                 || registration.workflow_path != workflow.path
+                || registration.workflow_embedded != workflow.embedded
                 || registration.workflow_digest != workflow.digest
                 || canonical_digest(1, &registration.isolation)? != canonical_digest(1, isolation.plan())?
                 || receipt.runtime_id != binding.runtime_id
@@ -490,6 +494,7 @@ impl Housekeeping {
                 || directory.marker() != old.marker
                 || canonical_digest(1, isolation.plan())? != canonical_digest(1, &old.isolation)?
                 || workflow.path != old.workflow_path
+                || workflow.embedded != old.workflow_embedded
                 || workflow.digest != old.workflow_digest
                 || reference.predecessor() != proof.predecessor()
                 || reference.directory_reuse_digest() != proof.digest()
@@ -501,7 +506,7 @@ impl Housekeeping {
             {
                 return Err(Error::new("resume_incompatible", "directory enrollment differs from exact admitted resume"));
             }
-            let registration = ExecutionRegistration { schema_version: 2, family_id: old.family_id, hook_location_digest: None, binding: binding.clone(), isolation: isolation.plan().clone(), marker: directory.marker().into(), directory_digest: directory.digest().into(), workflow_path: workflow.path.clone(), workflow_digest: workflow.digest.clone(), processes: vec![], retention: None };
+            let registration = ExecutionRegistration { schema_version: 2, family_id: old.family_id, hook_location_digest: None, binding: binding.clone(), isolation: isolation.plan().clone(), marker: directory.marker().into(), directory_digest: directory.digest().into(), workflow_path: workflow.path.clone(), workflow_embedded: workflow.embedded.clone(), workflow_digest: workflow.digest.clone(), processes: vec![], retention: None };
             let id = old.family_id.ok_or_else(|| Error::new("resume_incompatible", "resumed directory has no family"))?;
             let name = format!("family-{id}.json");
             let resume_digest = canonical_digest(1, &reference)?;
@@ -771,6 +776,7 @@ impl Housekeeping {
                 || canonical_digest(1, &current.isolation)?
                     != canonical_digest(1, &registration.isolation)?
                 || current.workflow_path != registration.workflow_path
+                || current.workflow_embedded != registration.workflow_embedded
                 || current.workflow_digest != registration.workflow_digest
                 || immutable_registration(&current)? != member.registration
             {

@@ -231,6 +231,10 @@ impl Fixture {
         Self::build(hook, false)
     }
     fn build(hook: bool, native: bool) -> Self {
+        Self::build_with_default(hook, native, false)
+    }
+    fn build_with_default(hook: bool, native: bool, installed_default: bool) -> Self {
+        assert!(!installed_default || !hook);
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().canonicalize().unwrap();
         let pinned_git = pinned_git::prepare(&home);
@@ -368,7 +372,12 @@ impl Fixture {
             },
         )
         .unwrap();
-        let workflow = Workflow::load(&workflow_path).unwrap();
+        let workflow = if installed_default {
+            std::fs::remove_file(&workflow_path).unwrap();
+            Workflow::installed_default().unwrap()
+        } else {
+            Workflow::load(&workflow_path).unwrap()
+        };
         let control = if let Some(services) = &native {
             services.control.clone()
         } else {
@@ -1517,9 +1526,13 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
         "missing_process",
         "old_metadata",
         "alpha3_metadata",
+        "pre_default_workflow_metadata",
+        "missing_workflow_source",
+        "unknown_workflow_source",
         "missing_managed_policy",
         "foreground_only_managed_policy",
         "pre_resource_managed_policy",
+        "obsolete_offline_cargo_managed_policy",
         "unknown_managed_policy",
     ] {
         let mut info = serde_json::to_value(&f.info).unwrap();
@@ -1531,6 +1544,15 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
                 info.as_object_mut().unwrap().remove("process_schema");
             }
             "alpha3_metadata" => info["schema_version"] = 2.into(),
+            // Keep the current asset inventory: reader support must be checked
+            // directly rather than inferred from the presence of an asset name.
+            "pre_default_workflow_metadata" => info["schema_version"] = 3.into(),
+            "missing_workflow_source" => {
+                info.as_object_mut()
+                    .unwrap()
+                    .remove("workflow_source_schema");
+            }
+            "unknown_workflow_source" => info["workflow_source_schema"] = 99.into(),
             "missing_managed_policy" => {
                 info.as_object_mut()
                     .unwrap()
@@ -1539,6 +1561,7 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
             "unknown_managed_policy" => info["managed_execution_schema"] = 99.into(),
             "foreground_only_managed_policy" => info["managed_execution_schema"] = 1.into(),
             "pre_resource_managed_policy" => info["managed_execution_schema"] = 2.into(),
+            "obsolete_offline_cargo_managed_policy" => info["managed_execution_schema"] = 4.into(),
             _ => info["schema_version"] = 1.into(),
         }
         let binary = metadata_binary(&f.host.home.join(fault), &info);
@@ -1695,4 +1718,33 @@ async fn native_cleanup_metadata_uses_control_journal_and_same_sealed_cleanup_ef
             .pending_local_processes
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn cleanup_reloads_installed_workflow_origin_and_refuses_conflicting_or_missing_source() {
+    let fixture = Fixture::build_with_default(false, false, true);
+    let storage = fixture.root.child("cleanup").unwrap();
+    let name = format!("{}.json", id(7));
+    let original: Value = storage.read(&name).unwrap();
+    assert!(original.get("workflow_path").is_none());
+    assert!(original["workflow_embedded"].is_object());
+    assert!(fixture.house.inspect(id(7), &fixture.client).await.is_ok());
+    for fault in ["missing", "conflicting", "obsolete"] {
+        let mut changed = original.clone();
+        match fault {
+            "missing" => {
+                changed.as_object_mut().unwrap().remove("workflow_embedded");
+            }
+            "conflicting" => changed["workflow_path"] = json!(fixture.source.join("WORKFLOW.md")),
+            _ => changed["workflow_embedded"]["version"] = json!(999),
+        }
+        storage.write(&name, &changed).unwrap();
+        assert!(
+            fixture.house.inspect(id(7), &fixture.client).await.is_err(),
+            "{fault}"
+        );
+        assert!(fixture.source.is_dir());
+        storage.write(&name, &original).unwrap();
+    }
+    assert!(fixture.house.inspect(id(7), &fixture.client).await.is_ok());
 }

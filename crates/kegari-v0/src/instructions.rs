@@ -17,12 +17,13 @@ mod resume;
 pub use resume::{ResumeSemantics, VerifiedResumeInstructions};
 
 pub const ASSEMBLY_SCHEMA: u32 = 1;
-pub const ASSET_VERSION: &str = "3";
+pub const ASSET_VERSION: &str = "4";
 pub const MAX_CONTEXT_BYTES: usize = 1_048_576;
 pub const SUPPORTED_CODEX_VERSION: &str = "0.164.0-alpha.11.1";
 pub const STARTER: &str = include_str!("../examples/WORKFLOW.md");
 const ASSET_MANIFEST: &str = include_str!("../instructions/manifest.json");
 const ASSETS: &[(&str, &str)] = &[
+    ("default_workflow", crate::workflow::DEFAULT_WORKFLOW),
     ("authority", include_str!("../instructions/authority.md")),
     ("child", include_str!("../instructions/child.md")),
     (
@@ -154,7 +155,10 @@ pub struct InstructionManifest {
     pub runtime_build: String,
     pub asset_version: String,
     pub assets: BTreeMap<String, String>,
-    pub workflow_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_embedded: Option<crate::workflow::EmbeddedWorkflow>,
     pub workflow_digest: String,
     pub role: AgentRole,
     pub phase: String,
@@ -510,14 +514,18 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
             &mut read_bytes,
         )?;
     }
+    input.workflow.validate_source()?;
     let rendered = input.workflow.render(input.context)?;
     check_text(&rendered, input.known_secrets)?;
     let role_asset = input.role.asset();
-    let selected_assets = ["authority", role_asset, "continuation"];
+    let mut selected_assets = vec!["authority", role_asset, "continuation"];
     let mut prompt = String::new();
-    for name in selected_assets {
+    for name in &selected_assets {
         prompt.push_str(asset(name)?);
         prompt.push_str("\n\n");
+    }
+    if input.workflow.embedded.is_some() {
+        selected_assets.push("default_workflow");
     }
     let static_prompt_digest = bytes_digest(prompt.as_bytes());
     let boundary = serde_json::json!({"role":input.role,"phase":input.phase,"workspace_id":input.workspace_id,"operation_id":input.operation_id,"work_generation":input.work_generation,"correction_revision":input.correction_revision,"profile":input.profile,"cwd":cwd,"tools":input.tools,"permissions":permissions});
@@ -533,7 +541,7 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
     prompt.push_str(&serialized_context);
     prompt.push_str("\n\n# Applicable repository-owned guidance and required context\n\n");
     prompt.push_str(&repository_text);
-    prompt.push_str("\n# Configured repository workflow\n\n");
+    prompt.push_str("\n# Selected workflow guidance\n\n");
     prompt.push_str(&rendered);
     if prompt.len() > MAX_CONTEXT_BYTES {
         return Err(Error::new(
@@ -565,6 +573,7 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
             .map(|name| (name.to_owned(), catalog[name].clone()))
             .collect(),
         workflow_path: input.workflow.path.clone(),
+        workflow_embedded: input.workflow.embedded.clone(),
         workflow_digest: input.workflow.digest.clone(),
         role: input.role,
         phase: input.phase.into(),

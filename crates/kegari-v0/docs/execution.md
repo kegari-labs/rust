@@ -46,6 +46,13 @@ unknown and require reconciliation.
 
 ## Named checks
 
+This existing named-check path is a migration component, not the full SPEC 1.4
+execution contract. Generic discovered invocations and revision-bound validation
+obligations must replace its mandatory preconfigured-command/result-artifact
+assumptions under M02-1–M02-4. Empty configured check sets cannot imply that all
+necessary validation ran. The Cargo-specific preparation path is removed;
+commands are not rewritten by an ecosystem adapter.
+
 `run_check` resolves the exact named local or integrated workflow command. It
 preserves argv and uses the validated repository cwd. Hosted CI cannot be created
 through this API. Integrated checks require the candidate-vector digest. The host
@@ -68,10 +75,10 @@ control mutex. `run_check_complete` also returns a private failed capability so
 failed result bytes can be retained before a corrected rerun.
 
 Optional managed resource content is observed before preparation and after
-command completion outside that mutex. A changed SDK/library cannot turn a
+command completion outside that mutex. A changed observed resource cannot turn a
 successful command into accepted evidence: checks persist uncertainty and hooks
 retain their started/unknown state. Admission reconstructs the retained binding
-without reading SDK bytes. The original explicit resource read root remains the
+without reading resource bytes. The original explicit resource read root remains the
 read boundary, with separately enumerated library mappings and no added process
 execution grant. This is pre/post observation, not an immutable filesystem view;
 host updates can invalidate it. Public workload qualification remains separate.

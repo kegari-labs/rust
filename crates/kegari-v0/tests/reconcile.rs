@@ -1349,7 +1349,7 @@ async fn cached_authority_is_reconstructed_after_restart_and_removed_publication
     let workflow = path.join("WORKFLOW.md");
     std::fs::write(&workflow,"---\nchecks:\n  local:\n    local:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/local.json'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/e2e.json'\n---\nUse prepared context\n").unwrap();
     let mut cfg = config();
-    cfg.workspaces.get_mut("example").unwrap().workflow = workflow.to_str().unwrap().into();
+    cfg.workspaces.get_mut("example").unwrap().workflow = Some(workflow.to_str().unwrap().into());
     let config = Arc::new(CacheConfiguration(cfg));
     let wire = Fixture::new();
     let inputs = Arc::new(CacheInputs(wire.clone()));
@@ -1627,7 +1627,8 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
         if scenario == "retryable_preflight" {
             cfg.runtime.retry_cap_ms = 1;
         }
-        cfg.workspaces.get_mut("example").unwrap().workflow = workflow.to_str().unwrap().into();
+        cfg.workspaces.get_mut("example").unwrap().workflow =
+            Some(workflow.to_str().unwrap().into());
         let config = Arc::new(CacheConfiguration(cfg));
         let wire = Fixture::new();
         let inputs = Arc::new(CacheInputs(wire.clone()));
@@ -1921,7 +1922,8 @@ impl ActiveFixture {
         let workflow = root.join("WORKFLOW.md");
         std::fs::write(&workflow,"---\nchecks:\n  local:\n    local:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/local.json'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/e2e.json'\n---\nOriginal admitted instructions\n").unwrap();
         let mut cfg = config();
-        cfg.workspaces.get_mut("example").unwrap().workflow = workflow.to_str().unwrap().into();
+        cfg.workspaces.get_mut("example").unwrap().workflow =
+            Some(workflow.to_str().unwrap().into());
         let configuration = Arc::new(MutableConfiguration {
             config: Mutex::new(cfg),
             fences: Mutex::new(Default::default()),

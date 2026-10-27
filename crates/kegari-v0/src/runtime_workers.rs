@@ -1108,7 +1108,7 @@ impl Plan {
                     "worker workspace is no longer configured",
                 )
             })?;
-        let workflow = Workflow::load(Path::new(&workspace.workflow))?;
+        let workflow = workspace.load_workflow()?;
         let projection = runtime.observations.admission_snapshot()?;
         let (mut role, mut context, review, generation, normalized_state) = match &request.authority
         {

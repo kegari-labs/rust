@@ -340,7 +340,10 @@ struct ExecutionRegistration {
     isolation: IsolationPlan,
     marker: PathBuf,
     directory_digest: String,
-    workflow_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workflow_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workflow_embedded: Option<crate::workflow::EmbeddedWorkflow>,
     workflow_digest: String,
     processes: Vec<ProcessIdentity>,
     retention: Option<RetentionLocation>,
@@ -411,7 +414,10 @@ impl VerifiedCleanupExecution {
                 "cleanup command registration changed",
             ));
         }
-        let workflow = Workflow::load(&registration.workflow_path)?;
+        let workflow = Workflow::load_recorded(
+            registration.workflow_path.as_deref(),
+            registration.workflow_embedded.as_ref(),
+        )?;
         if workflow.digest != self.plan.workflow_digest {
             return Err(Error::new(
                 "stale_config",
@@ -671,6 +677,7 @@ impl Housekeeping {
         directory: &OwnedDirectory,
         workflow: &Workflow,
     ) -> Result<()> {
+        workflow.validate_source()?;
         binding.validate(isolation)?;
         let identity = directory.identity();
         if identity.runtime_id != binding.runtime_id
@@ -692,6 +699,7 @@ impl Housekeeping {
                     && old.directory_digest == directory.digest()
                     && old.marker == directory.marker()
                     && old.workflow_path == workflow.path
+                    && old.workflow_embedded == workflow.embedded
                     && old.workflow_digest == workflow.digest
                     && canonical_digest(1, &old.isolation)?
                         == canonical_digest(1, isolation.plan())?
@@ -716,6 +724,7 @@ impl Housekeeping {
             marker: directory.marker().into(),
             directory_digest: directory.digest().into(),
             workflow_path: workflow.path.clone(),
+            workflow_embedded: workflow.embedded.clone(),
             workflow_digest: workflow.digest.clone(),
             processes: vec![],
             retention: None,
@@ -827,6 +836,16 @@ impl Housekeeping {
                 "cleanup registration identity differs",
             ));
         }
+        match (&value.workflow_path, &value.workflow_embedded) {
+            (Some(path), None) if path.is_absolute() => {}
+            (None, Some(identity)) if identity.digest == value.workflow_digest => {}
+            _ => {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "cleanup workflow source is missing or conflicting",
+                ));
+            }
+        }
         Ok(value)
     }
     fn save(&self, registration: &ExecutionRegistration) -> Result<()> {
@@ -908,7 +927,10 @@ impl Housekeeping {
             &registration.directory_digest,
             &isolation,
         )?;
-        let workflow = Workflow::load(&registration.workflow_path)?;
+        let workflow = Workflow::load_recorded(
+            registration.workflow_path.as_deref(),
+            registration.workflow_embedded.as_ref(),
+        )?;
         if workflow.digest != registration.workflow_digest {
             return Err(Error::new(
                 "stale_config",
@@ -1176,11 +1198,14 @@ impl Housekeeping {
                 "cleanup plan differs from current exact eligibility",
             ));
         }
-        if Workflow::load(&registration.workflow_path)?
-            .front_matter
-            .hooks
-            .before_remove
-            .is_some()
+        if Workflow::load_recorded(
+            registration.workflow_path.as_deref(),
+            registration.workflow_embedded.as_ref(),
+        )?
+        .front_matter
+        .hooks
+        .before_remove
+        .is_some()
         {
             crate::isolation::repository_command_prerequisite(&registration.isolation.validate()?)?;
         }
@@ -1221,7 +1246,12 @@ impl Housekeeping {
                 .map(|f| f.registrations.clone())
                 .unwrap_or_else(|| BTreeMap::from([(operation, current.clone())]));
             if canonical_digest(1, &current)? != initial.registration_digest
-                || Workflow::load(&current.workflow_path)?.digest != initial.workflow_digest
+                || Workflow::load_recorded(
+                    current.workflow_path.as_deref(),
+                    current.workflow_embedded.as_ref(),
+                )?
+                .digest
+                    != initial.workflow_digest
                 || family.as_ref().map(|f| &f.digest) != initial.directory_family_digest.as_ref()
                 || self.cleanup_observations(&current, &members, None)? != initial.receipt_digest
             {
@@ -1246,7 +1276,10 @@ impl Housekeeping {
         });
         proof.validate_current()?;
         let registration = self.registration(operation)?;
-        let workflow = Workflow::load(&registration.workflow_path)?;
+        let workflow = Workflow::load_recorded(
+            registration.workflow_path.as_deref(),
+            registration.workflow_embedded.as_ref(),
+        )?;
         if workflow.front_matter.hooks.before_remove.is_some() {
             self.before_remove(&registration, &workflow, proof.clone())
                 .await?;
@@ -2165,6 +2198,9 @@ pub struct HandoverInfo {
     /// The replacement must understand managed policy fields in configuration
     /// and retained isolation records; omission cannot imply that capability.
     pub managed_execution_schema: u32,
+    /// Optional file selection and embedded origins in config, instructions and
+    /// retained cleanup records. Asset names alone are not a reader contract.
+    pub workflow_source_schema: u32,
     pub runtime_version: String,
     pub runtime_build: String,
     pub instruction_schema: u32,
@@ -2173,12 +2209,13 @@ pub struct HandoverInfo {
 }
 pub fn handover_info() -> Result<HandoverInfo> {
     Ok(HandoverInfo {
-        schema_version: 3,
+        schema_version: 4,
         api_version: 1,
         config_schema: 1,
         receipt_schema: 1,
         process_schema: 3,
         managed_execution_schema: 3,
+        workflow_source_schema: 1,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
         runtime_build: crate::BUILD_ID.into(),
         instruction_schema: crate::instructions::ASSEMBLY_SCHEMA,
@@ -2411,12 +2448,13 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
     let info =
         observed.map_err(|_| Error::new("timeout", "replacement metadata probe timed out"))??;
     binary.revalidate(true)?;
-    if info.schema_version != 3
+    if info.schema_version != 4
         || info.api_version != 1
         || info.config_schema != 1
         || info.receipt_schema != 1
         || info.process_schema != 3
         || info.managed_execution_schema != 3
+        || info.workflow_source_schema != 1
         || info.instruction_schema != crate::instructions::ASSEMBLY_SCHEMA
         || info.runtime_build.is_empty()
         || info.runtime_version.is_empty()

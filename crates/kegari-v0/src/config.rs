@@ -126,7 +126,8 @@ pub struct Workspace {
     pub linear_connection: String,
     pub github_connection: String,
     pub codex_connection: String,
-    pub workflow: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
     pub linear: LinearSelection,
     pub github: GithubSelection,
     #[serde(default)]
@@ -145,6 +146,25 @@ pub struct Workspace {
     pub evaluation: Option<EvaluationBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_execution: Option<ManagedExecution>,
+}
+
+impl Workspace {
+    /// Omission selects the installed generic workflow; an explicit selection
+    /// always requires that exact resolved file and never falls back.
+    pub fn load_workflow(&self) -> Result<crate::workflow::Workflow> {
+        match self.workflow.as_deref() {
+            None => crate::workflow::Workflow::installed_default(),
+            Some(selected) => {
+                let path = Path::new(selected);
+                if !path.is_absolute() {
+                    return Err(Error::invalid(
+                        "resolve configured workflow path on the host before preflight",
+                    ));
+                }
+                crate::workflow::Workflow::load(path)
+            }
+        }
+    }
 }
 
 pub const MAX_MANAGED_EXECUTABLES: usize = 256;
@@ -503,7 +523,9 @@ pub struct Repository {
     pub main: String,
     #[serde(default = "staging_ref")]
     pub staging: String,
+    #[serde(default)]
     pub local_checks: Vec<String>,
+    #[serde(default)]
     pub integrated_checks: Vec<String>,
     pub ci: Vec<CiSuite>,
     pub production_ci: Vec<CiSuite>,
@@ -707,7 +729,9 @@ impl Config {
             }
         }
         for workspace in next.workspaces.values_mut() {
-            workspace.workflow = resolve(&workspace.workflow, home, &env)?;
+            if let Some(workflow) = &mut workspace.workflow {
+                *workflow = resolve(workflow, home, &env)?;
+            }
             if let Some(managed) = &mut workspace.managed_execution {
                 for executable in &mut managed.executables {
                     executable.path = resolve(&executable.path, home, &env)?;
@@ -747,13 +771,7 @@ impl Config {
     pub fn load_workflows(&self) -> Result<BTreeMap<Uuid, crate::workflow::Workflow>> {
         let mut loaded = BTreeMap::new();
         for workspace in self.workspaces.values() {
-            let path = Path::new(&workspace.workflow);
-            if !path.is_absolute() {
-                return Err(Error::invalid(
-                    "resolve configured workflow path on the host before preflight",
-                ));
-            }
-            let workflow = crate::workflow::Workflow::load(path)?;
+            let workflow = workspace.load_workflow()?;
             for repository in workspace.repositories.values() {
                 for name in &repository.local_checks {
                     if !workflow.front_matter.checks.local.contains_key(name) {
@@ -881,7 +899,9 @@ impl Config {
                     )));
                 }
             }
-            path_syntax(&workspace.workflow)?;
+            if let Some(workflow) = &workspace.workflow {
+                path_syntax(workflow)?;
+            }
             if let Some(managed) = &workspace.managed_execution {
                 managed.validate()?;
             }
@@ -1063,8 +1083,8 @@ impl Repository {
         if self.hostname.contains(['/', ':', '@']) {
             return Err(Error::invalid("invalid GitHub hostname"));
         }
-        unique_nonempty(&self.local_checks, "local checks", false)?;
-        unique_nonempty(&self.integrated_checks, "integrated checks", false)?;
+        unique_nonempty(&self.local_checks, "local checks", true)?;
+        unique_nonempty(&self.integrated_checks, "integrated checks", true)?;
         for suites in [&self.ci, &self.production_ci] {
             if suites.is_empty() {
                 return Err(Error::invalid(

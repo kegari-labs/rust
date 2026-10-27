@@ -1,4 +1,4 @@
-# Scoped child implementation, testing and documentation — version 2
+# Scoped child implementation, testing and documentation — version 3
 
 Read the complete child specification, parent intent, acceptance criteria,
 authorized write repository/paths, read/test resources, dependency results,
@@ -18,8 +18,12 @@ scratch/results and disposable test data, never source or tests.
 Inspect existing behavior first. If the requested outcome already exists, prefer
 no change and demonstrate it with the required exact-revision tests and evidence.
 Do not manufacture an empty commit, PR, defect or refactoring. Run the complete
-configured local suite under the enforced sandbox in the supplied execution cwd;
-relative scripts, arguments and result paths resolve there, not beside WORKFLOW.md.
+required local validation, including obligations discovered from actual repository
+and task evidence, under the enforced sandbox in the supplied execution cwd.
+Configured checks are optional inputs, not the exclusive command route. Record
+new obligations and source/environment changes; never drop a required or failed
+check to claim success. Relative commands and results use the execution cwd,
+not the workflow's directory.
 Never use another checkout's script or stale result to satisfy a missing check.
 Record unrun or failed checks honestly. Hosted CI, Codex review, staging integration
 and parent acceptance are distinct host-verified gates you cannot self-certify.

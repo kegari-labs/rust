@@ -59,66 +59,27 @@ probing may create private empty probe directories, but this helper does not sav
 credentials, configuration or registration. The concrete bootstrap path may use
 the same manager after taking the canonical control lock and remains STOPPED.
 
-## Managed repository execution policy
+## Generic execution migration
 
-A workspace may declare `managed_execution` separately from its Codex model
-`profiles`. `foreground_v1` describes foreground tools that finish with their
-managed work. `check_bundle_v1` additionally opts into finite services declared
-inside a configured validation check. Neither setting prevents detachment or
-qualifies arbitrary tool invocations. Omission preserves the previous encoding
-and missing-profile refusal; there is no `enabled` or `qualified` assertion.
+SPEC 1.4 requires agent-led discovery without mandatory command/environment
+specifications. Runtime-owned generic guidance is the default when no repository
+workflow is selected; an explicitly selected invalid/missing workflow remains an
+error. Discovery does not change configured account, repository/write, resource,
+network or release authority. Applicable known validation obligations remain
+required even when a workflow supplies no commands.
 
-The required `executables` array has 1–256 entries, each with a `path` and an exact
-SHA-256 `digest`. Declare the complete transitive tool inventory, including
-compilers, linkers and interpreters used by an authorized command. The optional
-`read_roots` array has at most 64 entries, each with a `path` and an explicit
-`directory` boolean. Paths are at most 4096 UTF-8 bytes and use the existing
-absolute-path, `~` or whole `$NAME` expansion rules. `/`, duplicate executable
-paths and duplicate read paths are rejected, including collisions after expansion.
-Filesystem identity, canonical aliases and forbidden-root overlap are checked
-when the execution boundary binds the declaration; parsing alone does not prove
-those properties. Empty read roots and absent generated-executable policy are
-omitted from the serialized policy.
+The legacy `managed_execution` executable/digest catalog and resource-selection
+fields are being removed/reworked under [M02-1–M02-4](../MILESTONES.md). They are
+not a supported way to onboard new technologies. Their current refusal behavior
+must not be presented as generic execution support or worked around by supplying
+another toolset inventory. The replacement records actual command/environment
+observations automatically under generic authority and resource enforcement.
 
-A read root may additionally declare `content = { digest = "sha256:v1:…",
-executable_mappings = ["lib/compiler.dylib"] }`. This digest is the runtime's
-versioned managed-resource manifest, not a directory-name or concatenated-file
-hash. `isolation::managed_resource_digest` provides the same bounded observation
-for host preparation. A content root must already be canonical. The snapshot
-includes every regular file's byte digest, directory and symlink spelling;
-links must resolve inside the captured tree and must not form cycles. Special,
-missing or redirected entries are refused. Original file identities are retained
-separately, so byte-identical replacement is not silently adopted.
-
-All content roots in one policy share finite capture bounds: 65,536 entries,
-8 GiB of file bytes, 512 MiB per file and a 30-second observation deadline, with
-additional finite path, depth and manifest-text limits. Files are streamed through
-no-follow descriptors; the deadline is checked around reads and cannot preempt
-a blocked synchronous system call. Exceeding a bound is a refusal, not a partial
-successful snapshot. Missing `content` preserves the old encoding and path-only
-read behavior; it does not supply the content identity needed for a supported
-offline toolchain.
-
-Mappings are explicit resource-relative regular-file names. Directory mappings
-cannot name `.`, traverse parents, use absolute paths or resolve through a link;
-a file root may map only `.`. A mapping permits executable library loading but
-does not grant process execution. The original declared read-root boundary stays
-in effect; a content digest does not make the filesystem immutable. Managed work
-cannot write these resources, but concurrent host updates can invalidate an
-observation. Full content checks run outside serialized Control callbacks during
-preparation and before accepting check/hook results or running cleanup hooks.
-Admission checks validate the retained manifest and current path/tool bindings;
-they do not reread SDK bytes or claim a fresh content observation. Changed inputs
-retain uncertainty instead of producing successful check/hook evidence.
-
-The optional `generated_executables = "scratch_build_v1"` declares generated
-programs under the operation's bound private scratch build area. It does not grant
-execution from the repository, home directory or an arbitrary tool directory.
-No ambient environment or directory-wide tool grant is implied. Cargo-style
-workloads still need their actual compiler/linker inventory, required SDK reads,
-supported scratch output routing and native qualification. Toolchain reads do
-not become model-visible source grants, and independent role, source, network
-and credential restrictions remain in force.
+The unpublished `offline_cargo` configuration and schema-4 launch/check adapter
+are removed. Unknown obsolete fields/records are rejected without migration or
+source deletion; they are not silently accepted as generic proof. Prior native
+approvals and test results remain bound to their actual earlier implementations.
+Native generic-backend qualification remains incomplete.
 
 A local or integrated workflow check may have an optional `services` array.
 Each service has a unique stable `name`, literal `argv`, a `readiness` object
@@ -145,7 +106,8 @@ schema 2. Policies with content resources use managed schema 3 for either
 lifecycle. Service-member process rows use schema 3, while ordinary process rows
 remain schema 2 and legacy rows remain readable without promotion. Service-bearing
 check records use schema 3; checks without services retain schemas 1/2. Handover
-metadata remains version 3 and requires process schema 3 and managed schema 3.
+metadata is version 4 and requires process schema 3, managed schema 3 and explicit
+workflow-source schema 1 support for selected or installed workflow origins.
 
 Any policy addition, change or removal creates a workspace authority fence. A
 successful replacement requires PAUSED or STOPPED, drained work and no unresolved

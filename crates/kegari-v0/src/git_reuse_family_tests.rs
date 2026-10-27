@@ -1130,7 +1130,14 @@ fn retained_execution_metadata_uses_protected_family_without_repointing_configur
         .operator_checkout
         .to_string_lossy()
         .into_owned();
-    workspace.workflow = f.workflow.path.to_string_lossy().into_owned();
+    workspace.workflow = Some(
+        f.workflow
+            .path
+            .as_ref()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    );
     let read_root = || {
         f.housekeeping.retained_execution_read_root(
             &config,

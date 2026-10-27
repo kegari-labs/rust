@@ -275,3 +275,50 @@ fn typed_resolution_rechecks_services_and_retains_artifact_containment() {
         );
     }
 }
+
+#[test]
+fn recorded_default_origin_cannot_fallback_adopt_a_path_or_change_version() {
+    let workflow = Workflow::installed_default().unwrap();
+    assert!(workflow.path.is_none());
+    assert!(workflow.front_matter.checks.local.is_empty());
+    assert!(workflow.front_matter.checks.integrated.is_empty());
+    let identity = workflow.embedded.clone().unwrap();
+    assert!(
+        Workflow::load_recorded(None, Some(&identity))
+            .unwrap()
+            .same_source(&workflow)
+    );
+    assert!(Workflow::load_recorded(None, None).is_err());
+    assert!(
+        Workflow::load_recorded(Some(Path::new("/absent/WORKFLOW.md")), Some(&identity)).is_err()
+    );
+    let mut obsolete = identity.clone();
+    obsolete.version += 1;
+    assert!(Workflow::load_recorded(None, Some(&obsolete)).is_err());
+    obsolete = identity;
+    obsolete.digest = "sha256:".to_owned() + &"0".repeat(64);
+    assert!(Workflow::load_recorded(None, Some(&obsolete)).is_err());
+    let root = tempfile::tempdir().unwrap();
+    assert!(
+        workflow
+            .resolve_resource("relative.md", &[root.path().into()])
+            .is_err()
+    );
+}
+
+#[test]
+fn installed_origin_rejects_copied_identity_and_mutated_default_commands() {
+    let installed = Workflow::installed_default().unwrap();
+    let mut copied = Workflow::parse("arbitrary guidance", "/fixture/WORKFLOW.md").unwrap();
+    copied.path = None;
+    copied.embedded = installed.embedded.clone();
+    copied.digest = installed.digest.clone();
+    copied.body = installed.body.clone();
+    assert!(copied.validate_source().is_err());
+    let mut changed = installed.clone();
+    changed.front_matter.hooks.before_remove = Some("unexpected hook".into());
+    assert!(changed.validate_source().is_err());
+    let mut changed = installed;
+    changed.body.push_str("changed guidance");
+    assert!(changed.validate_source().is_err());
+}

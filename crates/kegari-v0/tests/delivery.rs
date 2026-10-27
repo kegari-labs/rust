@@ -423,9 +423,30 @@ impl DeliveryFixture {
         Self::build(extra_check, false).await
     }
     async fn build(extra_check: bool, candidate: bool) -> Self {
+        Self::with_obligations(extra_check, candidate, true, true).await
+    }
+    async fn with_obligations(
+        extra_check: bool,
+        candidate: bool,
+        local: bool,
+        integrated: bool,
+    ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().canonicalize().unwrap();
         let mut cfg = config();
+        let repository = cfg
+            .workspaces
+            .get_mut("example")
+            .unwrap()
+            .repositories
+            .get_mut("42")
+            .unwrap();
+        if !local {
+            repository.local_checks.clear();
+        }
+        if !integrated {
+            repository.integrated_checks.clear();
+        }
         let actual_revision = if candidate {
             let source = directory.join("source");
             std::fs::create_dir(&source).unwrap();
@@ -1884,6 +1905,34 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
             .code,
         "provenance_mismatch"
     );
+}
+
+#[tokio::test]
+async fn undiscovered_local_obligations_cannot_become_a_vacuous_pass() {
+    let f = DeliveryFixture::with_obligations(false, false, false, true).await;
+    let before = f.wire.lock().unwrap().requests.len();
+    assert_eq!(
+        f.coordinator
+            .verify_local_checks(&f.admission, &workflow(), &[])
+            .unwrap_err()
+            .code,
+        "validation_obligations_pending"
+    );
+    assert_eq!(f.wire.lock().unwrap().requests.len(), before);
+}
+
+#[tokio::test]
+async fn undiscovered_integrated_obligations_block_candidate_contract() {
+    let f = DeliveryFixture::with_obligations(false, true, true, false).await;
+    let before = f.wire.lock().unwrap().requests.len();
+    assert_eq!(
+        f.coordinator
+            .parent_contract(f.admission.fresh_gate().clone(), &f.parent, &workflow())
+            .unwrap_err()
+            .code,
+        "validation_obligations_pending"
+    );
+    assert_eq!(f.wire.lock().unwrap().requests.len(), before);
 }
 
 #[tokio::test]

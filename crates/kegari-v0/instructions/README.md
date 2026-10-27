@@ -1,7 +1,7 @@
 # Runtime instruction and repository workflow contract
 
-The installed executable embeds the six versioned role assets and their checked
-SHA-256 catalog. `instructions::assemble` is the production assembly entry point;
+The installed executable embeds six role/authority assets and a versioned generic
+workflow with their checked SHA-256 catalog. `instructions::assemble` is the production assembly entry point;
 it validates the catalog, role/tools/permissions and exact profile, discovers
 allowed guidance, renders the selected workflow, and returns the prompt plus an
 instruction manifest. The runtime never reads these generic assets from the build
@@ -22,8 +22,10 @@ Layers, in assembly order:
    instruction chains and explicitly required context are supplied with path,
    scope and byte digests. Missing, inaccessible, oversized or secret-bearing
    required input blocks assembly. No target guidance is rewritten.
-6. The explicitly configured repository WORKFLOW.md supplies target-specific
-   context and validation instructions; it cannot change roles, accounts or scope.
+6. An explicitly selected repository WORKFLOW.md supplies additional guidance.
+   If no workflow is selected, the installed generic workflow supplies discovery
+   guidance without reading a file or inferring a cwd-relative selection. Neither
+   source changes roles, accounts, scope or execution permission.
 
 Supplied files and provider-confirmed discovery are separate manifest fields.
 Deterministic discovery tests establish what Kegari supplies, not what an actual
@@ -42,27 +44,47 @@ A successful assembly call alone does not establish native-review compatibility.
 
 ## Selecting and adapting the starter
 
-`examples/WORKFLOW.md` is a valid example that renders through production code.
+`examples/WORKFLOW.md` is an optional copy of the installed generic guidance.
 Choose an explicit new destination through `instructions::export_starter` (which
-uses create-new and cannot overwrite an existing file), then configure its
-absolute path. There is no cwd or starter fallback. Editing/copying the starter
-does not dispatch work, grant access or select a runtime profile.
+uses create-new and cannot overwrite an existing file) if repository-specific
+additions are useful. Omit `workspace.workflow` to use the installed default.
+An explicit selected path must resolve to its actual bounded, valid workflow;
+missing, unreadable or invalid selections never fall back. No file is guessed
+from the working directory.
 
-The shipped commands `./scripts/validate-local` and `./scripts/validate-integrated`
-are example target-owned commands. Supply/adapt them, their named local/integrated
-suites and current-run JSON result artifacts to the actual repository. Their argv,
-shell references and artifact paths resolve from the isolated execution/candidate
-cwd. Only an explicitly identified workflow resource link resolves beside the
-workflow. The loader never searches the workflow directory for a missing command
-or artifact. Result presence alone is insufficient: the host must verify actual
-execution, operation, revision and freshness before accepting it.
+The default declares no executable catalog, check commands or hooks. It directs
+the agent to discover relevant guidance, environment and validation from the
+actual permitted task/repository context, including an empty or unborn repository.
+This guidance does not establish an execution facility or missing source evidence.
+Dynamic command admission, discovered validation obligations and empty/unborn Git
+runtime support remain separate implementation work. Empty configured check sets
+are accepted as undiscovered inputs; dependent validation/delivery gates still
+refuse missing obligations and do not count them as passes.
+
+A file workflow records its actual canonical path and byte digest. The installed
+default records an explicit embedded version/digest and has no filesystem path.
+Worker binding and retained cleanup compare the original source identity; an
+obsolete embedded version or a changed selected file cannot silently replace it.
+Existing file-origin records retain their string path and omit the embedded field.
+Handover metadata schema 4 explicitly requires `workflow_source_schema = 1` for
+these config/instruction/cleanup formats. Missing or unsupported reader support
+refuses replacement even if the advertised asset catalog has matching names.
+Historical six-asset binaries also fail the existing asset-key compatibility gate;
+that incidental mismatch is not the definition of workflow reader support.
+
+Optional configured commands and artifact paths resolve from the isolated
+execution/candidate cwd. An explicit relative workflow resource link is available
+only for a selected file workflow; an embedded default has no filesystem resource
+anchor. Result presence alone cannot establish execution, revision or freshness.
 
 The front matter is a closed mapping: `schema_version: 1`, optional `hooks` and
 optional `checks`. Hooks are explicit shell strings (`after_create`, `before_run`,
 `after_run`, `before_remove`) plus positive `timeout_ms`. Each named
-`checks.local.NAME` or `checks.integrated.NAME` contains exactly `argv` (a string
-array) and `result_artifact` (a path string). Duplicate keys, implicit non-string
-argv values, unsupported fields and empty prompt bodies fail.
+`checks.local.NAME` or `checks.integrated.NAME` contains `argv` (a string array),
+`result_artifact` (a path string), and optional bounded `services` declarations.
+These are optional inputs/obligations rather than a required command catalog.
+Duplicate keys, implicit non-string argv values, unsupported fields and empty
+prompt bodies fail.
 
 Templates support `{{ path }}`, `if`/`elsif`/`else`, `for`/`else`, `assign`, literal
 array-index/map-key paths, comparisons and logical conditions. Supported filters
@@ -81,17 +103,22 @@ starter rendering, actual assembly, strict parsing and conflicting cwd fixtures.
 
 ## Target preparation before dispatch
 
-The operator must provide a concise repository entry point linking necessary
-architecture/conventions; existing root/nested instructions; complete build,
-test and lint commands; tools/environment prerequisites; allowed read repositories
-and explicit test data/resources; hosted CI workflow/check identities; required
-reviews and strict current-base squash protections; an exact-SHA no-change CI
-route; and the configured deployment step DAG or explicit `deployment = "none"`.
-Account IDs, actor allowlists, resource scopes, child routing labels and manual vs
-automatic release policy belong to host configuration/Linear, never front matter.
-`config check` must verify these prerequisites read-only and distinguish verified,
-unverified and blocked. Generic instructions and example values supply none of
-those permissions or qualification evidence.
+Repository context may include concise entry points, architecture/conventions,
+existing root/nested instructions and target-owned scripts/configuration. The
+agent discovers relevant commands and environment from permitted evidence; the
+operator does not need to maintain an executable inventory or command manifest.
+An empty repository starts from the authorized task, without invented existing
+files or revisions. Required inaccessible context remains a blocker.
+
+Account identities, actors, repository/resource scope, roles and release policy
+remain host-owned authorization inputs. Actual hosted proof, review, strict-base
+integration, deployment and human acceptance gates remain required when their
+operations apply. Some current configuration and delivery paths still require
+predeclared hosted CI/no-change/deployment identities; removing discovery blockers
+there requires a separate implementation preserving those evidence gates.
+`config check` is read-only and must distinguish verified, unverified and blocked.
+Neither generic instructions nor optional configured checks grant permissions or
+qualification, and they cannot make a failed or unrun obligation pass.
 
 Prepare one parent and scoped children in Linear before authorization. Include
 outcome, relevant context, constraints, dependencies, acceptance criteria and

@@ -379,7 +379,7 @@ impl Fixture {
             generated_executables: None,
         });
         let configured_workspace = configured_policy.as_ref().map(|policy| {
-            worker_bundle::configuration(&auth, &workflow.path, &source, policy, profile())
+            worker_bundle::configuration(&auth, workflow.path.as_deref().unwrap(), &source, policy, profile())
         });
         let work = WorkIdentity {
             linear_endpoint: "https://linear.invalid/graphql".into(),

@@ -167,7 +167,10 @@ impl Housekeeping {
                     "directory member has active or foreign ownership",
                 ));
             }
-            let workflow = Workflow::load(&member.workflow_path)?;
+            let workflow = Workflow::load_recorded(
+                member.workflow_path.as_deref(),
+                member.workflow_embedded.as_ref(),
+            )?;
             if workflow.digest != member.workflow_digest {
                 return Err(Error::new(
                     "stale_config",

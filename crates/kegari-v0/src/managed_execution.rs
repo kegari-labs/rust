@@ -338,6 +338,57 @@ mod tests {
         }
     }
     #[test]
+    fn unpublished_schema_four_is_not_reinterpreted_as_a_supported_binding() {
+        let mut f = Fixture::new();
+        f.policy.lifecycle = ManagedLifecycle::CheckBundleV1;
+        let original = BoundManagedExecution::resolve(&f.policy).unwrap();
+        assert!(original.supports_check_bundles());
+        let mut stored = serde_json::to_value(original).unwrap();
+        stored["schema_version"] = 4.into();
+        let decoded: BoundManagedExecution = serde_json::from_value(stored).unwrap();
+        assert!(!decoded.supports_check_bundles());
+        assert_eq!(
+            decoded.revalidate_binding().unwrap_err().code,
+            "identity_mismatch"
+        );
+        assert_eq!(decoded.revalidate().unwrap_err().code, "identity_mismatch");
+    }
+    #[test]
+    fn generic_command_rendering_preserves_argv_and_only_host_environment() {
+        let mut f = Fixture::new();
+        f.policy.generated_executables = Some(ManagedGeneratedExecutables::ScratchBuildV1);
+        f.plan.managed_execution = Some(BoundManagedExecution::resolve(&f.policy).unwrap());
+        let isolation = f.plan.validate().unwrap();
+        let argv = vec![
+            f.tool.to_string_lossy().into_owned(),
+            "repository-selected-command".into(),
+            "--project-option=unchanged".into(),
+        ];
+        // Pure preparation: the inert fixture executable is never launched.
+        let rendered = crate::isolation::render_command(&isolation, &argv).unwrap();
+        assert_eq!(rendered.argv, argv);
+        assert_eq!(rendered.executable, f.tool);
+        assert_eq!(rendered.profile, isolation.seatbelt_profile().unwrap());
+        assert_eq!(
+            rendered.environment,
+            std::collections::BTreeMap::from([
+                ("PATH".into(), isolation.command_path().unwrap()),
+                ("HOME".into(), f.plan.scratch.to_string_lossy().into_owned()),
+                (
+                    "TMPDIR".into(),
+                    f.plan.scratch.to_string_lossy().into_owned()
+                ),
+                ("LANG".into(), "C.UTF-8".into()),
+            ])
+        );
+        assert_eq!(
+            repository_command_prerequisite(&isolation)
+                .unwrap_err()
+                .code,
+            "managed_profile_unqualified"
+        );
+    }
+    #[test]
     fn check_bundle_policy_is_explicit_and_cannot_be_schema_downgraded() {
         let f = Fixture::new();
         let foreground = BoundManagedExecution::resolve(&f.policy).unwrap();

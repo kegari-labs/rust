@@ -455,7 +455,8 @@ impl DecisionFixture {
         let workflow = root.join("WORKFLOW.md");
         std::fs::write(&workflow,"---\nchecks:\n  local:\n    local:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/local.json'\n  integrated:\n    e2e:\n      argv: ['/usr/bin/true']\n      result_artifact: '{{ paths.scratch }}/e2e.json'\n---\nUse prepared context\n").unwrap();
         let mut cfg = config();
-        cfg.workspaces.get_mut("example").unwrap().workflow = workflow.to_str().unwrap().into();
+        cfg.workspaces.get_mut("example").unwrap().workflow =
+            Some(workflow.to_str().unwrap().into());
         let configuration = Arc::new(Configuration(RwLock::new(cfg)));
         let wire = Fixture::new();
         let inputs = Arc::new(Inputs(wire.clone()));

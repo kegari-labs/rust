@@ -5,7 +5,7 @@ Implementation and qualification remain in progress. The current build is not
 qualified to coordinate the lasting implementation. See [PROGRESS.md](PROGRESS.md)
 for the actual checkpoint, failed or blocked checks, and current work.
 [MILESTONES.md](MILESTONES.md) defines version targets, immediate 0.2.0 correction
-packages, completion gates and progress reporting. The Goal remains paused.
+packages, completion gates and progress reporting. The Goal is active and unattended.
 
 ## Build and deterministic checks
 
@@ -32,10 +32,10 @@ new requests must follow the generic backend and milestone plan.
 
 ## Versioned prerelease executable
 
-The uncommitted development source declares `0.2.0-alpha.9`; the package and
+The development source declares `0.2.0-alpha.9`; the package and
 executable remain `kegari-v0`. No final alpha.9 artifact has been packaged. Its
-Cargo-specific design is superseded by SPEC 1.4 and the 0.2.0 correction plan;
-alpha.8 remains the latest retained committed/artifact baseline.
+Cargo-specific design has been removed under the 0.2.0 correction plan;
+alpha.8 remains the latest retained packaged artifact.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or
 unqualified declared profiles (`managed_profile_unqualified`), and native,
 provider, actual-agent and human qualification remain incomplete.
@@ -54,8 +54,9 @@ These inspection commands do not set up or start the coordinator. The hidden
 metadata commands are exact internal forms, useful here for checking the build;
 they are not an installation or handover procedure. `__handover-info` validates
 the embedded instruction catalog before reporting its version and asset hashes.
-The six role assets and starter workflow are embedded in the executable, so they
-do not require a companion checkout. Instruction asset version `3` and persisted
+The runtime guidance, generic default workflow and optional starter are embedded
+in the executable, so they do not require a companion checkout. Instruction asset
+version `4` and persisted
 schema versions are independent of the application's prerelease version.
 
 `--version` reports the application version and source/profile build digest.
@@ -64,8 +65,8 @@ checksum or a complete record of compiler settings. Release and debug profiles
 have different build identities. The build output is a development artifact;
 operational use requires a separately authorized immutable installation and
 qualification under SPEC §11.7. Building does not install, activate or replace a
-running coordinator. The pending offline Cargo design is superseded development
-work awaiting removal/rework. Generic execution and agent-led discovery now follow
+running coordinator. The rejected offline Cargo execution adapter has been removed.
+Generic execution and agent-led discovery now follow
 SPEC 1.4 and MILESTONES.md. The historical [alpha.8 resource binding](validation/MANAGED-RESOURCES.md)
 records bounded SDK/library observations and explicit mappings, with 1,117
 passing tests for that source. It does not establish SPEC 1.4 conformance.
@@ -91,7 +92,7 @@ it does not open a setup wizard or start a service. Before setup, alpha.4 and la
 runtime has been configured yet. Use `./kegari-v0 --help` or
 `./kegari-v0 setup --help` to inspect the available commands without setup.
 
-Alpha.9 remains uncommitted development work requiring architectural correction;
+Alpha.9 remains development work requiring generic execution and discovery completion;
 no current build is qualified for coordinator activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
 requires the supported profile and native/provider prerequisites to be established
 first, then a final protected, versioned binary and explicit runtime configuration.
@@ -112,15 +113,22 @@ provider and execution prerequisites remain blockers.
 Read the [configuration contract](docs/configuration.md),
 [CLI command guide](docs/cli.md), [native host lifecycle](docs/native-host.md),
 and [control transport](docs/transport.md) before installation or activation.
-The [starter WORKFLOW.md](examples/WORKFLOW.md) documents the target-specific
-commands, tools, resources and acceptance inputs that must be supplied. Preserve
-the target repository's existing instructions; runtime-owned guidance is shipped
-in [instructions/](instructions/) and bound to the installed binary.
+The [starter WORKFLOW.md](examples/WORKFLOW.md) is optional guidance. Omitting a
+workflow selects the installed generic workflow; selecting an invalid file still
+fails. Agents retrieve project commands, technology boundaries and validation
+needs from accessible repository instructions, documentation, configuration and
+scripts. Empty repositories begin from the authorized task and actual observed
+state. Preserve existing repository guidance; runtime-owned instructions are
+shipped in [instructions/](instructions/) and bound to the installed binary.
 
 An operator must supply canonical account/workspace/repository identities,
-protected executable and credential locations, explicit scoped actors/resources,
-exact CI/review/deployment contracts, and qualified native isolation. Missing
-facts stay visible as blockers. Setup, service installation, live evaluation,
+the runtime's protected executable and credential locations, explicit scoped
+actors/resources and release policy. Project command lists and tool/environment
+inventories are not operator prerequisites under SPEC 1.4. The remaining legacy
+catalog/check interfaces are being replaced; the current source does not yet
+deliver that complete command-discovery path. Native isolation and actual
+CI/review/deployment facts must be established before their dependent gates.
+Setup, service installation, live evaluation,
 provider mutation and deployment require their own operational authorization;
 none is performed by the build/test commands above.
 
@@ -153,9 +161,10 @@ The [progression report](validation/LOCAL-PROGRESSION.md) records the historical
 [PROGRESS.md](PROGRESS.md). The [coverage inventory](validation/coverage.json)
 indexes normative requirements; it is not a conformance certificate.
 
-The [evaluation guide](docs/evaluations.md) describes the versioned V0-E01–08
+The [evaluation guide](docs/evaluations.md) describes the existing V0-E01–08
 fixtures, finite trial bounds, protected graders, provenance and human-review
-requirements. Actual-agent trials, real provider integrations, native service and
+requirements. SPEC 1.4 additionally requires V0-E09 generic-discovery variants;
+their implementation and qualification remain open. Actual-agent trials, real provider integrations, native service and
 isolation checks, and required human calibration are separate evidence classes.
 Supervised, bounded native component results are recorded above. Other live steps
 still require separate authorization and evidence.

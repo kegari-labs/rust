@@ -1,34 +1,167 @@
 # Kegari v0 build progress
 
-The Goal remains **paused and incomplete** at the user's explicit architecture
-checkpoint. On 2026-10-27 the user approved the technology-agnostic correction
-and authorized specification/goal documentation updates only. SPEC 1.4 now
-prohibits target-toolset-specific code, including optional adapters and manifest
-parsers, and removes mandatory environment/tool/command specifications. Agents
-must discover project commands/context under generic host enforcement.
+**Goal active and incomplete; unattended. Target: 0.2.0 / M02-1.** The user
+resumed the Goal after documentation commit `304cc98` on 2026-10-27. The Goal
+control confirms active. The documentation hold is lifted for implementation;
+earlier paused/available-for-supervision notes below are historical. The prior
+turn made progress by recording the user's unattended instruction.
 
-[MILESTONES.md](MILESTONES.md) now holds the revised version plan, retaining the
-0.2.0–0.7.0 sequence and correcting 0.2.0 first. The immediate target on explicit
-resumption is **0.2.0 / M02-1: remove/rework the incompatible execution design**.
-No minor milestone is complete. The goal files require concise milestone updates
-with completed work/evidence, remaining exit criteria, next action and blockers,
-plus a status update in the milestone file at meaningful checkpoints.
+Follow [MILESTONES.md](MILESTONES.md) and SPEC 1.4. First remove/rework the
+incompatible execution design across the repository, including pending alpha.9.
+The current increment removes Cargo-specific orchestration and introduces the
+installed generic workflow path while preserving existing authority/lifecycle
+checks. Mandatory tool inventories, discovered validation obligations, generic
+execution and empty/unborn repository handling remain open until implemented and
+verified. No minor milestone is complete.
 
-The current authorized work is planning/documentation only. The milestone plan
-is recorded; only explicit user resumption can lift the implementation hold.
-The user subsequently authorized committing these documentation changes. Code
-deletion, implementation, product/native validation and build packaging remain
-outside this step; the documentation commit does not resume the Goal.
+Resumption baseline: branch `main`, HEAD `304cc984721787f9148e7c0b246ad28dde60b149`,
+empty staging at that point; pending alpha.9 preserved before correction in
+`/private/tmp/kegari-m02-baseline-ry20u_yz` (`pending-work.tar.gz`, `pending.patch`,
+`state.json`, 31 files). The exact SPEC 1.4 SHA-256 remains
+`b01064b5238554d2def840cabf6a9e5d555535e35ce4877838a55ade2dd0a6e7`.
+The attached objective matches GOAL.md without its `/goal ` prefix. The installed
+stable alias still reports Rust/Cargo 1.99.1; no toolchain installation occurred.
+No new native/provider qualification is authorized or running in this increment.
 
-On resumption, audit and remove/rework incompatible implementation throughout
-the repository, including the pending alpha.9 Cargo-specific paths. Preserve
-useful generic supervision/evidence and historical failures. The prior source
-reviews and test results below remain evidence for their actual SPEC 1.3/code
-baseline, not proof of SPEC 1.4 conformance or a direction to finish alpha.9 as
-previously designed. The inventory tool's approved hash and coverage ledger
-still reference SPEC 1.3; reconcile them, new V0-H04/T38/T39/E09 and affected
-existing requirement statuses during the implementation package without
-inheriting passes for changed requirements. Historical reports stay unchanged.
+The Cargo-specific pending implementation and its helpers are removed. The
+installed workflow is instruction asset version 4 with an explicit embedded
+origin; a selected file still fails on missing/invalid content rather than
+falling back. Empty check catalogs now leave validation obligations pending,
+never successful by vacuity. This is a partial migration: command admission and
+validation still require further generic redesign. The SPEC 1.4 inventory now
+tracks 519 clauses and 140 named requirements, preserves all 326 prior evidence
+entries, and archives stale coverage without promoting any full pass. See
+[the baseline reconciliation](validation/TECHNOLOGY-AGNOSTIC-BASELINE.md).
+
+Validation: formatting and the second all-target offline check passed. The first
+check found two missed optional-workflow fixture adaptations; both were corrected
+and `/private/tmp/kegari-m02-check1.log` is retained. The successful check log is
+`/private/tmp/kegari-m02-check2.log`. All 11 inventory-tool tests and its consistency
+check passed. Independent source review found no unresolved material issue in the
+default-workflow origin/recovery or ledger migration; duplicate default rendering
+was corrected with a single-render regression before these checks.
+
+The first release suite (session `35357`, terminal exit 101) reached 545 passing
+library tests, 14 failures and one native ignore; later targets did not run in
+that command. All failures concern owned process-guard closure, including the
+unrelated pre-exec concurrency regression. The failure log is retained at
+`/private/tmp/kegari-m02-tests1.log`; no weakened exit proof or native qualification
+is inferred. Its source snapshot is `/private/tmp/kegari-m02-tests1-source.json`,
+SHA-256 `52fbae463adf58d33b067e05843f1a2033e8ef5a4150bfd0ef6335953e2253b9`.
+Only the containment documentation changed before the integration-only run.
+Session `29143` ended at a stale unpublished managed-schema-4 assertion in the CLI
+metadata test (389 passes, one failure); it was corrected to managed schema 3.
+The remaining targets, including that correction, passed in session `13371`
+(181 passes, two native ignores). Logs are
+`/private/tmp/kegari-m02-integration1.log` and `kegari-m02-integration3.log`.
+An intermediate command selected a nonexistent test target and ran no tests;
+its Cargo selection error is retained in `kegari-m02-integration2.log`.
+
+Post-run review made workflow-reader support explicit in handover metadata:
+schema 4 requires workflow-source schema 1, independent of instruction asset
+names. Historical six-asset binaries already fail the asset-key gate; this change
+does not claim a demonstrated accepted downgrade. Its new refusal cases still
+need the next release run. All-target clippy passed afterward, session `47021`,
+log `/private/tmp/kegari-m02-clippy1.log`.
+
+The failing process-overlap test passed once alone and in its 12-test startup
+group (`kegari-m02-guard-isolated1.log`, `kegari-m02-guard-group1.log`, session
+`71866` terminal 0). Neither pass resolves the full parallel-suite failure.
+Independent source inspection excluded non-atomic guard duplication, unbounded
+raw spawns and retained parent lock clones. Rust's spawn EOF and Darwin's
+descending close-on-exec order expose an ordering hole: unrelated inherited
+guard descriptors may outlive spawn return. A correction must remove those
+specific duplicates before exec, not poll away evidence of an actual survivor.
+Exact attribution of every historical failure is not established. The correction
+now registers and closes exact unrelated guard descriptors before exec. Intended
+inheritance is bound to the guard's inode/device and disarmed after actual
+child/group binding or guard release; stale callbacks on reused commands cannot
+clear close-on-exec on recycled descriptors. Four new regressions cover actual
+pre-exec descriptor state, success/failure command reuse, failed acquisition and
+reuse of a genuinely guarded command. The existing overlap and surviving-holder
+regressions remain unchanged. Independent static review found no further material
+finding after the reused intended-hook issue was corrected.
+
+Release session `23658` finished with `--no-fail-fast`: **1,131 passed, zero
+failed, three native ignores, 40 result groups**, log
+`/private/tmp/kegari-m02-tests2.log` (SHA-256
+`29fb7c77a01cc1beb097fb48c895d88855f66f3e00aa168cf66c624d0a95c8a3`).
+Its 851-file snapshot is
+`/private/tmp/kegari-m02-tests2-source.json`, SHA-256
+`6c597ff045f1e6e2984132d21814aac7149135cda50c8a9f66632603b607a264`.
+Formatting passed before launch. Clippy2 then found one redundant `st_ino as u64`
+cast. Removing that cast is the only subsequent build/test input change;
+independent review reproduced the previous file hash by restoring it in memory
+and verified the installed type is already `u64`. Preserve the full-suite result
+against its actual pre-cast-removal source, not as an exact-final-source run.
+Clippy3 passed for all targets, session `89943`, log
+`/private/tmp/kegari-m02-clippy3.log`; clippy2's failure remains retained.
+
+Final-source focused release session `19713` finished successfully: eight library
+`guard` tests and 40 `process_records`, `main` and `housekeeping` integration tests.
+Session `44132` then passed all four `process_spawn::tests`, final formatting and
+executable metadata inspection. These focused counts include overlapping library
+cases, not 52 unique tests. Logs:
+`/private/tmp/kegari-m02-guard-final.log` and `kegari-m02-integration-final.log`.
+The additional log is `/private/tmp/kegari-m02-spawn-final.log`. Final-source snapshot:
+`/private/tmp/kegari-m02-final-source.json`, SHA-256
+`1151b9a50c657c2712be4d978f6294b34faccb47f645ac09d5370e933b1e5868`.
+Only progress/documentation changed afterward. All owned test/build sessions are
+terminal. No native qualification was run.
+
+The complete local evidence archive is
+`target/validation/m02-1-1151b9a50c65` (26 files), including failed attempts,
+source snapshots, outcomes and the preserved rejected alpha.9 draft. Its checksum
+manifest SHA-256 is
+`bdf5f74972854ec45e229771f9b6f24e55467362071597d4a5f1e6bf269e4e93`.
+The development executable at `target/release/kegari-v0` has SHA-256
+`7b05e164f488b17ee6f95cd0ddd36e2ecf84b4caf90b72b3f29e73a51f93cd2f`
+and build identity
+`sha256:eda32ad1710a203eb4f30a334f79e09e12d755b0c90c8829d01c89e4e6002c7b`.
+It is an inspected development build, not a newly packaged/qualified release.
+Handover metadata 4 reports workflow-source 1, managed-execution 3, process 3 and
+instruction assets 4. Independent correspondence review verified all 327 build
+inputs and the single behavior-preserving cast difference from the full suite.
+
+Root owns integration, progress, commits and Cargo validation. Delegated removal,
+workflow, guard, inventory and source-correspondence work is complete for this
+increment; no unfinished agent edit or test handle remains. Independent bounded
+source review found no additional target-toolset adapter, while explicitly
+retaining the known catalog/check-interface gaps below. Old alpha.9 and earlier
+results remain evidence only for their actual source/SPEC baseline.
+
+Local commit `820a618` — `fix(kegari-v0): close unrelated process guards before exec`
+contains the ownership correction and regressions. The accompanying
+`feat(kegari-v0): add an installed generic workflow` checkpoint contains the
+workflow, evidence-ledger and documentation changes. They remain separate because
+the lifecycle defect and generic-workflow migration have distinct review scope;
+the approved specification checkpoint `304cc98` remains intact. No commits are
+consolidated, history rewritten, remote state changed or release qualification
+claimed.
+
+Next M02-1/M02-2 integration after this verified increment: replace configured
+tool/digest/mapping admission with a host-produced generic command domain, ordered
+PATH and automatically observed per-invocation identity. Keep existing role,
+source/write/network/credential boundaries and original lifecycle/authority.
+Discovery cannot turn an ambient PATH directory or executable's installation
+prefix into a recursive read grant. Fixed OS resources, owned repository/scratch
+and explicitly authorized resources supply the initial domain; unfamiliar names
+are valid within it. Any additional host environment namespace needs actual
+generic authority and credential separation, not ecosystem-specific parsing.
+Then expose bounded arbitrary command/inspection and recorded validation
+obligations through production worker tools, including empty/unborn baselines.
+The mandatory catalog and named-check requirement are still open work; do not
+claim M02-1 complete or shift its exit criteria to a later minor version.
+
+While unattended, decide routine details independently; do not open optional
+questions or start actions known to require manual approval, authentication or
+human review. Prepare bounded requests/evidence for the user's return, record the
+precise dependency and continue independent authorized work. Existing restrictions
+and normal automatic approval review remain effective. NQ-02A/B/C single-use
+approvals remain consumed; none permits another native run. Absence is not
+permission and blocked qualification is not a pass. Local implementation and
+coherent verified commits are authorized by the resumed objective; no push,
+installation, remote mutation, deployment or lasting-build activation is authorized.
 
 Pre-amendment implementation checkpoint (retained for reconciliation):
 

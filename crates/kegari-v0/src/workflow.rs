@@ -6,6 +6,9 @@ use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
+pub const DEFAULT_WORKFLOW_VERSION: u32 = 1;
+pub const DEFAULT_WORKFLOW: &str = include_str!("../instructions/default-workflow.md");
+
 pub const MAX_WORKFLOW_BYTES: usize = 1_048_576;
 pub const MAX_RENDER_BYTES: usize = 8_388_608;
 pub const MAX_CHECK_SERVICES: usize = 8;
@@ -151,12 +154,21 @@ impl Default for FrontMatter {
         }
     }
 }
+/// An installed instruction asset identity, never a filesystem locator or authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddedWorkflow {
+    pub version: u32,
+    pub digest: String,
+}
 #[derive(Clone, Debug)]
 pub struct Workflow {
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
+    pub embedded: Option<EmbeddedWorkflow>,
     pub digest: String,
     pub front_matter: FrontMatter,
     pub body: String,
+    original_embedded: Option<EmbeddedWorkflow>,
     nodes: Vec<Node>,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -169,6 +181,63 @@ pub struct ResolvedCheck {
     pub services: Vec<CheckService>,
 }
 impl Workflow {
+    /// The installed generic workflow does not read or infer a repository file.
+    pub fn installed_default() -> Result<Self> {
+        crate::instructions::verify_assets()?;
+        let mut workflow = Self::parse(DEFAULT_WORKFLOW, PathBuf::new())?;
+        workflow.path = None;
+        workflow.embedded = Some(EmbeddedWorkflow {
+            version: DEFAULT_WORKFLOW_VERSION,
+            digest: workflow.digest.clone(),
+        });
+        workflow.original_embedded = workflow.embedded.clone();
+        Ok(workflow)
+    }
+    /// Reload a recorded origin. Absence, conflicting origins and obsolete
+    /// embedded assets refuse; an explicit file failure never selects a default.
+    pub fn load_recorded(path: Option<&Path>, embedded: Option<&EmbeddedWorkflow>) -> Result<Self> {
+        match (path, embedded) {
+            (Some(path), None) => Self::load(path),
+            (None, Some(expected)) => {
+                let workflow = Self::installed_default()?;
+                if workflow.embedded.as_ref() != Some(expected) {
+                    return Err(Error::new(
+                        "stale_config",
+                        "recorded installed workflow differs from this runtime",
+                    ));
+                }
+                Ok(workflow)
+            }
+            _ => Err(Error::invalid(
+                "workflow requires exactly one recorded source",
+            )),
+        }
+    }
+    /// Validate descriptive origin fields without reading a file or granting work.
+    pub fn validate_source(&self) -> Result<()> {
+        match (&self.path, &self.embedded) {
+            (Some(path), None) if path.is_absolute() => Ok(()),
+            (None, Some(identity))
+                if identity.version == DEFAULT_WORKFLOW_VERSION
+                    && identity.digest == bytes_digest(DEFAULT_WORKFLOW.as_bytes())
+                    && identity.digest == self.digest
+                    && self.original_embedded.as_ref() == Some(identity)
+                    && self.body == DEFAULT_WORKFLOW
+                    && serde_json::to_value(&self.front_matter)
+                        .map_err(|_| Error::invalid("invalid default workflow metadata"))?
+                        == serde_json::to_value(FrontMatter::default())
+                            .map_err(|_| Error::invalid("invalid default workflow metadata"))? =>
+            {
+                Ok(())
+            }
+            _ => Err(Error::invalid(
+                "workflow source is missing, conflicting or obsolete",
+            )),
+        }
+    }
+    pub fn same_source(&self, other: &Self) -> bool {
+        self.path == other.path && self.embedded == other.embedded && self.digest == other.digest
+    }
     pub fn load(path: &Path) -> Result<Self> {
         let metadata = std::fs::metadata(path)
             .map_err(|e| Error::io("read configured workflow metadata", e))?;
@@ -278,10 +347,12 @@ impl Workflow {
             return Err(Error::invalid("unexpected closing template tag"));
         }
         Ok(Self {
-            path: path.into(),
+            path: Some(path.into()),
+            embedded: None,
             digest: bytes_digest(text.as_bytes()),
             front_matter,
             body,
+            original_embedded: None,
             nodes,
         })
     }
@@ -339,7 +410,8 @@ impl Workflow {
             resource.to_path_buf()
         } else {
             self.path
-                .parent()
+                .as_ref()
+                .and_then(|path| path.parent())
                 .ok_or_else(|| Error::invalid("workflow has no resource anchor"))?
                 .join(resource)
         };

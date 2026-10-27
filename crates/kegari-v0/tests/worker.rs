@@ -567,7 +567,7 @@ fn worker_run_preparation_rejects_changed_configuration_workflow_and_scope() {
     assert!(kegari_v0::worker_run::prepare(input).is_err());
     let input = run_preparation(&f);
     std::fs::write(
-        &input.workflow.path,
+        input.workflow.path.as_deref().unwrap(),
         "---\nschema_version: 1\n---\nChanged\n",
     )
     .unwrap();
@@ -2119,4 +2119,21 @@ fn ordinary_scoped_worker_does_not_enable_raw_protocol_capture() {
     assert_eq!(journal.records().unwrap(), before);
     assert!(f.worker.observe().unwrap().declared_protocol.is_none());
     assert!(f.worker.observe().unwrap().independent_broker.is_none());
+}
+
+#[test]
+fn changed_workflow_origin_cannot_rebind_an_assembled_worker_contract() {
+    let fixture = Fixture::new(AgentRole::Implementation);
+    let mut input = fixture.input.clone();
+    input.workflow.path = Some(fixture._temp.path().join("another-WORKFLOW.md"));
+    assert_eq!(
+        WorkerContract::new(input).unwrap_err().code,
+        "worker_binding"
+    );
+    let mut input = fixture.input.clone();
+    input.workflow.embedded = Workflow::installed_default().unwrap().embedded;
+    assert_eq!(
+        WorkerContract::new(input).unwrap_err().code,
+        "worker_binding"
+    );
 }

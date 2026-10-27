@@ -11,10 +11,12 @@ qualification whenever that is pursued; the pre-v1 revisit does not defer that
 gate for earlier public-PR processing.
 
 On 2026-10-26 the user selected the managed-workload contract recorded in
-[SPEC version 1.3](../SPEC.md#12-deliverable-and-exclusions). The current local
-lifecycle guarantee covers qualified foreground tools whose subprocesses remain
-within their declared, observed lifecycle, plus explicitly registered managed
-background services with verified ownership and bounded stop/exit handling.
+[SPEC §1.2](../SPEC.md#12-deliverable-and-exclusions), retained and clarified by
+version 1.4. The current local lifecycle guarantee covers the qualified generic
+backend for foreground work within its observed lifecycle, plus explicitly
+registered managed services with verified ownership and bounded stop/exit handling.
+Actual tools and environment identities are observed per operation; a shipped
+toolset catalog or user-authored executable inventory is not an admission prerequisite.
 Registration does not grant additional execution, filesystem, network, credential
 or role authority. Required writers must finish before their artifacts are
 accepted as final.
@@ -22,7 +24,8 @@ accepted as final.
 Escaped or unregistered descendants are outside this shutdown guarantee. A tool
 can violate a foreground-only policy by detaching; the policy does not technically
 prevent that behavior or promise to discover every escape. The supported profile
-must state its tools, services and lifecycle assumptions. Known or suspected
+must state its enforced backend capabilities and lifecycle assumptions, retaining
+actual operation/service observations. Known or suspected
 ownership/exit uncertainty still blocks affected completion, cleanup, replacement
 work and handover. Independent resource isolation remains required.
 
@@ -70,7 +73,30 @@ Compilation, help/version output, configuration parsing and deterministic
 fixtures can proceed while native qualification is incomplete. Completing those
 checks does not qualify a managed profile or a broader context profile by itself.
 
-## Contract and implementation boundary
+## Guard inheritance during concurrent launches
+
+Each managed launch retains its original locked guard descriptor. A concurrent
+host fork must not accidentally prolong another operation's guard until the new
+program starts. Spawn-return alone is insufficient: Darwin closes close-on-exec
+descriptors individually, so the spawn error pipe can reach EOF before another
+inherited descriptor closes. See the pinned [XNU descriptor-close loop](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_descrip.c#L783-L820).
+
+The current correction registers the original guard descriptors under the host
+spawn/retirement boundary. Before exec, a child closes only those registered
+descriptors that remain close-on-exec, preserving its explicitly selected guard.
+Guard lifetime and descriptor identity constrain callbacks retained by a reused
+command. This does not unlock another owner's file description or turn a later
+free lock into evidence that an observed survivor exited. The original owned
+group, journal and output-closure requirements remain in force; arbitrary
+detached-descendant containment is still unproven.
+
+## Historical implementation and current boundary
+
+The alpha.3/alpha.4 details below describe their actual historical source. SPEC 1.4
+supersedes their operator-authored executable/toolchain catalog; M02-1–M02-4 must
+remove/rework it while retaining generic lifecycle/resource safeguards. These
+older implementation details are not current setup instructions or qualification
+of the replacement backend.
 
 The alpha.3 increment adds an opaque owned-group exit observation, produced by
 reaping the original child after the supported macOS group observation. A

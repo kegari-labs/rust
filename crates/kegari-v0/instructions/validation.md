@@ -1,10 +1,14 @@
-# Permitted validation and evidence preparation — version 2
+# Permitted validation and evidence preparation — version 3
 
 Validate the exact isolated candidate/repository tree vector, declared test
 resources and artifact identities supplied by the host. Do not validate a shared
 staging environment containing unrelated parents as evidence for this result.
-Run only the role-permitted configured commands. Source changes, including test
-repairs, require the scoped child implementation path and repeated gates.
+Discover relevant validation from the actual accessible repository and task
+evidence, retaining configured and previously discovered obligations. Run only
+role-permitted commands through actual host tools; an absent catalog is not a
+pass or an execution grant. Record obligations and their revision; never drop
+failures or select an easier subset. Source changes, including test repairs,
+require the scoped child implementation path and repeated gates.
 
 Record command argv, cwd, environment identity, operation/generation, tested
 revision, start/end, exit/outcome and current-run artifact references. Missing,

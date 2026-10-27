@@ -35,6 +35,10 @@ class ContractInventoryTests(unittest.TestCase):
         ids = [item["id"] for item in generated["clauses"]]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(generated["spec_sha256"], inventory.APPROVED)
+        self.assertEqual(generated["spec_version"], "1.4")
+        self.assertEqual(len(generated["requirements"]), 140)
+        self.assertTrue({"V0-H04", "V0-T38", "V0-T39", "V0-E09"}.issubset(
+            {item["id"] for item in generated["requirements"]}))
         self.assertTrue(all(item["status"] == "not_assessed" and not item["evidence"]
                             for item in generated["clauses"] + generated["requirements"]))
 
@@ -99,18 +103,104 @@ class ContractInventoryTests(unittest.TestCase):
                     review_note="Retain this exact assessment.")
         changed_old.update(status="partial", evidence=[{"path": "old-evidence.json"}])
         old_stale = {"id": "clause:6.4:already_stale", "status": "not_assessed", "evidence": []}
-        prior = {"clauses": [same, changed_old], "requirements": [
-            {"id": "V0-T14", "status": "partial", "evidence": [{"path": "named-evidence.json"}]}],
+        definition = {"schema_version": 1, "sha256": "a" * 64, "clauses": []}
+        prior = {"schema_version": 2, "spec_sha256": inventory.APPROVED,
+                 "clauses": [same, changed_old], "requirements": [
+            {"id": "V0-T14", "definition": definition,
+             "status": "partial", "evidence": [{"path": "named-evidence.json"}]}],
             "stale": [old_stale]}
         generated = {"clauses": [clause("An unchanged obligation.", 11), changed_new],
-                     "requirements": [{"id": "V0-T14", "status": "not_assessed", "evidence": []}],
+                     "spec_sha256": inventory.APPROVED,
+                     "requirements": [{"id": "V0-T14", "definition": definition,
+                                       "status": "not_assessed", "evidence": []}],
                      "stale": []}
         result = inventory.preserve_evidence(copy.deepcopy(generated), prior)
         self.assertEqual(result["clauses"][0], {**same, "line": 11})
         self.assertEqual(result["clauses"][1], changed_new)
         self.assertEqual(result["requirements"], prior["requirements"])
-        self.assertEqual(result["stale"], [changed_old, old_stale])
+        self.assertEqual(result["stale"], [
+            {**changed_old, "spec_sha256": inventory.APPROVED,
+             "stale_reason": "definition_removed_or_changed"}, old_stale])
         self.assertEqual(inventory.preserve_evidence(copy.deepcopy(generated), result), result)
+
+    @staticmethod
+    def named_ledger(text, legacy=False):
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        clause = {"id": f"clause:12.2:{digest[:12]}", "section": "12.2", "line": 1,
+                  "sha256": digest, "excerpt": text, "status": "not_assessed", "evidence": []}
+        item = {"id": "V0-T14", "status": "not_assessed", "evidence": []}
+        if not legacy:
+            item["definition"] = inventory.named_definition("V0-T14", [clause])
+        return {"schema_version": 1 if legacy else 2,
+                "spec_sha256": inventory.LEGACY_UNBOUND_SPEC if legacy else inventory.APPROVED,
+                "clauses": [clause], "requirements": [item], "stale": []}
+
+    def test_same_named_id_changed_definition_cannot_inherit_assessment(self):
+        prior = self.named_ledger("| V0-T14 | The original obligation. |")
+        prior["requirements"][0].update(
+            status="partial", evidence=[{"reference": "original-result.json", "status": "targeted_pass"}])
+        before = copy.deepcopy(prior)
+        current = self.named_ledger("| V0-T14 | A different obligation with the same ID. |")
+        result = inventory.preserve_evidence(copy.deepcopy(current), prior)
+        self.assertEqual(result["requirements"][0]["status"], "not_assessed")
+        self.assertEqual(result["requirements"][0]["evidence"], [])
+        historical = next(item for item in result["stale"] if item["id"] == "V0-T14")
+        for key, value in before["requirements"][0].items():
+            self.assertEqual(historical[key], value)
+        self.assertEqual(historical["stale_reason"], "named_definition_changed")
+        self.assertEqual(historical["spec_sha256"], before["spec_sha256"])
+        self.assertEqual(prior, before)
+        self.assertEqual(inventory.preserve_evidence(copy.deepcopy(current), result), result)
+
+    def test_known_legacy_definitions_are_derived_before_preserving_evidence(self):
+        original = "| V0-T14 | An unchanged obligation. |"
+        prior = self.named_ledger(original, legacy=True)
+        prior["requirements"][0].update(status="partial", evidence=[{"reference": "legacy-result.json"}])
+        current = self.named_ledger(original)
+        kept = inventory.preserve_evidence(current, prior)
+        self.assertEqual(kept["requirements"][0]["status"], "partial")
+        self.assertEqual(kept["requirements"][0]["evidence"], prior["requirements"][0]["evidence"])
+        self.assertEqual(kept["stale"], [])
+        changed = inventory.preserve_evidence(
+            self.named_ledger("| V0-T14 | The amended obligation. |"), prior)
+        self.assertEqual(changed["requirements"][0]["status"], "not_assessed")
+        old = next(item for item in changed["stale"] if item["id"] == "V0-T14")
+        self.assertEqual(old["spec_sha256"], inventory.LEGACY_UNBOUND_SPEC)
+        self.assertEqual(old["evidence"], prior["requirements"][0]["evidence"])
+
+    def test_unknown_or_stripped_unbound_legacy_evidence_is_not_adopted(self):
+        text = "| V0-T14 | An obligation. |"
+        prior = self.named_ledger(text, legacy=True)
+        prior["requirements"][0].update(status="partial", evidence=[{"reference": "unknown.json"}])
+        for schema, digest in [(1, "0" * 64), (2, inventory.APPROVED)]:
+            with self.subTest(schema=schema, digest=digest):
+                candidate = {**prior, "schema_version": schema, "spec_sha256": digest}
+                with self.assertRaisesRegex(SystemExit, "explicit legacy reconciliation"):
+                    inventory.preserve_evidence(self.named_ledger(text), candidate)
+
+    def test_normative_section_change_invalidates_named_context_assessment(self):
+        current = inventory.inventory()
+        prior = copy.deepcopy(current)
+        for item in prior["requirements"]:
+            if item["id"] in ("V0-H02", "V0-T34", "V0-T12"):
+                item.update(status="partial", evidence=[{"reference": "earlier-context.json"}])
+        changed = next(item for item in prior["clauses"] if item["section"] == "7.5")
+        changed["sha256"] = hashlib.sha256(b"earlier context obligation").hexdigest()
+        changed["id"] = "clause:7.5:" + changed["sha256"][:12]
+        for item in prior["requirements"]:
+            item["definition"] = inventory.named_definition(item["id"], prior["clauses"])
+        result = inventory.preserve_evidence(current, prior)
+        by_id = {item["id"]: item for item in result["requirements"]}
+        self.assertEqual(by_id["V0-H02"]["status"], "not_assessed")
+        self.assertEqual(by_id["V0-T34"]["status"], "not_assessed")
+        self.assertEqual(by_id["V0-T12"]["status"], "partial")
+
+    def test_missing_or_duplicate_defining_rows_refuse_reconciliation(self):
+        clauses = self.named_ledger("| V0-T14 | An obligation. |")["clauses"]
+        for invalid in [[], clauses + clauses]:
+            with self.subTest(count=len(invalid)):
+                with self.assertRaisesRegex(SystemExit, "exactly one defining contract row"):
+                    inventory.named_definition("V0-T14", invalid)
 
     def test_changed_spec_still_requires_explicit_reconciliation(self):
         with tempfile.TemporaryDirectory() as directory:

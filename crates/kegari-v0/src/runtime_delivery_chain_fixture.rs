@@ -97,7 +97,12 @@ fn reloaded_predecessor<'a>(
             let permit = canonical_digest(1, &phase.permit).unwrap();
             let release_effects = f.github.release_effect_count();
             let configuration = f.built.configuration.snapshot().unwrap();
-            let workflow = std::path::PathBuf::from(&configuration.workspaces["example"].workflow);
+            let workflow = std::path::PathBuf::from(
+                configuration.workspaces["example"]
+                    .workflow
+                    .as_ref()
+                    .unwrap(),
+            );
             let contents = std::fs::read(&workflow).unwrap();
             {
                 let _refresh = f.observation_barrier.lock().await;

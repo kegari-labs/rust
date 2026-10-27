@@ -252,7 +252,9 @@ fn coordination_owned_binding_checks_actual_empty_repository_context_and_operati
             "context" => case.context["issue"]["description"] = json!("different actual task"),
             "operation" => assembled.manifest.operation_id = Uuid::new_v4(),
             "profile" => assembled.manifest.profile.model = "different".into(),
-            "workflow" => std::fs::write(&case.workflow.path, "different").unwrap(),
+            "workflow" => {
+                std::fs::write(case.workflow.path.as_ref().unwrap(), "different").unwrap()
+            }
             "grader" => case.reports = case.isolation.plan().repository.clone(),
             _ => unreachable!(),
         }

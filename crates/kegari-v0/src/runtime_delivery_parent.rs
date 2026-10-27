@@ -1299,7 +1299,8 @@ mod lifecycle_tests {
         wire.lock().unwrap().set_selected(false);
         let workflow = fixture.configuration.snapshot().unwrap().workspaces["example"]
             .workflow
-            .clone();
+            .clone()
+            .unwrap();
         let mut contents = std::fs::read_to_string(&workflow).unwrap();
         contents.push_str("\nOnly new admissions receive this revision.\n");
         std::fs::write(workflow, contents).unwrap();

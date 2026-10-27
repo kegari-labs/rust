@@ -286,7 +286,8 @@ async fn parent_grant_capture_uses_actual_retry_command_and_current_native_publi
         .find(|w| w.id == gate.workspace_id())
         .unwrap()
         .workflow
-        .clone();
+        .clone()
+        .unwrap();
     let original_workflow = std::fs::read_to_string(&workflow).unwrap();
     std::fs::write(
         &workflow,

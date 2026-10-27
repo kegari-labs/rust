@@ -690,13 +690,47 @@ pub fn command_launch_identity(
     isolation: &ValidatedIsolation,
     argv: &[String],
 ) -> Result<CommandLaunchIdentity> {
+    let rendered = render_command(isolation, argv)?;
+    rendered_launch_identity(isolation, &rendered)
+}
+
+struct RenderedCommand {
+    executable: PathBuf,
+    argv: Vec<String>,
+    environment: BTreeMap<String, String>,
+    profile: String,
+}
+fn render_command(isolation: &ValidatedIsolation, argv: &[String]) -> Result<RenderedCommand> {
     isolation.revalidate()?;
     if argv.is_empty() {
         return Err(Error::invalid("command launch requires argv"));
     }
-    let resolved = isolation.resolve_executable(&argv[0])?;
+    let executable = isolation.resolve_executable(&argv[0])?;
+    let environment = BTreeMap::from([
+        ("PATH".into(), isolation.command_path()?),
+        (
+            "HOME".into(),
+            isolation.plan.scratch.to_string_lossy().into_owned(),
+        ),
+        (
+            "TMPDIR".into(),
+            isolation.plan.scratch.to_string_lossy().into_owned(),
+        ),
+        ("LANG".into(), "C.UTF-8".into()),
+    ]);
     let profile = isolation.seatbelt_profile()?;
-    let mut launch = serde_json::json!({"argv":argv,"profile":profile,"resolved":resolved});
+    Ok(RenderedCommand {
+        executable,
+        argv: argv.to_vec(),
+        environment,
+        profile,
+    })
+}
+fn rendered_launch_identity(
+    isolation: &ValidatedIsolation,
+    rendered: &RenderedCommand,
+) -> Result<CommandLaunchIdentity> {
+    let mut launch = serde_json::json!({"argv":rendered.argv,"profile":rendered.profile,"resolved":rendered.executable,"environment":rendered.environment});
     if let Some(managed) = &isolation.plan.managed_execution {
         launch["managed_execution"] = serde_json::json!(canonical_digest(1, managed)?);
     }
@@ -706,13 +740,13 @@ pub fn command_launch_identity(
             Path::new("/usr/bin/sandbox-exec"),
             false,
         )?,
-        target: crate::platform::BinaryIdentity::inspect(&resolved, false)?,
+        target: crate::platform::BinaryIdentity::inspect(&rendered.executable, false)?,
         argv_digest: canonical_digest(1, &launch)?,
     })
 }
 /// A resolved managed declaration is distinct from native qualification. Retain
-/// pre-spawn refusal until actual release qualification supports the shipped
-/// workload profile and the configured inventory is verified against it.
+/// pre-spawn refusal until actual release qualification supports the generic
+/// command boundary. Removing a specialized profile does not qualify its replacement.
 pub fn repository_command_prerequisite(isolation: &ValidatedIsolation) -> Result<()> {
     isolation.revalidate()?;
     match &isolation.plan.managed_execution {
@@ -722,7 +756,7 @@ pub fn repository_command_prerequisite(isolation: &ValidatedIsolation) -> Result
         )),
         Some(profile) => Err(Error::new(
             "managed_profile_unqualified",
-            "managed foreground policy is bound, but its supported tool profile still requires native qualification evidence",
+            "managed foreground policy is bound, but the generic command boundary still requires native qualification evidence",
         ).detail(serde_json::json!({"profile": profile.policy_digest()}))),
     }
 }
@@ -871,29 +905,21 @@ fn spawn_command_inner(
             "managed commands require an admitted durable process journal before spawn",
         ));
     }
-    let executable = isolation.resolve_executable(&argv[0])?;
-    let profile = isolation.seatbelt_profile()?;
+    let rendered = render_command(isolation, argv)?;
+    let identity = rendered_launch_identity(isolation, &rendered)?;
     let mut command = Command::new("/usr/bin/sandbox-exec");
     command
-        .args(["-p", &profile])
-        .arg(&executable)
-        .args(&argv[1..]);
+        .args(["-p", &rendered.profile])
+        .arg(&rendered.executable)
+        .args(&rendered.argv[1..]);
     command
         .current_dir(&isolation.plan.cwd)
         .env_clear()
-        .env("PATH", isolation.command_path()?)
-        .env("HOME", &isolation.plan.scratch)
-        .env("TMPDIR", &isolation.plan.scratch)
-        .env("LANG", "C.UTF-8")
+        .envs(&rendered.environment)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    if let Some(managed) = &isolation.plan.managed_execution
-        && let Some(root) = managed.generated_root(&isolation.plan)?
-    {
-        command.env("CARGO_TARGET_DIR", root);
-    }
     #[cfg(unix)]
     {
         command.process_group(0);
@@ -904,7 +930,6 @@ fn spawn_command_inner(
         _ => None,
     };
     remaining_bundle_timeout(timeout, started, bundle_deadline)?;
-    let identity = command_launch_identity(isolation, argv)?;
     let service = matches!(&journal, Some(CommandJournal::Bundle { launch, .. })
         if matches!(launch.member().kind, crate::process_records::CheckMemberKind::Service));
     let output_budget = match &journal {

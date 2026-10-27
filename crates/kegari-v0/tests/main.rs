@@ -41,9 +41,11 @@ fn exact_identity_entrypoints_report_the_bound_build_and_assets() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(actual["schema_version"], 3);
+    assert_eq!(actual["schema_version"], 4);
+    assert_eq!(actual["workflow_source_schema"], 1);
     assert_eq!(actual["process_schema"], 3);
     assert_eq!(actual["managed_execution_schema"], 3);
+    assert_eq!(actual["asset_version"], "4");
     assert_eq!(
         actual,
         serde_json::to_value(kegari_v0::housekeeping::handover_info().unwrap()).unwrap()

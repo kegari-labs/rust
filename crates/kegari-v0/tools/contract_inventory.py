@@ -6,8 +6,10 @@ inferring requirement strength from keywords. This conservative inventory includ
 context as well as normative prose, lists, table rows and fenced forms. Headings
 and table separators are structural; section 15 is attribution and verbatim legal
 material outside this implementation-coverage ledger. The SPEC remains authority.
-Evidence entries are maintained explicitly. A changed contract preserves prior
-entries as stale instead of silently inheriting a pass.
+Evidence entries are maintained explicitly. Changed clause and named-definition
+identities preserve prior entries as stale instead of inheriting an assessment.
+Definition bindings do not replace review of changed cross-references or turn
+historical partial evidence into current implementation/qualification evidence.
 """
 import argparse
 import hashlib
@@ -16,7 +18,17 @@ import pathlib
 import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-APPROVED = "35d4515585fe92350ec1cc8b78a5919c834d559a48d48d071239d39305032fb3"
+APPROVED_VERSION = "1.4"
+APPROVED = "b01064b5238554d2def840cabf6a9e5d555535e35ce4877838a55ade2dd0a6e7"
+LEGACY_UNBOUND_SPEC = "35d4515585fe92350ec1cc8b78a5919c834d559a48d48d071239d39305032fb3"
+
+# H requirements are defined by their normative section as well as the summary
+# row. T17/T34 explicitly exercise the amended carry/context obligations; bind
+# those sections too, rather than carrying their old partial assessments forward.
+DEFINITION_SECTIONS = {
+    "V0-H01": "3.6", "V0-H02": "7.5", "V0-H03": "12.4", "V0-H04": "1.4",
+    "V0-T17": "9.2", "V0-T34": "7.5",
+}
 
 
 def content_blocks(text):
@@ -68,6 +80,48 @@ def content_blocks(text):
     yield from block()
 
 
+def named_definition(identifier, clauses):
+    """Bind the exact defining row/section, excluding changing line numbers.
+
+    Legacy clause excerpts retain the complete first table cell; full SHA-256
+    values, not excerpts, bind the selected content. Missing/ambiguous definitions
+    refuse reconciliation. This is a review ledger, not a capability or a parser
+    for target-project manifests.
+    """
+    if identifier.startswith("REQ-") or identifier.startswith("V0-H"):
+        section = "13"
+    elif identifier.startswith("SC-"):
+        section = "12.1"
+    elif identifier.startswith("V0-T"):
+        section = "12.2"
+    else:
+        section = "12.4.1"
+    rows = []
+    for clause in clauses:
+        excerpt = clause["excerpt"]
+        if clause["section"] != section or not excerpt.startswith("|"):
+            continue
+        first_cell = excerpt.split("|", 2)[1]
+        if identifier in re.findall(r"(?:REQ-|SC-|V0-[TEH])\d{2}\b", first_cell):
+            rows.append(clause)
+    if len(rows) != 1:
+        raise SystemExit(f"{identifier} needs exactly one defining contract row")
+    selected = {rows[0]["id"]: rows[0]}
+    normative = DEFINITION_SECTIONS.get(identifier)
+    if normative:
+        members = [clause for clause in clauses
+                   if clause["section"] == normative
+                   or clause["section"].startswith(normative + ".")]
+        if not members:
+            raise SystemExit(f"{identifier} is missing its normative section")
+        selected.update((clause["id"], clause) for clause in members)
+    ordered = sorted(selected.values(), key=lambda clause: clause["id"])
+    payload = [[clause["section"], clause["sha256"]] for clause in ordered]
+    digest = hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
+    return {"schema_version": 1, "sha256": digest,
+            "clauses": [clause["id"] for clause in ordered]}
+
+
 def inventory():
     raw = (ROOT / "SPEC.md").read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
@@ -82,24 +136,41 @@ def inventory():
             "excerpt": text[:180], "status": "not_assessed", "evidence": [],
         })
     identifiers = []
-    for prefix, count, width in [("REQ", 62, 2), ("SC", 26, 2), ("V0-T", 37, 2), ("V0-E", 8, 2), ("V0-H", 3, 2)]:
+    for prefix, count, width in [("REQ", 62, 2), ("SC", 26, 2), ("V0-T", 39, 2), ("V0-E", 9, 2), ("V0-H", 4, 2)]:
         for number in range(1, count + 1):
             identifier = f"{prefix}{'-' if prefix in ('REQ', 'SC') else ''}{number:0{width}}"
-            identifiers.append({"id": identifier, "status": "not_assessed", "evidence": []})
-    return {"schema_version": 1, "spec_sha256": digest,
-            "notice": "Complete contract content inventory through section 14, including preamble, context and required fenced forms; headings, table separators and section 15 attribution/legal material are excluded. Inclusion does not infer requirement strength or validation. Full clauses remain in SPEC. Deterministic, actual-agent, integration and human evidence are distinct.",
+            identifiers.append({"id": identifier, "definition": named_definition(identifier, blocks),
+                                "status": "not_assessed", "evidence": []})
+    return {"schema_version": 2, "spec_version": APPROVED_VERSION, "spec_sha256": digest,
+            "notice": "Complete contract content inventory through section 14, including preamble, context and required fenced forms; headings, table separators and section 15 attribution/legal material are excluded. Inclusion does not infer requirement strength or validation. Named definition bindings cover their defining rows and explicitly mapped normative sections, not every transitive reference. Preserved partial evidence retains its original source/scope and is not current-spec qualification. Changed definitions are unassessed; their prior records remain stale history. Full clauses remain in SPEC. Deterministic, actual-agent, integration and human evidence are distinct.",
             "clauses": blocks, "requirements": identifiers, "stale": []}
 
 
 def preserve_evidence(generated, prior):
+    def archive(item, reason, definition=None):
+        historical = dict(item)
+        if definition is not None:
+            historical["definition"] = definition
+        historical.update(spec_sha256=prior["spec_sha256"], stale_reason=reason)
+        generated["stale"].append(historical)
+
     for field in ("clauses", "requirements"):
         saved = {item["id"]: item for item in prior[field]}
         for item in generated[field]:
             previous = saved.pop(item["id"], None)
             if previous:
-                item.update({key: value for key, value in previous.items() if key not in ("id", "line", "section", "sha256", "excerpt")})
-        if saved:
-            generated.setdefault("stale", []).extend(saved.values())
+                if field == "requirements":
+                    definition = previous.get("definition")
+                    if definition is None:
+                        if prior.get("schema_version") != 1 or prior.get("spec_sha256") != LEGACY_UNBOUND_SPEC:
+                            raise SystemExit("Unbound named evidence needs explicit legacy reconciliation")
+                        definition = named_definition(previous["id"], prior["clauses"])
+                    if definition != item["definition"]:
+                        archive(previous, "named_definition_changed", definition)
+                        continue
+                item.update({key: value for key, value in previous.items() if key not in ("id", "line", "section", "sha256", "excerpt", "definition")})
+        for previous in saved.values():
+            archive(previous, "definition_removed_or_changed")
     generated.setdefault("stale", []).extend(prior.get("stale", []))
     return generated
 

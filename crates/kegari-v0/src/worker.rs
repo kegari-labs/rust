@@ -741,6 +741,8 @@ impl WorkerContract {
             || bytes_digest(assembled.prompt.as_bytes()) != manifest.prompt_digest
             || canonical_digest(1, &context)? != manifest.context_digest
             || manifest.workflow_digest != workflow.digest
+            || manifest.workflow_path != workflow.path
+            || manifest.workflow_embedded != workflow.embedded
             || authority.workflow() != workflow.digest
             || manifest.workspace_id != authority.workspace()
             || manifest.operation_id.is_nil()

@@ -448,7 +448,7 @@ mod tests {
             );
             let workflow = Workflow::load(&fixture.repository.join("WORKFLOW.md")).unwrap();
             assert!(
-                std::fs::read_to_string(&workflow.path)
+                std::fs::read_to_string(workflow.path.as_ref().unwrap())
                     .unwrap()
                     .contains(scratch.to_str().unwrap())
             );

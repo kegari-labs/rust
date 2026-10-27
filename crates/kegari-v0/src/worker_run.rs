@@ -121,9 +121,7 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
         .values()
         .find(|w| w.id == workspace_id)
         .ok_or_else(|| Error::new("scope_violation", "worker workspace is not configured"))?;
-    if std::path::Path::new(&workspace.workflow) != input.workflow.path
-        || Workflow::load(&input.workflow.path)?.digest != input.workflow.digest
-    {
+    if !workspace.load_workflow()?.same_source(&input.workflow) {
         return Err(Error::new(
             "stale_config",
             "workflow changed before worker assembly",

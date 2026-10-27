@@ -829,8 +829,8 @@ fn verify_grader_instructions(
         let private = private
             .canonicalize()
             .map_err(|e| Error::io("resolve private instruction boundary", e))?;
-        for public in [&manifest.codex_home, &manifest.workflow_path]
-            .into_iter()
+        for public in std::iter::once(&manifest.codex_home)
+            .chain(manifest.workflow_path.iter())
             .chain(
                 manifest
                     .supplied_files
@@ -960,7 +960,8 @@ pub fn assemble_trial(
     if input.cwd != fixture.repository
         || input.codex_home != fixture.codex_home
         || isolation.plan().repository != fixture.repository
-        || input.workflow.path != fixture.workflow_path()?
+        || input.workflow.path.as_deref() != Some(fixture.workflow_path()?.as_path())
+        || input.workflow.embedded.is_some()
         || input.permissions.enforcement_profile != isolation.digest()
         || input.permissions.read_roots.iter().any(|root| {
             !isolation
