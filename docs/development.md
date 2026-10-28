@@ -16,6 +16,7 @@ For the product introduction and preview instructions, see the [README](../READM
 | [`kegari-platform`](../crates/kegari-platform/README.md) | OS identity, executable inspection and native host helpers. |
 | [`kegari-secrets`](../crates/kegari-secrets/README.md) | Secret values, Keychain storage and generic signed-record primitives. |
 | [`kegari-control-api`](../crates/kegari-control-api/README.md) | Authenticated transport, request rules, operator identities and snapshot operations. |
+| [`kegari-execution`](../crates/kegari-execution/README.md) | Managed environments, isolation, resource binding and process-free observations. |
 | [`kegari-git`](../crates/kegari-git/README.md) | Git records, naming rules, validation and canonical digest calculations. |
 | [`kegari-scheduler`](../crates/kegari-scheduler/README.md) | Synchronous scheduling, capacity allocation, attempt accounting and retry timing. |
 | [`kegari-context`](../crates/kegari-context/README.md) | Workflow documents, instruction assembly, embedded assets and resume compatibility. |
@@ -100,12 +101,20 @@ All packages use workspace version `0.2.0-alpha.10`; the executable name, proces
 roles and serialized schemas remain unchanged. This extraction creates no new
 prerelease or qualification claim.
 
+The backend imports environment policy from `kegari-execution`, which depends on
+platform/digest/types. Native command lifecycle APIs formerly in `isolation` now
+live in backend `execution_host`, alongside their existing journal ownership.
+Environment construction and managed-domain validation explicitly receive the
+current backend `BUILD_ID`; validated isolation retains it for later checks.
+`codex_host::IsolationSessionScope` preserves protocol validation order without a
+Codex dependency in execution. Application checks/evidence remain in `execution`.
+
 ## Build and verification
 
 The commands below assume the pinned toolchain and dependencies are already
 cached. For a first build with dependency downloads, follow the root README.
 
-From the workspace root, using the pinned toolchain; `--workspace` checks all sixteen
+From the workspace root, using the pinned toolchain; `--workspace` checks all seventeen
 packages:
 
 ```sh

@@ -53,7 +53,7 @@ impl WorkerContract {
                 .forbidden_roots
                 .iter()
                 .any(|forbidden| overlaps(root, forbidden))
-            || crate::isolation::canonical_target(root)? != *root
+            || kegari_execution::canonical_target(root)? != *root
         {
             return Err(Error::new(
                 "scope_violation",

@@ -87,7 +87,7 @@ connection probing and owned cancellation/cleanup live in `codex_host`.
 `client_mut()`. Native methods formerly on `RpcClient` are now `codex_host` free
 functions. Client timing fields have read-only accessors.
 
-`SessionScope` delegates revalidation to the existing `ValidatedIsolation`;
+`IsolationSessionScope` delegates revalidation to `ValidatedIsolation`;
 native host APIs still require that concrete type. Backend
 `worker_run::RetainedResumeSession` remains an opaque protected-journal wrapper
 around ordinary `kegari_codex::ResumeCandidate` data. Receipt lineage, joined
@@ -134,10 +134,26 @@ commands. No unchecked constructors, runner abstraction or new execution authori
 are introduced. The pinned Git version, serialized records and digest inputs are
 unchanged.
 
+Managed environment construction, isolation validation, resource binding,
+command rendering and descriptive observations now belong to
+[`kegari-execution`](../kegari-execution/README.md). Import environment interfaces
+from `kegari_execution`; native command functions, outcomes, budgets, cancellation
+and joined cleanup now live in `kegari_v0::execution_host`. The former `isolation`
+module is removed without compatibility reexports. Application-level checks and
+evidence remain in `execution`; journals, permits, registration and recovery
+remain with their existing backend owners.
+
+Production environment construction and managed-domain validation explicitly
+supply `crate::BUILD_ID`. Validated isolation retains this expectation privately
+through revalidation and cwd derivation; persisted formats are unchanged. Codex
+protocol calls borrow `codex_host::IsolationSessionScope`, whose constructor does
+no validation or I/O. This is a bounded environment extraction, not complete
+native-execution ownership or a qualification claim.
+
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all sixteen packages:
+test and lint commands cover all seventeen packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0

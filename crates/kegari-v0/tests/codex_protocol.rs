@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use kegari_v0::isolation::*;
-use std::collections::BTreeMap;
+use kegari_execution::{ExecutionRole, IsolationPlan, PathGrant};
+use kegari_v0::codex_host::IsolationSessionScope;
 
 #[derive(Default)]
 struct ObservingBroker {
@@ -216,12 +216,9 @@ fn thread_response(cwd: &Path, permissions: &PermissionConfiguration) -> Value {
 }
 
 #[test]
-fn sandbox_paths_roles_and_environment_fail_closed() {
-    let (_temp, mut plan) = fixture();
-    let isolated = plan.validate().unwrap();
-    let profile = isolated.seatbelt_profile().unwrap();
-    assert!(profile.contains("(deny default)"));
-    assert!(!profile.contains("(allow network"));
+fn codex_permissions_deny_ungranted_filesystem_and_network() {
+    let (_temp, plan) = fixture();
+    let isolated = plan.validate(kegari_v0::BUILD_ID).unwrap();
     let permissions = kegari_v0::codex_host::permission_configuration(
         &isolated,
         &plan.execution_root.join("auth"),
@@ -233,101 +230,12 @@ fn sandbox_paths_roles_and_environment_fail_closed() {
         permissions.settings["permissions"][&permissions.profile_id]["network"]["enabled"],
         false
     );
-    plan.role = ExecutionRole::Coordination;
-    assert!(plan.validate().is_err());
-    plan.source_writes.clear();
-    plan.validate().unwrap();
-    plan.role = ExecutionRole::Child;
-    plan.managed_execution =
-        Some(kegari_v0::isolation::BoundManagedExecution::automatic(&plan).unwrap());
-    plan.role = ExecutionRole::IndependentReview;
-    assert!(plan.validate().is_err());
-    assert!(
-        worker_environment(
-            &plan.scratch,
-            &BTreeMap::from([("PRIVATE_ALIAS".into(), "secret".into())]),
-            &["PRIVATE_ALIAS".into()]
-        )
-        .is_err()
-    );
-    assert!(
-        worker_environment(
-            &plan.scratch,
-            &BTreeMap::from([("CODEX_HOME".into(), "elsewhere".into())]),
-            &[]
-        )
-        .is_err()
-    );
-}
-
-#[test]
-fn artifact_resolution_uses_candidate_and_refuses_symlink_escape() {
-    let (_temp, plan) = fixture();
-    let isolated = plan.validate().unwrap();
-    std::fs::write(plan.cwd.join("results.json"), "candidate").unwrap();
-    std::fs::write(plan.execution_root.join("results.json"), "workflow-copy").unwrap();
-    assert_eq!(
-        isolated.artifact(Path::new("results.json")).unwrap(),
-        plan.cwd.join("results.json")
-    );
-    assert!(isolated.artifact(Path::new("../results.json")).is_err());
-    assert!(
-        isolated
-            .artifact(&plan.execution_root.join("results.json"))
-            .is_err()
-    );
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(&plan.forbidden_roots[0], plan.cwd.join("escape")).unwrap();
-        assert!(isolated.artifact(Path::new("escape/secret")).is_err());
-    }
-}
-
-#[test]
-fn identity_directory_names_do_not_collide_or_escape() {
-    let a = execution_name("../../same title", "issue-one", "repo", "g1").unwrap();
-    let b = execution_name("../../same title", "issue-two", "repo", "g1").unwrap();
-    assert_ne!(a, b);
-    assert!(!a.contains('/'));
-    assert!(!a.starts_with('.'));
-    assert!(
-        a.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
-    );
-}
-
-#[test]
-fn writable_directory_rejects_hardlinks_to_unrelated_files() {
-    let (_temp, plan) = fixture();
-    let outside = plan.forbidden_roots[0].join("secret");
-    std::fs::write(&outside, "private").unwrap();
-    std::fs::hard_link(outside, plan.repository.join("src/linked")).unwrap();
-    assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
-}
-
-#[test]
-fn bare_executable_uses_admitted_path_without_rebasing_arguments() {
-    let (_temp, mut plan) = fixture();
-    plan.managed_execution =
-        Some(kegari_v0::isolation::BoundManagedExecution::automatic(&plan).unwrap());
-    let isolation = plan.validate().unwrap();
-    assert_eq!(
-        isolation.resolve_executable("sh").unwrap(),
-        Path::new("/bin/sh").canonicalize().unwrap()
-    );
-    assert!(isolation.resolve_executable("./sh").is_err());
-    // Unknown names are resolved generically; there is no configured tool list.
-    assert!(
-        isolation
-            .resolve_executable("kegari-nonexistent-command-fixture")
-            .is_err()
-    );
 }
 
 #[tokio::test]
 async fn production_session_requests_follow_pinned_schema_and_completion_races() {
     let (_temp, plan) = fixture();
-    let isolation = plan.validate().unwrap();
+    let isolation = plan.validate(kegari_v0::BUILD_ID).unwrap();
     let permissions = kegari_v0::codex_host::permission_configuration(
         &isolation,
         &plan.execution_root.join("auth"),
@@ -432,7 +340,7 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
     let mut state = SessionState::new(b, 3).unwrap();
     rpc.start_thread(
         &mut state,
-        &isolation,
+        &IsolationSessionScope::new(&isolation),
         &permissions,
         "runtime authority and delivered child guidance",
         vec![json!({"type":"function","name":"observe","description":"Fixture observation","inputSchema":{"type":"object"}})],
@@ -472,7 +380,7 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
     rpc.resume_thread(
         &mut state,
         &previous,
-        &isolation,
+        &IsolationSessionScope::new(&isolation),
         &permissions,
         "provider confirms PR remains open at abc",
         &mut DenyTools,
@@ -495,7 +403,7 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
 #[tokio::test]
 async fn connection_metadata_uses_only_bounded_read_protocol_without_model_work() {
     let (_temp, plan) = fixture();
-    let isolation = plan.validate().unwrap();
+    let isolation = plan.validate(kegari_v0::BUILD_ID).unwrap();
     let permissions = kegari_v0::codex_host::permission_configuration(
         &isolation,
         &plan.execution_root.join("auth"),
@@ -562,7 +470,7 @@ async fn owned_fixture_provider_cancellation_waits_and_reaps_without_pid_adoptio
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::set_permissions(root.join("auth"), std::fs::Permissions::from_mode(0o700)).unwrap();
     let permissions = kegari_v0::codex_host::permission_configuration(
-        &plan.validate().unwrap(),
+        &plan.validate(kegari_v0::BUILD_ID).unwrap(),
         &root.join("auth"),
     )
     .unwrap();
@@ -647,7 +555,7 @@ async fn metadata_probe_limits_output_and_reaps_timed_out_fixture_processes() {
 }
 
 #[test]
-fn test_resource_writes_are_separate_exact_grants_and_never_reopen_source_or_control() {
+fn codex_permissions_preserve_exact_resource_grants() {
     let (_temp, mut plan) = fixture();
     let resource = plan.execution_root.join("disposable-resource");
     std::fs::create_dir(&resource).unwrap();
@@ -657,9 +565,8 @@ fn test_resource_writes_are_separate_exact_grants_and_never_reopen_source_or_con
         directory: true,
     };
     plan.resource_writes.push(grant.clone());
-    assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
     plan.read_roots.push(grant.clone());
-    let boundary = plan.validate().unwrap();
+    let boundary = plan.validate(kegari_v0::BUILD_ID).unwrap();
     let permissions = kegari_v0::codex_host::permission_configuration(
         &boundary,
         &plan.execution_root.join("auth"),
@@ -671,30 +578,6 @@ fn test_resource_writes_are_separate_exact_grants_and_never_reopen_source_or_con
         "write"
     );
     assert_eq!(permissions.settings["features"]["shell_tool"], false);
-    let profile = boundary.seatbelt_profile().unwrap();
-    assert!(profile.contains(&format!(
-        "(allow file-write* (subpath \"{}\"))",
-        resource.display()
-    )));
-    plan.role = ExecutionRole::Coordination;
-    plan.source_writes.clear();
-    assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
-    plan.role = ExecutionRole::Validation;
-    plan.validate().unwrap();
-    let original = plan.resource_writes.clone();
-    for path in [&plan.repository, &plan.scratch, &plan.forbidden_roots[0]] {
-        let mut unsafe_plan = plan.clone();
-        let grant = PathGrant {
-            path: path.clone(),
-            directory: true,
-        };
-        unsafe_plan.read_roots.push(grant.clone());
-        unsafe_plan.resource_writes = vec![grant];
-        assert_eq!(unsafe_plan.validate().unwrap_err().code, "scope_violation");
-    }
-    plan.resource_writes = original;
-    std::os::unix::fs::symlink(&plan.repository, resource.join("escape")).unwrap();
-    assert_eq!(plan.validate().unwrap_err().code, "scope_violation");
 }
 
 #[tokio::test]
@@ -711,7 +594,7 @@ async fn dropping_native_client_cancels_and_reaps_its_owned_fixture() {
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::set_permissions(root.join("auth"), std::fs::Permissions::from_mode(0o700)).unwrap();
     let permissions = kegari_v0::codex_host::permission_configuration(
-        &plan.validate().unwrap(),
+        &plan.validate(kegari_v0::BUILD_ID).unwrap(),
         &root.join("auth"),
     )
     .unwrap();

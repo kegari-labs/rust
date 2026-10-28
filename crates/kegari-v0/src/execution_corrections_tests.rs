@@ -1,7 +1,7 @@
 //! Actual signed correction lineage + deterministic command boundary. The
 //! resulting records deliberately remain ineligible as production check proof.
 use super::*;
-use crate::isolation::{IsolationPlan, PathGrant};
+use kegari_execution::{IsolationPlan, PathGrant};
 use std::{fs, os::unix::fs::PermissionsExt, process::Command, sync::Mutex};
 
 fn run(binary: &Path, root: &Path, args: &[&str]) {
@@ -155,8 +155,8 @@ async fn native_correction_check_keeps_original_marker_and_historical_evidence()
         forbidden_roots: vec![operator.clone()],
     };
     plan.managed_execution =
-        Some(crate::isolation::BoundManagedExecution::automatic(&plan).unwrap());
-    let isolation = plan.validate().unwrap();
+        Some(kegari_execution::BoundManagedExecution::automatic(&plan, crate::BUILD_ID).unwrap());
+    let isolation = plan.validate(crate::BUILD_ID).unwrap();
     let git = Git::new(binary).unwrap();
     let original = ExecutionBinding {
         runtime_id: Uuid::from_u128(1),

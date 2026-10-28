@@ -2,8 +2,8 @@
 //! result. No test manufactures confined execution or live validation authority.
 use super::*;
 use crate::evidence::{Generation, WorkIdentity};
-use crate::isolation::{BoundManagedExecution, IsolationPlan, PathGrant};
 use crate::test_pinned_git as pinned_git;
+use kegari_execution::{BoundManagedExecution, IsolationPlan, PathGrant};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -127,8 +127,9 @@ impl Fixture {
             });
             plan.source_writes.clear();
         }
-        plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
-        let isolation = plan.validate().unwrap();
+        plan.managed_execution =
+            Some(BoundManagedExecution::automatic(&plan, crate::BUILD_ID).unwrap());
+        let isolation = plan.validate(crate::BUILD_ID).unwrap();
         let git = Git::new(binary).unwrap();
         let digest = bytes_digest(b"component generation");
         let binding = ExecutionBinding {

@@ -506,7 +506,7 @@ impl Git {
         &self,
         ownership: &crate::execution::OwnedDirectory,
         binding: &crate::execution::ExecutionBinding,
-        boundary: &crate::isolation::ValidatedIsolation,
+        boundary: &kegari_execution::ValidatedIsolation,
         scope: &WriteScope,
         metadata: SourceCommitMetadata,
     ) -> Result<Option<CommittedSource>> {
@@ -520,7 +520,7 @@ impl Git {
         binding.validate(boundary)?;
         scope.validate()?;
         metadata.validate()?;
-        if boundary.plan().role != crate::isolation::ExecutionRole::Child
+        if boundary.plan().role != kegari_execution::ExecutionRole::Child
             || binding.work.child.is_none()
         {
             return Err(Error::new(
@@ -1187,7 +1187,7 @@ impl Git {
         &self,
         cwd: &Path,
         inspection: &crate::execution::GitInspection,
-    ) -> Result<crate::isolation::CommandOutcome> {
+    ) -> Result<crate::execution_host::CommandOutcome> {
         let mut args: Vec<String> = Vec::new();
         match inspection {
             crate::execution::GitInspection::Status => args
@@ -1227,7 +1227,7 @@ impl Git {
             .collect();
         let started = std::time::Instant::now();
         let output = self.finish_command(command, None)?;
-        Ok(crate::isolation::CommandOutcome {
+        Ok(crate::execution_host::CommandOutcome {
             schema_version: 1,
             argv,
             cwd: cwd.to_owned(),

@@ -4,15 +4,15 @@
 mod pinned_git;
 use kegari_context::workflow::Workflow;
 use kegari_digest::bytes_digest;
+use kegari_execution::{
+    BoundManagedExecution, ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation,
+};
 use kegari_git::RepositoryId;
 use kegari_types::error::{Error, Result};
 use kegari_v0::evidence::{CheckKind, Generation, WorkIdentity};
 use kegari_v0::execution::*;
+use kegari_v0::execution_host::CommandOutcome;
 use kegari_v0::git::Git;
-use kegari_v0::isolation::{
-    BoundManagedExecution, CommandOutcome, ExecutionRole, IsolationPlan, PathGrant,
-    ValidatedIsolation,
-};
 use serde_json::json;
 use std::collections::VecDeque;
 use std::fs;
@@ -141,9 +141,10 @@ impl Fixture {
             forbidden_roots: vec![source.clone()],
         };
         if executable {
-            plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
+            plan.managed_execution =
+                Some(BoundManagedExecution::automatic(&plan, kegari_v0::BUILD_ID).unwrap());
         }
-        let boundary = plan.validate().unwrap();
+        let boundary = plan.validate(kegari_v0::BUILD_ID).unwrap();
         let git = Git::new(pinned_git::prepare(temp.path())).unwrap();
         let work = WorkIdentity {
             linear_endpoint: "https://api.linear.app/graphql".into(),
@@ -218,8 +219,9 @@ impl Fixture {
             path: resource.clone(),
             directory: true,
         });
-        plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
-        fixture.boundary = plan.validate().unwrap();
+        plan.managed_execution =
+            Some(BoundManagedExecution::automatic(&plan, kegari_v0::BUILD_ID).unwrap());
+        fixture.boundary = plan.validate(kegari_v0::BUILD_ID).unwrap();
         fixture.binding.isolation_digest = fixture.boundary.digest().into();
         // Reuse the actual exclusive marker, work and repository identity. Only
         // the fixture's newly declared isolation binding changes.

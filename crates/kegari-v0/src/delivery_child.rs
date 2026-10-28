@@ -596,7 +596,7 @@ impl DeliveryCoordinator {
         admission: &DeliveryAdmission,
         claim: &CompletedChildClaim,
         execution: &crate::worker::WorkerExecution,
-        isolation: &crate::isolation::ValidatedIsolation,
+        isolation: &kegari_execution::ValidatedIsolation,
         metadata: kegari_git::SourceCommitMetadata,
     ) -> Result<SealedChildSource> {
         self.current(admission, &[DeliveryPhase::SourceSealing])?;
@@ -1221,7 +1221,7 @@ impl DeliveryCoordinator {
         claim: &CompletedChildClaim,
         operation: Uuid,
         ownership: Arc<crate::execution::OwnedDirectory>,
-        isolation: crate::isolation::ValidatedIsolation,
+        isolation: kegari_execution::ValidatedIsolation,
     ) -> Result<SealedChildSource> {
         self.current_child_claim(admission, claim)?;
         let signed: Signed<SourceSealRecord> = self

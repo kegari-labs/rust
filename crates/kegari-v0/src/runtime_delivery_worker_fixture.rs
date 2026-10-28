@@ -10,7 +10,6 @@ use crate::{
         CommandBoundary, DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass,
         ExecutionLimits, OwnedDirectory, StartedCommand,
     },
-    isolation::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation},
     worker::{ContractInput, WorkerContract, WorkerExecution, operation_tool_definitions},
     worker_run::{RunCompletion, RunOutcome},
 };
@@ -22,6 +21,7 @@ use kegari_context::instructions::RepositoryContext;
 use kegari_context::instructions::WorkerNetwork;
 use kegari_context::instructions::assemble;
 use kegari_digest::canonical_digest;
+use kegari_execution::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation};
 use kegari_types::error::{Error, Result};
 use kegari_types::run::PhaseKey;
 use kegari_types::run::RunReference;
@@ -197,7 +197,7 @@ pub(crate) fn worker(input: WorkerInput<'_>) -> WorkerFixture {
         source_writes: writes,
         forbidden_roots: vec![source.into(), auth.clone()],
     }
-    .validate()
+    .validate(crate::BUILD_ID)
     .unwrap();
     let mut context = json!({"issue":{"id":gate.work().child,"title":"Disposable assigned source fixture"},"parent":{"id":gate.work().parent},"children":[],"workspace":{"id":gate.workspace_id(),"name":"fixture"},"scope":gate.child_scope(),"dependencies":[],"corrections":[],"evidence":{"task":if assignment.is_some() {Value::Null}else{task}},"attempt":1,"phase":phase,"profile":gate.profile(),"operation":{"id":operation}});
     if let Some(assignment) = assignment {

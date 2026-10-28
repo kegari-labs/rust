@@ -278,13 +278,13 @@ impl PreparedFixture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::isolation::IsolationPlan;
     use kegari_config::{Profile, Speed};
     use kegari_context::instructions::PermissionManifest;
     use kegari_context::instructions::ProviderDiscovery;
     use kegari_context::instructions::RepositoryContext;
     use kegari_context::instructions::WorkerNetwork;
     use kegari_context::workflow::Workflow;
+    use kegari_execution::IsolationPlan;
     use serde_json::json;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -473,7 +473,7 @@ mod tests {
                 }],
                 forbidden_roots: vec![fixture.grader_root.clone(), reports.clone(), auth.clone()],
             }
-            .validate()
+            .validate(crate::BUILD_ID)
             .unwrap();
             let profile = Profile {
                 tool: "codex".into(),

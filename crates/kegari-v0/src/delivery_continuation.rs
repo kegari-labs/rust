@@ -1936,7 +1936,7 @@ mod tests {
     use super::*;
     use crate::{
         execution::{ExecutionBinding, ExecutionEvidenceClass, SourceSnapshot},
-        isolation::CommandOutcome,
+        execution_host::CommandOutcome,
     };
     use kegari_git::Revision;
     fn work() -> WorkIdentity {

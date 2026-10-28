@@ -6,6 +6,8 @@ use std::{
     os::unix::fs::{PermissionsExt, symlink},
 };
 
+const TEST_BUILD: &str = "execution-test-build";
+
 struct Fixture {
     _temp: tempfile::TempDir,
     isolation: ValidatedIsolation,
@@ -42,10 +44,10 @@ impl Fixture {
             forbidden_roots: vec![],
             managed_execution: None,
         };
-        plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
+        plan.managed_execution = Some(BoundManagedExecution::automatic(&plan, TEST_BUILD).unwrap());
         Self {
             _temp: temp,
-            isolation: plan.validate().unwrap(),
+            isolation: plan.validate(TEST_BUILD).unwrap(),
             external,
             resource,
         }
@@ -144,7 +146,7 @@ fn forged_cwd_derivation_cannot_change_grants_or_reset_original_identity() {
         "scope_violation"
     );
     let derived = original.with_cwd(Path::new("nested")).unwrap();
-    let reconstructed_without_origin = derived.plan.validate().unwrap();
+    let reconstructed_without_origin = derived.plan.validate(TEST_BUILD).unwrap();
     assert_eq!(
         reconstructed_without_origin
             .verify_cwd_derivation(original)
@@ -288,176 +290,6 @@ fn observation_changes_on_actual_target_bytes_arguments_or_cwd_without_claiming_
 }
 
 #[test]
-fn expired_original_deadline_refuses_before_probe_journal_or_unqualified_start() {
-    use crate::control::ControlHost;
-    use crate::control::Lease;
-    use crate::control::Lifecycle;
-    use crate::control::MutationRequest;
-    use crate::process_records::ProcessJournal;
-    use kegari_control_api::identity::Actor;
-    use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
-    use kegari_storage::PrivateDir;
-    use std::{
-        collections::BTreeSet,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Instant,
-    };
-    use uuid::Uuid;
-    struct NoProbe(Arc<AtomicUsize>);
-    impl ProcessProbe for NoProbe {
-        fn current(&self) -> Result<ProcessIdentity> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(Error::invalid("component forbids process probes"))
-        }
-        fn observe(&self, _: &ProcessIdentity) -> Result<ProcessObservation> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(Error::invalid("component forbids process probes"))
-        }
-        fn matching_executable(&self, _: &Path) -> Result<Vec<ProcessIdentity>> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(Error::invalid("component forbids process probes"))
-        }
-    }
-    let fixture = Fixture::new();
-    let root = fixture._temp.path().canonicalize().unwrap();
-    let runtime = Uuid::new_v4();
-    let control = ControlHost::setup(
-        PrivateDir::create(&root.join("control")).unwrap(),
-        runtime,
-        Uuid::new_v4(),
-    )
-    .unwrap();
-    control
-        .lifecycle(
-            MutationRequest {
-                request_id: Uuid::new_v4(),
-                runtime_id: runtime,
-                actor: Actor {
-                    identity: "component operator".into(),
-                    roles: BTreeSet::from(["lifecycle".into()]),
-                    principal: None,
-                },
-                kind: "start".into(),
-                canonical_targets: vec![runtime.to_string()],
-                expected: BTreeMap::new(),
-                payload: serde_json::Value::Null,
-            },
-            Lifecycle::Start,
-            0,
-        )
-        .unwrap();
-    let lease = Lease {
-        runtime_id: runtime,
-        owner_generation: 1,
-        owner_id: Uuid::new_v4(),
-    };
-    control.attach_reconciled(lease.clone()).unwrap();
-    let permit = control
-        .admit(
-            &lease,
-            Uuid::new_v4(),
-            "component invocation".into(),
-            bytes_digest(b"component scope"),
-            || Ok(()),
-        )
-        .unwrap();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let journal_path = root.join("processes");
-    let journal = Arc::new(
-        ProcessJournal::with_probe(
-            PrivateDir::create(&journal_path).unwrap(),
-            runtime,
-            Arc::new(NoProbe(calls.clone())),
-        )
-        .unwrap(),
-    );
-    let deadline = Instant::now();
-    let result = start_journaled_command_until(
-        &fixture.isolation,
-        &["never-launched".into()],
-        InvocationCommandLimits {
-            timeout: Duration::from_secs(30),
-            deadline,
-            output_limit: 1024,
-        },
-        &[],
-        journal,
-        permit,
-    );
-    assert!(matches!(result, Err(ref error) if error.code == "timeout"));
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(fs::read_dir(journal_path).unwrap().count(), 0);
-    // The same elapsed absolute cutoff cannot become a fresh relative budget.
-    assert_eq!(
-        remaining_bundle_timeout(Duration::from_secs(30), Instant::now(), Some(deadline))
-            .unwrap_err()
-            .code,
-        "timeout"
-    );
-}
-
-#[tokio::test]
-async fn invocation_streams_share_one_raw_allowance_and_both_reach_eof() {
-    let budget = std::sync::Arc::new(CommandOutputBudget::new(8));
-    let mut out = b"sixout".as_slice();
-    let mut err = b"sixerr".as_slice();
-    let (out_result, err_result) = tokio::join!(
-        bounded_output(&mut out, 8, Some(budget.clone())),
-        bounded_output(&mut err, 8, Some(budget.clone())),
-    );
-    let (out_bytes, out_truncated) = out_result.unwrap();
-    let (err_bytes, err_truncated) = err_result.unwrap();
-    assert_eq!(out_bytes.len() + err_bytes.len(), 8);
-    assert!(out_truncated || err_truncated);
-    assert!(out.is_empty() && err.is_empty());
-    assert_eq!(budget.take(1), 0);
-    // The old unshared collector contract remains per-stream.
-    let (out, err) = tokio::join!(
-        bounded_output(b"12345678".as_slice(), 8, None),
-        bounded_output(b"12345678".as_slice(), 8, None),
-    );
-    assert_eq!(out.unwrap().0.len() + err.unwrap().0.len(), 16);
-}
-
-#[test]
-fn invocation_rendered_output_bounds_utf8_and_redaction_without_exposing_matched_secrets() {
-    let (out, err, truncated) = rendered_command_output(&[0xff; 4], b"ok", &[], Some(4)).unwrap();
-    assert!(truncated);
-    assert_eq!(out, "\u{fffd}");
-    assert_eq!(err, "o");
-    assert_eq!(out.len() + err.len(), 4);
-    let secret = "SECRET".to_owned();
-    let (out, err, truncated) =
-        rendered_command_output(b"SECRET", b"SECRET", std::slice::from_ref(&secret), Some(8))
-            .unwrap();
-    assert!(truncated);
-    assert!(out.len() + err.len() <= 8);
-    assert!(!out.contains(&secret) && !err.contains(&secret));
-    assert_eq!(out, "[REDACTE");
-    assert!(err.is_empty());
-    let (out, err, truncated) =
-        rendered_command_output(b"SECRET", b"SECRET", &[secret], None).unwrap();
-    assert_eq!(
-        (out.as_str(), err.as_str(), truncated),
-        ("[REDACTED]", "[REDACTED]", false)
-    );
-    assert_eq!(
-        rendered_command_output(
-            b"anything",
-            b"sandbox-exec: sandbox_apply failed",
-            &[],
-            Some(0)
-        )
-        .unwrap_err()
-        .code,
-        "isolation_unavailable"
-    );
-}
-
-#[test]
 fn environment_observation_uses_exact_command_environment_without_launch_or_lookup() {
     let fixture = Fixture::new();
     let marker = fixture.isolation.plan.scratch.join("must-not-be-created");
@@ -568,7 +400,7 @@ fn environment_observation_missing_domain_is_unavailable_and_changed_boundary_is
         let mut plan = fixture.isolation.plan.clone();
         plan.role = role;
         plan.managed_execution = None;
-        let isolation = plan.validate().unwrap();
+        let isolation = plan.validate(TEST_BUILD).unwrap();
         assert_eq!(
             observe_environment(&isolation).unwrap_err().code,
             "execution_environment_unavailable"
@@ -616,7 +448,10 @@ fn environment_observation_does_not_recapture_or_attest_resource_contents() {
             .managed_execution
             .as_ref()
             .unwrap()
-            .revalidate_resource_versions_until(std::time::Instant::now() + Duration::from_secs(1))
+            .revalidate_resource_versions_until(
+                std::time::Instant::now() + Duration::from_secs(1),
+                TEST_BUILD
+            )
             .is_err()
     );
 }
@@ -653,8 +488,8 @@ fn environment_observation_has_closed_descriptive_schema_and_bounded_public_size
             directory: true,
         });
     }
-    plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
-    let large = plan.validate().unwrap();
+    plan.managed_execution = Some(BoundManagedExecution::automatic(&plan, TEST_BUILD).unwrap());
+    let large = plan.validate(TEST_BUILD).unwrap();
     assert_eq!(
         observe_environment(&large).unwrap_err().code,
         "execution_environment_limit"
@@ -684,7 +519,7 @@ fn environment_inspection_and_original_file_membership_never_renew_expired_cutof
     let digest = bytes_digest(b"original");
     assert_eq!(
         domain
-            .verify_resource_file_until(&fixture.resource, &path, &digest, 8, deadline)
+            .verify_resource_file_until(&fixture.resource, &path, &digest, 8, deadline, TEST_BUILD)
             .unwrap_err()
             .code,
         "managed_resource_limit"
@@ -696,6 +531,7 @@ fn environment_inspection_and_original_file_membership_never_renew_expired_cutof
             &digest,
             8,
             std::time::Instant::now() + Duration::from_secs(5),
+            TEST_BUILD,
         )
         .unwrap();
     assert!(
@@ -706,6 +542,7 @@ fn environment_inspection_and_original_file_membership_never_renew_expired_cutof
                 &bytes_digest(b"changed!"),
                 8,
                 std::time::Instant::now() + Duration::from_secs(5),
+                TEST_BUILD,
             )
             .is_err()
     );
@@ -719,7 +556,7 @@ fn environment_inspection_does_not_scan_writable_descendants_or_qualify_their_la
         path: plan.repository.clone(),
         directory: true,
     });
-    let isolation = plan.validate().unwrap();
+    let isolation = plan.validate(TEST_BUILD).unwrap();
     let original = observe_environment(&isolation).unwrap();
     let source = isolation.plan.repository.join("new-source");
     fs::write(&source, b"mutable source").unwrap();
@@ -746,5 +583,155 @@ fn environment_inspection_does_not_scan_writable_descendants_or_qualify_their_la
             .unwrap()
             .code,
         "scope_violation"
+    );
+}
+
+#[test]
+fn retained_domain_requires_the_supplied_current_build() {
+    let fixture = Fixture::new();
+    let encoded = serde_json::to_vec(fixture.isolation.plan()).unwrap();
+    let retained: IsolationPlan = serde_json::from_slice(&encoded).unwrap();
+    let same = retained.validate(TEST_BUILD).unwrap();
+    assert_eq!(same.digest(), fixture.isolation.digest());
+    assert_eq!(serde_json::to_vec(same.plan()).unwrap(), encoded);
+    assert_eq!(
+        retained
+            .validate("another-execution-build")
+            .unwrap_err()
+            .code,
+        "identity_mismatch"
+    );
+    let domain = retained.managed_execution.as_ref().unwrap();
+    assert_eq!(
+        domain.policy_digest(),
+        BoundManagedExecution::automatic_policy_digest(TEST_BUILD).unwrap()
+    );
+    assert_ne!(
+        domain.policy_digest(),
+        BoundManagedExecution::automatic_policy_digest("another-execution-build").unwrap()
+    );
+    assert_eq!(
+        domain
+            .revalidate("another-execution-build")
+            .unwrap_err()
+            .code,
+        "identity_mismatch"
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    assert_eq!(
+        domain
+            .revalidate_resource_versions_until(deadline, "another-execution-build")
+            .unwrap_err()
+            .code,
+        "identity_mismatch"
+    );
+    let path = fixture.resource.join("input");
+    let digest = bytes_digest(b"original");
+    assert_eq!(
+        domain
+            .verify_resource_file(
+                &fixture.resource,
+                &path,
+                &digest,
+                8,
+                "another-execution-build"
+            )
+            .unwrap_err()
+            .code,
+        "identity_mismatch"
+    );
+    assert_eq!(
+        domain
+            .verify_resource_file_until(
+                &fixture.resource,
+                &path,
+                &digest,
+                8,
+                deadline,
+                "another-execution-build",
+            )
+            .unwrap_err()
+            .code,
+        "identity_mismatch"
+    );
+    // Current identity is a host input, never an additional retained field.
+    let value = serde_json::to_value(&retained).unwrap();
+    assert!(value.get("runtime_build").is_none());
+    assert!(value["managed_execution"].get("runtime_build").is_none());
+}
+
+#[test]
+fn derived_boundaries_keep_the_supplied_build_for_every_revalidation_path() {
+    let fixture = Fixture::new();
+    let original = fixture.isolation.clone();
+    let nested = original.with_cwd(Path::new("nested")).unwrap();
+    let deeper = nested.with_cwd(Path::new("deeper")).unwrap();
+    for isolation in [&original, &nested, &deeper] {
+        assert_eq!(isolation.runtime_build.as_ref(), TEST_BUILD);
+        isolation.revalidate().unwrap();
+        isolation.revalidate_resource_contents().unwrap();
+        isolation
+            .revalidate_inspection_until(std::time::Instant::now() + Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            observe_environment(isolation)
+                .unwrap()
+                .backend_policy_digest,
+            BoundManagedExecution::automatic_policy_digest(TEST_BUILD).unwrap()
+        );
+    }
+    deeper.verify_cwd_derivation(&original).unwrap();
+    // Private fault injection ensures neither repeated validation nor bounded
+    // inspection can silently take the expected build from retained records.
+    let mut wrong_build = deeper.clone();
+    wrong_build.runtime_build = std::sync::Arc::from("another-execution-build");
+    assert_eq!(
+        wrong_build.revalidate().unwrap_err().code,
+        "identity_mismatch"
+    );
+    assert_eq!(
+        wrong_build.revalidate_resource_contents().unwrap_err().code,
+        "identity_mismatch"
+    );
+    assert_eq!(
+        wrong_build
+            .revalidate_inspection_until(std::time::Instant::now() + Duration::from_secs(5))
+            .unwrap_err()
+            .code,
+        "identity_mismatch"
+    );
+    assert_eq!(
+        wrong_build.with_cwd(Path::new(".")).unwrap_err().code,
+        "identity_mismatch"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn public_rendering_and_observation_share_one_exact_invocation() {
+    let fixture = Fixture::new();
+    let target = fixture.program("actual", b"#!/bin/sh\nexit 0\n");
+    let argv = vec![target.to_str().unwrap().to_owned(), "literal $HOME".into()];
+    let (rendered, observation) = render_observed_command(&fixture.isolation, &argv).unwrap();
+    assert_eq!(rendered.executable(), target);
+    assert_eq!(rendered.argv(), argv);
+    assert_eq!(rendered.environment(), &observation.environment);
+    assert_eq!(
+        rendered.profile(),
+        fixture.isolation.seatbelt_profile().unwrap()
+    );
+    assert_eq!(
+        observation,
+        observe_command(&fixture.isolation, &argv).unwrap()
+    );
+    assert_eq!(
+        observation.launch_identity(),
+        command_launch_identity(&fixture.isolation, &argv).unwrap()
+    );
+    assert_eq!(
+        repository_command_prerequisite(&fixture.isolation)
+            .unwrap_err()
+            .code,
+        "managed_profile_unqualified"
     );
 }

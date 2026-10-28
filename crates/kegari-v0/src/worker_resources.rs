@@ -219,7 +219,7 @@ impl ResourceState {
             resource.check(contract, deadline)?;
         }
         let environment =
-            match crate::isolation::observe_environment_until(&contract.isolation, deadline) {
+            match kegari_execution::observe_environment_until(&contract.isolation, deadline) {
                 Ok(value) => json!({"available":true,"observation":value}),
                 Err(error) if error.code == "execution_environment_unavailable" => {
                     json!({"available":false,"error":error})
@@ -246,7 +246,7 @@ impl ResourceState {
         let resource = self.roots.get(handle).ok_or_else(denied)?;
         contract.isolation.revalidate_inspection_until(deadline)?;
         if let Some(domain) = &contract.isolation.plan().managed_execution {
-            domain.revalidate_resource_versions_until(deadline)?;
+            domain.revalidate_resource_versions_until(deadline, crate::BUILD_ID)?;
         }
         resource.check(contract, deadline)?;
         let target = resource.target(path, list)?;
@@ -352,7 +352,14 @@ impl ResourceState {
             && let Some(domain) = &contract.isolation.plan().managed_execution
             && let DiscoveryReadContent::Resource { digest, bytes, .. } = &content
         {
-            domain.verify_resource_file_until(&resource.root, &target, digest, *bytes, deadline)?;
+            domain.verify_resource_file_until(
+                &resource.root,
+                &target,
+                digest,
+                *bytes,
+                deadline,
+                crate::BUILD_ID,
+            )?;
         }
         self.check_deadline(deadline)?;
         Ok((value, content))

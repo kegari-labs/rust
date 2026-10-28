@@ -14,13 +14,13 @@ use crate::execution::HookPhase;
 use crate::execution::LocalExecutor;
 use crate::execution::OwnedDirectory;
 use crate::git::Git;
-use crate::isolation::IsolationPlan;
 use crate::platform::OwnerRecord;
 use crate::platform::ServiceShutdown;
 use chrono::{DateTime, Utc};
 use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_execution::IsolationPlan;
 use kegari_platform::{
     BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
 };
@@ -410,7 +410,7 @@ impl VerifiedCleanupExecution {
     }
     pub(crate) fn command_identity(
         &self,
-    ) -> Result<(crate::isolation::ValidatedIsolation, Vec<String>, Duration)> {
+    ) -> Result<(kegari_execution::ValidatedIsolation, Vec<String>, Duration)> {
         let registration: ExecutionRegistration = self
             .directory
             .read(&format!("{}.json", self.plan.operation_id))?;
@@ -436,7 +436,7 @@ impl VerifiedCleanupExecution {
             .before_remove
             .as_ref()
             .ok_or_else(|| Error::new("scope_violation", "sealed cleanup has no removal hook"))?;
-        let isolation = registration.isolation.validate()?;
+        let isolation = registration.isolation.validate(crate::BUILD_ID)?;
         OwnedDirectory::reopen(
             &registration.marker,
             &registration.directory_digest,
@@ -568,7 +568,7 @@ impl VerifiedCleanupReadRoot {
                 "cleanup registration changed",
             ));
         }
-        let boundary = actual.isolation.validate()?;
+        let boundary = actual.isolation.validate(crate::BUILD_ID)?;
         OwnedDirectory::reopen(&actual.marker, &actual.directory_digest, &boundary)?;
         let dir = PrivateDir::open(&self.root)?;
         let meta = std::fs::symlink_metadata(dir.path())
@@ -599,7 +599,7 @@ pub struct CleanupHook<'a> {
     pub proof: Arc<VerifiedCleanupExecution>,
     pub root: VerifiedCleanupReadRoot,
     pub binding: &'a ExecutionBinding,
-    pub isolation: &'a crate::isolation::ValidatedIsolation,
+    pub isolation: &'a kegari_execution::ValidatedIsolation,
     pub ownership: &'a OwnedDirectory,
     pub workflow: &'a Workflow,
     pub directory: PrivateDir,
@@ -679,7 +679,7 @@ impl Housekeeping {
     pub fn register_execution(
         &self,
         binding: &ExecutionBinding,
-        isolation: &crate::isolation::ValidatedIsolation,
+        isolation: &kegari_execution::ValidatedIsolation,
         directory: &OwnedDirectory,
         workflow: &Workflow,
     ) -> Result<()> {
@@ -927,7 +927,7 @@ impl Housekeeping {
             .collect();
         let receipt_digest =
             self.cleanup_observations(&registration, &member_map, cleanup.as_deref())?;
-        let isolation = registration.isolation.clone().validate()?;
+        let isolation = registration.isolation.clone().validate(crate::BUILD_ID)?;
         OwnedDirectory::reopen(
             &registration.marker,
             &registration.directory_digest,
@@ -1214,7 +1214,9 @@ impl Housekeeping {
         .before_remove
         .is_some()
         {
-            crate::isolation::repository_command_prerequisite(&registration.isolation.validate()?)?;
+            kegari_execution::repository_command_prerequisite(
+                &registration.isolation.validate(crate::BUILD_ID)?,
+            )?;
         }
         let actor = request.actor.clone();
         let state = self.control.snapshot()?;
@@ -1338,7 +1340,7 @@ impl Housekeeping {
         proof: Arc<VerifiedCleanupExecution>,
     ) -> Result<()> {
         proof.validate_current()?;
-        let boundary = registration.isolation.clone().validate()?;
+        let boundary = registration.isolation.clone().validate(crate::BUILD_ID)?;
         let ownership = OwnedDirectory::reopen(
             &registration.marker,
             &registration.directory_digest,
@@ -1503,7 +1505,7 @@ impl CleanupProcesses for NativeCleanupProcesses {
             }
             // Observe admitted resource contents before entering the host effect gate.
             expected.revalidate_resource_contents()?;
-            crate::isolation::repository_command_prerequisite(&expected)?;
+            kegari_execution::repository_command_prerequisite(&expected)?;
             let authority = self.scope(request.root, Some(request.proof.clone()))?;
             let git = self.git.clone();
             let scope = authority.clone();
@@ -1566,7 +1568,7 @@ impl crate::execution::CommandBoundary for CleanupCommandBoundary {
     }
     fn start(
         &self,
-        isolation: &crate::isolation::ValidatedIsolation,
+        isolation: &kegari_execution::ValidatedIsolation,
         argv: &[String],
         timeout: Duration,
         output_limit: usize,
@@ -2709,7 +2711,7 @@ pub struct ReadOnlyPreparation<'a> {
     pub authority: &'a crate::worker::WorkerAuthority,
     pub identity: ReadOnlyIdentity,
     pub independent_clone: Option<&'a crate::git::VerifiedIndependentClone>,
-    pub isolation: &'a crate::isolation::ValidatedIsolation,
+    pub isolation: &'a kegari_execution::ValidatedIsolation,
     pub workflow: &'a Workflow,
 }
 #[derive(Clone, Debug)]
@@ -2748,7 +2750,8 @@ impl Housekeeping {
         &self,
         input: ReadOnlyPreparation<'_>,
     ) -> Result<PreservedPreparation> {
-        use crate::{isolation::ExecutionRole, worker::WorkerAuthority};
+        use crate::worker::WorkerAuthority;
+        use kegari_execution::ExecutionRole;
         input.isolation.revalidate()?;
         let plan = input.isolation.plan();
         if input.operation.is_nil()
@@ -2916,7 +2919,7 @@ impl Housekeeping {
                 "read-only preservation record differs from runtime/operation",
             ));
         }
-        let isolation = record.isolation.validate()?;
+        let isolation = record.isolation.validate(crate::BUILD_ID)?;
         if isolation.digest() != record.isolation_digest {
             return Err(Error::new(
                 "ownership_conflict",

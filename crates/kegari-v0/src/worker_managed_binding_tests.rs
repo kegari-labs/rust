@@ -1,6 +1,6 @@
 //! Actual file-backed automatic-domain checks only; no process or worker is launched.
 use super::*;
-use crate::isolation::{BoundManagedExecution, IsolationPlan, PathGrant};
+use kegari_execution::{BoundManagedExecution, IsolationPlan, PathGrant};
 
 fn bound_fixture() -> (tempfile::TempDir, ValidatedIsolation) {
     let temp = tempfile::tempdir().unwrap();
@@ -36,8 +36,9 @@ fn bound_fixture() -> (tempfile::TempDir, ValidatedIsolation) {
         forbidden_roots: vec![protected],
         managed_execution: None,
     };
-    plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
-    (temp, plan.validate().unwrap())
+    plan.managed_execution =
+        Some(BoundManagedExecution::automatic(&plan, crate::BUILD_ID).unwrap());
+    (temp, plan.validate(crate::BUILD_ID).unwrap())
 }
 
 #[test]
@@ -52,7 +53,7 @@ fn automatic_domain_rejects_omission_and_nonexecuting_contract_use() {
     );
     let mut omitted = isolation.plan().clone();
     omitted.managed_execution = None;
-    let omitted = omitted.validate().unwrap();
+    let omitted = omitted.validate(crate::BUILD_ID).unwrap();
     assert_eq!(
         verify_command_domain(&omitted, true).unwrap_err().code,
         "worker_binding"
@@ -65,7 +66,7 @@ fn automatic_domain_rejects_omission_and_nonexecuting_contract_use() {
             .as_ref()
             .unwrap()
             .policy_digest(),
-        BoundManagedExecution::automatic_policy_digest().unwrap()
+        BoundManagedExecution::automatic_policy_digest(crate::BUILD_ID).unwrap()
     );
 }
 
@@ -76,16 +77,16 @@ fn automatic_domain_rejects_other_owned_roots_and_nonexecuting_roles() {
     let mut substituted = original.plan().clone();
     substituted.managed_execution = other.plan().managed_execution.clone();
     // A self-consistent domain for another actual directory cannot bind this plan.
-    assert!(substituted.validate().is_err());
+    assert!(substituted.validate(crate::BUILD_ID).is_err());
     for role in [
         ExecutionRole::Coordination,
         ExecutionRole::IndependentReview,
     ] {
         let mut changed = original.plan().clone();
         changed.role = role;
-        assert!(changed.clone().validate().is_err());
+        assert!(changed.clone().validate(crate::BUILD_ID).is_err());
         changed.managed_execution = None;
-        assert!(BoundManagedExecution::automatic(&changed).is_err());
+        assert!(BoundManagedExecution::automatic(&changed, crate::BUILD_ID).is_err());
     }
 }
 

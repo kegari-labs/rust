@@ -6,8 +6,6 @@ use crate::control::ControlHost;
 use crate::control::Intent;
 use crate::control::MutationRequest;
 use crate::control::Receipt;
-use crate::isolation::ExecutionRole;
-use crate::isolation::IsolationPlan;
 use crate::platform::Registration;
 use kegari_codex::CodexConnectionMetadata;
 use kegari_codex::CodexProfile;
@@ -16,6 +14,8 @@ use kegari_control_api::identity::Actor;
 use kegari_control_api::identity::Principal;
 use kegari_control_api::transport::TransportAuthentication;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_execution::ExecutionRole;
+use kegari_execution::IsolationPlan;
 use kegari_platform::HostIdentity;
 use kegari_providers::HttpTransport;
 use kegari_providers::{AccountIdentity, GithubClient, HttpPolicy};
@@ -109,7 +109,7 @@ impl ConfigurationInputs for NativeConfigurationInputs {
                 forbidden_roots: vec![auth_home.clone()],
                 managed_execution: None,
             }
-            .validate()?;
+            .validate(crate::BUILD_ID)?;
             let permissions = crate::codex_host::permission_configuration(&plan, &auth_home)?;
             crate::codex_host::probe_connection(
                 &executable,

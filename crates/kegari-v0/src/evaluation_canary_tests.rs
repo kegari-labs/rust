@@ -475,7 +475,7 @@ fn actual_scorer_load_failure_keeps_materialization_diagnostic_without_native_cl
         case.grader.path(),
     )
     .unwrap();
-    let isolation = crate::isolation::IsolationPlan {
+    let isolation = kegari_execution::IsolationPlan {
         managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::IndependentReview,
@@ -491,7 +491,7 @@ fn actual_scorer_load_failure_keeps_materialization_diagnostic_without_native_cl
         resource_writes: vec![],
         forbidden_roots: vec![case.grader.path().to_owned(), prepared.codex_home.clone()],
     }
-    .validate()
+    .validate(crate::BUILD_ID)
     .unwrap();
     let diagnostic = case.owner.diagnostic().unwrap();
     let facts = ObservedFacts {

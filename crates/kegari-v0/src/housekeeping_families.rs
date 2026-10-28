@@ -283,7 +283,7 @@ impl Housekeeping {
         &self,
         configuration: &kegari_config::Config,
         binding: &ExecutionBinding,
-        isolation: &crate::isolation::ValidatedIsolation,
+        isolation: &kegari_execution::ValidatedIsolation,
         directory: &OwnedDirectory,
         workflow: &Workflow,
     ) -> Result<crate::git::VerifiedHostReadRoot> {
@@ -419,7 +419,7 @@ impl Housekeeping {
     pub fn prepare_directory_reuse(
         &self,
         source: &crate::git::VerifiedReusableSource,
-        isolation: &crate::isolation::ValidatedIsolation,
+        isolation: &kegari_execution::ValidatedIsolation,
         directory: &OwnedDirectory,
         workflow: &Workflow,
     ) -> Result<VerifiedDirectoryReuse> {
@@ -471,7 +471,7 @@ impl Housekeeping {
         permit: &crate::control::Permit,
         proof: &VerifiedDirectoryReuse,
         binding: &ExecutionBinding,
-        isolation: &crate::isolation::ValidatedIsolation,
+        isolation: &kegari_execution::ValidatedIsolation,
         directory: &OwnedDirectory,
         workflow: &Workflow,
     ) -> Result<EnrolledDirectoryReuse> {

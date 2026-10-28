@@ -8,8 +8,8 @@ use kegari_context::instructions::RepositoryContext;
 use kegari_context::instructions::WorkerNetwork;
 use kegari_context::workflow::Workflow;
 use kegari_digest::bytes_digest;
+use kegari_execution::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation};
 use kegari_v0::evaluation::*;
-use kegari_v0::isolation::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -102,7 +102,7 @@ fn setup_from(
             fixture.codex_home.clone(),
         ],
     }
-    .validate()
+    .validate(kegari_v0::BUILD_ID)
     .unwrap();
     (temp, fixture, isolation, reports)
 }
@@ -596,7 +596,7 @@ fn grader_and_reports_are_outside_all_worker_grants() {
         path: fixture.grader_root.clone(),
         directory: true,
     });
-    let broadened = plan.validate().unwrap();
+    let broadened = plan.validate(kegari_v0::BUILD_ID).unwrap();
     assert_eq!(
         verify_grader_boundary(&broadened, std::slice::from_ref(&fixture.grader_root))
             .unwrap_err()
@@ -1302,7 +1302,7 @@ fn legacy_executable_carveout_cannot_expose_private_grading_material() {
     std::fs::write(&hidden, b"private expected result").unwrap();
     let mut retained = serde_json::to_value(isolation.plan()).unwrap();
     retained["executables"] = serde_json::json!([hidden]);
-    assert!(serde_json::from_value::<kegari_v0::isolation::IsolationPlan>(retained).is_err());
+    assert!(serde_json::from_value::<kegari_execution::IsolationPlan>(retained).is_err());
 }
 
 #[test]

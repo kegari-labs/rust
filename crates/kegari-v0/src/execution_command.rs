@@ -19,7 +19,7 @@ pub struct CommandPreparationRecord {
     pub binding: ExecutionBinding,
     pub correction: Option<CorrectionExecutionProvenance>,
     pub request: CommandRequest,
-    pub observation: isolation::CommandObservation,
+    pub observation: kegari_execution::CommandObservation,
     pub limits: ExecutionLimits,
     pub prepared_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
@@ -347,7 +347,7 @@ impl LocalExecutor<'_> {
             .map_err(|e| Error::io("resolve command executable", e))?;
         let executable =
             Anchors::paths(&[&selected, &canonical, Path::new("/usr/bin/sandbox-exec")])?;
-        let observation = isolation::observe_command(&isolation, &request.argv)?;
+        let observation = kegari_execution::observe_command(&isolation, &request.argv)?;
         if observation.selected_executable != selected
             || observation.canonical_executable.path != canonical
         {
@@ -409,7 +409,7 @@ impl LocalExecutor<'_> {
         self.launch_identity(original)?;
         prepared.isolation.verify_cwd_derivation(self.isolation)?;
         if let Some(managed) = &self.isolation.plan().managed_execution {
-            managed.revalidate_resource_versions_until(prepared.deadline)?;
+            managed.revalidate_resource_versions_until(prepared.deadline, crate::BUILD_ID)?;
         }
         prepared.source.verify(Some(prepared.deadline))?;
         prepared.executable.verify(Some(prepared.deadline))?;

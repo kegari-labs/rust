@@ -266,3 +266,12 @@ cleanup token after enrollment, preserves an exact retained clone, and records
 removal tombstones for both family operations through guarded metadata reads.
 Native end-to-end session resumption
 requires the independently verified provider and joined-execution path.
+
+## Environment package boundary
+
+`kegari_execution` owns isolation plans, managed resource binding, sandbox
+rendering and descriptive observations. The backend `execution_host` retains
+native command ownership, journals and joined cleanup. This module retains the
+application checks, protected artifacts and evidence policy. Environment/domain
+construction and validation explicitly use the current application `BUILD_ID`;
+this refactor adds no command-discovery requirements or qualification.

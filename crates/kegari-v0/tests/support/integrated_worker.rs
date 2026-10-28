@@ -11,10 +11,11 @@ use kegari_codex::{CodexProfile, SessionBinding, ToolCall};
 use kegari_config::Speed;
 use kegari_context::instructions::*;
 use kegari_context::workflow::Workflow;
+use kegari_execution::*;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    control::*, execution::*, git::Git, isolation::*, providers::ProviderBroker,
+    control::*, execution::*, execution_host::*, git::Git, providers::ProviderBroker,
     reconcile::ParentProjection, worker::*,
 };
 use serde_json::{Value, json};
@@ -88,8 +89,9 @@ pub(super) async fn exercise_assignment(
         forbidden_roots: vec![source.root().into(), private.path().into()],
         managed_execution: None,
     };
-    isolation.managed_execution = Some(BoundManagedExecution::automatic(&isolation).unwrap());
-    let isolation = isolation.validate().unwrap();
+    isolation.managed_execution =
+        Some(BoundManagedExecution::automatic(&isolation, kegari_v0::BUILD_ID).unwrap());
+    let isolation = isolation.validate(kegari_v0::BUILD_ID).unwrap();
     let revision = git.revision(&repository, "HEAD").unwrap();
     assert_eq!(&revision, source.revision());
     let operation = Uuid::new_v4();

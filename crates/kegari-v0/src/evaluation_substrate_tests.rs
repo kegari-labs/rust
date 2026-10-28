@@ -1,11 +1,11 @@
 //! Real filesystem/Workflow/assembly components; no runtime permit or native worker.
 use super::*;
-use crate::isolation::IsolationPlan;
 use kegari_config::Speed;
 use kegari_context::instructions::PermissionManifest;
 use kegari_context::instructions::ProviderDiscovery;
 use kegari_context::instructions::WorkerNetwork;
 use kegari_context::workflow::Workflow;
+use kegari_execution::IsolationPlan;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -111,7 +111,7 @@ impl Case {
             resource_writes: vec![],
             forbidden_roots: vec![grader, reports.clone(), auth.clone()],
         }
-        .validate()
+        .validate(crate::BUILD_ID)
         .unwrap();
         let profile = Profile {
             tool: "codex".into(),

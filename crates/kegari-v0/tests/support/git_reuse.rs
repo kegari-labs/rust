@@ -2,11 +2,11 @@
 //! the boot probe is synthetic and no native sandbox/worker completion is claimed.
 use super::*;
 use kegari_digest::bytes_digest;
+use kegari_execution::{ExecutionRole, IsolationPlan, ValidatedIsolation};
 use kegari_v0::{
     authority::IssueKey,
     evidence::{Generation, WorkIdentity},
     execution::{DirectoryIdentity, ExecutionBinding, OwnedDirectory},
-    isolation::{ExecutionRole, IsolationPlan, ValidatedIsolation},
 };
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
@@ -112,7 +112,7 @@ impl ReuseFixture {
             source_writes: vec![],
             forbidden_roots: vec![registration.root().path().into()],
         }
-        .validate()
+        .validate(kegari_v0::BUILD_ID)
         .unwrap();
         let ownership = OwnedDirectory::register(identity, &boundary).unwrap();
         let binding = ExecutionBinding {

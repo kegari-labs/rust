@@ -209,7 +209,7 @@ fn main_check_failure_eligibility_requires_clean_service_and_readiness_records()
             readiness_process: Uuid::new_v4(),
             readiness: outcome(0),
             terminal: outcome(0),
-            stopped: isolation::ServiceObservation {
+            stopped: crate::execution_host::ServiceObservation {
                 leader_running: false,
                 stop_requested: true,
                 kill_escalated: false,

@@ -425,7 +425,7 @@ fn exited_transport_with_unknown_outcome_keeps_original_member_and_hold() {
 }
 #[test]
 fn admitted_source_observation_uses_the_returned_bytes_and_refuses_traversal() {
-    use crate::isolation::{IsolationPlan, PathGrant};
+    use kegari_execution::{IsolationPlan, PathGrant};
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let repository = root.join("source");
@@ -449,7 +449,7 @@ fn admitted_source_observation_uses_the_returned_bytes_and_refuses_traversal() {
         resource_writes: vec![],
         forbidden_roots: vec![],
     }
-    .validate()
+    .validate(crate::BUILD_ID)
     .unwrap();
     let mut observed = None;
     let value = read_source(&isolation, "limit.py", |path, bytes, value| {

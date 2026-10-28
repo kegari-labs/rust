@@ -1,10 +1,10 @@
 //! Native Codex launch and owned-process integration. Protocol data is not authority.
-use crate::isolation::ValidatedIsolation;
 use kegari_codex::{
     CodexConnectionMetadata, PROTOCOL_PROFILE, PermissionConfiguration, RpcClient,
     SUPPORTED_CODEX_VERSION, SessionScope,
 };
 use kegari_digest::canonical_digest;
+use kegari_execution::ValidatedIsolation;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, process::Stdio, time::Duration};
@@ -18,15 +18,25 @@ use tokio::{
 /// is read-only metadata probing; native session launch still needs a host gate.
 pub struct VerifiedCodexExecutable(kegari_platform::BinaryIdentity);
 
-impl SessionScope for ValidatedIsolation {
+/// Borrow an actual validated boundary for protocol session checks. Creating
+/// this bridge does not revalidate, admit work or acquire process ownership.
+pub struct IsolationSessionScope<'a> {
+    isolation: &'a ValidatedIsolation,
+}
+impl<'a> IsolationSessionScope<'a> {
+    pub fn new(isolation: &'a ValidatedIsolation) -> Self {
+        Self { isolation }
+    }
+}
+impl SessionScope for IsolationSessionScope<'_> {
     fn revalidate(&self) -> Result<()> {
-        ValidatedIsolation::revalidate(self)
+        self.isolation.revalidate()
     }
     fn cwd(&self) -> &Path {
-        &self.plan().cwd
+        &self.isolation.plan().cwd
     }
     fn isolation_digest(&self) -> &str {
-        self.digest()
+        self.isolation.digest()
     }
 }
 

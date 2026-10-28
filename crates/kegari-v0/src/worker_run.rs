@@ -8,8 +8,6 @@ use crate::control::Permit;
 use crate::evaluation::TrialHost;
 use crate::execution::CommandCancellation;
 use crate::execution::VerifiedCheckExecution;
-use crate::isolation::IsolationPlan;
-use crate::isolation::ValidatedIsolation;
 use crate::worker::ContractInput;
 use crate::worker::ExecutionRegistry;
 use crate::worker::ReadResource;
@@ -37,6 +35,8 @@ use kegari_context::instructions::WorkerNetwork;
 use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
+use kegari_execution::IsolationPlan;
+use kegari_execution::ValidatedIsolation;
 use kegari_platform::BinaryIdentity;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -204,7 +204,7 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
             .ok_or_else(|| Error::invalid("Codex auth_home is missing"))?,
     );
     kegari_storage::PrivateDir::open(&auth_home)?;
-    let isolation = input.isolation.validate()?;
+    let isolation = input.isolation.validate(crate::BUILD_ID)?;
     let permissions = crate::codex_host::permission_configuration(&isolation, &auth_home)?;
     let repository_execution =
         input.role.permits_repository_execution() && input.repository_id.is_some();
@@ -1707,7 +1707,7 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
             broker.checkpoint(&state, Some("thread/start"))?;
             rpc.start_thread(
                 &mut state,
-                &prepared.isolation,
+                &crate::codex_host::IsolationSessionScope::new(&prepared.isolation),
                 &prepared.permissions,
                 &prepared.contract.instructions().prompt,
                 prepared.contract.tools().definitions().to_vec(),

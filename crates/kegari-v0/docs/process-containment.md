@@ -51,7 +51,7 @@ The child may still write into the operation's allowed directory. The existing
 finite `tests/process_group.rs` regression demonstrates exactly that late write.
 It establishes a process-group limitation, not a filesystem-sandbox escape.
 
-`src/isolation.rs::repository_command_prerequisite` currently rejects repository
+`kegari_execution::repository_command_prerequisite` currently rejects repository
 commands without an actual host-produced command domain with `process_tree_unverified`.
 A bound schema-5 domain still returns `managed_profile_unqualified`;
 it cannot manufacture the missing native qualification. Successful group cleanup

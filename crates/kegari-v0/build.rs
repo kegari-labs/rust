@@ -24,6 +24,7 @@ fn main() {
     // as build inputs without introducing a reverse Cargo dependency.
     for name in [
         "src",
+        "../kegari-execution/src",
         "../kegari-git/src",
         "../kegari-scheduler/src",
         "../kegari-context/src",
@@ -49,6 +50,7 @@ fn main() {
     }
     for name in [
         "build.rs",
+        "../kegari-execution/Cargo.toml",
         "../kegari-git/Cargo.toml",
         "Cargo.toml",
         "../kegari-scheduler/Cargo.toml",

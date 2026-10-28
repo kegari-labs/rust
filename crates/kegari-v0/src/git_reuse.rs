@@ -1,7 +1,7 @@
 //! A clean source proof for one retained execution, never process-exit authority.
 use super::*;
 use crate::execution::{ExecutionBinding, OwnedDirectory};
-use crate::isolation::ValidatedIsolation;
+use kegari_execution::ValidatedIsolation;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd};

@@ -1,11 +1,12 @@
 //! Injected command outcomes only. The surrounding fixture uses the actual
 //! ScopedWorker, Control and LocalExecutor; this module launches no OS process
 //! and never constructs a Control launch token or native qualification proof.
+use kegari_execution::ValidatedIsolation;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     control::CheckBundleLaunch,
     execution::{CommandBoundary, CommandCancellation, ExecutionEvidenceClass, StartedCommand},
-    isolation::{BundleCommandLimits, CommandOutcome, ServiceObservation, ValidatedIsolation},
+    execution_host::{BundleCommandLimits, CommandOutcome, ServiceObservation},
 };
 use std::{
     future::Future,

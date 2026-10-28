@@ -125,7 +125,7 @@ mod tests {
     use super::*;
     use crate::evaluation::{CheckStatus, observed_check};
     use crate::evidence::Generation;
-    use crate::isolation::ServiceObservation;
+    use crate::execution_host::ServiceObservation;
 
     // Synthetic descriptive records only: these tests never construct private
     // execution/owner/Control capabilities or claim a real service was launched.

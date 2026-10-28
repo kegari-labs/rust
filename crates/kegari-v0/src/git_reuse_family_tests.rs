@@ -26,12 +26,12 @@ use crate::{
         HookRecord, HookState, OwnedDirectory,
     },
     housekeeping::Housekeeping,
-    isolation::{ExecutionRole, IsolationPlan, ValidatedIsolation},
 };
 use kegari_config::Config;
 use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_execution::{ExecutionRole, IsolationPlan, ValidatedIsolation};
 use kegari_git::RepositoryId;
 use kegari_platform::{BinaryIdentity, HostIdentity, ProcessProbe};
 use kegari_providers::RepositoryIdentity;
@@ -258,7 +258,7 @@ impl ReuseFixture {
             source_writes: vec![],
             forbidden_roots: vec![registration.root().path().into()],
         }
-        .validate()
+        .validate(crate::BUILD_ID)
         .unwrap();
         let ownership = OwnedDirectory::register(identity, &boundary).unwrap();
         let binding = ExecutionBinding {

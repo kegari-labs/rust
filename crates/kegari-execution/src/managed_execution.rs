@@ -279,11 +279,11 @@ impl BoundManagedExecution {
     /// Exact-build compatibility is deliberate: a different backend build must
     /// not silently adopt a retained schema-5 domain. Such recovery needs a
     /// separately authorized/revalidated preparation, not a rewritten old digest.
-    pub fn automatic_policy_digest() -> Result<String> {
+    pub fn automatic_policy_digest(runtime_build: &str) -> Result<String> {
         canonical_digest(
             SCHEMA,
             &serde_json::json!({
-                "backend":"macos_managed_command_domain_v1", "build":crate::BUILD_ID,
+                "backend":"macos_managed_command_domain_v1", "build":runtime_build,
                 "os_read_roots":OS_READ_ROOTS, "os_command_roots":OS_COMMAND_ROOTS,
                 "path":OS_PATH, "scope":"owned_repository_scratch_and_admitted_reads",
                 "lifecycle":"owned_groups_and_registered_check_services",
@@ -292,7 +292,7 @@ impl BoundManagedExecution {
         )
     }
     /// Full resource observation is allowed only in preparation outside Control.
-    pub fn automatic(plan: &IsolationPlan) -> Result<Self> {
+    pub fn automatic(plan: &IsolationPlan, runtime_build: &str) -> Result<Self> {
         let context = DomainContext::from_plan(plan);
         let mut budget = ResourceBudget::new();
         context.validate(&mut budget)?;
@@ -304,7 +304,7 @@ impl BoundManagedExecution {
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             schema_version: SCHEMA,
-            policy_digest: Self::automatic_policy_digest()?,
+            policy_digest: Self::automatic_policy_digest(runtime_build)?,
             roots,
             search_path: search_path(&context),
             context,
@@ -318,12 +318,18 @@ impl BoundManagedExecution {
         self.schema_version == SCHEMA
     }
     /// Bounded structure and metadata checks only; no resource content reads.
-    pub(crate) fn revalidate_binding(&self) -> Result<()> {
-        self.revalidate_binding_with_budget(&mut ResourceBudget::new())
+    fn revalidate_binding(&self, runtime_build: &str) -> Result<()> {
+        self.revalidate_binding_with_budget(&mut ResourceBudget::new(), runtime_build)
     }
-    fn revalidate_binding_with_budget(&self, budget: &mut ResourceBudget) -> Result<()> {
+    fn revalidate_binding_with_budget(
+        &self,
+        budget: &mut ResourceBudget,
+        runtime_build: &str,
+    ) -> Result<()> {
         budget.check()?;
-        if self.schema_version != SCHEMA || self.policy_digest != Self::automatic_policy_digest()? {
+        if self.schema_version != SCHEMA
+            || self.policy_digest != Self::automatic_policy_digest(runtime_build)?
+        {
             return Err(changed());
         }
         self.context.validate(budget)?;
@@ -343,20 +349,21 @@ impl BoundManagedExecution {
     }
     /// Original resource versions are checked at the dispatch boundary. This
     /// reads bounded metadata only; full contents stay outside Control.
-    pub(crate) fn revalidate_resource_versions_until(
+    pub fn revalidate_resource_versions_until(
         &self,
         deadline: std::time::Instant,
+        runtime_build: &str,
     ) -> Result<()> {
         let mut budget = ResourceBudget::until(deadline);
         budget.check()?;
-        self.revalidate_binding_with_budget(&mut budget)?;
+        self.revalidate_binding_with_budget(&mut budget, runtime_build)?;
         for resource in &self.resources {
             resource.revalidate_versions(&mut budget)?;
         }
         budget.check()
     }
-    pub fn revalidate(&self) -> Result<()> {
-        self.revalidate_binding()?;
+    pub fn revalidate(&self, runtime_build: &str) -> Result<()> {
+        self.revalidate_binding(runtime_build)?;
         let mut budget = ResourceBudget::new();
         for resource in &self.resources {
             resource.revalidate(&mut budget)?;
@@ -367,12 +374,13 @@ impl BoundManagedExecution {
     /// resource bytes must still be revalidated separately before acceptance.
     /// Legacy source-read callers retain their existing local metadata bound;
     /// this wrapper does not represent an original worker inspection cutoff.
-    pub(crate) fn verify_resource_file(
+    pub fn verify_resource_file(
         &self,
         root: &Path,
         path: &Path,
         digest: &str,
         bytes: u64,
+        runtime_build: &str,
     ) -> Result<()> {
         self.verify_resource_file_until(
             root,
@@ -380,19 +388,21 @@ impl BoundManagedExecution {
             digest,
             bytes,
             std::time::Instant::now() + std::time::Duration::from_secs(30),
+            runtime_build,
         )
     }
     /// New inspection operations must retain their caller's absolute cutoff.
-    pub(crate) fn verify_resource_file_until(
+    pub fn verify_resource_file_until(
         &self,
         root: &Path,
         path: &Path,
         digest: &str,
         bytes: u64,
         deadline: std::time::Instant,
+        runtime_build: &str,
     ) -> Result<()> {
         let mut budget = ResourceBudget::until(deadline);
-        self.revalidate_binding_with_budget(&mut budget)?;
+        self.revalidate_binding_with_budget(&mut budget, runtime_build)?;
         let mut matching = self
             .resources
             .iter()
@@ -404,19 +414,20 @@ impl BoundManagedExecution {
         resource.verify_file_with_budget(path, digest, bytes, &budget)?;
         budget.check()
     }
-    pub(super) fn validate_plan(&self, plan: &IsolationPlan) -> Result<()> {
-        self.validate_plan_with_budget(plan, &mut ResourceBudget::new())
+    pub(super) fn validate_plan(&self, plan: &IsolationPlan, runtime_build: &str) -> Result<()> {
+        self.validate_plan_with_budget(plan, &mut ResourceBudget::new(), runtime_build)
     }
     pub(super) fn validate_plan_with_budget(
         &self,
         plan: &IsolationPlan,
         budget: &mut ResourceBudget,
+        runtime_build: &str,
     ) -> Result<()> {
         budget.check()?;
         if self.context != DomainContext::from_plan(plan) {
             return Err(changed());
         }
-        self.revalidate_binding_with_budget(budget)
+        self.revalidate_binding_with_budget(budget, runtime_build)
     }
     pub(super) fn execution_grants(&self) -> impl Iterator<Item = &PathGrant> {
         self.roots.iter().map(|root| &root.grant)
@@ -508,6 +519,7 @@ impl BoundManagedExecution {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TEST_BUILD;
     use std::{
         fs,
         os::unix::fs::{PermissionsExt, symlink},
@@ -556,8 +568,8 @@ mod tests {
         }
         fn bind(&mut self) -> super::super::ValidatedIsolation {
             self.plan.managed_execution =
-                Some(BoundManagedExecution::automatic(&self.plan).unwrap());
-            self.plan.validate().unwrap()
+                Some(BoundManagedExecution::automatic(&self.plan, TEST_BUILD).unwrap());
+            self.plan.validate(TEST_BUILD).unwrap()
         }
         fn program(path: &Path, body: &[u8]) {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -753,8 +765,8 @@ mod tests {
         // These are genuine, internally consistent filesystem grants. The
         // automatic observer must reject their unsupported mixed partition,
         // rather than exempt the whole parent and lose its read-only sibling.
-        fixture.plan.validate().unwrap();
-        let error = BoundManagedExecution::automatic(&fixture.plan).unwrap_err();
+        fixture.plan.validate(TEST_BUILD).unwrap();
+        let error = BoundManagedExecution::automatic(&fixture.plan, TEST_BUILD).unwrap_err();
         assert_eq!(error.code, "scope_violation");
         assert!(error.message.contains("read-only resource parent"));
         // A disjoint representation retains writable semantics and real input
@@ -800,8 +812,8 @@ mod tests {
         }];
         // Reachable through the ordinary path checks: the read parent is an
         // existing canonical directory, distinct from every forbidden root.
-        fixture.plan.validate().unwrap();
-        let error = BoundManagedExecution::automatic(&fixture.plan).unwrap_err();
+        fixture.plan.validate(TEST_BUILD).unwrap();
+        let error = BoundManagedExecution::automatic(&fixture.plan, TEST_BUILD).unwrap_err();
         assert_eq!(error.code, "scope_violation");
         assert!(
             error
@@ -848,17 +860,17 @@ mod tests {
         let bound = fixture.plan.managed_execution.as_ref().unwrap();
         let original = serde_json::to_value(bound).unwrap();
         let roundtrip: BoundManagedExecution = serde_json::from_value(original.clone()).unwrap();
-        roundtrip.revalidate().unwrap();
+        roundtrip.revalidate(TEST_BUILD).unwrap();
         for schema in 1..5 {
             let mut value = original.clone();
             value["schema_version"] = schema.into();
             let forged: BoundManagedExecution = serde_json::from_value(value).unwrap();
-            assert!(forged.revalidate_binding().is_err());
+            assert!(forged.revalidate_binding(TEST_BUILD).is_err());
         }
         let mut value = original;
         value["search_path"] = serde_json::json!([fixture.outside]);
         let forged: BoundManagedExecution = serde_json::from_value(value).unwrap();
-        assert!(forged.revalidate_binding().is_err());
+        assert!(forged.revalidate_binding(TEST_BUILD).is_err());
         fs::rename(
             &fixture.plan.repository,
             fixture.plan.repository.with_extension("old"),
@@ -875,7 +887,7 @@ mod tests {
         ] {
             let fixture = Fixture::new(role);
             assert_eq!(
-                BoundManagedExecution::automatic(&fixture.plan)
+                BoundManagedExecution::automatic(&fixture.plan, TEST_BUILD)
                     .unwrap_err()
                     .code,
                 "scope_violation"
@@ -883,7 +895,7 @@ mod tests {
             assert!(
                 fixture
                     .plan
-                    .validate()
+                    .validate(TEST_BUILD)
                     .unwrap()
                     .resolve_executable("sh")
                     .is_err()

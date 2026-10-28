@@ -8,6 +8,8 @@ use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_control_api::identity::Principal;
 use kegari_digest::bytes_digest;
+use kegari_execution::ExecutionRole;
+use kegari_execution::IsolationPlan;
 use kegari_git::RepositoryId;
 use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_providers::*;
@@ -27,8 +29,6 @@ use kegari_v0::execution::OwnedDirectory;
 use kegari_v0::execution::SessionLifecycle;
 use kegari_v0::git::Git;
 use kegari_v0::housekeeping::*;
-use kegari_v0::isolation::ExecutionRole;
-use kegari_v0::isolation::IsolationPlan;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -343,7 +343,7 @@ impl Fixture {
             source_writes: vec![],
             forbidden_roots: vec![root.path().into()],
         }
-        .validate()
+        .validate(kegari_v0::BUILD_ID)
         .unwrap();
         let owned = OwnedDirectory::register(
             DirectoryIdentity {
@@ -860,7 +860,7 @@ async fn directory_family_rejects_a_second_unrelated_registration_without_changi
     let mut binding: ExecutionBinding = serde_json::from_value(stored["binding"].clone()).unwrap();
     let isolation = serde_json::from_value::<IsolationPlan>(stored["isolation"].clone())
         .unwrap()
-        .validate()
+        .validate(kegari_v0::BUILD_ID)
         .unwrap();
     let owned = OwnedDirectory::reopen(
         Path::new(stored["marker"].as_str().unwrap()),

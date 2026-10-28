@@ -1,11 +1,12 @@
 //! Local execution tools. Production commands always use the OS boundary;
 //! deterministic boundary fixtures never become qualified validation evidence.
 use crate::evidence::{ArtifactReference, CheckKind, WorkIdentity, validate_digest};
+use crate::execution_host::CommandOutcome;
 use crate::git::Git;
-use crate::isolation::{self, CommandOutcome, ExecutionRole, ValidatedIsolation};
 use chrono::{DateTime, Utc};
 use kegari_context::workflow::Workflow;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_execution::{ExecutionRole, ValidatedIsolation};
 use kegari_git::{RepositoryId, Revision};
 use kegari_types::artifact::ArtifactProof;
 use kegari_types::error::{Error, Result};
@@ -59,7 +60,7 @@ pub trait CommandCancellation: Send + Sync {
     fn check_bundle_owner(&self) -> Option<&CheckBundleOwner> {
         None
     }
-    fn service_observation(&self) -> Result<isolation::ServiceObservation> {
+    fn service_observation(&self) -> Result<crate::execution_host::ServiceObservation> {
         Err(Error::new(
             "service_observation_unavailable",
             "boundary has no original service leader observation",
@@ -110,7 +111,7 @@ pub trait CommandBoundary: Send + Sync {
         &self,
         _isolation: &ValidatedIsolation,
         _argv: &[String],
-        _limits: isolation::BundleCommandLimits,
+        _limits: crate::execution_host::BundleCommandLimits,
         _launch: crate::control::CheckBundleLaunch,
     ) -> Result<Box<dyn StartedCommand>> {
         Err(Error::new(
@@ -133,23 +134,23 @@ pub trait CommandBoundary: Send + Sync {
     }
 }
 
-impl CommandCancellation for isolation::OwnedCommandCancellation {
+impl CommandCancellation for crate::execution_host::OwnedCommandCancellation {
     fn cancel(&self) -> Result<()> {
-        isolation::OwnedCommandCancellation::cancel(self)
+        crate::execution_host::OwnedCommandCancellation::cancel(self)
     }
     fn exited(&self) -> Result<bool> {
-        isolation::OwnedCommandCancellation::exited(self)
+        crate::execution_host::OwnedCommandCancellation::exited(self)
     }
-    fn service_observation(&self) -> Result<isolation::ServiceObservation> {
-        isolation::OwnedCommandCancellation::service_observation(self)
+    fn service_observation(&self) -> Result<crate::execution_host::ServiceObservation> {
+        crate::execution_host::OwnedCommandCancellation::service_observation(self)
     }
 }
-impl StartedCommand for isolation::OwnedCommand {
+impl StartedCommand for crate::execution_host::OwnedCommand {
     fn cancellation(&self) -> std::sync::Arc<dyn CommandCancellation> {
-        std::sync::Arc::new(isolation::OwnedCommand::cancellation(self))
+        std::sync::Arc::new(crate::execution_host::OwnedCommand::cancellation(self))
     }
     fn wait(self: Box<Self>) -> Pin<Box<dyn Future<Output = Result<CommandOutcome>> + Send>> {
-        Box::pin(isolation::OwnedCommand::wait(*self))
+        Box::pin(crate::execution_host::OwnedCommand::wait(*self))
     }
 }
 
@@ -206,24 +207,26 @@ impl CommandBoundary for JournaledSandboxBoundary {
             .ok_or_else(|| {
                 Error::new("timeout", "original command deadline expired before start")
             })?;
-        Ok(Box::new(isolation::start_journaled_command_until(
-            isolation,
-            argv,
-            isolation::InvocationCommandLimits {
-                timeout,
-                deadline,
-                output_limit,
-            },
-            &[],
-            self.journal.clone(),
-            self.permit.clone(),
-        )?))
+        Ok(Box::new(
+            crate::execution_host::start_journaled_command_until(
+                isolation,
+                argv,
+                crate::execution_host::InvocationCommandLimits {
+                    timeout,
+                    deadline,
+                    output_limit,
+                },
+                &[],
+                self.journal.clone(),
+                self.permit.clone(),
+            )?,
+        ))
     }
     fn start_bundle_member(
         &self,
         isolation: &ValidatedIsolation,
         argv: &[String],
-        limits: isolation::BundleCommandLimits,
+        limits: crate::execution_host::BundleCommandLimits,
         launch: crate::control::CheckBundleLaunch,
     ) -> Result<Box<dyn StartedCommand>> {
         if canonical_digest(1, launch.permit())? != canonical_digest(1, &self.permit)?
@@ -234,7 +237,7 @@ impl CommandBoundary for JournaledSandboxBoundary {
                 "native launch differs from its admitted bundle member",
             ));
         }
-        Ok(Box::new(isolation::start_bundle_command(
+        Ok(Box::new(crate::execution_host::start_bundle_command(
             isolation,
             argv,
             limits,
@@ -247,7 +250,7 @@ impl CommandBoundary for JournaledSandboxBoundary {
         ExecutionEvidenceClass::ConfinedExecution
     }
     fn preflight(&self, isolation: &ValidatedIsolation) -> Result<()> {
-        isolation::repository_command_prerequisite(isolation)
+        kegari_execution::repository_command_prerequisite(isolation)
     }
     fn start(
         &self,
@@ -256,7 +259,7 @@ impl CommandBoundary for JournaledSandboxBoundary {
         timeout: Duration,
         output_limit: usize,
     ) -> Result<Box<dyn StartedCommand>> {
-        Ok(Box::new(isolation::start_journaled_command(
+        Ok(Box::new(crate::execution_host::start_journaled_command(
             isolation,
             argv,
             timeout,
@@ -2076,7 +2079,7 @@ impl LocalExecutor<'_> {
             ));
         }
         source_relative(write.relative_path)?;
-        let path = isolation::canonical_target(
+        let path = kegari_execution::canonical_target(
             &self.isolation.plan().repository.join(write.relative_path),
         )?;
         if !path.starts_with(&self.isolation.plan().repository)
@@ -2113,7 +2116,7 @@ impl LocalExecutor<'_> {
             .ok_or_else(|| Error::invalid("source parent missing"))?;
         replace_source_at(parent, &path, write.bytes, write.executable, || {
             self.launch_identity(binding)?;
-            if isolation::canonical_target(&path)? != path
+            if kegari_execution::canonical_target(&path)? != path
                 || artifact_stamp(&path, self.limits.source_bytes)?
                     .map(|s| s.digest)
                     .as_ref()
@@ -2651,8 +2654,8 @@ impl LocalExecutor<'_> {
             height: info.height,
             video_codec: "h264".into(),
             audio_codec: info.audio,
-            ffprobe_binary_digest: isolation::artifact_digest(&probe_path, 268_435_456)?,
-            ffmpeg_binary_digest: isolation::artifact_digest(&ffmpeg_path, 268_435_456)?,
+            ffprobe_binary_digest: kegari_execution::artifact_digest(&probe_path, 268_435_456)?,
+            ffmpeg_binary_digest: kegari_execution::artifact_digest(&ffmpeg_path, 268_435_456)?,
             probe_receipt_digest: canonical_digest(1, &probe_result)?,
             decode_receipt_digest: canonical_digest(1, &decoded)?,
             conversion_receipt_digest,

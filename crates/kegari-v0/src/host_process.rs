@@ -314,11 +314,11 @@ impl LocalProcessPermit {
     }
     pub(crate) fn start_cleanup_command(
         &self,
-        isolation: &crate::isolation::ValidatedIsolation,
+        isolation: &kegari_execution::ValidatedIsolation,
         argv: &[String],
         timeout: std::time::Duration,
         output_limit: usize,
-    ) -> Result<crate::isolation::OwnedCommand> {
+    ) -> Result<crate::execution_host::OwnedCommand> {
         let cleanup = self.cleanup.as_ref().ok_or_else(|| {
             Error::new(
                 "scope_violation",
@@ -336,8 +336,8 @@ impl LocalProcessPermit {
                 "removal hook differs from sealed cleanup workflow",
             ));
         }
-        crate::isolation::repository_command_prerequisite(&expected)?;
-        let launch_identity = crate::isolation::command_launch_identity(isolation, argv)?;
+        kegari_execution::repository_command_prerequisite(&expected)?;
+        let launch_identity = kegari_execution::command_launch_identity(isolation, argv)?;
         let effect = Uuid::new_v4();
         let slot = Arc::new(CleanupCancellation::default());
         let result = self.services.control.with_host_process(
@@ -374,7 +374,7 @@ impl LocalProcessPermit {
                     effect,
                     slot.clone(),
                 )?;
-                let command = crate::isolation::start_guarded_command(
+                let command = crate::execution_host::start_guarded_command(
                     isolation,
                     argv,
                     timeout,
@@ -464,7 +464,7 @@ impl LocalProcessPermit {
             && let Some(cleanup) = &self.cleanup
         {
             let (isolation, argv, _) = cleanup.command_identity()?;
-            let expected = crate::isolation::command_launch_identity(&isolation, &argv)?;
+            let expected = kegari_execution::command_launch_identity(&isolation, &argv)?;
             if binding.cwd == expected.cwd
                 && binding.executable == expected.launcher
                 && binding.observed_executables == [expected.target]

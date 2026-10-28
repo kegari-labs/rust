@@ -1,5 +1,40 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Execution environment extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. `kegari-execution` owns managed
+environments, isolation validation, resource binding, rendering and descriptive
+observations. Native commands, cancellation and joined cleanup now live in
+backend `execution_host`; admission, journals and application execution/evidence
+remain with their existing owners. This is the bounded environment pass; full
+native-lifecycle ownership remains future work.
+
+All seventeen packages retain `0.2.0-alpha.10`; all 239 external lock entries are
+unchanged. The same-filesystem comparison reproduced pre-refactor bytes/digests
+using the original build identity. Current-build expectations survive repeated
+validation and cwd derivation without persisted-format changes. Existing test
+assertions and native-ignore reasons remain intact.
+
+All **305 focused checks passed**, plus the separate compatibility comparison.
+The complete workspace release suite passed **1,352 tests, zero failed,
+exactly three native ignores**, with normal concurrency. Formatting, strict
+workspace Clippy, contract inventory and its eleven tests passed. Independent
+review found no material finding. Initial relocation/compile diagnostics were
+corrected and retained; no test assertion failed. The full suite ran once on the
+reviewed candidate, with no further source changes or broad reruns.
+
+The optimized arm64 executable passed all five minimal-environment inspections,
+with consistent identity and no runtime-state creation. Independent reconstruction
+verified 396 build inputs and all 829 reviewed source/test/build inputs.
+See the [execution package](../kegari-execution/README.md) and
+[verification report](validation/EXECUTION-ENVIRONMENT-EXTRACTION.md).
+
+Native/live restrictions, milestone requirements, schemas, instruction/protocol
+assets and the alpha.10 archive remain intact. No qualification, service
+activation, goal resumption, packaging, commit or remote operation was performed.
+
+## Previous Git records extraction checkpoint
+
 **Goal mode cancelled. Git records extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. `kegari-git` owns fourteen Git data

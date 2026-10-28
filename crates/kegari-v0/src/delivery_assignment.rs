@@ -1,8 +1,9 @@
 //! Opaque host assignments for validation and review. Model/CLI JSON cannot
 //! select a role, replace context, or grant an arbitrary source directory.
 use super::*;
-use crate::{isolation::ValidatedIsolation, worker::WorkerExecution};
+use crate::worker::WorkerExecution;
 use kegari_context::instructions::AgentRole;
+use kegari_execution::ValidatedIsolation;
 
 #[derive(Clone)]
 enum SourceOwnership {

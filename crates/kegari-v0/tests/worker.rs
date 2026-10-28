@@ -352,7 +352,7 @@ fn changed_tools_profiles_or_authorized_write_paths_cannot_rebind_contract() {
         path: plan.repository.clone(),
         directory: true,
     }];
-    input.isolation = plan.validate().unwrap();
+    input.isolation = plan.validate(kegari_v0::BUILD_ID).unwrap();
     input.assembled.manifest.permissions.source_write_paths =
         vec![input.isolation.plan().repository.clone()];
     input.assembled.manifest.permissions.enforcement_profile = input.isolation.digest().into();
@@ -503,7 +503,8 @@ fn run_preparation(f: &Fixture) -> kegari_v0::worker_run::Preparation {
         .role
         .permits_repository_execution()
     {
-        isolation.managed_execution = Some(BoundManagedExecution::automatic(&isolation).unwrap());
+        isolation.managed_execution =
+            Some(BoundManagedExecution::automatic(&isolation, kegari_v0::BUILD_ID).unwrap());
     }
     kegari_v0::worker_run::Preparation {
         config: Arc::new(config),
@@ -1407,8 +1408,9 @@ fn authorized_resource_write_contract_rejects_unconfigured_flags_and_scope_expan
     );
     // Rebind the host-derived domain after the actual admitted resource grants
     // are final; the domain does not authorize the configured scope itself.
-    preparation.isolation.managed_execution =
-        Some(BoundManagedExecution::automatic(&preparation.isolation).unwrap());
+    preparation.isolation.managed_execution = Some(
+        BoundManagedExecution::automatic(&preparation.isolation, kegari_v0::BUILD_ID).unwrap(),
+    );
     let prepared = kegari_v0::worker_run::prepare(preparation).unwrap();
     assert_eq!(
         prepared

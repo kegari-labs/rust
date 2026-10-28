@@ -2386,6 +2386,8 @@ impl kegari_platform::ProcessProbe for PreservedProbe {
 #[tokio::test]
 async fn coordination_preservation_binds_actual_opaque_authority_and_directory_identity() {
     use kegari_control_api::identity::Actor;
+    use kegari_execution::ExecutionRole;
+    use kegari_execution::IsolationPlan;
     use kegari_storage::PrivateDir;
     use kegari_v0::control::Lease;
     use kegari_v0::control::Lifecycle;
@@ -2393,8 +2395,6 @@ async fn coordination_preservation_binds_actual_opaque_authority_and_directory_i
     use kegari_v0::housekeeping::Housekeeping;
     use kegari_v0::housekeeping::ReadOnlyIdentity;
     use kegari_v0::housekeeping::ReadOnlyPreparation;
-    use kegari_v0::isolation::ExecutionRole;
-    use kegari_v0::isolation::IsolationPlan;
     use kegari_v0::worker::WorkerAuthority;
     let f = ActiveFixture::new().await;
     let projection = f.cache.snapshot().unwrap();
@@ -2461,7 +2461,7 @@ async fn coordination_preservation_binds_actual_opaque_authority_and_directory_i
         source_writes: vec![],
         forbidden_roots: vec![home.join("control")],
     }
-    .validate()
+    .validate(kegari_v0::BUILD_ID)
     .unwrap();
     let git = pinned_git::prepare(&home);
     let house = Housekeeping::new(

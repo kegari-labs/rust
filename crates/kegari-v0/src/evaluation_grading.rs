@@ -103,7 +103,7 @@ pub(super) fn collect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::isolation::{ExecutionRole, IsolationPlan, PathGrant};
+    use kegari_execution::{ExecutionRole, IsolationPlan, PathGrant};
     use serde_json::json;
 
     struct Fixture {
@@ -151,7 +151,7 @@ mod tests {
                     prepared.codex_home.clone(),
                 ],
             }
-            .validate()
+            .validate(crate::BUILD_ID)
             .unwrap();
             let candidate = canonical_digest(1, &snapshot(&prepared.repository).unwrap()).unwrap();
             let facts = ObservedFacts {

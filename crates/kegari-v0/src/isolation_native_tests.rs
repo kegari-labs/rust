@@ -42,8 +42,9 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
         forbidden_roots: vec![protected],
         managed_execution: None,
     };
-    plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
-    let isolation = plan.validate().unwrap();
+    plan.managed_execution =
+        Some(BoundManagedExecution::automatic(&plan, crate::BUILD_ID).unwrap());
+    let isolation = plan.validate(crate::BUILD_ID).unwrap();
     // Even this exact fixture cannot open the public execution entry.
     assert_eq!(
         repository_command_prerequisite(&isolation)
@@ -109,7 +110,7 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
                 "operation_id": operation_id, "effect_id": effect_id,
                 "argv": argv, "cwd": launch.cwd, "launcher": launch.launcher,
                 "target": launch.target, "argv_digest": launch.argv_digest,
-                "isolation_digest": isolation.digest,
+                "isolation_digest": isolation.digest(),
             }))
             .unwrap(),
         )
@@ -121,7 +122,7 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
             control_owner: None,
             check_bundle: None,
             work_key: format!("native-managed-fixture-{index}"),
-            scope_digest: isolation.digest.clone(),
+            scope_digest: isolation.digest().to_owned(),
             cwd: launch.cwd,
             executable: launch.launcher,
             observed_executables: vec![launch.target],

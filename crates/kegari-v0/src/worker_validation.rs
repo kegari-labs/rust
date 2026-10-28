@@ -721,10 +721,17 @@ fn verify_read(
                     )
                 })?;
             match inspection_deadline {
-                Some(deadline) => {
-                    domain.verify_resource_file_until(&root, path, digest, *bytes, deadline)?
+                Some(deadline) => domain.verify_resource_file_until(
+                    &root,
+                    path,
+                    digest,
+                    *bytes,
+                    deadline,
+                    crate::BUILD_ID,
+                )?,
+                None => {
+                    domain.verify_resource_file(&root, path, digest, *bytes, crate::BUILD_ID)?
                 }
-                None => domain.verify_resource_file(&root, path, digest, *bytes)?,
             }
         }
         if observed.as_ref() != Some(&(path.clone(), digest.clone(), *bytes)) {

@@ -553,7 +553,11 @@ impl VerifiedSessionResume {
         permissions: &PermissionConfiguration,
         broker: &mut dyn kegari_codex::ToolBroker,
     ) -> Result<()> {
-        client.validate_session(state, isolation, permissions)?;
+        client.validate_session(
+            state,
+            &crate::codex_host::IsolationSessionScope::new(isolation),
+            permissions,
+        )?;
         self.verify_session(state)?;
         client
             .resume_protocol(

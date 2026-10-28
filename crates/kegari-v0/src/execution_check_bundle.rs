@@ -29,7 +29,7 @@ pub struct ServiceExecutionRecord {
     pub readiness_process: Uuid,
     pub readiness: CommandOutcome,
     pub terminal: CommandOutcome,
-    pub stopped: isolation::ServiceObservation,
+    pub stopped: crate::execution_host::ServiceObservation,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,7 +98,7 @@ pub struct CheckBundleOwner {
     deadline: Instant,
     cleanup_deadline: OnceLock<Instant>,
     uncertain: AtomicBool,
-    output_budget: Arc<isolation::CommandOutputBudget>,
+    output_budget: Arc<crate::execution_host::CommandOutputBudget>,
     state: Mutex<OwnerState>,
 }
 impl CheckBundleOwner {
@@ -117,7 +117,9 @@ impl CheckBundleOwner {
             deadline,
             cleanup_deadline: OnceLock::new(),
             uncertain: AtomicBool::new(false),
-            output_budget: Arc::new(isolation::CommandOutputBudget::new(output_limit)),
+            output_budget: Arc::new(crate::execution_host::CommandOutputBudget::new(
+                output_limit,
+            )),
         })
     }
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, OwnerState>> {
@@ -173,7 +175,7 @@ impl CheckBundleOwner {
         }
         Ok(())
     }
-    fn service(&self, ordinal: usize) -> Result<isolation::ServiceObservation> {
+    fn service(&self, ordinal: usize) -> Result<crate::execution_host::ServiceObservation> {
         let cancellation = self
             .lock()?
             .slots
@@ -585,7 +587,7 @@ impl LocalExecutor<'_> {
         let command = match self.boundary.start_bundle_member(
             isolation,
             &resolved.argv,
-            isolation::BundleCommandLimits {
+            crate::execution_host::BundleCommandLimits {
                 timeout,
                 deadline: bundle.owner.deadline,
                 output_limit: self.limits.output_bytes,

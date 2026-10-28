@@ -25,11 +25,6 @@ use crate::git::GitStartGate;
 use crate::git::IndependentCloneIdentity;
 use crate::housekeeping::ReadOnlyIdentity;
 use crate::housekeeping::ReadOnlyPreparation;
-use crate::isolation::BoundManagedExecution;
-use crate::isolation::ExecutionRole;
-use crate::isolation::IsolationPlan;
-use crate::isolation::PathGrant;
-use crate::isolation::ValidatedIsolation;
 use crate::providers::ProviderBroker;
 use crate::runtime::RuntimeCoordinator;
 use crate::worker::ReadResource;
@@ -53,6 +48,11 @@ use kegari_context::instructions::RepositoryContext;
 use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
+use kegari_execution::BoundManagedExecution;
+use kegari_execution::ExecutionRole;
+use kegari_execution::IsolationPlan;
+use kegari_execution::PathGrant;
+use kegari_execution::ValidatedIsolation;
 use kegari_git::RepositoryId;
 use kegari_git::Revision;
 use kegari_storage::PrivateDir;
@@ -1052,7 +1052,7 @@ fn require_preparation_schedule(
 impl Plan {
     fn revalidate_command_policy(&self) -> Result<()> {
         if let Some(expected) = &self.command_policy_digest
-            && expected != &BoundManagedExecution::automatic_policy_digest()?
+            && expected != &BoundManagedExecution::automatic_policy_digest(crate::BUILD_ID)?
         {
             return Err(Error::new(
                 "worker_binding",
@@ -1258,7 +1258,9 @@ impl Plan {
             .clone();
         let command_policy_digest =
             if role.permits_repository_execution() && repository_id.is_some() {
-                Some(BoundManagedExecution::automatic_policy_digest()?)
+                Some(BoundManagedExecution::automatic_policy_digest(
+                    crate::BUILD_ID,
+                )?)
             } else {
                 None
             };
@@ -1693,7 +1695,7 @@ async fn prepare_owned(
     if let Some(expected) = &plan.command_policy_digest {
         // Actual roots and admitted resources now exist. This bounded capture
         // stays outside Control; later effect gates recheck retained identities.
-        let domain = BoundManagedExecution::automatic(&isolation)?;
+        let domain = BoundManagedExecution::automatic(&isolation, crate::BUILD_ID)?;
         if domain.policy_digest() != expected {
             return Err(Error::new(
                 "worker_binding",
@@ -1702,7 +1704,7 @@ async fn prepare_owned(
         }
         isolation.managed_execution = Some(domain);
     }
-    let boundary = isolation.validate()?;
+    let boundary = isolation.validate(crate::BUILD_ID)?;
     if let Some(proof) = &independent_proof {
         records.write(
             "independent-clone-observation.json",
@@ -1811,7 +1813,7 @@ async fn prepare_owned(
         WorkerAuthority::Independent(_) => vec![".".into()],
     };
     if let Some(operand) = &plan.canary_operand {
-        operand.verify_isolation(&isolation.validate()?)?;
+        operand.verify_isolation(&isolation.validate(crate::BUILD_ID)?)?;
         runtime.verify_evaluation_context_operand(&plan.request, Some(operand))?;
     }
     let prepared = worker_run::prepare(Preparation {config:plan.config.clone(),workflow:plan.workflow.clone(),authority:plan.request.authority.clone(),operation_id:plan.request.operation_id,role:plan.role,phase:plan.request.phase.phase.clone(),context:plan.context.clone(),isolation,repository:plan.source.as_ref().map(|source|RepositoryContext {root:repository,revision:source.revision.commit.clone(),scope_paths}),repository_id:plan.repository_id.clone(),read_resources:grants.resources,review:plan.review.clone(),required_context:vec![],project_doc_max_bytes:32_768,provider_discovery:ProviderDiscovery::Unavailable {reason:"Pinned app-server does not expose an authenticated project-instruction discovery inventory; supplied accessible files are separately hashed".into()},known_secrets:vec![]})?;

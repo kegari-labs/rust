@@ -36,7 +36,6 @@ use crate::execution::{
     LocalExecutor, OwnedDirectory, RetainedArtifact, SourceWrite, VerifiedCheckExecution,
 };
 use crate::git::Git;
-use crate::isolation::{ExecutionRole, ValidatedIsolation};
 use crate::providers::{ProviderBroker, ProviderMutation};
 use crate::reconcile::{FreshGate, IndependentReviewGate};
 use chrono::{Duration, Utc};
@@ -51,6 +50,7 @@ use kegari_context::instructions::ToolCapability;
 use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_execution::{ExecutionRole, ValidatedIsolation};
 use kegari_providers::RepositoryIdentity;
 use kegari_storage::{ExclusiveLock, PrivateDir};
 use kegari_types::error::{Error, Result};
@@ -909,7 +909,7 @@ impl WorkerContract {
                     let expected: Vec<_> = scope
                         .write_paths
                         .iter()
-                        .map(|path| crate::isolation::PathGrant {
+                        .map(|path| kegari_execution::PathGrant {
                             path: isolation.plan().repository.join(path.trim_end_matches('/')),
                             directory: path.ends_with('/'),
                         })
@@ -1067,7 +1067,7 @@ fn verify_command_domain(isolation: &ValidatedIsolation, required: bool) -> Resu
             // Revalidate the exact automatic domain against this retained plan,
             // not merely the self-consistency of a supplied serialized record.
             isolation.revalidate()?;
-            actual.revalidate()
+            actual.revalidate(crate::BUILD_ID)
         }
         _ => Err(Error::new(
             "worker_binding",
@@ -2039,7 +2039,7 @@ impl ScopedWorker {
                         "source write path cannot escape the admitted repository",
                     ));
                 }
-                let target = crate::isolation::canonical_target(
+                let target = kegari_execution::canonical_target(
                     &self.contract.isolation.plan().repository.join(relative),
                 )?;
                 if !self
@@ -3103,7 +3103,7 @@ fn read_source_at(
         ));
     }
     let candidate = root.join(relative);
-    let actual = crate::isolation::canonical_target(&candidate)?;
+    let actual = kegari_execution::canonical_target(&candidate)?;
     if actual != candidate
         || !actual.starts_with(root)
         || boundary
@@ -3146,7 +3146,7 @@ fn read_source_at(
     file.take(48_001)
         .read_to_end(&mut bytes)
         .map_err(|e| Error::io("read admitted source", e))?;
-    if bytes.len() > 48_000 || crate::isolation::canonical_target(&candidate)? != candidate {
+    if bytes.len() > 48_000 || kegari_execution::canonical_target(&candidate)? != candidate {
         return Err(Error::new(
             "scope_violation",
             "source changed path or exceeded bound",

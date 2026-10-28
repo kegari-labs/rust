@@ -8,8 +8,8 @@ use std::time::Instant;
 #[serde(deny_unknown_fields)]
 pub struct DiscoveredServiceObservation {
     pub name: String,
-    pub start: isolation::CommandObservation,
-    pub readiness: isolation::CommandObservation,
+    pub start: kegari_execution::CommandObservation,
+    pub readiness: kegari_execution::CommandObservation,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,7 +18,7 @@ pub struct DiscoveredCheckProvenance {
     pub plan: ValidationPlanRecord,
     pub plan_digest: String,
     pub invocation_id: Uuid,
-    pub observation: isolation::CommandObservation,
+    pub observation: kegari_execution::CommandObservation,
     pub service_observations: Vec<DiscoveredServiceObservation>,
     pub prepared_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
@@ -51,7 +51,7 @@ fn observe(
     isolation: &ValidatedIsolation,
     argv: &[String],
     deadline: Instant,
-) -> Result<(isolation::CommandObservation, command::Anchors)> {
+) -> Result<(kegari_execution::CommandObservation, command::Anchors)> {
     current(deadline)?;
     let selected = isolation.resolve_executable(
         argv.first()
@@ -62,7 +62,7 @@ fn observe(
         .map_err(|e| Error::io("resolve validation executable", e))?;
     let anchors =
         command::Anchors::paths(&[&selected, &canonical, Path::new("/usr/bin/sandbox-exec")])?;
-    let observation = isolation::observe_command(isolation, argv)?;
+    let observation = kegari_execution::observe_command(isolation, argv)?;
     if observation.selected_executable != selected
         || observation.canonical_executable.path != canonical
     {
@@ -308,7 +308,7 @@ impl PreparedDiscovered {
         }
         self.isolation.verify_cwd_derivation(executor.isolation)?;
         if let Some(managed) = &executor.isolation.plan().managed_execution {
-            managed.revalidate_resource_versions_until(self.deadline)?;
+            managed.revalidate_resource_versions_until(self.deadline, crate::BUILD_ID)?;
         }
         self.source.verify(Some(self.deadline))?;
         for anchor in &self.executables {

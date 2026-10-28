@@ -16,7 +16,8 @@ use kegari_v0::execution::*;
 use kegari_v0::git::Git;
 use kegari_git::{RepositoryId};
 use kegari_context::instructions::*;
-use kegari_v0::isolation::*;
+use kegari_execution::*;
+use kegari_v0::execution_host::*;
 use kegari_v0::providers::ProviderBroker;
 use kegari_v0::reconcile::*;
 use kegari_v0::worker::*;
@@ -421,9 +422,9 @@ impl Fixture {
             ]);
         }
         if role.permits_repository_execution() {
-            plan.managed_execution = Some(BoundManagedExecution::automatic(&plan).unwrap());
+            plan.managed_execution = Some(BoundManagedExecution::automatic(&plan, kegari_v0::BUILD_ID).unwrap());
         }
-        let isolation = plan.validate().unwrap();
+        let isolation = plan.validate(kegari_v0::BUILD_ID).unwrap();
         let context = json!({"issue":{"body":"fixture"},"parent":{},"children":[{"id":id(11)}],"workspace":{"id":id(3)},"scope":{},"dependencies":[],"corrections":[],"evidence":{},"attempt":1,"phase":"work","profile":profile(),"operation":{"id":id(4)}});
         let work_key = authority.work_key().unwrap();
         let generation = match &authority {
