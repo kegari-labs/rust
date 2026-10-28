@@ -84,12 +84,12 @@ fn private_dir(path: &Path) {
 
 #[test]
 fn scoped_git_metadata_is_journaled_registered_and_fenced_before_each_spawn() {
+    use kegari_execution::journal::RecoveryState;
     use kegari_storage::PrivateDir;
-    use kegari_v0::{
-        control::{Lease, Permit},
-        process_records::{ProcessJournal, RecoveryState},
-        worker::ExecutionRegistry,
-    };
+    use kegari_types::control::Lease;
+    use kegari_v0::control::Permit;
+    use kegari_v0::process_records::ProcessJournal;
+    use kegari_v0::worker::ExecutionRegistry;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},

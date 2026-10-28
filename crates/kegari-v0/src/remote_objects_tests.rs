@@ -526,7 +526,7 @@ async fn actual_protocol_import_preserves_dirty_operator_source_and_reuses_only_
     assert!(!records.is_empty());
     assert!(records.iter().all(|r| matches!(
         r.state,
-        crate::process_records::RecoveryState::OwnedGroupExitRecorded
+        kegari_execution::journal::RecoveryState::OwnedGroupExitRecorded
     )));
     assert!(
         fixture
@@ -1636,7 +1636,7 @@ async fn exact_missing_object_probe_uses_owned_scope_and_never_fetches_on_query(
     assert!(after.len() > before);
     assert!(after.iter().all(|r| matches!(
         r.state,
-        crate::process_records::RecoveryState::OwnedGroupExitRecorded
+        kegari_execution::journal::RecoveryState::OwnedGroupExitRecorded
     )));
     assert!(
         fixture

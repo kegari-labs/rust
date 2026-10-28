@@ -2,7 +2,6 @@
 //! and actual process registration; worker summaries never establish delivery.
 use crate::authority::IssueKey;
 use crate::control::ControlHost;
-use crate::control::Lease;
 use crate::control::Permit;
 use crate::observations::ObservationCache;
 use crate::platform::Registration;
@@ -27,6 +26,7 @@ use chrono::{Duration, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_scheduler::Quota;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use kegari_types::run::RunReference;
 use serde_json::{Value, json};

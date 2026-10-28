@@ -1,12 +1,11 @@
 //! Guarded, metadata-only recovery of one retained terminal failed thread.
 use super::*;
+use crate::control::SessionRecoveryPreparationReference;
+use crate::worker::RecoveryJournal;
 use crate::worker_run::RetainedResumeSession;
-use crate::{
-    control::{Lease, SessionRecoveryPreparationReference},
-    worker::RecoveryJournal,
-};
 use kegari_codex::VerifiedThreadRecovery;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 
 pub struct RecoveryPreparation {
     pub config: Arc<Config>,

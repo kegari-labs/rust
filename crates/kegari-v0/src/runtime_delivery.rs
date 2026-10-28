@@ -957,7 +957,7 @@ impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
     }
     fn advance<'a>(
         &'a self,
-        lease: &'a crate::control::Lease,
+        lease: &'a kegari_types::control::Lease,
     ) -> crate::runtime_host::SupervisorFuture<'a, ()> {
         Box::pin(async move {
             self.runtime.registration.verify_active_owner(lease)?;

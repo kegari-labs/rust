@@ -995,12 +995,16 @@ dependencies = [
  "hex",
  "kegari-digest",
  "kegari-platform",
+ "kegari-process",
+ "kegari-storage",
  "kegari-types",
  "libc",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

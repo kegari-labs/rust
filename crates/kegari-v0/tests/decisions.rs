@@ -1170,7 +1170,8 @@ async fn edited_or_deleted_retry_and_correction_publications_never_install_new_a
 
 #[tokio::test]
 async fn stopped_recovery_reaches_backend_with_pending_correction_and_retains_unknown_effect() {
-    use kegari_v0::control::{Lease, Lifecycle};
+    use kegari_types::control::Lease;
+    use kegari_v0::control::Lifecycle;
     let f = DecisionFixture::new().await;
     let work = f
         .cache
@@ -1286,9 +1287,11 @@ async fn stopped_recovery_reaches_backend_with_pending_correction_and_retains_un
 
 #[tokio::test]
 async fn retry_finalization_allows_only_its_own_started_budget_and_preserves_holds() {
-    use kegari_v0::control::{
-        Lease, Lifecycle, PreparationAdmission, PreparationReference, RunAdmission,
-    };
+    use kegari_types::control::Lease;
+    use kegari_v0::control::Lifecycle;
+    use kegari_v0::control::PreparationAdmission;
+    use kegari_v0::control::PreparationReference;
+    use kegari_v0::control::RunAdmission;
     for preparation in [false, true] {
         for unrelated_budget in [false, true] {
             let f = DecisionFixture::new().await;

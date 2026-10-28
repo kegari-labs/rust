@@ -1536,7 +1536,7 @@ mod tests {
         };
         let permit = Permit {
             operation_id: Uuid::new_v4(),
-            lease: crate::control::Lease {
+            lease: kegari_types::control::Lease {
                 runtime_id: scope.runtime_id,
                 owner_generation: 1,
                 owner_id: Uuid::new_v4(),

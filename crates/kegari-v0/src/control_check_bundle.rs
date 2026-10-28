@@ -2,7 +2,8 @@
 //! Plans and journal references are data. Only the original live token can
 //! advance a step; cold readers never recreate launch or settlement authority.
 use super::*;
-use crate::process_records::{CheckBundleMember, CheckMemberKind};
+use kegari_execution::journal::CheckBundleMember;
+use kegari_execution::journal::CheckMemberKind;
 
 pub(super) const PLAN_KEY: &str = "check_bundle";
 const PERMIT_KEY: &str = "check_bundle_permit";
@@ -652,7 +653,7 @@ impl ControlHost {
 
     fn verify_bundle_process_receipt(
         &self,
-        binding: &crate::process_records::SpawnBinding,
+        binding: &kegari_execution::journal::SpawnBinding,
         receipt: &Receipt,
     ) -> Result<()> {
         // The complete batch already checked exact member identity and read
@@ -727,7 +728,7 @@ impl ControlHost {
     pub(crate) fn verify_check_bundle_inventory(
         &self,
         receipts: &[Receipt],
-        bindings: &[crate::process_records::SpawnBinding],
+        bindings: &[kegari_execution::journal::SpawnBinding],
     ) -> Result<()> {
         self.verify_live_check_bundle_inventory(receipts, bindings, |_, _| Ok(None))
     }
@@ -739,7 +740,7 @@ impl ControlHost {
     pub(crate) fn verify_live_check_bundle_inventory(
         &self,
         receipts: &[Receipt],
-        bindings: &[crate::process_records::SpawnBinding],
+        bindings: &[kegari_execution::journal::SpawnBinding],
         retained: impl Fn(
             Uuid,
             Uuid,

@@ -2,12 +2,12 @@
 //! ValidationPlan, VerifiedCheckExecution, worker outcome or native capability.
 use super::*;
 use crate::execution::{DiscoveredCheckProvenance, ExecutionBinding, SourceSnapshot};
-use crate::execution_host::CommandOutcome;
 use crate::validation::{
     DiscoveryJournalReference, DiscoveryReadContent, DiscoveryReadReference, ValidationRequirement,
 };
 use kegari_digest::bytes_digest;
 use kegari_execution::CommandObservation;
+use kegari_execution::CommandOutcome;
 use kegari_git::{RepositoryId, Revision};
 use kegari_platform::BinaryIdentity;
 use kegari_types::artifact::ArtifactProof;

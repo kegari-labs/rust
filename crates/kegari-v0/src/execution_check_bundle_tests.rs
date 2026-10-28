@@ -209,7 +209,7 @@ fn main_check_failure_eligibility_requires_clean_service_and_readiness_records()
             readiness_process: Uuid::new_v4(),
             readiness: outcome(0),
             terminal: outcome(0),
-            stopped: crate::execution_host::ServiceObservation {
+            stopped: kegari_execution::ServiceObservation {
                 leader_running: false,
                 stop_requested: true,
                 kill_escalated: false,
@@ -239,7 +239,6 @@ fn main_check_failure_eligibility_requires_clean_service_and_readiness_records()
 async fn warm_empty_bundle_uses_original_control_and_registry_owner_cold_records_do_not() {
     for attempt_missing in [false, true] {
         use crate::control::ControlHost;
-        use crate::control::Lease;
         use crate::control::Lifecycle;
         use crate::control::MutationRequest;
         use crate::control::ReceiptPhase;
@@ -248,6 +247,7 @@ async fn warm_empty_bundle_uses_original_control_and_registry_owner_cold_records
         use crate::worker::ExecutionRegistry;
         use kegari_control_api::identity::Actor;
         use kegari_storage::PrivateDir;
+        use kegari_types::control::Lease;
         use kegari_types::run::RunReference;
         use serde_json::json;
         let temp = tempfile::tempdir().unwrap();

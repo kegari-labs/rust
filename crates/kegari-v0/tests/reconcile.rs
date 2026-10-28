@@ -1683,8 +1683,8 @@ async fn authorization_preparation_requires_current_human_scope_and_is_not_a_wor
 async fn authorization_publication_reconciles_real_wire_records_without_retransmitting_unknowns() {
     use kegari_control_api::identity::Actor;
     use kegari_storage::PrivateDir;
+    use kegari_types::control::Lease;
     use kegari_v0::control::ControlHost;
-    use kegari_v0::control::Lease;
     use kegari_v0::control::Lifecycle;
     use kegari_v0::control::MutationRequest;
     use kegari_v0::observations::ObservationCache;
@@ -2389,7 +2389,7 @@ async fn coordination_preservation_binds_actual_opaque_authority_and_directory_i
     use kegari_execution::ExecutionRole;
     use kegari_execution::IsolationPlan;
     use kegari_storage::PrivateDir;
-    use kegari_v0::control::Lease;
+    use kegari_types::control::Lease;
     use kegari_v0::control::Lifecycle;
     use kegari_v0::control::MutationRequest;
     use kegari_v0::housekeeping::Housekeeping;

@@ -1,5 +1,40 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Final execution extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. `kegari-execution` now owns native
+commands, output capture, actual process ownership, journal mechanics and joined
+cleanup alongside managed environments. Backend adapters retain worker and sealed
+host admission, bundle authority, receipts and recovery policy. `Lease` is shared
+control data; there are no compatibility reexports or reverse dependencies.
+
+All seventeen packages remain `0.2.0-alpha.10`, with all 239 external lock entries
+unchanged. Twenty baseline serialization/digest fixtures match. Original journal,
+command and native-test assertions are retained. The journal factory is consumed
+before spawn; cleanup keeps the concrete guard and the single retirement interlock.
+
+All **343 focused checks passed**. The complete workspace release suite passed
+**1,366 tests, zero failed, exactly three native ignores**, with normal
+concurrency. Formatting, strict all-target Clippy, contract inventory and its
+eleven tests passed. Independent review has no unresolved material finding;
+its startup-order coverage gap was resolved and verified. The initial compile's
+missing moved-test import was corrected and its diagnostic retained. No test
+assertion failed; the full release suite ran once on the reviewed final candidate.
+
+The optimized arm64 executable passed all five minimal-environment inspections,
+with consistent metadata and no runtime-state creation. Independent reconstruction
+verified 400 application hash inputs and 837 reviewed source/test/build inputs.
+See the [execution package](../kegari-execution/README.md) and
+[final-pass report](validation/EXECUTION-LIFECYCLE-EXTRACTION.md).
+
+Execution infrastructure ownership is complete. Application policy remains with
+its existing backend owners; execution qualification and milestone requirements
+remain open. Schemas/assets, native/live restrictions and the alpha.10 archive
+are unchanged. No qualification, services, goal resumption, packaging, commits
+or remote operations were performed. The reviewed diff is uncommitted.
+
+## Previous execution environment extraction checkpoint
+
 **Goal mode cancelled. Execution environment extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. `kegari-execution` owns managed

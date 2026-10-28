@@ -418,19 +418,19 @@ impl SupervisorDriver for SwitchableBackend {
     fn reconcile_before_start(&self) -> SupervisorFuture<'_, ()> {
         Box::pin(async move { self.backend()?.driver.reconcile_before_start().await })
     }
-    fn recover<'a>(&'a self, lease: &'a kegari_v0::control::Lease) -> SupervisorFuture<'a, ()> {
+    fn recover<'a>(&'a self, lease: &'a kegari_types::control::Lease) -> SupervisorFuture<'a, ()> {
         Box::pin(async move { self.backend()?.driver.recover(lease).await })
     }
     fn poll<'a>(
         &'a self,
-        lease: &'a kegari_v0::control::Lease,
+        lease: &'a kegari_types::control::Lease,
         sequence: u64,
     ) -> SupervisorFuture<'a, ()> {
         Box::pin(async move { self.backend()?.driver.poll(lease, sequence).await })
     }
     fn maintain<'a>(
         &'a self,
-        lease: &'a kegari_v0::control::Lease,
+        lease: &'a kegari_types::control::Lease,
         snapshot: &'a kegari_v0::control::ControlSnapshot,
     ) -> SupervisorFuture<'a, DrainState> {
         Box::pin(async move { self.backend()?.driver.maintain(lease, snapshot).await })
@@ -440,7 +440,7 @@ impl SupervisorDriver for SwitchableBackend {
     }
     fn exited<'a>(
         &'a self,
-        lease: &'a kegari_v0::control::Lease,
+        lease: &'a kegari_types::control::Lease,
     ) -> SupervisorFuture<'a, DrainState> {
         Box::pin(async move { self.backend()?.driver.exited(lease).await })
     }

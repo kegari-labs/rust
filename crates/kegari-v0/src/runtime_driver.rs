@@ -2,11 +2,9 @@
 //! actual completion is joined; recovery preserves uncertain process/effect holds.
 use crate::control::ControlSnapshot;
 use crate::control::Intent;
-use crate::control::Lease;
 use crate::control::ReceiptPhase;
 use crate::preparation::AuthorizationPublisher;
 use crate::process_records::ProcessJournal;
-use crate::process_records::ProcessRecovery;
 use crate::runtime::RuntimeAction;
 use crate::runtime::RuntimeCoordinator;
 use crate::runtime::SessionRecoveryAction;
@@ -21,9 +19,11 @@ use crate::worker::WorkerHost;
 use chrono::Utc;
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
+use kegari_execution::journal::ProcessRecovery;
 use kegari_scheduler::Limits;
 use kegari_scheduler::Scheduler;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -347,8 +347,8 @@ impl RuntimeDriver {
                 } else if observed.iter().any(|process| {
                     !matches!(
                         process.state,
-                        crate::process_records::RecoveryState::GroupExitRecordedTreeUnverified
-                            | crate::process_records::RecoveryState::OwnedGroupExitRecorded
+                        kegari_execution::journal::RecoveryState::GroupExitRecordedTreeUnverified
+                            | kegari_execution::journal::RecoveryState::OwnedGroupExitRecorded
                     )
                 }) {
                     return Err(Error::new(
@@ -1461,11 +1461,10 @@ fn scheduler_limits(config: &Config) -> Limits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        control::ControlHost,
-        process_records::{RecoveryState, SpawnBinding},
-    };
+    use crate::control::ControlHost;
     use kegari_digest::bytes_digest;
+    use kegari_execution::journal::RecoveryState;
+    use kegari_execution::journal::SpawnBinding;
     use kegari_platform::BinaryIdentity;
     fn id(value: u128) -> Uuid {
         Uuid::from_u128(value)

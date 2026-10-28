@@ -1,17 +1,17 @@
 //! Finite child progression over actual completed run capabilities. Persisted
 //! phase references are recovery facts, never replacements for execution proof.
 use super::*;
-use crate::{
-    control::{Lease, Permit},
-    delivery::*,
-    evidence::RevisionBinding,
-    git::GitExecutionScope,
-    runtime::VerifiedAuthorizedOutcome,
-    worker::{WorkerAuthority, WorkerHost},
-    worker_run::RunCompletion,
-};
+use crate::control::Permit;
+use crate::delivery::*;
+use crate::evidence::RevisionBinding;
+use crate::git::GitExecutionScope;
+use crate::runtime::VerifiedAuthorizedOutcome;
+use crate::worker::WorkerAuthority;
+use crate::worker::WorkerHost;
+use crate::worker_run::RunCompletion;
 use kegari_digest::canonical_digest;
 use kegari_git::SourceCommitMetadata;
+use kegari_types::control::Lease;
 use kegari_types::run::PhaseKey;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;

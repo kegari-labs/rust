@@ -2,11 +2,10 @@
 //! belongs to this disposable fixture; it does not exercise authenticated Control
 //! admission or issue a reusable managed-profile qualification record.
 use super::*;
-use crate::{
-    control::Lease,
-    process_records::{ProcessJournal, RecoveryState, SpawnBinding},
-};
+use crate::command_launch_identity;
+use crate::journal::{ProcessJournalStore, RecoveryState, SpawnBinding};
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -43,8 +42,8 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
         managed_execution: None,
     };
     plan.managed_execution =
-        Some(BoundManagedExecution::automatic(&plan, crate::BUILD_ID).unwrap());
-    let isolation = plan.validate(crate::BUILD_ID).unwrap();
+        Some(BoundManagedExecution::automatic(&plan, crate::TEST_BUILD).unwrap());
+    let isolation = plan.validate(crate::TEST_BUILD).unwrap();
     // Even this exact fixture cannot open the public execution entry.
     assert_eq!(
         repository_command_prerequisite(&isolation)
@@ -59,7 +58,7 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
     .unwrap();
     let runtime = Uuid::new_v4();
     let journal = Arc::new(
-        ProcessJournal::new(
+        ProcessJournalStore::new(
             PrivateDir::create(&root.join("processes")).unwrap(),
             runtime,
         )
@@ -141,7 +140,9 @@ async fn managed_foreground_native_exit_output_and_timeout_are_journaled() {
             timeout,
             1024,
             &["fixture-secret".into()],
-            Some(CommandJournal::Guard(Box::new(guard))),
+            Some(CommandJournal::<UnusedJournalFactory>::Guard(Box::new(
+                guard,
+            ))),
         );
         // A diagnostic failure must not panic while the returned command is
         // still live. Defer its assertion until the original waiter settles or

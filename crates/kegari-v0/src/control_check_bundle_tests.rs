@@ -709,7 +709,7 @@ fn inventory_refuses_absent_directory_rows_removed_membership_duplicates_and_wro
     );
     let executable =
         kegari_platform::BinaryIdentity::inspect(&std::env::current_exe().unwrap(), false).unwrap();
-    let original = crate::process_records::SpawnBinding {
+    let original = kegari_execution::journal::SpawnBinding {
         operation_id: f.permit.operation_id,
         effect_id: bundle.plan.steps()[0].process_id(),
         lease: Some(f.permit.lease.clone()),

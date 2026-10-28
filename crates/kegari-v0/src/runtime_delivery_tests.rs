@@ -27,7 +27,7 @@ impl FixtureOwner {
     pub(crate) fn start(
         &self,
         runtime: &RuntimeCoordinator,
-    ) -> (crate::control::Lease, kegari_storage::ExclusiveLock) {
+    ) -> (kegari_types::control::Lease, kegari_storage::ExclusiveLock) {
         let snapshot = runtime.control.snapshot().unwrap();
         runtime
             .control
@@ -326,7 +326,7 @@ fn phase_uuid_uses_versioned_digest_payload_and_is_domain_separated() {
     assert_eq!(first.get_version_num(), 8);
 }
 
-pub(crate) fn start_control(runtime: &RuntimeCoordinator) -> crate::control::Lease {
+pub(crate) fn start_control(runtime: &RuntimeCoordinator) -> kegari_types::control::Lease {
     let id = runtime.configuration.snapshot().unwrap().runtime.id;
     let state = runtime.control.snapshot().unwrap();
     runtime
@@ -349,7 +349,7 @@ pub(crate) fn start_control(runtime: &RuntimeCoordinator) -> crate::control::Lea
             state.intent.generation,
         )
         .unwrap();
-    let lease = crate::control::Lease {
+    let lease = kegari_types::control::Lease {
         runtime_id: id,
         owner_generation: 1,
         owner_id: Uuid::new_v4(),

@@ -14,6 +14,7 @@ use kegari_controller::app::{HostDispatcher, HostServices};
 use kegari_secrets::Secret;
 use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest, Envelope};
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     control::*,

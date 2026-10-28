@@ -3141,12 +3141,12 @@ mod fidelity_tests {
 mod cancellation_tests {
     use super::*;
     use crate::control::ControlHost;
-    use crate::control::Lease;
     use crate::control::Lifecycle;
     use crate::control::MutationRequest;
     use crate::control::Permit;
     use kegari_control_api::identity::Actor;
     use kegari_storage::PrivateDir;
+    use kegari_types::control::Lease;
     use std::sync::Arc;
     use uuid::Uuid;
 

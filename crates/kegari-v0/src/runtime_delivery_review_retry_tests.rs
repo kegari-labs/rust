@@ -16,7 +16,7 @@ pub(super) struct ReviewFixture<'a> {
     pub wire: &'a Arc<Mutex<crate::corrections::wire_fixture::Fixture>>,
     pub workspace: &'a WorkspaceDelivery,
     pub gate: &'a FreshGate,
-    pub lease: &'a crate::control::Lease,
+    pub lease: &'a kegari_types::control::Lease,
     pub reviewer: &'a WorkerFixture,
     pub original_claim: Arc<CompletedChildClaim>,
     pub original_completion: Arc<crate::worker_run::RunCompletion>,

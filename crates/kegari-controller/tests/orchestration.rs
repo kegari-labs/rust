@@ -1,5 +1,6 @@
 use kegari_controller::orchestration::*;
-use kegari_v0::control::{Intent, Lease};
+use kegari_types::control::Lease;
+use kegari_v0::control::Intent;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 

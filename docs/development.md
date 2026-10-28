@@ -27,8 +27,8 @@ CLI and backend also depend directly on `kegari-storage`, which depends on
 The backend also depends directly on `kegari-process`, which owns the single
 spawn/retirement interlock and owned process-group handling. It depends on
 storage/types without a backend dependency; the CLI has no direct process
-dependency. Process journals, authorization and application supervision remain
-in the backend.
+dependency. Process-journal mechanics belong to `kegari-execution`; application
+authorization and supervision remain in the backend.
 
 CLI and backend import native host helpers directly from `kegari-platform`, which
 depends on process/digest/types without a backend dependency. Registration,
@@ -73,8 +73,8 @@ helper does not replace the backend's receipt-based attempt accounting.
 
 The backend imports Git records and deterministic rules directly from
 `kegari-git`, whose production workspace dependencies are `kegari-types` and
-`kegari-digest`. This first pass retains actual Git operations, process journals,
-admission, operation requests and privately constructed proofs in
+`kegari-digest`. This first pass retains actual Git operations, journal admission,
+operation requests and privately constructed proofs in
 `kegari_v0::git`. The three existing pure validation helpers are public for those
 retained callers; no compatibility reexports or unchecked proof constructors are
 added. CLI and controller need no direct Git dependency. The extraction does not
@@ -84,13 +84,20 @@ All packages use workspace version `0.2.0-alpha.10`; the executable name, proces
 roles and serialized schemas remain unchanged. This extraction creates no new
 prerelease or qualification claim.
 
-The backend imports environment policy from `kegari-execution`, which depends on
-platform/digest/types. Native command lifecycle APIs formerly in `isolation` now
-live in backend `execution_host`, alongside their existing journal ownership.
-Environment construction and managed-domain validation explicitly receive the
-current backend `BUILD_ID`; validated isolation retains it for later checks.
-`codex_host::IsolationSessionScope` preserves protocol validation order without a
-Codex dependency in execution. Application checks/evidence remain in `execution`.
+The backend imports environment and native command interfaces from
+`kegari-execution`, which depends on platform/process/storage/digest/types.
+`kegari_execution::journal` owns concrete process guards and journal storage.
+Backend `execution_host` retains worker/bundle admission adapters;
+`process_records::ProcessJournal` retains worker-only and sealed host admission.
+Its lower `ProcessJournalStore` validates and acquires resources, not application
+permission. The one-shot command journal factory is consumed before spawn;
+cleanup retains only the concrete guard. Shared lease data is imported directly
+from `kegari_types::control::Lease`, including controller consumers.
+
+Environment construction still receives the current backend `BUILD_ID`, retained
+privately for revalidation. `codex_host::IsolationSessionScope` preserves protocol
+validation order without a Codex dependency. Command prerequisites remain closed;
+no qualification, process arrangement or workflow behavior changes.
 
 ## Build and verification
 

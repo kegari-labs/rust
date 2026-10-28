@@ -44,3 +44,10 @@ cargo fmt --all -- --check
 See [current progress](../kegari-v0/PROGRESS.md) for validation results and limits.
 The archived alpha.10 artifact and its evidence predate this extraction; the
 package split does not establish new native or operational qualification.
+
+## Control lease identity
+
+`kegari_types::control::Lease` owns the existing runtime UUID, owner generation and
+owner UUID record. Its fields, strict serialization and digest inputs are unchanged.
+Import it directly instead of `kegari_v0::control::Lease`. It is descriptive data;
+current ownership, admission and durable-control validation remain backend policy.

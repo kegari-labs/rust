@@ -2,7 +2,7 @@
 //! replace the original Control launch token, command owner or joined result.
 use super::*;
 use crate::control::{CheckBundleLaunch, CheckBundlePlan, CheckBundleStepSpec};
-use crate::process_records::CheckMemberKind;
+use kegari_execution::journal::CheckMemberKind;
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
@@ -29,7 +29,7 @@ pub struct ServiceExecutionRecord {
     pub readiness_process: Uuid,
     pub readiness: CommandOutcome,
     pub terminal: CommandOutcome,
-    pub stopped: crate::execution_host::ServiceObservation,
+    pub stopped: kegari_execution::ServiceObservation,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,7 +98,7 @@ pub struct CheckBundleOwner {
     deadline: Instant,
     cleanup_deadline: OnceLock<Instant>,
     uncertain: AtomicBool,
-    output_budget: Arc<crate::execution_host::CommandOutputBudget>,
+    output_budget: Arc<kegari_execution::CommandOutputBudget>,
     state: Mutex<OwnerState>,
 }
 impl CheckBundleOwner {
@@ -117,9 +117,7 @@ impl CheckBundleOwner {
             deadline,
             cleanup_deadline: OnceLock::new(),
             uncertain: AtomicBool::new(false),
-            output_budget: Arc::new(crate::execution_host::CommandOutputBudget::new(
-                output_limit,
-            )),
+            output_budget: Arc::new(kegari_execution::CommandOutputBudget::new(output_limit)),
         })
     }
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, OwnerState>> {
@@ -175,7 +173,7 @@ impl CheckBundleOwner {
         }
         Ok(())
     }
-    fn service(&self, ordinal: usize) -> Result<crate::execution_host::ServiceObservation> {
+    fn service(&self, ordinal: usize) -> Result<kegari_execution::ServiceObservation> {
         let cancellation = self
             .lock()?
             .slots
@@ -587,12 +585,12 @@ impl LocalExecutor<'_> {
         let command = match self.boundary.start_bundle_member(
             isolation,
             &resolved.argv,
-            crate::execution_host::BundleCommandLimits {
+            kegari_execution::BundleCommandLimits::new(
                 timeout,
-                deadline: bundle.owner.deadline,
-                output_limit: self.limits.output_bytes,
-                output_budget: bundle.owner.output_budget.clone(),
-            },
+                bundle.owner.deadline,
+                self.limits.output_bytes,
+                bundle.owner.output_budget.clone(),
+            ),
             launch,
         ) {
             Ok(command) => command,

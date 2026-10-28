@@ -3,7 +3,6 @@
 use crate::authority::ChildScope;
 use crate::authority::Responsibility;
 use crate::connections::ConnectionRegistry;
-use crate::control::Lease;
 use crate::control::MutationRequest;
 use crate::control::Permit;
 use crate::control::PreparationAdmission;
@@ -56,6 +55,7 @@ use kegari_execution::ValidatedIsolation;
 use kegari_git::RepositoryId;
 use kegari_git::Revision;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use kegari_types::run::PhaseKey;
 use kegari_types::run::RunReference;

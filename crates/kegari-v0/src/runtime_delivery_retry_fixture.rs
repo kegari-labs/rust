@@ -17,7 +17,7 @@ use std::sync::Mutex;
 /// grant parser and opaque proof, without inventing that cache capability.
 pub(super) fn assert_preparation_denied(
     runtime: &RuntimeCoordinator,
-    lease: &crate::control::Lease,
+    lease: &kegari_types::control::Lease,
     proof: &RetriedUnfinishedWork,
     account: &str,
 ) -> Error {

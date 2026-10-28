@@ -1,12 +1,13 @@
 //! Owned local subprocess fixtures, not native host-identity or sandbox qualification.
 use super::*;
-use crate::{
-    control::Lease,
-    process_records::{ProcessJournal, RecoveryState, SpawnBinding, SpawnGuard},
-};
+use crate::process_records::ProcessJournal;
+use kegari_execution::journal::RecoveryState;
+use kegari_execution::journal::SpawnBinding;
+use kegari_execution::journal::SpawnGuard;
 use kegari_platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_process::group::{OwnedGroup, Termination};
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use std::{
     os::{fd::OwnedFd, unix::net::UnixStream},
     sync::{

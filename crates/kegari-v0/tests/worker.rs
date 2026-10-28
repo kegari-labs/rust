@@ -1169,7 +1169,7 @@ async fn forced_worker_joins_actual_fixture_provider_before_confirming_local_exi
     assert!(
         process_records
             .iter()
-            .any(|p| p.state == kegari_v0::process_records::RecoveryState::GuardHeld)
+            .any(|p| p.state == kegari_execution::journal::RecoveryState::GuardHeld)
     );
     let snapshot = f.control.snapshot().unwrap();
     f.control
@@ -1208,7 +1208,7 @@ async fn forced_worker_joins_actual_fixture_provider_before_confirming_local_exi
     let records = processes.observe(operation).unwrap();
     assert_eq!(records.len(), 2);
     assert!(records.iter().all(|p| p.state
-        == kegari_v0::process_records::RecoveryState::OwnedGroupExitRecorded
+        == kegari_execution::journal::RecoveryState::OwnedGroupExitRecorded
         && p.owned_group_exited
         && !p.all_descendants_exited));
 

@@ -1,0 +1,82 @@
+{
+  "check_member": {
+    "bytes": "{\"bundle_effect\":\"00000000-0000-0000-0000-000000000006\",\"plan_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ordinal\":2,\"kind\":\"check\",\"service\":null}",
+    "digest": "sha256:v1:de40a07a35837347ce70b247bf0427e4a69f70330e84dc63270bc8c131d21e47"
+  },
+  "host_binding": {
+    "bytes": "{\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"effect_id\":\"00000000-0000-0000-0000-000000000005\",\"lease\":null,\"control_owner\":{\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"process\":{\"pid\":101,\"parent_pid\":100,\"process_group\":101,\"uid\":501,\"boot_id\":\"00000000-0000-0000-0000-000000000003\",\"started_seconds\":1234,\"started_microseconds\":567,\"executable\":\"/fixture/host\"},\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"work_key\":\"fixture-work\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"config_revision\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"work_key\":\"fixture-work\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cwd\":\"/fixture/repository\",\"executable\":{\"path\":\"/fixture/launcher\",\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"bytes\":123},\"observed_executables\":[{\"path\":\"/fixture/tool\",\"digest\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"bytes\":456}],\"argv_digest\":\"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"kind\":\"repository_command\"}",
+    "digest": "sha256:v1:f200a796148f0a236d4e00fb5fe45efdddec62bd52220da9e79062470e3859da"
+  },
+  "host_cleanup_identity": {
+    "bytes": "{\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"process\":{\"pid\":101,\"parent_pid\":100,\"process_group\":101,\"uid\":501,\"boot_id\":\"00000000-0000-0000-0000-000000000003\",\"started_seconds\":1234,\"started_microseconds\":567,\"executable\":\"/fixture/host\"},\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"work_key\":\"fixture-work\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"config_revision\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"cleanup_receipt\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"}",
+    "digest": "sha256:v1:4259c4e7abfee1564553f2b9a75c1dc02a787c7c62ddb722482422ea920cd3c8"
+  },
+  "host_identity": {
+    "bytes": "{\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"process\":{\"pid\":101,\"parent_pid\":100,\"process_group\":101,\"uid\":501,\"boot_id\":\"00000000-0000-0000-0000-000000000003\",\"started_seconds\":1234,\"started_microseconds\":567,\"executable\":\"/fixture/host\"},\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"work_key\":\"fixture-work\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"config_revision\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+    "digest": "sha256:v1:cf04db2b1daa420b86c662cc022e36f45c40b9e59929a4eaac3d01c127ef84e9"
+  },
+  "lease": {
+    "bytes": "{\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"owner_id\":\"00000000-0000-0000-0000-000000000002\"}",
+    "digest": "sha256:v1:a748db8856ac872e50de5df377c7c17983e9a4e75854acedc463fae7805f53f6"
+  },
+  "legacy_exit": {
+    "bytes": "{\"state\":\"group_exited\",\"process\":{\"pid\":101,\"parent_pid\":100,\"process_group\":101,\"uid\":501,\"boot_id\":\"00000000-0000-0000-0000-000000000003\",\"started_seconds\":1234,\"started_microseconds\":567,\"executable\":\"/fixture/host\"},\"exit_code\":7}",
+    "digest": "sha256:v1:3273f210706dfbc9eacdb86164ac67493e1d2c624aea0e761fe1ab9d5877dc0e"
+  },
+  "outcome": {
+    "bytes": "{\"schema_version\":1,\"argv\":[\"/fixture/tool\",\"--check\"],\"cwd\":\"/fixture/repository\",\"isolation_digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"exit_code\":7,\"timed_out\":false,\"stdout\":\"output\\n[REDACTED]\",\"stderr\":\"diagnostic\\n\",\"output_truncated\":true,\"elapsed_ms\":42}",
+    "digest": "sha256:v1:560271287d6ee3c13f23e86a6864c593c294628712955c59d65ccb3951bd7418"
+  },
+  "owned_exit": {
+    "bytes": "{\"state\":\"group_exited\",\"process\":null,\"exit_code\":null,\"owned_group\":\"00000000-0000-0000-0000-000000000008\",\"guard_release_verified\":true}",
+    "digest": "sha256:v1:c37ddf29497c76867c4016f64acad6719f614e31e80a3481bec16a2d5fc80dda"
+  },
+  "permit": {
+    "bytes": "{\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"lease\":{\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"owner_id\":\"00000000-0000-0000-0000-000000000002\"},\"control_generation\":11,\"work_key\":\"fixture-work\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"registered_at\":\"2026-01-02T03:04:05Z\"}",
+    "digest": "sha256:v1:c832d1f8e5d5fd8cb344b494bcde26bc3cf5238a682f85b19f465f9e340bd44b"
+  },
+  "readiness_member": {
+    "bytes": "{\"bundle_effect\":\"00000000-0000-0000-0000-000000000006\",\"plan_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ordinal\":2,\"kind\":\"readiness\",\"service\":\"fixture-service\"}",
+    "digest": "sha256:v1:71cd0ac83993ebb19abcc7c3b6519c2c59c40200d1a19e709f78fad72b2c1228"
+  },
+  "receipt": {
+    "bytes": "{\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"request_id\":\"00000000-0000-0000-0000-00000000000c\",\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"actor\":\"fixture-actor\",\"kind\":\"host_metadata\",\"canonical_targets\":[\"fixture-work\"],\"payload_digest\":\"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"expected\":{\"host_identity\":\"sha256:v1:cf04db2b1daa420b86c662cc022e36f45c40b9e59929a4eaac3d01c127ef84e9\",\"permit\":\"sha256:v1:c832d1f8e5d5fd8cb344b494bcde26bc3cf5238a682f85b19f465f9e340bd44b\"},\"phase\":\"reconciled\",\"remote_ids\":{\"process_binding\":\"{\\\"operation_id\\\":\\\"00000000-0000-0000-0000-000000000004\\\",\\\"effect_id\\\":\\\"00000000-0000-0000-0000-000000000005\\\",\\\"lease\\\":null,\\\"control_owner\\\":{\\\"runtime_id\\\":\\\"00000000-0000-0000-0000-000000000001\\\",\\\"owner_generation\\\":7,\\\"process\\\":{\\\"pid\\\":101,\\\"parent_pid\\\":100,\\\"process_group\\\":101,\\\"uid\\\":501,\\\"boot_id\\\":\\\"00000000-0000-0000-0000-000000000003\\\",\\\"started_seconds\\\":1234,\\\"started_microseconds\\\":567,\\\"executable\\\":\\\"/fixture/host\\\"},\\\"operation_id\\\":\\\"00000000-0000-0000-0000-000000000004\\\",\\\"work_key\\\":\\\"fixture-work\\\",\\\"scope_digest\\\":\\\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"config_revision\\\":\\\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\\"},\\\"work_key\\\":\\\"fixture-work\\\",\\\"scope_digest\\\":\\\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"cwd\\\":\\\"/fixture/repository\\\",\\\"executable\\\":{\\\"path\\\":\\\"/fixture/launcher\\\",\\\"digest\\\":\\\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\\",\\\"bytes\\\":123},\\\"observed_executables\\\":[{\\\"path\\\":\\\"/fixture/tool\\\",\\\"digest\\\":\\\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\\",\\\"bytes\\\":456}],\\\"argv_digest\\\":\\\"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\\",\\\"kind\\\":\\\"repository_command\\\"}\"},\"observed_result\":{\"delivery_evidence\":false,\"owned_handles_joined\":true},\"cancellation\":\"none\",\"updated_at\":\"2026-01-02T03:04:06Z\"}",
+    "digest": "sha256:v1:f1828ccd9ceeaabc4ca3ee950f73eab86e80a6b4e03a35530765b3c414e66ad2"
+  },
+  "running": {
+    "bytes": "{\"state\":\"running\",\"process\":{\"pid\":101,\"parent_pid\":100,\"process_group\":101,\"uid\":501,\"boot_id\":\"00000000-0000-0000-0000-000000000003\",\"started_seconds\":1234,\"started_microseconds\":567,\"executable\":\"/fixture/host\"}}",
+    "digest": "sha256:v1:98ac37787f7d47563ba7bab3d56f8111e583c6705b4bdefedd9481ef1074853b"
+  },
+  "schema_1": {
+    "bytes": "{\"schema_version\":1,\"binding\":{\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"effect_id\":\"00000000-0000-0000-0000-000000000005\",\"lease\":{\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"owner_id\":\"00000000-0000-0000-0000-000000000002\"},\"work_key\":\"fixture-work\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cwd\":\"/fixture/repository\",\"executable\":{\"path\":\"/fixture/launcher\",\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"bytes\":123},\"observed_executables\":[{\"path\":\"/fixture/tool\",\"digest\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"bytes\":456}],\"argv_digest\":\"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"kind\":\"repository_command\"},\"host\":{\"pid\":101,\"parent_pid\":100,\"process_group\":101,\"uid\":501,\"boot_id\":\"00000000-0000-0000-0000-000000000003\",\"started_seconds\":1234,\"started_microseconds\":567,\"executable\":\"/fixture/host\"},\"guard\":\"00000000-0000-0000-0000-000000000005.guard\",\"guard_device\":9,\"guard_inode\":10,\"state\":{\"state\":\"group_exited\",\"process\":{\"pid\":101,\"parent_pid\":100,\"process_group\":101,\"uid\":501,\"boot_id\":\"00000000-0000-0000-0000-000000000003\",\"started_seconds\":1234,\"started_microseconds\":567,\"executable\":\"/fixture/host\"},\"exit_code\":7}}",
+    "digest": "sha256:v1:ff14327cf093938dd33a248e7c01ec6224febc057d58d352de753ead9ee5b1db"
+  },
+  "schema_2": {
+    "bytes": "{\"schema_version\":2,\"binding\":{\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"effect_id\":\"00000000-0000-0000-0000-000000000005\",\"lease\":{\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"owner_id\":\"00000000-0000-0000-0000-000000000002\"},\"work_key\":\"fixture-work\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cwd\":\"/fixture/repository\",\"executable\":{\"path\":\"/fixture/launcher\",\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"bytes\":123},\"observed_executables\":[{\"path\":\"/fixture/tool\",\"digest\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"bytes\":456}],\"argv_digest\":\"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"kind\":\"repository_command\"},\"host\":{\"pid\":101,\"parent_pid\":100,\"process_group\":101,\"uid\":501,\"boot_id\":\"00000000-0000-0000-0000-000000000003\",\"started_seconds\":1234,\"started_microseconds\":567,\"executable\":\"/fixture/host\"},\"guard\":\"00000000-0000-0000-0000-000000000005.guard\",\"guard_device\":9,\"guard_inode\":10,\"state\":{\"state\":\"group_exited\",\"process\":null,\"exit_code\":null,\"owned_group\":\"00000000-0000-0000-0000-000000000008\",\"guard_release_verified\":true}}",
+    "digest": "sha256:v1:a5f8faa74dfdc3b80bd90330540412e5964acd4d0ecf26c9f6988b72616d6df7"
+  },
+  "schema_3": {
+    "bytes": "{\"schema_version\":3,\"binding\":{\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"effect_id\":\"00000000-0000-0000-0000-000000000005\",\"lease\":{\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"owner_id\":\"00000000-0000-0000-0000-000000000002\"},\"check_bundle\":{\"bundle_effect\":\"00000000-0000-0000-0000-000000000006\",\"plan_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ordinal\":2,\"kind\":\"check\",\"service\":null},\"work_key\":\"fixture-work\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cwd\":\"/fixture/repository\",\"executable\":{\"path\":\"/fixture/launcher\",\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"bytes\":123},\"observed_executables\":[{\"path\":\"/fixture/tool\",\"digest\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"bytes\":456}],\"argv_digest\":\"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"kind\":\"repository_command\"},\"host\":{\"pid\":101,\"parent_pid\":100,\"process_group\":101,\"uid\":501,\"boot_id\":\"00000000-0000-0000-0000-000000000003\",\"started_seconds\":1234,\"started_microseconds\":567,\"executable\":\"/fixture/host\"},\"guard\":\"00000000-0000-0000-0000-000000000005.guard\",\"guard_device\":9,\"guard_inode\":10,\"state\":{\"state\":\"starting\"}}",
+    "digest": "sha256:v1:19529619249c4c168804e08daecf7b5af0311f3db76b0923093a291860b7acb2"
+  },
+  "service_member": {
+    "bytes": "{\"bundle_effect\":\"00000000-0000-0000-0000-000000000006\",\"plan_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ordinal\":2,\"kind\":\"service\",\"service\":\"fixture-service\"}",
+    "digest": "sha256:v1:d6e926a63342bf86b9fa12425222c9cc9f4f73a2677c575b43ca9a626ccc17ea"
+  },
+  "service_observation": {
+    "bytes": "{\"leader_running\":false,\"stop_requested\":true,\"kill_escalated\":false}",
+    "digest": "sha256:v1:a993f31b1c796179181a9ca56655d4df0f8733ba98d4c37113b4e7409a1c100c"
+  },
+  "signalled_outcome": {
+    "bytes": "{\"schema_version\":1,\"argv\":[\"/fixture/tool\",\"--check\"],\"cwd\":\"/fixture/repository\",\"isolation_digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"exit_code\":null,\"termination_signal\":15,\"timed_out\":true,\"stdout\":\"output\\n[REDACTED]\",\"stderr\":\"diagnostic\\n\",\"output_truncated\":true,\"elapsed_ms\":42}",
+    "digest": "sha256:v1:0eda5716c68840d5c1ebbf606fd3a94d67b60408624b509a77dda5e79e5e8dc2"
+  },
+  "starting": {
+    "bytes": "{\"state\":\"starting\"}",
+    "digest": "sha256:v1:35db985c8ec9242697a589c112d6d3b95638cbb330dca450a293de74166a4c50"
+  },
+  "worker_binding": {
+    "bytes": "{\"operation_id\":\"00000000-0000-0000-0000-000000000004\",\"effect_id\":\"00000000-0000-0000-0000-000000000005\",\"lease\":{\"runtime_id\":\"00000000-0000-0000-0000-000000000001\",\"owner_generation\":7,\"owner_id\":\"00000000-0000-0000-0000-000000000002\"},\"work_key\":\"fixture-work\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cwd\":\"/fixture/repository\",\"executable\":{\"path\":\"/fixture/launcher\",\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"bytes\":123},\"observed_executables\":[{\"path\":\"/fixture/tool\",\"digest\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"bytes\":456}],\"argv_digest\":\"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"kind\":\"repository_command\"}",
+    "digest": "sha256:v1:08e95843b7b648f3cc93c009b33bc6197a41873470e620ae38c301ceb917426a"
+  }
+}

@@ -143,7 +143,6 @@ mod process_probe {
     }
 }
 use crate::control::ControlHost;
-use crate::control::Lease;
 use crate::control::Lifecycle;
 use crate::control::MutationRequest;
 use crate::evidence::Publication;
@@ -164,6 +163,7 @@ use kegari_git::RepositoryId;
 use kegari_providers::*;
 use kegari_secrets::AttestationKey;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};

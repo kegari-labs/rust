@@ -1,7 +1,6 @@
 //! Synthetic provider wire; production dispatch, receipts, signatures and recovery.
 use super::wire_fixture::*;
 use super::*;
-use crate::control::Lease;
 use crate::control::Lifecycle;
 use crate::control::MutationRequest;
 use crate::observations::ObservationCache;
@@ -9,6 +8,7 @@ use crate::reconcile::DependencyOutcomes;
 use crate::reconcile::GatePurpose;
 use kegari_control_api::identity::Actor;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 struct Harness {

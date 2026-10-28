@@ -1934,10 +1934,10 @@ impl crate::delivery::lineage_drop::Release for VerifiedSourceAdvanced {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        execution::{ExecutionBinding, ExecutionEvidenceClass, SourceSnapshot},
-        execution_host::CommandOutcome,
-    };
+    use crate::execution::ExecutionBinding;
+    use crate::execution::ExecutionEvidenceClass;
+    use crate::execution::SourceSnapshot;
+    use kegari_execution::CommandOutcome;
     use kegari_git::Revision;
     fn work() -> WorkIdentity {
         let digest = bytes_digest(b"continuation fixture");

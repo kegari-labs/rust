@@ -14,15 +14,16 @@ and has no direct process dependency.
 
 This crate depends on `kegari-storage`, `kegari-types`, Tokio's `process` feature,
 libc, UUID generation and `serde_json` for existing diagnostic details. It has no backend dependency, including in tests.
-Process journals, control permits, recovery and isolation policy, host registration,
-service management and the application-level supervisor remain in the backend.
+`kegari-execution` owns process-journal mechanics, isolation and native command
+cleanup. Control permits, journal admission, recovery policy, registration,
+service management and application supervision remain in the backend.
 
 ## Ownership and interlock
 
 `SpawnBoundary` and `RegisteredGuard` expose existing integration operations with
 private state. The descriptor registry and mutex are private and have one
 implementation. Guard acquisition, registration, retirement and descriptor closure
-use this same interlock. Backend journal retirement continues to hold it across
+use this same interlock. Execution journal retirement continues to hold it across
 guard release and observation of the original lock inode.
 
 The spawn wrappers preserve deadlines after interlock acquisition, pre-exec hook
@@ -48,7 +49,8 @@ cargo test --offline --locked --release -p kegari-process
 
 Use workspace-wide tests and Clippy for backend integration. Existing disposable
 process fixtures move with this crate; native/live qualification remains separately
-restricted. The three native qualification tests remain ignored in the backend.
+restricted. The three native qualification tests remain ignored across platform
+and execution packages.
 
 Version remains `0.2.0-alpha.10`; executable arguments, persisted/API schemas and
 instruction assets are unchanged. This refactor does not package another alpha or

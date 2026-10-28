@@ -159,7 +159,7 @@ pub async fn verify_version(executable: &Path, deadline: Duration) -> Result<()>
 /// Split metadata probe: spawn/register while serialized, wait outside the gate.
 pub fn start_version_probe(
     executable: &kegari_platform::BinaryIdentity,
-    mut guard: Option<crate::process_records::SpawnGuard>,
+    mut guard: Option<kegari_execution::journal::SpawnGuard>,
 ) -> Result<VersionProbe> {
     executable.revalidate(false)?;
     if let Some(guard) = &guard
@@ -237,7 +237,7 @@ pub fn start_verified_guarded(
     codex_home: &Path,
     permissions: &PermissionConfiguration,
     request_timeout: Duration,
-    guard: crate::process_records::SpawnGuard,
+    guard: kegari_execution::journal::SpawnGuard,
 ) -> Result<NativeCodexClient> {
     start_inner(
         executable,
@@ -252,7 +252,7 @@ fn start_inner(
     codex_home: &Path,
     permissions: &PermissionConfiguration,
     request_timeout: Duration,
-    mut guard: Option<crate::process_records::SpawnGuard>,
+    mut guard: Option<kegari_execution::journal::SpawnGuard>,
 ) -> Result<NativeCodexClient> {
     executable.0.revalidate(false)?;
     let args = kegari_codex::app_server_argv(permissions)?;
@@ -413,7 +413,7 @@ impl OwnedProviderProcess {
     fn new(
         child: Child,
         group: kegari_process::group::OwnedGroup,
-        guard: Option<crate::process_records::SpawnGuard>,
+        guard: Option<kegari_execution::journal::SpawnGuard>,
     ) -> Self {
         Self {
             child: tokio::sync::Mutex::new(ProviderChild {
@@ -466,7 +466,7 @@ impl OwnedProviderCancellation {
 struct ProviderChild {
     child: Child,
     group: kegari_process::group::OwnedGroup,
-    guard: Option<crate::process_records::SpawnGuard>,
+    guard: Option<kegari_execution::journal::SpawnGuard>,
     reaped: Option<kegari_process::group::OwnedGroupExit>,
 }
 impl ProviderChild {

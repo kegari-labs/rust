@@ -1,6 +1,7 @@
 #[path = "worker_bundle.rs"]
 #[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
 mod worker_bundle;
+use kegari_types::control::Lease;
 use chrono::{Duration, Utc};
 use kegari_codex::{CodexProfile, SessionBinding, ToolCall};
 use kegari_config::{Profile, ReleaseMode, Speed};
@@ -17,7 +18,6 @@ use kegari_v0::git::Git;
 use kegari_git::{RepositoryId};
 use kegari_context::instructions::*;
 use kegari_execution::*;
-use kegari_v0::execution_host::*;
 use kegari_v0::providers::ProviderBroker;
 use kegari_v0::reconcile::*;
 use kegari_v0::worker::*;

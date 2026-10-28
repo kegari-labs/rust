@@ -777,7 +777,7 @@ impl CorrectionPublisher {
             .map(|client| client.linear.clone())
             .ok_or_else(|| invalid("correction workspace has no current bound provider client"))
     }
-    fn current(&self, plan: &PublicationPlan, lease: &crate::control::Lease) -> Result<()> {
+    fn current(&self, plan: &PublicationPlan, lease: &kegari_types::control::Lease) -> Result<()> {
         (self.services.owner_check)(lease)?;
         self.services
             .configuration
@@ -1021,7 +1021,7 @@ impl CorrectionPublisher {
     /// semantic proposal until fresh source/scope checks and all publications pass.
     pub async fn publish(
         self: &std::sync::Arc<Self>,
-        lease: &crate::control::Lease,
+        lease: &kegari_types::control::Lease,
         completed: &crate::runtime::VerifiedCoordinationOutcome,
     ) -> Result<CorrectionPublication> {
         (self.services.control_owner_check)()?;
@@ -1338,7 +1338,7 @@ impl CorrectionPublisher {
     }
     async fn stage(
         self: &std::sync::Arc<Self>,
-        lease: &crate::control::Lease,
+        lease: &kegari_types::control::Lease,
         plan: &PublicationPlan,
         client: &kegari_providers::LinearClient,
         writer: &str,

@@ -2,14 +2,13 @@
 //! isolated candidate vector before issuing integrated and coordination work.
 use super::child::{ActivePhase, PhaseRequest};
 use super::*;
-use crate::{
-    control::Lease,
-    delivery::*,
-    deployment::VerifiedProductionBaseline,
-    evidence::{RevisionBinding, VerifiedParent},
-};
+use crate::delivery::*;
+use crate::deployment::VerifiedProductionBaseline;
+use crate::evidence::RevisionBinding;
+use crate::evidence::VerifiedParent;
 use kegari_digest::canonical_digest;
 use kegari_git::Revision;
+use kegari_types::control::Lease;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, sync::Mutex};
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

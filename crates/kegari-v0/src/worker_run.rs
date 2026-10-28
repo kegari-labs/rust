@@ -955,7 +955,7 @@ async fn launch_provider(
     control.validate_permit(permit, || {
         gate.fresh()?;
         cancel.before_start()?;
-        let guard = processes.begin(crate::process_records::SpawnBinding {
+        let guard = processes.begin(kegari_execution::journal::SpawnBinding {
             operation_id: permit.operation_id,
             effect_id: Uuid::new_v4(),
             lease: Some(permit.lease.clone()),
@@ -981,7 +981,7 @@ async fn launch_provider(
     control.validate_permit(permit, || {
         gate.fresh()?;
         cancel.before_start()?;
-        let guard = processes.begin(crate::process_records::SpawnBinding {
+        let guard = processes.begin(kegari_execution::journal::SpawnBinding {
             operation_id: permit.operation_id,
             effect_id: Uuid::new_v4(),
             lease: Some(permit.lease.clone()),
@@ -2331,8 +2331,9 @@ mod protocol_tests;
 #[cfg(test)]
 mod trial_lifecycle_tests {
     use super::*;
-    use crate::control::{Lease, Lifecycle};
+    use crate::control::Lifecycle;
     use kegari_storage::PrivateDir;
+    use kegari_types::control::Lease;
     use std::collections::BTreeSet;
     use std::sync::atomic::AtomicUsize;
 

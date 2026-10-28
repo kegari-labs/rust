@@ -1,9 +1,10 @@
 //! Real owned Git/source seals and production contract/claim validation. The
 //! completed model protocol is synthetic; no native agent qualification claimed.
-use crate::{
-    control::Lease, delivery::*, git::Git, reconcile::FreshGate,
-    runtime::VerifiedAuthorizedOutcome, worker::WorkerAuthority,
-};
+use crate::delivery::*;
+use crate::git::Git;
+use crate::reconcile::FreshGate;
+use crate::runtime::VerifiedAuthorizedOutcome;
+use crate::worker::WorkerAuthority;
 use crate::{
     control::RunAdmission,
     execution::{
@@ -22,6 +23,7 @@ use kegari_context::instructions::WorkerNetwork;
 use kegari_context::instructions::assemble;
 use kegari_digest::canonical_digest;
 use kegari_execution::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation};
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use kegari_types::run::PhaseKey;
 use kegari_types::run::RunReference;

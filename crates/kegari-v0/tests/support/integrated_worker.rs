@@ -2,6 +2,7 @@
 //! Only command execution is injected; no vector, assignment, production
 //! execution class, completed native turn or adequacy review is manufactured.
 use crate::pinned_git;
+use kegari_types::control::Lease;
 use kegari_v0::evaluation::TrialHost;
 #[path = "worker_bundle.rs"]
 #[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
@@ -15,8 +16,8 @@ use kegari_execution::*;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    control::*, execution::*, execution_host::*, git::Git, providers::ProviderBroker,
-    reconcile::ParentProjection, worker::*,
+    control::*, execution::*, git::Git, providers::ProviderBroker, reconcile::ParentProjection,
+    worker::*,
 };
 use serde_json::{Value, json};
 use std::{

@@ -1187,7 +1187,7 @@ impl Git {
         &self,
         cwd: &Path,
         inspection: &crate::execution::GitInspection,
-    ) -> Result<crate::execution_host::CommandOutcome> {
+    ) -> Result<kegari_execution::CommandOutcome> {
         let mut args: Vec<String> = Vec::new();
         match inspection {
             crate::execution::GitInspection::Status => args
@@ -1227,7 +1227,7 @@ impl Git {
             .collect();
         let started = std::time::Instant::now();
         let output = self.finish_command(command, None)?;
-        Ok(crate::execution_host::CommandOutcome {
+        Ok(kegari_execution::CommandOutcome {
             schema_version: 1,
             argv,
             cwd: cwd.to_owned(),
@@ -2713,7 +2713,7 @@ struct ActiveGitChild {
     child: std::process::Child,
     group: kegari_process::group::OwnedGroup,
     terminal: Option<kegari_process::group::OwnedGroupExit>,
-    guard: Option<crate::process_records::SpawnGuard>,
+    guard: Option<kegari_execution::journal::SpawnGuard>,
 }
 impl ActiveGitChild {
     fn observe(&mut self) -> Result<Option<std::process::ExitStatus>> {
@@ -2772,7 +2772,7 @@ struct GitOperationState {
     // this is absent from production and exposes no public observation API.
     #[cfg(test)]
     before_exit_lock: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
-    provided_guard: std::sync::Mutex<Option<crate::process_records::SpawnGuard>>,
+    provided_guard: std::sync::Mutex<Option<kegari_execution::journal::SpawnGuard>>,
     deadline: std::time::Instant,
     limits: GitLimits,
     gate: Option<GitStartGate>,
@@ -2891,7 +2891,7 @@ impl GitOperationState {
                         .ok_or_else(|| Error::invalid("journaled Git needs explicit cwd"))?
                         .canonicalize()
                         .map_err(|e| Error::io("resolve journaled Git cwd", e))?;
-                    journal.begin(crate::process_records::SpawnBinding {
+                    journal.begin(kegari_execution::journal::SpawnBinding {
                         operation_id: permit.operation_id,
                         effect_id: Uuid::new_v4(),
                         lease: Some(permit.lease.clone()),

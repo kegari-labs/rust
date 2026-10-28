@@ -1,6 +1,7 @@
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use kegari_types::error::Error;
 use kegari_types::run::PhaseKey;
 use kegari_v0::control::*;

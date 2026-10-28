@@ -8,15 +8,15 @@ use crate::execution::CommandCancellation;
 use crate::git::VerifiedHostReadRoot;
 use crate::platform::Registration;
 use crate::process_records::ProcessJournal;
-use crate::process_records::SpawnBinding;
-use crate::process_records::SpawnGuard;
 use crate::runtime_host::ConfigurationControl;
 use crate::worker::ExecutionRegistry;
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
-use kegari_platform::{BinaryIdentity, ProcessIdentity};
+use kegari_execution::journal::HostProcessIdentity;
+use kegari_execution::journal::SpawnBinding;
+use kegari_execution::journal::SpawnGuard;
+use kegari_platform::BinaryIdentity;
 use kegari_types::error::{Error, Result};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -25,19 +25,6 @@ use std::{
 };
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct HostProcessIdentity {
-    pub runtime_id: Uuid,
-    pub owner_generation: u64,
-    pub process: ProcessIdentity,
-    pub operation_id: Uuid,
-    pub work_key: String,
-    pub scope_digest: String,
-    pub config_revision: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cleanup_receipt: Option<String>,
-}
 #[derive(Clone)]
 pub struct HostProcessServices {
     pub control: Arc<ControlHost>,
@@ -318,7 +305,7 @@ impl LocalProcessPermit {
         argv: &[String],
         timeout: std::time::Duration,
         output_limit: usize,
-    ) -> Result<crate::execution_host::OwnedCommand> {
+    ) -> Result<kegari_execution::OwnedCommand> {
         let cleanup = self.cleanup.as_ref().ok_or_else(|| {
             Error::new(
                 "scope_violation",
@@ -374,7 +361,7 @@ impl LocalProcessPermit {
                     effect,
                     slot.clone(),
                 )?;
-                let command = crate::execution_host::start_guarded_command(
+                let command = kegari_execution::start_guarded_command(
                     isolation,
                     argv,
                     timeout,

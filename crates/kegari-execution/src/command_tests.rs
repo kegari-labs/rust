@@ -2,12 +2,10 @@
 //! authenticated worker admission. Probe metadata is synthetic; Child/group,
 //! output reads, inherited guards and journal writes are real local objects.
 use super::*;
-use crate::{
-    control::Lease,
-    process_records::{ProcessJournal, RecoveryState, SpawnBinding},
-};
+use crate::journal::{ProcessJournalStore, RecoveryState, SpawnBinding};
 use kegari_platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use std::{
     pin::Pin,
     sync::{
@@ -58,7 +56,7 @@ impl ProcessProbe for FixtureProbe {
 struct Fixture {
     _temp: tempfile::TempDir,
     root: PathBuf,
-    journal: Arc<ProcessJournal>,
+    journal: Arc<ProcessJournalStore>,
     probe: Arc<FixtureProbe>,
     binding: SpawnBinding,
 }
@@ -82,7 +80,7 @@ impl Fixture {
             retired: AtomicBool::new(false),
         });
         let journal = Arc::new(
-            ProcessJournal::with_probe(
+            ProcessJournalStore::with_probe(
                 PrivateDir::create(&root.join("processes")).unwrap(),
                 runtime,
                 probe.clone(),
@@ -662,4 +660,47 @@ fn original_bundle_cutoff_is_not_renewed_by_preparation() {
         remaining_bundle_timeout(Duration::from_secs(20), started, None).unwrap(),
         Duration::from_secs(20)
     );
+}
+
+#[test]
+fn existing_guard_keeps_foreground_mode_and_exact_binding_refusal() {
+    use crate::journal::CheckBundleMember;
+    let fixture = Fixture::new();
+    let mut binding = fixture.binding.clone();
+    binding.kind = "repository_command".into();
+    binding.observed_executables = vec![binding.executable.clone()];
+    binding.check_bundle = Some(CheckBundleMember {
+        bundle_effect: Uuid::new_v4(),
+        plan_digest: bytes_digest(b"fixture service plan"),
+        ordinal: 0,
+        kind: CheckMemberKind::Service,
+        service: Some("fixture-service".into()),
+    });
+    let identity = CommandLaunchIdentity {
+        cwd: binding.cwd.clone(),
+        launcher: binding.executable.clone(),
+        target: binding.observed_executables[0].clone(),
+        argv_digest: binding.argv_digest.clone(),
+    };
+    let guard = fixture.journal.begin(binding.clone()).unwrap();
+    let source = CommandJournal::<UnusedJournalFactory>::Guard(Box::new(guard));
+    assert!(!source.service());
+    assert_eq!(source.deadline(), None);
+    assert!(source.output_budget(64).is_none());
+    assert_eq!(source.rendered_output_limit(64), None);
+    let guard = source.begin(&identity).unwrap();
+    assert_eq!(guard.binding(), &binding);
+    let source = CommandJournal::<UnusedJournalFactory>::Guard(Box::new(guard));
+    let mut different = identity;
+    different.argv_digest = bytes_digest(b"different invocation");
+    let error = source.begin(&different).err().unwrap();
+    assert_eq!(error.code, "scope_violation");
+    assert_eq!(
+        error.message,
+        "provided process guard differs from exact repository command, executable or isolation policy"
+    );
+    let observed = fixture.journal.observe(binding.operation_id).unwrap();
+    assert_eq!(observed.len(), 1);
+    assert_eq!(observed[0].state, RecoveryState::StartingUnknown);
+    assert!(!observed[0].owned_group_exited);
 }

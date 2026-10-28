@@ -1,4 +1,5 @@
-//! Managed execution environments and observations. These do not grant launch authority.
+//! Managed environments, native command ownership and durable process journals.
+//! Application admission remains the caller's responsibility.
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,14 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+mod command;
+pub use command::{
+    BundleCommandLimits, CommandLaunchOptions, CommandOutcome, CommandOutputBudget,
+    InvocationCommandLimits, OwnedCommand, OwnedCommandCancellation, ServiceObservation,
+    run_command, start_command, start_guarded_command, start_journaled_command,
+};
+pub mod journal;
 
 #[cfg(test)]
 const TEST_BUILD: &str = "fixture-runtime-build";

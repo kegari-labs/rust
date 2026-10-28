@@ -5,7 +5,6 @@ use crate::evidence::{Generation, WorkIdentity};
 use crate::execution::{
     CheckExecutionRecord, DiscoveredCheckProvenance, ExecutionEvidenceClass, SourceSnapshot,
 };
-use crate::execution_host::CommandOutcome;
 use crate::validation::{
     DiscoveryJournalReference, DiscoveryReadContent, DiscoveryReadReference, ValidationPlanRecord,
     ValidationRequirement,
@@ -13,6 +12,7 @@ use crate::validation::{
 use chrono::{DateTime, Utc};
 use kegari_digest::canonical_digest;
 use kegari_execution::CommandObservation;
+use kegari_execution::CommandOutcome;
 use kegari_git::{RepositoryId, Revision};
 use kegari_platform::BinaryIdentity;
 use std::path::PathBuf;

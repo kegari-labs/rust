@@ -4,6 +4,7 @@
 mod pinned_git;
 use kegari_context::workflow::Workflow;
 use kegari_digest::bytes_digest;
+use kegari_execution::CommandOutcome;
 use kegari_execution::{
     BoundManagedExecution, ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation,
 };
@@ -11,7 +12,6 @@ use kegari_git::RepositoryId;
 use kegari_types::error::{Error, Result};
 use kegari_v0::evidence::{CheckKind, Generation, WorkIdentity};
 use kegari_v0::execution::*;
-use kegari_v0::execution_host::CommandOutcome;
 use kegari_v0::git::Git;
 use serde_json::json;
 use std::collections::VecDeque;

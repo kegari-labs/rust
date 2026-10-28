@@ -2,8 +2,10 @@
 
 `execution.rs` implements local hooks, named checks, restricted Git inspection,
 scoped source writes, and validation of a video captured by an integrated check.
-It calls `isolation::run_command` through `SandboxBoundary`. The adapter has no
-unsandboxed fallback and never injects provider credentials into subprocesses.
+Its admitted `JournaledSandboxBoundary` calls backend `execution_host` adapters
+and the `kegari-execution` command mechanism. `SandboxBoundary` refuses commands
+without a journal. There is no unsandboxed fallback or injection of provider
+credentials into subprocesses.
 
 ## Host integration
 
@@ -270,8 +272,20 @@ requires the independently verified provider and joined-execution path.
 ## Environment package boundary
 
 `kegari_execution` owns isolation plans, managed resource binding, sandbox
-rendering and descriptive observations. The backend `execution_host` retains
-native command ownership, journals and joined cleanup. This module retains the
+rendering and descriptive observations, together with native command ownership,
+journals and joined cleanup. Backend `execution_host` retains admission adapters.
+This module retains the
 application checks, protected artifacts and evidence policy. Environment/domain
 construction and validation explicitly use the current application `BUILD_ID`;
 this refactor adds no command-discovery requirements or qualification.
+
+## Execution package boundary
+
+`kegari-execution` owns native command construction, output budgets, actual child
+and group ownership, journal mechanics and joined cleanup. Backend adapters retain
+permits and construct exact bindings through a synchronous one-shot factory at the
+original journal-creation point. No factory is retained or invoked during cleanup.
+`process_records::ProcessJournal` keeps application admission checks over
+`kegari_execution::journal::ProcessJournalStore`; retained records grant no launch,
+adoption, signaling or recovery authority. Command outcome/service records and
+resource-limit types are imported directly from `kegari_execution`.

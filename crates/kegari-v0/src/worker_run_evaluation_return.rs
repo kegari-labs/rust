@@ -356,7 +356,7 @@ mod registry_return_tests {
                 0,
             )
             .unwrap();
-        let lease = crate::control::Lease {
+        let lease = kegari_types::control::Lease {
             runtime_id: runtime,
             owner_generation: 1,
             owner_id: Uuid::new_v4(),

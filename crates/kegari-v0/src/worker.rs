@@ -23,7 +23,6 @@ pub use broker_observation::{BrokerControlBatch, BrokerInventory, IndependentBro
 pub use validation::ValidationHistorySeal;
 
 use crate::control::ControlHost;
-use crate::control::Lease;
 use crate::control::MutationRequest;
 use crate::control::Permit;
 use crate::evaluation::{
@@ -53,6 +52,7 @@ use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_execution::{ExecutionRole, ValidatedIsolation};
 use kegari_providers::RepositoryIdentity;
 use kegari_storage::{ExclusiveLock, PrivateDir};
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

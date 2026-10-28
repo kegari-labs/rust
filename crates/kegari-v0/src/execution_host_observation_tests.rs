@@ -2,6 +2,8 @@
 use super::*;
 use kegari_digest::bytes_digest;
 use kegari_execution::{BoundManagedExecution, ExecutionRole, IsolationPlan, PathGrant};
+use kegari_types::error::{Error, Result};
+use std::path::Path;
 use std::{collections::BTreeMap, fs};
 
 struct Fixture {
@@ -50,13 +52,13 @@ impl Fixture {
 #[test]
 fn expired_original_deadline_refuses_before_probe_journal_or_unqualified_start() {
     use crate::control::ControlHost;
-    use crate::control::Lease;
     use crate::control::Lifecycle;
     use crate::control::MutationRequest;
     use crate::process_records::ProcessJournal;
     use kegari_control_api::identity::Actor;
     use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
     use kegari_storage::PrivateDir;
+    use kegari_types::control::Lease;
     use std::{
         collections::BTreeSet,
         sync::{
@@ -144,75 +146,29 @@ fn expired_original_deadline_refuses_before_probe_journal_or_unqualified_start()
             output_limit: 1024,
         },
         &[],
-        journal,
-        permit,
+        journal.clone(),
+        permit.clone(),
     );
     assert!(matches!(result, Err(ref error) if error.code == "timeout"));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(fs::read_dir(journal_path).unwrap().count(), 0);
     // The same elapsed absolute cutoff cannot become a fresh relative budget.
     assert_eq!(
-        remaining_bundle_timeout(Duration::from_secs(30), Instant::now(), Some(deadline))
-            .unwrap_err()
-            .code,
-        "timeout"
-    );
-}
-
-#[tokio::test]
-async fn invocation_streams_share_one_raw_allowance_and_both_reach_eof() {
-    let budget = std::sync::Arc::new(CommandOutputBudget::new(8));
-    let mut out = b"sixout".as_slice();
-    let mut err = b"sixerr".as_slice();
-    let (out_result, err_result) = tokio::join!(
-        bounded_output(&mut out, 8, Some(budget.clone())),
-        bounded_output(&mut err, 8, Some(budget.clone())),
-    );
-    let (out_bytes, out_truncated) = out_result.unwrap();
-    let (err_bytes, err_truncated) = err_result.unwrap();
-    assert_eq!(out_bytes.len() + err_bytes.len(), 8);
-    assert!(out_truncated || err_truncated);
-    assert!(out.is_empty() && err.is_empty());
-    assert_eq!(budget.take(1), 0);
-    // The old unshared collector contract remains per-stream.
-    let (out, err) = tokio::join!(
-        bounded_output(b"12345678".as_slice(), 8, None),
-        bounded_output(b"12345678".as_slice(), 8, None),
-    );
-    assert_eq!(out.unwrap().0.len() + err.unwrap().0.len(), 16);
-}
-
-#[test]
-fn invocation_rendered_output_bounds_utf8_and_redaction_without_exposing_matched_secrets() {
-    let (out, err, truncated) = rendered_command_output(&[0xff; 4], b"ok", &[], Some(4)).unwrap();
-    assert!(truncated);
-    assert_eq!(out, "\u{fffd}");
-    assert_eq!(err, "o");
-    assert_eq!(out.len() + err.len(), 4);
-    let secret = "SECRET".to_owned();
-    let (out, err, truncated) =
-        rendered_command_output(b"SECRET", b"SECRET", std::slice::from_ref(&secret), Some(8))
-            .unwrap();
-    assert!(truncated);
-    assert!(out.len() + err.len() <= 8);
-    assert!(!out.contains(&secret) && !err.contains(&secret));
-    assert_eq!(out, "[REDACTE");
-    assert!(err.is_empty());
-    let (out, err, truncated) =
-        rendered_command_output(b"SECRET", b"SECRET", &[secret], None).unwrap();
-    assert_eq!(
-        (out.as_str(), err.as_str(), truncated),
-        ("[REDACTED]", "[REDACTED]", false)
-    );
-    assert_eq!(
-        rendered_command_output(
-            b"anything",
-            b"sandbox-exec: sandbox_apply failed",
+        start_journaled_command_until(
+            &fixture.isolation,
+            &["never-launched".into()],
+            InvocationCommandLimits {
+                timeout: Duration::from_secs(30),
+                deadline,
+                output_limit: 1024,
+            },
             &[],
-            Some(0)
+            journal,
+            permit,
         )
-        .unwrap_err()
+        .err()
+        .unwrap()
         .code,
-        "isolation_unavailable"
+        "timeout"
     );
 }

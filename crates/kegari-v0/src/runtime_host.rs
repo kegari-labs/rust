@@ -1,18 +1,24 @@
 //! Shared runtime-host contracts used by controller composition and backend implementations.
 //! These declarations grant no authority beyond their existing domain interfaces.
-use crate::{
-    authority::IssueKey,
-    configuration::ConfigurationInputs,
-    control::{ControlHost, ControlSnapshot, Lease, Receipt},
-    housekeeping::{Housekeeping, LogSink},
-    observations::ObservationCache,
-    platform::Registration,
-    reconcile::{Activity, DependencyOutcomes, HistoryRow, ParentDelivery, RuntimeProjection},
-};
+use crate::authority::IssueKey;
+use crate::configuration::ConfigurationInputs;
+use crate::control::ControlHost;
+use crate::control::ControlSnapshot;
+use crate::control::Receipt;
+use crate::housekeeping::Housekeeping;
+use crate::housekeeping::LogSink;
+use crate::observations::ObservationCache;
+use crate::platform::Registration;
+use crate::reconcile::Activity;
+use crate::reconcile::DependencyOutcomes;
+use crate::reconcile::HistoryRow;
+use crate::reconcile::ParentDelivery;
+use crate::reconcile::RuntimeProjection;
 use kegari_config::Config;
 use kegari_control_api::identity::Actor;
 use kegari_secrets::{AttestationKey, Secret, SecretStore};
 use kegari_types::api::CommandRequest;
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use serde_json::Value;
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};

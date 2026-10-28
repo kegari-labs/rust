@@ -1,11 +1,11 @@
 //! Local execution tools. Production commands always use the OS boundary;
 //! deterministic boundary fixtures never become qualified validation evidence.
 use crate::evidence::{ArtifactReference, CheckKind, WorkIdentity, validate_digest};
-use crate::execution_host::CommandOutcome;
 use crate::git::Git;
 use chrono::{DateTime, Utc};
 use kegari_context::workflow::Workflow;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_execution::CommandOutcome;
 use kegari_execution::{ExecutionRole, ValidatedIsolation};
 use kegari_git::{RepositoryId, Revision};
 use kegari_types::artifact::ArtifactProof;
@@ -60,7 +60,7 @@ pub trait CommandCancellation: Send + Sync {
     fn check_bundle_owner(&self) -> Option<&CheckBundleOwner> {
         None
     }
-    fn service_observation(&self) -> Result<crate::execution_host::ServiceObservation> {
+    fn service_observation(&self) -> Result<kegari_execution::ServiceObservation> {
         Err(Error::new(
             "service_observation_unavailable",
             "boundary has no original service leader observation",
@@ -111,7 +111,7 @@ pub trait CommandBoundary: Send + Sync {
         &self,
         _isolation: &ValidatedIsolation,
         _argv: &[String],
-        _limits: crate::execution_host::BundleCommandLimits,
+        _limits: kegari_execution::BundleCommandLimits,
         _launch: crate::control::CheckBundleLaunch,
     ) -> Result<Box<dyn StartedCommand>> {
         Err(Error::new(
@@ -134,23 +134,23 @@ pub trait CommandBoundary: Send + Sync {
     }
 }
 
-impl CommandCancellation for crate::execution_host::OwnedCommandCancellation {
+impl CommandCancellation for kegari_execution::OwnedCommandCancellation {
     fn cancel(&self) -> Result<()> {
-        crate::execution_host::OwnedCommandCancellation::cancel(self)
+        kegari_execution::OwnedCommandCancellation::cancel(self)
     }
     fn exited(&self) -> Result<bool> {
-        crate::execution_host::OwnedCommandCancellation::exited(self)
+        kegari_execution::OwnedCommandCancellation::exited(self)
     }
-    fn service_observation(&self) -> Result<crate::execution_host::ServiceObservation> {
-        crate::execution_host::OwnedCommandCancellation::service_observation(self)
+    fn service_observation(&self) -> Result<kegari_execution::ServiceObservation> {
+        kegari_execution::OwnedCommandCancellation::service_observation(self)
     }
 }
-impl StartedCommand for crate::execution_host::OwnedCommand {
+impl StartedCommand for kegari_execution::OwnedCommand {
     fn cancellation(&self) -> std::sync::Arc<dyn CommandCancellation> {
-        std::sync::Arc::new(crate::execution_host::OwnedCommand::cancellation(self))
+        std::sync::Arc::new(kegari_execution::OwnedCommand::cancellation(self))
     }
     fn wait(self: Box<Self>) -> Pin<Box<dyn Future<Output = Result<CommandOutcome>> + Send>> {
-        Box::pin(crate::execution_host::OwnedCommand::wait(*self))
+        Box::pin(kegari_execution::OwnedCommand::wait(*self))
     }
 }
 
@@ -211,7 +211,7 @@ impl CommandBoundary for JournaledSandboxBoundary {
             crate::execution_host::start_journaled_command_until(
                 isolation,
                 argv,
-                crate::execution_host::InvocationCommandLimits {
+                kegari_execution::InvocationCommandLimits {
                     timeout,
                     deadline,
                     output_limit,
@@ -226,7 +226,7 @@ impl CommandBoundary for JournaledSandboxBoundary {
         &self,
         isolation: &ValidatedIsolation,
         argv: &[String],
-        limits: crate::execution_host::BundleCommandLimits,
+        limits: kegari_execution::BundleCommandLimits,
         launch: crate::control::CheckBundleLaunch,
     ) -> Result<Box<dyn StartedCommand>> {
         if canonical_digest(1, launch.permit())? != canonical_digest(1, &self.permit)?

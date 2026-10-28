@@ -260,3 +260,13 @@ profile, isolation and lifecycle checks; neither the scope decision nor a
 prerelease executable supplies that evidence. The stronger-contract research and
 old native prerequisite build remain historical evidence, not a current native
 qualification result.
+
+## Execution lifecycle ownership
+
+Concrete journal guards and command supervision now live in `kegari-execution`.
+Its journal store validates and acquires actual descriptors; backend admission
+still checks worker bindings and sealed host permits. Guard retirement retains
+the single `kegari-process` critical section across release and inode observation.
+Factories run synchronously before spawn and never participate in cleanup. The
+move does not change owned-group evidence, inherited-holder uncertainty, output
+closure requirements or the detached-descendant limitation.

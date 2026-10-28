@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_storage::{ExclusiveLock, PrivateDir};
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use kegari_types::run::RunReference;
 use serde::{Deserialize, Serialize};
@@ -84,14 +85,6 @@ pub enum Lifecycle {
     Start,
     Stop,
     ForceStop,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Lease {
-    pub runtime_id: Uuid,
-    pub owner_generation: u64,
-    pub owner_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

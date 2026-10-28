@@ -163,11 +163,11 @@ fn process_history(
         for record in &records {
             let group_exit_recorded = matches!(
                 record.state,
-                crate::process_records::ProcessState::GroupExited { .. }
+                kegari_execution::journal::ProcessState::GroupExited { .. }
             ) && (record.schema_version == 1
                 || matches!(
                     record.state,
-                    crate::process_records::ProcessState::GroupExited {
+                    kegari_execution::journal::ProcessState::GroupExited {
                         guard_release_verified: true,
                         ..
                     }

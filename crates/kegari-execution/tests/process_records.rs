@@ -1,15 +1,13 @@
 use kegari_digest::bytes_digest;
+use kegari_execution::journal::{
+    CheckBundleMember, CheckMemberKind, ProcessJournalStore, ProcessRecord, RecoveryState,
+    SpawnBinding,
+};
 use kegari_platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_process::group::{OwnedGroup, Termination};
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use kegari_types::error::Result;
-use kegari_v0::{
-    control::Lease,
-    process_records::{
-        CheckBundleMember, CheckMemberKind, ProcessJournal, ProcessRecord, RecoveryState,
-        SpawnBinding,
-    },
-};
 use std::{
     path::Path,
     sync::{
@@ -50,7 +48,7 @@ impl ProcessProbe for Probe {
 }
 fn setup() -> (
     tempfile::TempDir,
-    Arc<ProcessJournal>,
+    Arc<ProcessJournalStore>,
     Arc<Probe>,
     SpawnBinding,
 ) {
@@ -72,7 +70,7 @@ fn setup() -> (
         gone: AtomicBool::new(false),
     });
     let journal = Arc::new(
-        ProcessJournal::with_probe(
+        ProcessJournalStore::with_probe(
             PrivateDir::create(&root.join("processes")).unwrap(),
             runtime,
             probe.clone(),
@@ -378,7 +376,7 @@ fn foreign_exit_cannot_retire_another_spawn_and_original_evidence_survives_write
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let records = PrivateDir::open(&directory).unwrap();
     let name = format!("{}.json", binding.effect_id);
-    let mut replaced: kegari_v0::process_records::ProcessRecord = records.read(&name).unwrap();
+    let mut replaced: ProcessRecord = records.read(&name).unwrap();
     replaced.binding.kind = "substituted".into();
     records.write(&name, &replaced).unwrap();
     assert_eq!(
@@ -416,8 +414,7 @@ fn legacy_group_rows_are_read_without_promoting_their_exit_provenance() {
         .as_object_mut()
         .unwrap()
         .remove("guard_release_verified");
-    let legacy: kegari_v0::process_records::ProcessRecord =
-        serde_json::from_value(row.clone()).unwrap();
+    let legacy: ProcessRecord = serde_json::from_value(row.clone()).unwrap();
     assert_eq!(serde_json::to_value(legacy).unwrap(), row);
     directory.write(&name, &row).unwrap();
     let before = std::fs::read(directory.path().join(&name)).unwrap();

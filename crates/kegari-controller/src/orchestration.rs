@@ -3,11 +3,12 @@
 //! No user-controlled socket/header can construct this process handshake.
 use kegari_platform::{BinaryIdentity, HostIdentity, OwnedChild, ProcessIdentity};
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
-use kegari_v0::{
-    control::{ControlHost, Intent, Lease},
-    platform::{Registration, RuntimeLock},
-};
+use kegari_v0::control::ControlHost;
+use kegari_v0::control::Intent;
+use kegari_v0::platform::Registration;
+use kegari_v0::platform::RuntimeLock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::{

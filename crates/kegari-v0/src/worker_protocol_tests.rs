@@ -20,7 +20,7 @@ impl WorkerHost for Host {
         }
         Ok(self.authority.clone())
     }
-    fn verify_owner(&self, _: &crate::control::Lease) -> Result<()> {
+    fn verify_owner(&self, _: &kegari_types::control::Lease) -> Result<()> {
         Ok(())
     }
     fn rate_limits(&self, _: Uuid, _: &Value) -> Result<()> {
@@ -68,7 +68,7 @@ async fn protocol_ack_records_exact_sent_request_when_native_generation_changes(
             0,
         )
         .unwrap();
-    let lease = crate::control::Lease {
+    let lease = kegari_types::control::Lease {
         runtime_id: runtime,
         owner_generation: 1,
         owner_id: Uuid::new_v4(),

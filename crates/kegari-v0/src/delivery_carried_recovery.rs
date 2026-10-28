@@ -360,7 +360,7 @@ impl ReobservedCarry {
 /// this object can yield PublishedCarry. It cannot enter a worker/run cache.
 pub(crate) struct ObservedCurrentCarry {
     carry: PublishedCarry,
-    read: crate::host_process::HostProcessIdentity,
+    read: kegari_execution::journal::HostProcessIdentity,
 }
 impl ObservedCurrentCarry {
     pub(crate) fn finish(mut self, receipt: &Receipt) -> Result<PublishedCarry> {

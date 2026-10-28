@@ -37,9 +37,9 @@ Guarded spawning and owned process-group handling now belong to
 [`kegari-process`](../kegari-process/README.md). Import the moved interfaces from
 `kegari_process::{spawn, group}`; there are no backend compatibility reexports.
 The process crate owns the single spawn/retirement interlock and descriptor
-registry. This backend retains process journals, control permits, recovery and
-isolation policy, platform registration, service management and application-level
-supervision. The CLI has no direct process dependency.
+registry. `kegari-execution` owns environment policy, process-journal mechanics
+and native command cleanup. This backend retains journal admission, control
+permits, recovery policy, registration, services and application supervision. The CLI has no direct process dependency.
 
 OS account/host identity, executable inspection, process identity/probes,
 `OwnedChild`, free-space queries and browser launch now belong to
@@ -127,28 +127,30 @@ compatibility reexports. The existing `validate_repo_path`,
 for retained backend callers without changing their behavior.
 
 This is the first Git extraction pass. `git::Git`, its operation request structs,
-process scopes, journals, gates and cancellation remain here, together with clone
+process scopes, journal admission, gates and cancellation remain here, together with clone
 ownership, protected recovery and privately constructed candidate/integration
 proofs. Branch construction and delta ordering still perform their existing Git
 commands. No unchecked constructors, runner abstraction or new execution authority
 are introduced. The pinned Git version, serialized records and digest inputs are
 unchanged.
 
-Managed environment construction, isolation validation, resource binding,
-command rendering and descriptive observations now belong to
-[`kegari-execution`](../kegari-execution/README.md). Import environment interfaces
-from `kegari_execution`; native command functions, outcomes, budgets, cancellation
-and joined cleanup now live in `kegari_v0::execution_host`. The former `isolation`
-module is removed without compatibility reexports. Application-level checks and
-evidence remain in `execution`; journals, permits, registration and recovery
-remain with their existing backend owners.
+Managed environments, isolation, native commands, outputs, cancellation and joined
+cleanup belong to [`kegari-execution`](../kegari-execution/README.md). Import those
+interfaces from `kegari_execution` and process records/guards from its `journal`
+module. Backend `execution_host` now contains only worker/invocation/bundle
+adapters, while `process_records::ProcessJournal` is the application admission
+facade over the concrete journal store. The store provides checked resource
+ownership; the facade retains sealed host and worker admission. Application
+execution/evidence, receipts, reservations and recovery policy remain here.
+`Lease` is shared data in `kegari_types::control`. There are no compatibility
+reexports or changes to command prerequisites.
 
 Production environment construction and managed-domain validation explicitly
 supply `crate::BUILD_ID`. Validated isolation retains this expectation privately
 through revalidation and cwd derivation; persisted formats are unchanged. Codex
 protocol calls borrow `codex_host::IsolationSessionScope`, whose constructor does
-no validation or I/O. This is a bounded environment extraction, not complete
-native-execution ownership or a qualification claim.
+no validation or I/O. Execution infrastructure ownership is complete; application
+admission and recovery remain backend-owned, with no qualification claim.
 
 ## Build and deterministic checks
 

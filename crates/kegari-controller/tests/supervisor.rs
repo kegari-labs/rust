@@ -1,6 +1,7 @@
 use kegari_control_api::identity::Actor;
 use kegari_controller::supervisor::*;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     control::*,
