@@ -189,20 +189,35 @@ impl RepositoryContract {
                 "delivery contract requires canonical repository and branch identities",
             ));
         }
-        for suite in self
-            .configuration
-            .ci
-            .iter()
-            .chain(&self.configuration.production_ci)
-        {
-            if suite.workflow_id == 0 {
-                return Err(Error::invalid("workflow identity missing"));
-            }
-            suite.proof.validate()?;
-        }
-        self.configuration.no_change_validation.proof.validate()?;
+        // Repository/source identity remains usable before delivery policy is
+        // resolved. Supplied policy is still strict and enters this digest.
+        self.configuration.validate_supplied_policy()?;
         canonical_digest(1, self)
     }
+}
+
+// Local/source preparation uses only the repository identity contract. Remote
+// delivery effects require the policy for their actual phase before recording
+// an intent or transmitting anything. Absence is never a deployment-free or
+// empty-success policy.
+fn require_effect_policy(contract: &RepositoryContract, phase: DeliveryPhase) -> Result<()> {
+    match phase {
+        DeliveryPhase::PublishChild
+        | DeliveryPhase::HostedValidation
+        | DeliveryPhase::ReviewPublication
+        | DeliveryPhase::Staging => {
+            contract.configuration.staging_ci()?;
+        }
+        DeliveryPhase::NoChange => {
+            exact_requirements(contract)?;
+        }
+        DeliveryPhase::Release => {
+            contract.configuration.production_ci_policy()?;
+            contract.configuration.deployment_policy()?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 pub type GateCheck = Arc<dyn Fn(&FreshGate) -> Result<()> + Send + Sync>;
@@ -400,6 +415,7 @@ impl DeliveryCoordinator {
             return Err(Error::invalid("invalid bounded delivery action identity"));
         }
         self.current(admission, &[admission.scope.phase])?;
+        require_effect_policy(self.contract(admission)?, admission.scope.phase)?;
         let digest = admission.scope.digest()?;
         let payload_digest = canonical_digest(1, &command)?;
         let leaf = format!(
@@ -862,9 +878,9 @@ impl DeliveryCoordinator {
         }
         let contract = self.contract(admission)?;
         let suites = if kind == CheckKind::ProductionCi {
-            &contract.configuration.production_ci
+            contract.configuration.production_ci_policy()?
         } else {
-            &contract.configuration.ci
+            contract.configuration.staging_ci()?
         };
         self.observe_hosted_suite(
             admission,
@@ -1935,9 +1951,9 @@ impl DeliveryCoordinator {
             .await?;
         let contract = self.contract(admission)?;
         let suites = if branch == "main" {
-            &contract.configuration.production_ci
+            contract.configuration.production_ci_policy()?
         } else {
-            &contract.configuration.ci
+            contract.configuration.staging_ci()?
         };
         let required = suites
             .iter()
@@ -1957,6 +1973,11 @@ impl DeliveryCoordinator {
             return Err(Error::invalid("delivery branch must be main or staging"));
         }
         let contract = self.contract(admission)?;
+        let suites = if branch == "main" {
+            contract.configuration.production_ci_policy()?
+        } else {
+            contract.configuration.staging_ci()?
+        };
         let github = self.github()?;
         let repository = github.repository(&contract.provider).await?;
         let base = github
@@ -1964,11 +1985,6 @@ impl DeliveryCoordinator {
             .await?;
         let protection = github.protection(&contract.provider, branch).await?;
         let rules = github.branch_rules(&contract.provider, branch).await?;
-        let suites = if branch == "main" {
-            &contract.configuration.production_ci
-        } else {
-            &contract.configuration.ci
-        };
         let mut required = suites
             .iter()
             .flat_map(|s| s.required_checks.iter().cloned())
@@ -2078,6 +2094,44 @@ impl DeliveryCoordinator {
             },
         )?;
         let contract = self.contract(admission)?;
+        let exact = if admission.scope.phase == DeliveryPhase::NoChange {
+            let route = contract.configuration.no_change_workflow()?;
+            Some([CiSuite {
+                workflow_id: route.workflow_id,
+                required_checks: exact_requirements(contract)?
+                    .into_iter()
+                    .map(|r| r.id)
+                    .collect(),
+                proof: route.proof.clone(),
+                inapplicable_when: None,
+            }])
+        } else {
+            None
+        };
+        let suites = if let Some(exact) = &exact {
+            exact.as_slice()
+        } else if passed.kind == CheckKind::ProductionCi {
+            contract.configuration.production_ci_policy()?
+        } else {
+            contract.configuration.staging_ci()?
+        };
+        let required = hosted_requirements(suites, passed.kind.clone())?;
+        evidence::verify_checks(
+            &required,
+            &admission.scope.work,
+            &admission.scope.revision,
+            &CheckSnapshot {
+                pagination_complete: true,
+                observed_at: Utc::now(),
+                runs: passed.checks.clone(),
+            },
+        )?;
+        if passed.checks.is_empty() || passed.proofs.is_empty() {
+            return Err(Error::new(
+                "validation_gate",
+                "retained hosted validation requires actual checks and proofs",
+            ));
+        }
         for expected in &passed.checks {
             let run = self
                 .github()?
@@ -2111,8 +2165,38 @@ impl DeliveryCoordinator {
                 .ok_or_else(|| {
                     Error::new("hosted_proof", "retained current check proof missing")
                 })?;
-            if run.head_sha != proof.expectation.trigger_sha {
-                return Err(Error::new("hosted_proof", "workflow trigger changed"));
+            let pin = suites
+                .iter()
+                .find(|suite| Some(suite.workflow_id) == expected.workflow_id)
+                .map(|suite| &suite.proof)
+                .ok_or_else(|| {
+                    Error::new("hosted_proof", "retained check has no current proof route")
+                })?;
+            let original = &proof.expectation;
+            if proof.schema_version != 1
+                || original.runtime_id != admission.scope.runtime_id
+                || original.operation_id != expected.operation_id
+                || original.repository_id != contract.provider.id
+                || original.repository_owner_id != contract.provider.owner_id
+                || original.run_id != run.id
+                || Some(run.workflow_id) != expected.workflow_id
+                || original.actor_id != run.actor_id
+                || original.trigger_sha != run.head_sha
+                || original.event_name != run.event
+                || original.event_name != pin.event_name
+                || original.workflow_ref != pin.workflow_ref
+                || original.workflow_sha != pin.workflow_sha
+                || original.job_workflow_ref != pin.job_workflow_ref
+                || original.job_workflow_sha != pin.job_workflow_sha
+                || (run.event == "workflow_dispatch" && run.head_sha != pin.workflow_sha)
+                || (run.event != "workflow_dispatch"
+                    && run.head_sha != admission.scope.revision.head
+                    && run.head_sha != admission.scope.revision.tested_commit)
+            {
+                return Err(Error::new(
+                    "hosted_proof",
+                    "retained workflow proof differs from current route or original operation",
+                ));
             }
             let raw = self
                 .github()?
@@ -2596,13 +2680,13 @@ impl DeliveryCoordinator {
             required.extend(exact_requirements(contract)?);
         } else {
             required.extend(hosted_requirements(
-                &contract.configuration.ci,
+                contract.configuration.staging_ci()?,
                 CheckKind::HostedCi,
             )?);
         }
         let contexts = contract
             .configuration
-            .ci
+            .staging_ci()?
             .iter()
             .flat_map(|s| s.required_checks.iter().cloned())
             .chain(std::iter::once(evidence::REVIEW_CONTEXT.into()))
@@ -2666,15 +2750,24 @@ impl DeliveryCoordinator {
                 DeliveryPhase::Recovery,
             ],
         )?;
+        self.key.verify("child_result", &result.signed)?;
         if config.revision()? != admission.gate.config_revision()
             || result.verified.evidence().work != admission.scope.work
             || result.verified.evidence().revision != admission.scope.revision
+            || result.signed.payload.contract_digest != admission.scope.contract_digest
         {
             return Err(Error::new(
                 "stale_result",
                 "child closure configuration/result changed",
             ));
         }
+        let phase = match &result.verified.evidence().outcome {
+            evidence::ChildOutcome::NoChange { .. } => DeliveryPhase::NoChange,
+            evidence::ChildOutcome::Changed { .. } | evidence::ChildOutcome::Replacement { .. } => {
+                DeliveryPhase::Staging
+            }
+        };
+        require_effect_policy(self.contract(admission)?, phase)?;
         let child = admission
             .scope
             .work
@@ -2856,7 +2949,8 @@ impl DeliveryCoordinator {
     ) -> Result<PendingExactValidation> {
         self.current(admission, &[DeliveryPhase::NoChange])?;
         let contract = self.contract(admission)?;
-        let route = &contract.configuration.no_change_validation;
+        exact_requirements(contract)?;
+        let route = contract.configuration.no_change_workflow()?;
         let challenge = self.prepare_hosted_challenge(admission)?;
         let (locator, reference) = route
             .proof
@@ -2929,10 +3023,10 @@ impl DeliveryCoordinator {
             .parse()
             .map_err(|_| Error::new("provider_response", "dispatch run identity invalid"))?;
         let contract = self.contract(admission)?;
-        let route = &contract.configuration.no_change_validation;
+        let route = contract.configuration.no_change_workflow()?;
         let names: Vec<_> = contract
             .configuration
-            .ci
+            .staging_ci()?
             .iter()
             .flat_map(|c| c.required_checks.iter().cloned())
             .collect();
@@ -2968,9 +3062,10 @@ impl DeliveryCoordinator {
 }
 
 fn exact_requirements(contract: &RepositoryContract) -> Result<Vec<CheckRequirement>> {
+    let route = contract.configuration.no_change_workflow()?;
     let mut result = Vec::new();
     let mut names = BTreeSet::new();
-    for suite in &contract.configuration.ci {
+    for suite in contract.configuration.staging_ci()? {
         for name in &suite.required_checks {
             if !names.insert(name.clone()) {
                 return Err(Error::new(
@@ -2981,7 +3076,7 @@ fn exact_requirements(contract: &RepositoryContract) -> Result<Vec<CheckRequirem
             result.push(CheckRequirement {
                 id: name.clone(),
                 kind: CheckKind::HostedCi,
-                workflow_id: Some(contract.configuration.no_change_validation.workflow_id),
+                workflow_id: Some(route.workflow_id),
                 command: vec![],
             });
         }
@@ -3243,8 +3338,17 @@ impl DeliveryCoordinator {
             },
         )
         .await?;
+        // Recovery remains read-only authority; the retained child outcome
+        // selects which complete current hosted route must be observed.
+        let mut hosted_observation = admission.clone();
+        hosted_observation.scope.phase = match &signed.payload.evidence.outcome {
+            evidence::ChildOutcome::NoChange { .. } => DeliveryPhase::NoChange,
+            evidence::ChildOutcome::Changed { .. } | evidence::ChildOutcome::Replacement { .. } => {
+                DeliveryPhase::Staging
+            }
+        };
         self.reobserve_hosted(
-            admission,
+            &hosted_observation,
             &HostedPassed {
                 work: admission.scope.work.clone(),
                 revision: admission.scope.revision.clone(),
@@ -3428,6 +3532,7 @@ impl DeliveryCoordinator {
         validation: &ExactValidationPassed,
     ) -> Result<()> {
         self.current(admission, &[DeliveryPhase::NoChange])?;
+        exact_requirements(self.contract(admission)?)?;
         self.reobserve_hosted(admission, &validation.hosted).await?;
         self.current(admission, &[DeliveryPhase::NoChange])
     }
@@ -3447,7 +3552,8 @@ impl DeliveryCoordinator {
             ));
         }
         let contract = self.contract(admission)?;
-        let route = &contract.configuration.no_change_validation;
+        exact_requirements(contract)?;
+        let route = contract.configuration.no_change_workflow()?;
         let github = self.github()?;
         let run_id = remote_id(&pending.receipt, "workflow_run_id")?
             .parse()
@@ -4639,7 +4745,7 @@ impl DeliveryCoordinator {
         for target in &authorized.scope.production_targets {
             let mut found = false;
             for contract in self.contracts.values() {
-                if let crate::config::Deployment::Steps { steps } =
+                if let Some(crate::config::Deployment::Steps { steps }) =
                     &contract.configuration.deployment
                     && steps.iter().any(|step| &step.target_id == target)
                 {

@@ -25,7 +25,11 @@ impl EvaluationBinding {
     pub(crate) fn endpoint(workspace: Uuid, provider: &str) -> String {
         format!(
             "https://{provider}.{workspace}.evaluation.invalid{}",
-            if provider == "linear" { "/graphql" } else { "" }
+            if provider == "linear" {
+                "/graphql"
+            } else {
+                "/"
+            }
         )
     }
     pub(crate) fn validate(&self, config: &Config, workspace: &Workspace) -> Result<()> {
@@ -73,7 +77,7 @@ impl EvaluationBinding {
             || workspace
                 .repositories
                 .values()
-                .any(|r| !matches!(&r.deployment, Deployment::None(v) if v == "none"))
+                .any(|r| !matches!(&r.deployment, Some(Deployment::None(v)) if v == "none"))
         {
             return Err(Error::invalid(
                 "evaluation workspace must be independent-review-only with one undeployed repository and no test resources",

@@ -187,6 +187,8 @@ pub fn build_release_plan(input: ReleasePlanInput<'_>) -> Result<ReleasePlan> {
     for item in input.repositories {
         let contract = item.contract;
         contract.digest()?;
+        contract.configuration.production_ci_policy()?;
+        contract.configuration.deployment_policy()?;
         let configured = input
             .workspace
             .repositories
@@ -271,7 +273,7 @@ pub fn build_release_plan(input: ReleasePlanInput<'_>) -> Result<ReleasePlan> {
                 ));
             }
         }
-        match &contract.configuration.deployment {
+        match contract.configuration.deployment_policy()? {
             crate::config::Deployment::None(value) if value == "none" => {
                 if changed {
                     deployment_free.insert(contract.repository.clone());
@@ -741,7 +743,8 @@ fn configured_deployment<'a>(
     let ResourceKey::Target { provider, id } = target else {
         return Err(production_error("deployment target is not canonical"));
     };
-    let crate::config::Deployment::Steps { steps } = &contract.configuration.deployment else {
+    let crate::config::Deployment::Steps { steps } = contract.configuration.deployment_policy()?
+    else {
         return Err(production_error("repository has no deployment contract"));
     };
     let matches: Vec<_> = steps
@@ -2236,7 +2239,7 @@ impl DeliveryCoordinator {
         self.acquire_dispatched_validation(
             admission,
             verifier,
-            &self.contract(admission)?.configuration.ci,
+            self.contract(admission)?.configuration.staging_ci()?,
             CheckKind::HostedCi,
             "child",
         )
@@ -2250,6 +2253,8 @@ impl DeliveryCoordinator {
         kind: CheckKind,
         prefix: &str,
     ) -> Result<HostedPassed> {
+        // Cached results cannot make an unresolved current policy complete.
+        let required = hosted_requirements(suites, kind.clone())?;
         let leaf = format!("{prefix}-hosted-{}.json", admission.operation_id());
         match self.records.read::<Signed<ChildValidationRecord>>(&leaf) {
             Ok(signed) => {
@@ -2267,6 +2272,16 @@ impl DeliveryCoordinator {
                     checks: signed.payload.checks,
                     proofs: signed.payload.proofs,
                 };
+                evidence::verify_checks(
+                    &required,
+                    &admission.scope.work,
+                    &admission.scope.revision,
+                    &CheckSnapshot {
+                        pagination_complete: true,
+                        observed_at: Utc::now(),
+                        runs: passed.checks.clone(),
+                    },
+                )?;
                 self.reobserve_hosted(admission, &passed).await?;
                 return Ok(passed);
             }
@@ -2274,7 +2289,6 @@ impl DeliveryCoordinator {
             Err(e) => return Err(e),
         }
         let contract = self.contract(admission)?;
-        hosted_requirements(suites, kind.clone())?;
         if suites
             .iter()
             .any(|s| s.proof.event_name != "workflow_dispatch")
@@ -2452,7 +2466,9 @@ impl DeliveryCoordinator {
             .acquire_dispatched_validation(
                 admission,
                 verifier,
-                &self.contract(admission)?.configuration.production_ci,
+                self.contract(admission)?
+                    .configuration
+                    .production_ci_policy()?,
                 CheckKind::ProductionCi,
                 "existing",
             )
@@ -2528,7 +2544,9 @@ impl DeliveryCoordinator {
         current.scope.phase = DeliveryPhase::Release;
         self.reobserve_hosted(&current, hosted).await?;
         let requirements = hosted_requirements(
-            &self.contract(observation)?.configuration.production_ci,
+            self.contract(observation)?
+                .configuration
+                .production_ci_policy()?,
             CheckKind::ProductionCi,
         )?;
         let verified = evidence::verify_existing_production(
@@ -2739,6 +2757,7 @@ impl DeliveryCoordinator {
     ) -> Result<PreparedProductionCandidate> {
         use base64::Engine as _;
         self.current(admission, &[DeliveryPhase::Release])?;
+        require_effect_policy(self.contract(admission)?, DeliveryPhase::Release)?;
         self.production_parent(admission, parent, slice.manifest())?;
         if self.main_revision(admission).await? != slice.manifest().production {
             return Err(production_error(
@@ -2914,7 +2933,7 @@ impl DeliveryCoordinator {
             .publish_review(admission, &self.key.sign("codex_review", &attestation)?)
             .await?;
         let mut dispatches = BTreeMap::new();
-        for suite in &contract.configuration.production_ci {
+        for suite in contract.configuration.production_ci_policy()? {
             if suite.proof.event_name == "workflow_dispatch" {
                 let (locator, reference) = suite
                     .proof
@@ -3004,6 +3023,7 @@ impl DeliveryCoordinator {
             observation,
             &[DeliveryPhase::Release, DeliveryPhase::Recovery],
         )?;
+        require_effect_policy(self.contract(observation)?, DeliveryPhase::Release)?;
         self.key.verify("production_candidate", &prepared.signed)?;
         let r = &prepared.signed.payload;
         self.production_parent(observation, parent, &r.candidate)?;
@@ -3138,7 +3158,7 @@ impl DeliveryCoordinator {
         let github = self.github()?;
         let mut tokens = Vec::new();
         let mut artifacts = Vec::new();
-        for suite in &contract.configuration.production_ci {
+        for suite in contract.configuration.production_ci_policy()? {
             let dispatch = record
                 .dispatches
                 .get(&suite.workflow_id)
@@ -3258,7 +3278,7 @@ impl DeliveryCoordinator {
         let required_contexts = self
             .contract(admission)?
             .configuration
-            .production_ci
+            .production_ci_policy()?
             .iter()
             .flat_map(|suite| suite.required_checks.iter().cloned())
             .chain(std::iter::once(evidence::REVIEW_CONTEXT.into()))
@@ -3296,7 +3316,9 @@ impl DeliveryCoordinator {
             .current_repository_protection(observation, "main")
             .await?;
         let required = hosted_requirements(
-            &self.contract(observation)?.configuration.production_ci,
+            self.contract(observation)?
+                .configuration
+                .production_ci_policy()?,
             CheckKind::ProductionCi,
         )?;
         let contexts = required

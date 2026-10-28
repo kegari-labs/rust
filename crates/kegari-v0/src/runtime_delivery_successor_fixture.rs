@@ -55,7 +55,7 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
                             .repositories
                             .get_mut("42")
                             .unwrap()
-                            .deployment = crate::config::Deployment::None("none".into());
+                            .deployment = Some(crate::config::Deployment::None("none".into()));
                         extra_completion_fixture::configure_auxiliary(configuration);
                     }
                 }
@@ -965,7 +965,8 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
 fn fixture_deployment_route(
     contract: &RepositoryContract,
 ) -> &crate::config::ExactRevisionWorkflow {
-    let crate::config::Deployment::Steps { steps } = &contract.configuration.deployment else {
+    let Some(crate::config::Deployment::Steps { steps }) = &contract.configuration.deployment
+    else {
         panic!("lineage fixture requires an actual configured deployment route")
     };
     let selected = steps

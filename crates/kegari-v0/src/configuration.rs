@@ -844,10 +844,10 @@ pub async fn prepare_initial(
     }
     config.resolve_paths(&host.home, |name| inputs.environment(name))?;
     let report = verification_report(&config, secrets, inputs, probe_root).await?;
-    if report["status"] != "verified" {
+    if report["configuration_admission"] != "verified" {
         return Err(Error::new(
             "configuration_unverified",
-            "initial configuration has blocked verification checks",
+            "initial configuration has blocked identity, scope or workflow checks",
         )
         .detail(report));
     }
@@ -863,6 +863,7 @@ async fn verification_report(
     inputs.configure_evaluations(config)?;
     let mut checks = Vec::new();
     let mut failed = false;
+    let mut delivery_blocked = false;
     match config.load_workflows() {
         Ok(workflows) => {
             checks.push(json!({"check":"workflows","status":"verified","count":workflows.len()}))
@@ -918,8 +919,17 @@ async fn verification_report(
         }
         .await;
         match observed {
-            Ok(value) => checks.push(json!({"check":"repository_prerequisites","workspace":name,"status":"verified","repositories":value})),
-            Err(error) => { failed=true; checks.push(json!({"check":"repository_prerequisites","workspace":name,"status":"blocked","error":error})); }
+            Ok(value) => {
+                let blocked = value
+                    .iter()
+                    .any(|repository| repository["delivery_prerequisites"]["status"] == "blocked");
+                delivery_blocked |= blocked;
+                checks.push(json!({"check":"repository_prerequisites","workspace":name,"status":if blocked {"blocked"} else {"verified"},"configuration_admission":"verified","repositories":value}));
+            }
+            Err(error) => {
+                failed = true;
+                checks.push(json!({"check":"repository_prerequisites","workspace":name,"status":"blocked","error":error}));
+            }
         }
         for (check, reason) in [
             (
@@ -945,7 +955,7 @@ async fn verification_report(
         }
     }
     Ok(
-        json!({"config_revision":config.revision()?,"status":if failed{"blocked"}else{"verified"},"checks":checks,"operational_qualification":"unverified","qualification_reason":"Identity/profile/workflow metadata checks do not execute hooks, tests, agent turns or qualify live isolation, CI, deployment or human evaluation"}),
+        json!({"config_revision":config.revision()?,"status":if failed || delivery_blocked {"blocked"}else{"verified"},"configuration_admission":if failed {"blocked"}else{"verified"},"checks":checks,"operational_qualification":"unverified","qualification_reason":"Identity/profile/workflow metadata checks do not execute hooks, tests, agent turns or qualify live isolation, CI, deployment or human evaluation"}),
     )
 }
 
@@ -982,114 +992,160 @@ pub async fn repository_prerequisites(
             reports.push(json!({"repository":id,"kind":"declared_synthetic_evaluation","read_access":true,"production_workflows_verified":false,"native_trial_qualified":false}));
             continue;
         }
+        configured.validate_supplied_policy()?;
         if repository.archived
             || repository.disabled
             || repository.permissions.get("pull").and_then(Value::as_bool) != Some(true)
-            || repository.permissions.get("push").and_then(Value::as_bool) != Some(true)
-            || repository.squash_allowed != Some(true)
         {
             return Err(Error::new(
-                "repository_incompatible",
-                "configured implementation repository requires observed read/write permission, active state and allowed squash merging",
+                "repository_inaccessible",
+                "configured repository requires observed read permission and active state",
             ));
         }
-        let workflows: BTreeMap<_, _> = client
-            .workflows(&repository.identity)
-            .await?
-            .into_iter()
-            .map(|w| (w.id, w))
-            .collect();
-        let mut routes = configured
-            .ci
-            .iter()
-            .chain(&configured.production_ci)
-            .map(|suite| (suite.workflow_id, &suite.proof))
-            .collect::<Vec<_>>();
-        routes.push((
-            configured.no_change_validation.workflow_id,
-            &configured.no_change_validation.proof,
-        ));
-        if let Deployment::Steps { steps } = &configured.deployment {
-            routes.extend(
-                steps
-                    .iter()
-                    .map(|step| (step.workflow.workflow_id, &step.workflow.proof)),
-            );
-        }
-        let mut pins = BTreeSet::new();
-        for (id, proof) in routes {
-            let observed = workflows.get(&id).ok_or_else(|| {
-                Error::new(
-                    "workflow_unavailable",
-                    "configured workflow ID is absent from complete workflow enumeration",
-                )
-            })?;
-            let caller = proof
-                .workflow_ref
-                .rsplit_once('@')
-                .ok_or_else(|| Error::invalid("workflow pin is malformed"))?
-                .0;
-            let expected_prefix = format!(
-                "{}/{}/",
-                repository.identity.owner, repository.identity.name
-            );
-            let expected_path = caller.strip_prefix(&expected_prefix).ok_or_else(|| {
-                Error::new(
-                    "identity_mismatch",
-                    "workflow proof names another caller repository",
-                )
-            })?;
-            if observed.data.get("state").and_then(Value::as_str) != Some("active")
-                || observed.data.get("path").and_then(Value::as_str) != Some(expected_path)
-            {
-                return Err(Error::new(
-                    "workflow_unavailable",
-                    "configured workflow ID/path is disabled or differs from its pinned caller",
-                ));
+        // Read access admits scoped discovery only. Missing downstream policy or
+        // delivery metadata must remain visible without preventing discovery.
+        let observed = repository_delivery_prerequisites(client, configured, repository).await;
+        let mut report = match observed {
+            Ok(value) => value,
+            Err(error) => {
+                json!({"repository_id":repository.identity.id,"repository":repository.identity,"delivery_prerequisites":{"status":"blocked","error":error},"trusted_reusable_execution":"unverified"})
             }
-            if pins.insert(proof.workflow_sha.clone()) {
-                client
-                    .commit(&repository.identity, &proof.workflow_sha)
-                    .await?;
-            }
-        }
-        let mut branches = Vec::new();
-        for (branch, suites) in [
-            (&configured.staging, &configured.ci),
-            (&configured.main, &configured.production_ci),
-        ] {
-            let base = client
-                .reference(&repository.identity, &format!("heads/{branch}"))
-                .await?;
-            let protection = client.protection(&repository.identity, branch).await?;
-            let rules = client.branch_rules(&repository.identity, branch).await?;
-            let required = suites
-                .iter()
-                .flat_map(|suite| suite.required_checks.iter().cloned())
-                .chain(std::iter::once(configured.review_context.clone()))
-                .collect();
-            let identity = crate::git::RepositoryId {
-                hostname: configured.hostname.clone(),
-                id: repository.identity.id.to_string(),
-            };
-            let policy = crate::delivery::validate_repository_prerequisites(
-                &identity,
-                repository,
-                branch,
-                &base,
-                &protection,
-                &rules,
-                &required,
-            )?;
-            branches.push(
-                serde_json::to_value(policy)
-                    .map_err(|_| Error::invalid("repository policy cannot be encoded"))?,
-            );
-        }
-        reports.push(json!({"repository_id":repository.identity.id,"repository":repository.identity,"branches":branches,"workflow_count":workflows.len(),"caller_pins_observed":pins,"trusted_reusable_execution":"unverified"}));
+        };
+        report["read_access"] = json!(true);
+        reports.push(report);
     }
     Ok(reports)
 }
+async fn repository_delivery_prerequisites(
+    client: &GithubClient,
+    configured: &crate::config::Repository,
+    repository: &crate::providers::Repository,
+) -> Result<Value> {
+    let unresolved: Vec<_> = [
+        ("ci", configured.ci.is_none()),
+        ("production_ci", configured.production_ci.is_none()),
+        (
+            "no_change_validation",
+            configured.no_change_validation.is_none(),
+        ),
+        ("deployment", configured.deployment.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(field, missing)| missing.then_some(field))
+    .collect();
+    if !unresolved.is_empty() {
+        return Err(Error::new(
+            "delivery_policy_unresolved",
+            "repository discovery is available; dependent delivery policy remains unresolved",
+        )
+        .detail(json!({"unresolved_fields":unresolved,"delivery_metadata_observed":false})));
+    }
+    if repository.permissions.get("push").and_then(Value::as_bool) != Some(true)
+        || repository.squash_allowed != Some(true)
+    {
+        return Err(Error::new(
+            "repository_incompatible",
+            "delivery requires observed write permission and allowed squash merging",
+        ));
+    }
+    let workflows: BTreeMap<_, _> = client
+        .workflows(&repository.identity)
+        .await?
+        .into_iter()
+        .map(|w| (w.id, w))
+        .collect();
+    let mut routes = configured
+        .staging_ci()?
+        .iter()
+        .chain(configured.production_ci_policy()?)
+        .map(|suite| (suite.workflow_id, &suite.proof))
+        .collect::<Vec<_>>();
+    routes.push((
+        configured.no_change_workflow()?.workflow_id,
+        &configured.no_change_workflow()?.proof,
+    ));
+    if let Deployment::Steps { steps } = configured.deployment_policy()? {
+        routes.extend(
+            steps
+                .iter()
+                .map(|step| (step.workflow.workflow_id, &step.workflow.proof)),
+        );
+    }
+    let mut pins = BTreeSet::new();
+    for (id, proof) in routes {
+        let observed = workflows.get(&id).ok_or_else(|| {
+            Error::new(
+                "workflow_unavailable",
+                "configured workflow ID is absent from complete workflow enumeration",
+            )
+        })?;
+        let caller = proof
+            .workflow_ref
+            .rsplit_once('@')
+            .ok_or_else(|| Error::invalid("workflow pin is malformed"))?
+            .0;
+        let expected_prefix = format!(
+            "{}/{}/",
+            repository.identity.owner, repository.identity.name
+        );
+        let expected_path = caller.strip_prefix(&expected_prefix).ok_or_else(|| {
+            Error::new(
+                "identity_mismatch",
+                "workflow proof names another caller repository",
+            )
+        })?;
+        if observed.data.get("state").and_then(Value::as_str) != Some("active")
+            || observed.data.get("path").and_then(Value::as_str) != Some(expected_path)
+        {
+            return Err(Error::new(
+                "workflow_unavailable",
+                "configured workflow ID/path is disabled or differs from its pinned caller",
+            ));
+        }
+        if pins.insert(proof.workflow_sha.clone()) {
+            client
+                .commit(&repository.identity, &proof.workflow_sha)
+                .await?;
+        }
+    }
+    let mut branches = Vec::new();
+    for (branch, suites) in [
+        (&configured.staging, configured.staging_ci()?),
+        (&configured.main, configured.production_ci_policy()?),
+    ] {
+        let base = client
+            .reference(&repository.identity, &format!("heads/{branch}"))
+            .await?;
+        let protection = client.protection(&repository.identity, branch).await?;
+        let rules = client.branch_rules(&repository.identity, branch).await?;
+        let required = suites
+            .iter()
+            .flat_map(|suite| suite.required_checks.iter().cloned())
+            .chain(std::iter::once(configured.review_context.clone()))
+            .collect();
+        let identity = crate::git::RepositoryId {
+            hostname: configured.hostname.clone(),
+            id: repository.identity.id.to_string(),
+        };
+        let policy = crate::delivery::validate_repository_prerequisites(
+            &identity,
+            repository,
+            branch,
+            &base,
+            &protection,
+            &rules,
+            &required,
+        )?;
+        branches.push(
+            serde_json::to_value(policy)
+                .map_err(|_| Error::invalid("repository policy cannot be encoded"))?,
+        );
+    }
+    Ok(
+        json!({"repository_id":repository.identity.id,"repository":repository.identity,"branches":branches,"workflow_count":workflows.len(),"caller_pins_observed":pins,"delivery_prerequisites":{"status":"verified","qualification":"metadata_only"},"trusted_reusable_execution":"unverified"}),
+    )
+}
+
 fn credential_environment_names(
     current: &Config,
     request: &CommandRequest,
@@ -1232,7 +1288,7 @@ fn restricted_revision(config: &Config) -> Result<String> {
     // replacements require paused/stopped, drained ownership.
     let connections: BTreeMap<_,_> = config.connections.iter().map(|(name,c)| (name,json!({"kind":c.kind,"account_id":c.account_id,"endpoint":c.endpoint,"auth_home":c.auth_home,"argv":c.argv}))).collect();
     let workspaces: BTreeMap<_,_> = config.workspaces.iter().map(|(name,w)| {
-        let repositories: BTreeMap<_,_> = w.repositories.iter().map(|(id,r)| (id,json!({"source":r.source,"hostname":r.hostname,"main":r.main,"staging":r.staging,"deployment":r.deployment}))).collect();
+        let repositories: BTreeMap<_,_> = w.repositories.iter().map(|(id,r)| (id,json!({"source":r.source,"hostname":r.hostname,"main":r.main,"staging":r.staging,"ci":r.ci,"production_ci":r.production_ci,"no_change_validation":r.no_change_validation,"deployment":r.deployment}))).collect();
         let value = json!({"id":w.id,"linear_workspace_id":w.linear_workspace_id,"linear_connection":w.linear_connection,"github_connection":w.github_connection,"codex_connection":w.codex_connection,"actors":w.actors,"authorization_label_id":w.linear.authorization_label_id,"states":w.linear.states,"organizations":w.github.organizations,"repositories_allowlist":w.github.repositories,"repositories":repositories,"test_resources":w.test_resources});
         (name, value)
     }).collect();
@@ -1490,8 +1546,12 @@ fn workspace_reduction(before: &Value, after: &Value) -> bool {
                     return true;
                 }
                 if collection == "repositories"
-                    && replacement.get("deployment").is_some()
-                    && entry.get("deployment") != replacement.get("deployment")
+                    && ["ci", "production_ci", "no_change_validation", "deployment"]
+                        .iter()
+                        .any(|field| {
+                            entry.get(*field).is_some()
+                                && entry.get(*field) != replacement.get(*field)
+                        })
                 {
                     return true;
                 }
@@ -1504,7 +1564,13 @@ fn workspace_reduction(before: &Value, after: &Value) -> bool {
 /// reliable restriction to be observed despite an unrelated typed-field error.
 fn proposed_reductions(current: &Config, request: &CommandRequest) -> Result<AuthorityFences> {
     let mut out = AuthorityFences::default();
-    let current_value = serde_json::to_value(current)
+    // Compare the same TOML representation on both sides. JSON serialization
+    // retains nested Option::None as null while TOML omits it; that difference
+    // alone is not a permission reduction. Keep the proposal untyped below so
+    // a real removal still fences authority despite unrelated invalid fields.
+    let current_toml = toml::Value::try_from(current)
+        .map_err(|_| Error::invalid("configuration encoding failed"))?;
+    let current_value = serde_json::to_value(current_toml)
         .map_err(|_| Error::invalid("configuration encoding failed"))?;
     let parse = |key: &str| -> Option<Value> {
         let text = request.args.get(key)?.as_str()?;

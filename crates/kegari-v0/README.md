@@ -5,7 +5,7 @@ Implementation and qualification remain in progress. The current build is not
 qualified to coordinate the lasting implementation. See [PROGRESS.md](PROGRESS.md)
 for the actual checkpoint, failed or blocked checks, and current work.
 [MILESTONES.md](MILESTONES.md) defines version targets, immediate 0.2.0 correction
-packages, completion gates and progress reporting. The Goal is active and unattended.
+packages, completion gates and progress reporting. Goal mode is cancelled; work proceeds through individual planning and execution prompts.
 
 ## Build and deterministic checks
 
@@ -32,10 +32,12 @@ new requests must follow the generic backend and milestone plan.
 
 ## Versioned prerelease executable
 
-The development source declares `0.2.0-alpha.9`; the package and
-executable remain `kegari-v0`. No final alpha.9 artifact has been packaged. Its
-Cargo-specific design has been removed under the 0.2.0 correction plan;
-alpha.8 remains the latest retained packaged artifact.
+The locally verified and packaged checkpoint is `0.2.0-alpha.10`; the package and
+executable remain `kegari-v0`. The final release suite passed 1,260 tests, with
+three native qualification tests ignored. See the artifact links, checksums and
+retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md). The Cargo-specific
+execution design has been removed. This is a checkpoint before a separately
+planned crate split, with native execution still blocked.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or
 unqualified declared profiles (`managed_profile_unqualified`), and native,
 provider, actual-agent and human qualification remain incomplete.
@@ -98,7 +100,7 @@ it does not open a setup wizard or start a service. Before setup, alpha.4 and la
 runtime has been configured yet. Use `./kegari-v0 --help` or
 `./kegari-v0 setup --help` to inspect the available commands without setup.
 
-Alpha.9 remains development work requiring generic execution and discovery completion;
+Alpha.10 is a stabilization checkpoint with native execution still blocked;
 no current build is qualified for coordinator activation. The intended [first-install sequence](docs/cli.md#first-install-and-local-status)
 requires the supported profile and native/provider prerequisites to be established
 first, then a final protected, versioned binary and explicit runtime configuration.
@@ -134,6 +136,12 @@ inventories are not operator prerequisites under SPEC 1.4. The remaining legacy
 catalog/check interfaces are being replaced; the current source does not yet
 deliver that complete command-discovery path. Native isolation and actual
 CI/review/deployment facts must be established before their dependent gates.
+Repository `ci`, `production_ci`, `no_change_validation` and `deployment` may be
+omitted during discovery; missing policy blocks dependent delivery. Only explicit
+`deployment = "none"` declares deployment-free behavior. Run `config check` after
+setup to see repository prerequisites: `configuration_admission: verified` can
+coexist with `status: blocked` for unresolved delivery, and operational qualification
+remains unverified.
 Setup, service installation, live evaluation,
 provider mutation and deployment require their own operational authorization;
 none is performed by the build/test commands above.

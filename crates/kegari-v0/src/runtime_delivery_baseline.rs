@@ -232,25 +232,24 @@ impl RuntimeDelivery {
                 .coordinator
                 .parent_contract(gate.clone(), parent, &workspace.workflow)?
         };
-        let resources = workspace
+        let mut resources = BTreeSet::new();
+        for repository in workspace
             .contracts
             .iter()
             .filter(|repository| contract.repositories().contains(&repository.repository))
-            .flat_map(|contract| {
-                let mut resources = vec![domain::ResourceKey::Repository {
-                    repository: contract.repository.clone(),
-                }];
-                if let crate::config::Deployment::Steps { steps } =
-                    &contract.configuration.deployment
-                {
-                    resources.extend(steps.iter().map(|step| domain::ResourceKey::Target {
-                        provider: "github".into(),
-                        id: step.target_id.clone(),
-                    }));
-                }
-                resources
-            })
-            .collect::<BTreeSet<_>>();
+        {
+            resources.insert(domain::ResourceKey::Repository {
+                repository: repository.repository.clone(),
+            });
+            if let crate::config::Deployment::Steps { steps } =
+                repository.configuration.deployment_policy()?
+            {
+                resources.extend(steps.iter().map(|step| domain::ResourceKey::Target {
+                    provider: "github".into(),
+                    id: step.target_id.clone(),
+                }));
+            }
+        }
         let candidates = {
             let state = self.releases.state.lock().map_err(|_| unavailable())?;
             let consumed = state.completed_ancestors(gate.work(), &resources)?;

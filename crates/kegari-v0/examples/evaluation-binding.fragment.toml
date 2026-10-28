@@ -11,7 +11,7 @@ roles = ["inspect", "evaluate"] # Merge with existing required roles, do not dro
 [connections."evaluation-11111111-2222-4333-8444-555555555555-github"]
 kind = "github"
 account_id = "303"
-endpoint = "https://github.11111111-2222-4333-8444-555555555555.evaluation.invalid"
+endpoint = "https://github.11111111-2222-4333-8444-555555555555.evaluation.invalid/"
 credential_ref = "$EVAL_GITHUB_FIXTURE_TOKEN"
 
 [connections."evaluation-11111111-2222-4333-8444-555555555555-linear"]

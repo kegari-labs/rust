@@ -835,9 +835,24 @@ impl DeliveryFixture {
         Self::build(extra_check, false).await
     }
     async fn build(extra_check: bool, candidate: bool) -> Self {
+        Self::build_configured(extra_check, candidate, |_| {}).await
+    }
+    async fn build_configured(
+        extra_check: bool,
+        candidate: bool,
+        adjust: impl FnOnce(&mut crate::config::Repository),
+    ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().canonicalize().unwrap();
         let mut cfg = config();
+        adjust(
+            cfg.workspaces
+                .get_mut("example")
+                .unwrap()
+                .repositories
+                .get_mut("42")
+                .unwrap(),
+        );
         let actual_revision = if candidate {
             let source = directory.join("source");
             std::fs::create_dir(&source).unwrap();
@@ -877,7 +892,9 @@ impl DeliveryFixture {
                 .repositories
                 .get_mut("42")
                 .unwrap()
-                .ci[0]
+                .ci
+                .as_mut()
+                .unwrap()[0]
                 .required_checks
                 .push("suite-two".into());
         }
@@ -1637,14 +1654,16 @@ fn zip_fixture(name: &str, data: &[u8]) -> Vec<u8> {
     writer.finish().unwrap().into_inner()
 }
 async fn child_ci_fixture() -> DeliveryFixture {
-    let mut f = DeliveryFixture::new().await;
+    bind_child_ci_fixture(DeliveryFixture::new().await)
+}
+fn bind_child_ci_fixture(mut f: DeliveryFixture) -> DeliveryFixture {
     f.host
         .finish(
             f.admission.operation_id(),
             json!({"fixture":"prior metadata complete"}),
         )
         .unwrap();
-    f.repository_contract.configuration.ci[0].workflow_id = 3;
+    f.repository_contract.configuration.ci.as_mut().unwrap()[0].workflow_id = 3;
     Arc::get_mut(&mut f.coordinator).unwrap().contracts.insert(
         f.repository_contract.repository.clone(),
         f.repository_contract.clone(),
@@ -1665,6 +1684,158 @@ async fn child_ci_fixture() -> DeliveryFixture {
     f.admission = DeliveryAdmission::bind(permit, f.admission.gate.clone(), scope).unwrap();
     f
 }
+
+#[tokio::test]
+async fn warm_hosted_capability_must_cover_current_requirements_and_trusted_route() {
+    let original = child_ci_fixture().await;
+    assert!(
+        original
+            .coordinator
+            .acquire_child_validation(&original.admission, &verifier())
+            .await
+            .is_err()
+    );
+    child_ci_artifact(&original, &original.admission.scope.revision.tested_commit);
+    let passed = original
+        .coordinator
+        .acquire_child_validation(&original.admission, &verifier())
+        .await
+        .unwrap();
+    original
+        .coordinator
+        .reobserve_hosted(&original.admission, &passed)
+        .await
+        .unwrap();
+    for change in ["requirement", "trusted_pin", "same_policy"] {
+        // The changed policy enters before original configuration/authorization
+        // and Control admission. Only the previous genuine capability is reused.
+        let current = bind_child_ci_fixture(
+            DeliveryFixture::build_configured(false, false, |repository| {
+                let suite = &mut repository.ci.as_mut().unwrap()[0];
+                suite.workflow_id = 3;
+                match change {
+                    "requirement" => suite.required_checks.push("new-required-suite".into()),
+                    "trusted_pin" => {
+                        suite.proof.job_workflow_sha = "2".repeat(40);
+                        suite.proof.job_workflow_ref = format!(
+                            "fixture/trusted/.github/workflows/proof.yml@{}",
+                            "2".repeat(40)
+                        );
+                    }
+                    _ => {}
+                }
+            })
+            .await,
+        );
+        assert_eq!(current.admission.scope.work, original.admission.scope.work);
+        assert_eq!(
+            current.admission.scope.revision,
+            original.admission.scope.revision
+        );
+        let requests = current.wire.lock().unwrap().requests.len();
+        let operations = current.host.operations().unwrap().len();
+        let result = current
+            .coordinator
+            .reobserve_hosted(&current.admission, &passed)
+            .await;
+        match change {
+            "requirement" => {
+                assert_eq!(result.unwrap_err().code, "validation_gate");
+                assert_eq!(current.wire.lock().unwrap().requests.len(), requests);
+            }
+            "trusted_pin" => assert_eq!(result.unwrap_err().code, "hosted_proof"),
+            _ => result.unwrap(), // Original proof operation is not rebound to this admission.
+        }
+        assert_eq!(current.host.operations().unwrap().len(), operations);
+        assert_eq!(current.wire.lock().unwrap().dispatch_count, 0);
+    }
+}
+
+#[tokio::test]
+async fn cached_empty_hosted_record_cannot_pass_an_absent_or_nonempty_suite() {
+    let f = child_ci_fixture().await;
+    let leaf = format!("child-hosted-{}.json", f.admission.operation_id());
+    f.coordinator
+        .records
+        .write(
+            &leaf,
+            &f.key
+                .sign(
+                    "child_hosted_validation",
+                    &ChildValidationRecord {
+                        scope_digest: f.admission.scope.digest().unwrap(),
+                        checks: vec![],
+                        proofs: vec![],
+                    },
+                )
+                .unwrap(),
+        )
+        .unwrap();
+    let before = f.wire.lock().unwrap().requests.len();
+    let absent = f
+        .coordinator
+        .acquire_dispatched_validation(&f.admission, &verifier(), &[], CheckKind::HostedCi, "child")
+        .await
+        .unwrap_err();
+    assert_eq!(absent.code, "incompletely_prepared");
+    let missing = f
+        .coordinator
+        .acquire_child_validation(&f.admission, &verifier())
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "validation_gate");
+    assert_eq!(f.wire.lock().unwrap().requests.len(), before);
+    assert_eq!(f.wire.lock().unwrap().dispatch_count, 0);
+}
+
+#[tokio::test]
+async fn delivery_effect_policy_is_phase_specific_and_release_requires_explicit_deployment() {
+    let f = DeliveryFixture::new().await;
+    let mut contract = f.repository_contract.clone();
+    contract.configuration.ci = None;
+    contract.configuration.production_ci = None;
+    contract.configuration.no_change_validation = None;
+    contract.configuration.deployment = None;
+    contract.digest().unwrap();
+    for phase in [
+        DeliveryPhase::SourceSealing,
+        DeliveryPhase::LocalValidation,
+        DeliveryPhase::CandidateAssembly,
+        DeliveryPhase::ParentEvidence,
+    ] {
+        require_effect_policy(&contract, phase).unwrap();
+    }
+    for phase in [
+        DeliveryPhase::PublishChild,
+        DeliveryPhase::HostedValidation,
+        DeliveryPhase::ReviewPublication,
+        DeliveryPhase::Staging,
+        DeliveryPhase::NoChange,
+        DeliveryPhase::Release,
+    ] {
+        assert_eq!(
+            require_effect_policy(&contract, phase).unwrap_err().code,
+            "delivery_policy_unresolved"
+        );
+    }
+    contract.configuration.production_ci =
+        f.repository_contract.configuration.production_ci.clone();
+    assert_eq!(
+        require_effect_policy(&contract, DeliveryPhase::Release)
+            .unwrap_err()
+            .code,
+        "delivery_policy_unresolved"
+    );
+    contract.configuration.deployment = Some(crate::config::Deployment::None("none".into()));
+    require_effect_policy(&contract, DeliveryPhase::Release).unwrap();
+    assert_eq!(
+        require_effect_policy(&contract, DeliveryPhase::Staging)
+            .unwrap_err()
+            .code,
+        "delivery_policy_unresolved"
+    );
+}
+
 fn child_ci_artifact(f: &DeliveryFixture, source: &str) {
     let action = "child-ci-3";
     let record: EffectRecord = f

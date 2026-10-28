@@ -181,7 +181,7 @@ pub(super) fn prepare_deployment_free_observation(
                 "baseline lacks one exact configured repository contract",
             ));
         };
-        if !matches!(&contract.configuration.deployment,
+        if !matches!(contract.configuration.deployment_policy()?,
             crate::config::Deployment::None(value) if value == "none")
             || !baseline.deployment_free
             || !current.targets().is_empty()

@@ -757,7 +757,7 @@ async fn recovery_rechecks_full_unfiltered_target_status_and_run_attempt() {
 async fn every_configured_target_needs_its_own_authenticated_current_proof() {
     let f = Fixture::new();
     let mut c = contract(true);
-    if let kegari_v0::config::Deployment::Steps { steps } = &mut c.configuration.deployment {
+    if let Some(kegari_v0::config::Deployment::Steps { steps }) = &mut c.configuration.deployment {
         let mut second = steps[0].clone();
         second.id = "deploy-two".into();
         second.target_id = "second-production-target".into();

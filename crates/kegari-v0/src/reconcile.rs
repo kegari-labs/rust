@@ -819,8 +819,10 @@ fn project(
                 .repositories
                 .values()
                 .flat_map(|r| match &r.deployment {
-                    crate::config::Deployment::None(_) => Vec::new(),
-                    crate::config::Deployment::Steps { steps } => {
+                    // Absence contributes no admitted production targets. It
+                    // does not establish the explicit deployment-free policy.
+                    None | Some(crate::config::Deployment::None(_)) => Vec::new(),
+                    Some(crate::config::Deployment::Steps { steps }) => {
                         steps.iter().map(|s| s.target_id.clone()).collect()
                     }
                 })

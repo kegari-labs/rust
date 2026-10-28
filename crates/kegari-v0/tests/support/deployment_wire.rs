@@ -550,7 +550,7 @@ impl Fixture {
         mutate: impl FnOnce(&mut Value),
     ) {
         let step = match &c.configuration.deployment {
-            kegari_v0::config::Deployment::Steps { steps } => &steps[0],
+            Some(kegari_v0::config::Deployment::Steps { steps }) => &steps[0],
             _ => panic!(),
         };
         let (run_id, deployment_id) = {

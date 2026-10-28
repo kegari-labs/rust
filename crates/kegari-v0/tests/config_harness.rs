@@ -59,6 +59,264 @@ fn typed_config_defaults_and_reproducible_revision() {
     assert_eq!(config.revision().unwrap(), parsed.revision().unwrap());
 }
 
+#[test]
+fn supplied_delivery_policy_preserves_legacy_bytes_and_config_revision() {
+    // Exact former Repository serialization shape, independent of the new
+    // Option serializer. No new version/null/discriminator may enter old data.
+    #[derive(serde::Serialize)]
+    struct LegacyRepository<'a> {
+        source: &'a String,
+        hostname: &'a String,
+        main: &'a String,
+        staging: &'a String,
+        local_checks: &'a Vec<String>,
+        integrated_checks: &'a Vec<String>,
+        ci: &'a Vec<CiSuite>,
+        production_ci: &'a Vec<CiSuite>,
+        review_context: &'a String,
+        no_change_validation: &'a ExactRevisionWorkflow,
+        deployment: &'a Deployment,
+    }
+    let config = configured();
+    config.validate().unwrap();
+    let repository = &config.workspaces["example"].repositories["101"];
+    let legacy = LegacyRepository {
+        source: &repository.source,
+        hostname: &repository.hostname,
+        main: &repository.main,
+        staging: &repository.staging,
+        local_checks: &repository.local_checks,
+        integrated_checks: &repository.integrated_checks,
+        ci: repository.ci.as_ref().unwrap(),
+        production_ci: repository.production_ci.as_ref().unwrap(),
+        review_context: &repository.review_context,
+        no_change_validation: repository.no_change_validation.as_ref().unwrap(),
+        deployment: repository.deployment.as_ref().unwrap(),
+    };
+    let old_bytes = serde_json::to_vec(&legacy).unwrap();
+    assert_eq!(serde_json::to_vec(repository).unwrap(), old_bytes);
+    assert_eq!(
+        toml::to_string(repository).unwrap(),
+        toml::to_string(&legacy).unwrap()
+    );
+    let decoded: Repository = serde_json::from_slice(&old_bytes).unwrap();
+    assert_eq!(serde_json::to_vec(&decoded).unwrap(), old_bytes);
+    assert_eq!(
+        canonical_digest(1, &decoded).unwrap(),
+        canonical_digest(1, &legacy).unwrap()
+    );
+    let mut old_config = serde_json::to_value(&config).unwrap();
+    old_config["workspaces"]["example"]["repositories"]["101"] =
+        serde_json::to_value(&legacy).unwrap();
+    assert_eq!(
+        config.revision().unwrap(),
+        canonical_digest(1, &old_config).unwrap()
+    );
+    let old_text = toml::to_string(&config).unwrap();
+    assert_eq!(
+        Config::parse(&old_text).unwrap().revision().unwrap(),
+        config.revision().unwrap()
+    );
+}
+
+#[test]
+fn omitted_delivery_policies_remain_unresolved_and_roundtrip_without_defaults() {
+    let full = serde_json::to_value(configured()).unwrap();
+    for omitted in ["ci", "production_ci", "no_change_validation", "deployment"] {
+        let mut value = full.clone();
+        value["workspaces"]["example"]["repositories"]["101"]
+            .as_object_mut()
+            .unwrap()
+            .remove(omitted);
+        let config: Config = serde_json::from_value(value).unwrap();
+        config.validate().unwrap();
+        let encoded = serde_json::to_value(&config).unwrap();
+        assert!(
+            encoded["workspaces"]["example"]["repositories"]["101"]
+                .get(omitted)
+                .is_none()
+        );
+        assert_eq!(
+            Config::parse(&toml::to_string(&config).unwrap())
+                .unwrap()
+                .revision()
+                .unwrap(),
+            config.revision().unwrap()
+        );
+    }
+    let mut value = full;
+    let repository = value["workspaces"]["example"]["repositories"]["101"]
+        .as_object_mut()
+        .unwrap();
+    for field in ["ci", "production_ci", "no_change_validation", "deployment"] {
+        repository.remove(field);
+    }
+    let config: Config = serde_json::from_value(value).unwrap();
+    config.validate().unwrap();
+    let repository = &config.workspaces["example"].repositories["101"];
+    repository.validate_supplied_policy().unwrap();
+    for (field, result) in [
+        ("ci", repository.staging_ci().map(|_| ())),
+        (
+            "production_ci",
+            repository.production_ci_policy().map(|_| ()),
+        ),
+        (
+            "no_change_validation",
+            repository.no_change_workflow().map(|_| ()),
+        ),
+        ("deployment", repository.deployment_policy().map(|_| ())),
+    ] {
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "delivery_policy_unresolved");
+        assert!(error.message.contains(field));
+    }
+    assert_eq!(repository.local_checks, ["local"]);
+    assert_eq!(repository.integrated_checks, ["e2e"]);
+}
+
+#[test]
+fn supplied_null_empty_or_malformed_delivery_policy_never_means_unresolved() {
+    for field in ["ci", "production_ci", "no_change_validation", "deployment"] {
+        let mut value = serde_json::to_value(configured()).unwrap();
+        value["workspaces"]["example"]["repositories"]["101"][field] = Value::Null;
+        assert!(
+            serde_json::from_value::<Config>(value).is_err(),
+            "accepted explicit null {field}"
+        );
+    }
+    for field in ["ci", "production_ci"] {
+        let mut config = configured();
+        let repository = config
+            .workspaces
+            .get_mut("example")
+            .unwrap()
+            .repositories
+            .get_mut("101")
+            .unwrap();
+        if field == "ci" {
+            repository.ci = Some(vec![]);
+        } else {
+            repository.production_ci = Some(vec![]);
+        }
+        assert!(repository.validate_supplied_policy().is_err());
+        let error = if field == "ci" {
+            repository.staging_ci().unwrap_err()
+        } else {
+            repository.production_ci_policy().unwrap_err()
+        };
+        assert_eq!(error.code, "invalid_config");
+        assert!(config.validate().is_err());
+        assert!(Config::parse(&toml::to_string(&config).unwrap()).is_err());
+    }
+    for (field, malformed) in [
+        ("ci", json!([{"workflow_id":0,"required_checks":[]}])),
+        ("production_ci", json!({})),
+        ("no_change_validation", json!({})),
+        ("deployment", json!({"steps":[]})),
+        ("deployment", json!("unknown")),
+    ] {
+        let mut value = serde_json::to_value(configured()).unwrap();
+        value["workspaces"]["example"]["repositories"]["101"][field] = malformed;
+        if let Ok(config) = serde_json::from_value::<Config>(value) {
+            assert!(config.validate().is_err());
+        }
+    }
+}
+
+#[test]
+fn evaluation_requires_explicit_deployment_free_policy_even_when_other_policy_is_omitted() {
+    let mut config = configured();
+    let workspace = config.workspaces.get_mut("example").unwrap();
+    let workspace_id = workspace.id;
+    workspace.independent_review.enabled = true;
+    workspace.profiles.independent_review = Some(profile());
+    workspace.github.pr_authors = vec!["77".into()];
+    workspace.github_connection = format!("evaluation-{workspace_id}-github");
+    workspace.linear_connection = format!("evaluation-{workspace_id}-linear");
+    let repository = workspace.repositories.get_mut("101").unwrap();
+    repository.hostname = format!("github.{workspace_id}.evaluation.invalid");
+    repository.ci = None;
+    repository.production_ci = None;
+    repository.no_change_validation = None;
+    workspace.evaluation = Some(EvaluationBinding {
+        schema_version: 1,
+        suite_manifest: "/private/tmp/evaluation-suite.json".into(),
+        suite_digest: bytes_digest(b"declared test data only"),
+        report_root: "/private/tmp/evaluation-reports".into(),
+        fixture_root: "/private/tmp/evaluation-fixtures".into(),
+        case: "case".into(),
+        variant: "variant".into(),
+        profile: "profile".into(),
+        repository_id: 101,
+        pull_request: 1,
+        author_id: 77,
+        base_commit: "1".repeat(40),
+        head_commit: "2".repeat(40),
+    });
+    for provider in ["github", "linear"] {
+        let mut connection = config.connections.remove(provider).unwrap();
+        connection.endpoint = Some(format!(
+            "https://{provider}.{workspace_id}.evaluation.invalid{}",
+            if provider == "linear" {
+                "/graphql"
+            } else {
+                "/"
+            }
+        ));
+        config
+            .connections
+            .insert(format!("evaluation-{workspace_id}-{provider}"), connection);
+    }
+    config.validate().unwrap();
+    Config::parse(&toml::to_string(&config).unwrap()).unwrap();
+    for (provider, endpoint) in [
+        (
+            "github",
+            format!("https://github.{workspace_id}.evaluation.invalid"),
+        ),
+        (
+            "github",
+            format!("https://github.{workspace_id}.evaluation.invalid/other"),
+        ),
+        (
+            "github",
+            format!("https://github.{}.evaluation.invalid/", Uuid::nil()),
+        ),
+        (
+            "linear",
+            format!("https://linear.{workspace_id}.evaluation.invalid/graphql/"),
+        ),
+    ] {
+        let mut changed = config.clone();
+        changed
+            .connections
+            .get_mut(&format!("evaluation-{workspace_id}-{provider}"))
+            .unwrap()
+            .endpoint = Some(endpoint);
+        assert_eq!(changed.validate().unwrap_err().code, "invalid_config");
+    }
+    assert!(
+        matches!(config.workspaces["example"].repositories["101"].deployment_policy().unwrap(), Deployment::None(value) if value=="none")
+    );
+    config
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .repositories
+        .get_mut("101")
+        .unwrap()
+        .deployment = None;
+    let encoded = serde_json::to_value(&config).unwrap();
+    assert!(
+        encoded["workspaces"]["example"]["repositories"]["101"]
+            .get("deployment")
+            .is_none()
+    );
+    assert_eq!(config.validate().unwrap_err().code, "invalid_config");
+    assert!(Config::parse(&toml::to_string(&config).unwrap()).is_err());
+}
+
 // The removed catalog tests described obsolete target-tool policy. The public
 // configuration now rejects that entire surface rather than retaining an opt-in
 // adapter. Generic account/repository/resource authority remains independently tested.
@@ -154,7 +412,9 @@ fn generic_test_resources_keep_scope_resolution_and_disposable_write_requirement
 #[test]
 fn hosted_proof_routes_require_pinned_caller_and_reusable_workflow_identity() {
     let good = configured();
-    let route = good.workspaces["example"].repositories["101"].ci[0]
+    let route = good.workspaces["example"].repositories["101"]
+        .staging_ci()
+        .unwrap()[0]
         .proof
         .clone();
     route.validate().unwrap();
@@ -194,6 +454,8 @@ fn hosted_proof_routes_require_pinned_caller_and_reusable_workflow_identity() {
         .get_mut("101")
         .unwrap()
         .no_change_validation
+        .as_mut()
+        .unwrap()
         .proof
         .workflow_sha = "1111111111111111111111111111111111111111".into();
     assert!(mismatched.validate().is_err());

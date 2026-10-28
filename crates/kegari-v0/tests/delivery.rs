@@ -434,6 +434,15 @@ impl DeliveryFixture {
         local: bool,
         integrated: bool,
     ) -> Self {
+        Self::with_repository_configuration(extra_check, candidate, local, integrated, |_| {}).await
+    }
+    async fn with_repository_configuration(
+        extra_check: bool,
+        candidate: bool,
+        local: bool,
+        integrated: bool,
+        adjust: impl FnOnce(&mut kegari_v0::config::Repository),
+    ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().canonicalize().unwrap();
         let mut cfg = config();
@@ -450,6 +459,7 @@ impl DeliveryFixture {
         if !integrated {
             repository.integrated_checks.clear();
         }
+        adjust(repository);
         let actual_revision = if candidate {
             let source = directory.join("source");
             std::fs::create_dir(&source).unwrap();
@@ -489,7 +499,9 @@ impl DeliveryFixture {
                 .repositories
                 .get_mut("42")
                 .unwrap()
-                .ci[0]
+                .ci
+                .as_mut()
+                .unwrap()[0]
                 .required_checks
                 .push("suite-two".into());
         }
@@ -751,6 +763,113 @@ impl DeliveryFixture {
             .get(&id(101))
             .map_or(0, Vec::len)
     }
+}
+
+#[tokio::test]
+async fn unresolved_delivery_policy_preserves_identity_but_never_passes_empty_hosted_checks() {
+    let f =
+        DeliveryFixture::with_repository_configuration(false, false, true, true, |repository| {
+            repository.ci = None;
+            repository.production_ci = None;
+            repository.no_change_validation = None;
+            repository.deployment = None;
+        })
+        .await;
+    assert_eq!(
+        f.repository_contract.digest().unwrap(),
+        f.admission.scope().contract_digest
+    );
+    let requests = f.wire.lock().unwrap().requests.len();
+    let operations = f.host.operations().unwrap().len();
+    for kind in [
+        kegari_v0::evidence::CheckKind::HostedCi,
+        kegari_v0::evidence::CheckKind::ProductionCi,
+    ] {
+        let error = f
+            .coordinator
+            .observe_hosted_checks(&f.admission, kind, &[], &verifier())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "delivery_policy_unresolved");
+    }
+    assert_eq!(f.wire.lock().unwrap().requests.len(), requests);
+    assert_eq!(f.host.operations().unwrap().len(), operations);
+    assert_eq!(f.wire.lock().unwrap().dispatch_count, 0);
+}
+
+#[tokio::test]
+async fn exact_dispatch_requires_both_ci_and_route_before_recording_or_sending() {
+    for omit_ci in [true, false] {
+        let f = DeliveryFixture::with_repository_configuration(
+            false,
+            false,
+            true,
+            true,
+            |repository| {
+                if omit_ci {
+                    repository.ci = None;
+                } else {
+                    repository.no_change_validation = None;
+                }
+            },
+        )
+        .await;
+        let requests = f.wire.lock().unwrap().requests.len();
+        let operations = f.host.operations().unwrap().len();
+        let error = f
+            .coordinator
+            .dispatch_exact_validation(&f.admission)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "delivery_policy_unresolved");
+        assert_eq!(f.wire.lock().unwrap().requests.len(), requests);
+        assert_eq!(f.host.operations().unwrap().len(), operations);
+        assert_eq!(f.wire.lock().unwrap().dispatch_count, 0);
+    }
+}
+
+#[tokio::test]
+async fn missing_deployment_cannot_create_an_empty_production_or_recovery_baseline() {
+    let f =
+        DeliveryFixture::with_repository_configuration(false, false, true, true, |repository| {
+            repository.deployment = None;
+        })
+        .await;
+    let requests = f.wire.lock().unwrap().requests.len();
+    assert_eq!(
+        f.observer
+            .observe(&f.repository_contract)
+            .await
+            .unwrap_err()
+            .code,
+        "delivery_policy_unresolved"
+    );
+    assert_eq!(
+        f.observer
+            .observe_recovery(&f.repository_contract)
+            .await
+            .unwrap_err()
+            .code,
+        "delivery_policy_unresolved"
+    );
+    assert_eq!(f.wire.lock().unwrap().requests.len(), requests);
+}
+
+#[tokio::test]
+async fn explicit_no_deployment_still_requires_current_main_without_unrelated_ci_policy() {
+    let f =
+        DeliveryFixture::with_repository_configuration(false, false, true, true, |repository| {
+            repository.ci = None;
+            repository.production_ci = None;
+            repository.no_change_validation = None;
+        })
+        .await;
+    let observed = f.observer.observe(&f.repository_contract).await.unwrap();
+    assert!(observed.baseline().deployment_free);
+    assert!(observed.targets().is_empty());
+    assert_eq!(observed.baseline().production.commit, "a".repeat(40));
+    assert!(f.wire.lock().unwrap().main_reads >= 2);
+    assert_eq!(f.wire.lock().unwrap().dispatch_count, 0);
 }
 
 #[tokio::test]
@@ -1176,6 +1295,93 @@ async fn child_recovery_requires_authentic_complete_record_and_closure_replays_o
                 .is_some_and(|q| q.contains("KegariState")))
             .count(),
         1
+    );
+}
+
+#[tokio::test]
+async fn recovery_cannot_close_original_child_after_current_policy_is_removed() {
+    let original = DeliveryFixture::new().await;
+    let comment = retained_child_fixture(&original).await;
+    let child = original
+        .coordinator
+        .recover_child_result(
+            &original.admission,
+            &workflow(),
+            &BTreeSet::from(["exact outcome".into()]),
+            comment,
+        )
+        .await
+        .unwrap();
+    let mut current =
+        DeliveryFixture::with_repository_configuration(false, false, true, true, |repository| {
+            repository.ci = None;
+            repository.no_change_validation = None;
+        })
+        .await;
+    // A new actual configuration/gate is constructed before admission. The
+    // retained child is the original recovered capability, never decoded into
+    // authority or rewritten to match this new policy.
+    assert_eq!(
+        child.verified().evidence().work,
+        current.admission.scope().work
+    );
+    assert_eq!(
+        child.verified().evidence().revision,
+        current.admission.scope().revision
+    );
+    current.wire.lock().unwrap().comments = original.wire.lock().unwrap().comments.clone();
+    current
+        .host
+        .finish(
+            current.admission.operation_id(),
+            json!({"fixture":"initial scope complete"}),
+        )
+        .unwrap();
+    let gate = current.admission.fresh_gate().clone();
+    let mut scope = current.admission.scope().clone();
+    scope.phase = DeliveryPhase::Recovery;
+    let permit = current
+        .host
+        .admit(
+            &current.lease,
+            Uuid::new_v4(),
+            gate.work_key().unwrap(),
+            scope.digest().unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
+    current.admission = DeliveryAdmission::bind(permit, gate, scope).unwrap();
+    let mut configuration = config();
+    let repository = configuration
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .repositories
+        .get_mut("42")
+        .unwrap();
+    repository.ci = None;
+    repository.no_change_validation = None;
+    let requests = current.wire.lock().unwrap().requests.len();
+    let operations = current.host.operations().unwrap().len();
+    let error = current
+        .coordinator
+        .close_child(&current.admission, &child, &configuration)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "stale_result");
+    assert_eq!(current.wire.lock().unwrap().requests.len(), requests);
+    assert_eq!(current.host.operations().unwrap().len(), operations);
+    assert!(
+        !current
+            ._temp
+            .path()
+            .join("records")
+            .join(id(2).to_string())
+            .join(format!(
+                "child-closure-intent-{}.json",
+                current.admission.operation_id()
+            ))
+            .exists()
     );
 }
 #[tokio::test]

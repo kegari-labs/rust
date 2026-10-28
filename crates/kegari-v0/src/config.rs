@@ -396,6 +396,15 @@ pub enum ReleaseMode {
     Automatic,
     Manual,
 }
+// An omitted declaration is unresolved. A supplied null is malformed rather
+// than an alternate spelling for omission or an empty delivery policy.
+fn supplied_policy<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Repository {
@@ -410,12 +419,32 @@ pub struct Repository {
     pub local_checks: Vec<String>,
     #[serde(default)]
     pub integrated_checks: Vec<String>,
-    pub ci: Vec<CiSuite>,
-    pub production_ci: Vec<CiSuite>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "supplied_policy"
+    )]
+    pub ci: Option<Vec<CiSuite>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "supplied_policy"
+    )]
+    pub production_ci: Option<Vec<CiSuite>>,
     #[serde(default = "review_context")]
     pub review_context: String,
-    pub no_change_validation: ExactRevisionWorkflow,
-    pub deployment: Deployment,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "supplied_policy"
+    )]
+    pub no_change_validation: Option<ExactRevisionWorkflow>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "supplied_policy"
+    )]
+    pub deployment: Option<Deployment>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -941,6 +970,34 @@ impl Config {
     }
 }
 impl Repository {
+    fn unresolved(field: &str) -> Error {
+        Error::new(
+            "delivery_policy_unresolved",
+            format!("repository {field} policy is unresolved; dependent delivery cannot proceed"),
+        )
+    }
+    pub fn staging_ci(&self) -> Result<&[CiSuite]> {
+        self.validate_supplied_policy()?;
+        self.ci.as_deref().ok_or_else(|| Self::unresolved("ci"))
+    }
+    pub fn production_ci_policy(&self) -> Result<&[CiSuite]> {
+        self.validate_supplied_policy()?;
+        self.production_ci
+            .as_deref()
+            .ok_or_else(|| Self::unresolved("production_ci"))
+    }
+    pub fn no_change_workflow(&self) -> Result<&ExactRevisionWorkflow> {
+        self.validate_supplied_policy()?;
+        self.no_change_validation
+            .as_ref()
+            .ok_or_else(|| Self::unresolved("no_change_validation"))
+    }
+    pub fn deployment_policy(&self) -> Result<&Deployment> {
+        self.validate_supplied_policy()?;
+        self.deployment
+            .as_ref()
+            .ok_or_else(|| Self::unresolved("deployment"))
+    }
     fn validate(&self) -> Result<()> {
         path_syntax(&self.source)?;
         if self.main != "main"
@@ -955,12 +1012,18 @@ impl Repository {
         if self.hostname.contains(['/', ':', '@']) {
             return Err(Error::invalid("invalid GitHub hostname"));
         }
+        self.validate_supplied_policy()
+    }
+    /// Validate every supplied requirement without inventing missing policy.
+    /// Dependent effects must additionally request their specific policy via
+    /// the accessors above; this check alone establishes no delivery readiness.
+    pub fn validate_supplied_policy(&self) -> Result<()> {
         unique_nonempty(&self.local_checks, "local checks", true)?;
         unique_nonempty(&self.integrated_checks, "integrated checks", true)?;
-        for suites in [&self.ci, &self.production_ci] {
+        for suites in [&self.ci, &self.production_ci].into_iter().flatten() {
             if suites.is_empty() {
                 return Err(Error::invalid(
-                    "complete staging and production hosted CI suites are required",
+                    "a supplied staging or production hosted CI policy must contain complete nonempty suites",
                 ));
             }
             let mut ids = BTreeSet::new();
@@ -981,10 +1044,13 @@ impl Repository {
                 }
             }
         }
-        self.no_change_validation.validate()?;
+        if let Some(workflow) = &self.no_change_validation {
+            workflow.validate()?;
+        }
         match &self.deployment {
-            Deployment::None(value) if value == "none" => (),
-            Deployment::Steps { steps } if !steps.is_empty() => {
+            None => (),
+            Some(Deployment::None(value)) if value == "none" => (),
+            Some(Deployment::Steps { steps }) if !steps.is_empty() => {
                 let mut ids = BTreeSet::new();
                 for step in steps {
                     nonempty(&step.id, "deployment step ID")?;

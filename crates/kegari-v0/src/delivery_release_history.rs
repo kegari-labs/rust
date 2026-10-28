@@ -81,7 +81,9 @@ impl DeliveryCoordinator {
         production.scope.phase = DeliveryPhase::Release;
         self.reobserve_hosted(&production, &hosted).await?;
         let requirements = hosted_requirements(
-            &self.contract(observation)?.configuration.production_ci,
+            self.contract(observation)?
+                .configuration
+                .production_ci_policy()?,
             CheckKind::ProductionCi,
         )?;
         let contexts = requirements

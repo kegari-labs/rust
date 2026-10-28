@@ -228,8 +228,26 @@ struct Fixture {
     wire: Arc<Wire>,
 }
 async fn fixture() -> Fixture {
-    let (temp, built, _delivery) =
-        crate::runtime_delivery::tests::fixture_authorization(true).await;
+    fixture_with_delivery_policy(true).await
+}
+async fn fixture_with_delivery_policy(declared: bool) -> Fixture {
+    let (temp, built, _delivery, _, _) =
+        crate::runtime_delivery::tests::fixture_authorization_with_configuration(true, |config| {
+            if !declared {
+                let repository = config
+                    .workspaces
+                    .get_mut("example")
+                    .unwrap()
+                    .repositories
+                    .get_mut("42")
+                    .unwrap();
+                repository.ci = None;
+                repository.production_ci = None;
+                repository.no_change_validation = None;
+                repository.deployment = None;
+            }
+        })
+        .await;
     let root = temp.path().canonicalize().unwrap();
     let git = git_fixture(&root);
     let wire = Arc::new(Wire {
@@ -341,6 +359,115 @@ async fn fixture() -> Fixture {
         request,
         wire,
     }
+}
+#[tokio::test]
+async fn unresolved_delivery_policy_still_acquires_exact_scoped_source_and_owned_instructions() {
+    // Omission happens before configuration, authorization, and the real Control
+    // permit are constructed. No authenticated state is rewritten for this case.
+    let fixture = fixture_with_delivery_policy(false).await;
+    let configuration = fixture.runtime.configuration.snapshot().unwrap();
+    let repository = &configuration.workspaces["example"].repositories["42"];
+    configuration.validate().unwrap();
+    assert_eq!(
+        repository.staging_ci().unwrap_err().code,
+        "delivery_policy_unresolved"
+    );
+    assert_eq!(
+        repository.production_ci_policy().unwrap_err().code,
+        "delivery_policy_unresolved"
+    );
+    assert_eq!(
+        repository.no_change_workflow().unwrap_err().code,
+        "delivery_policy_unresolved"
+    );
+    assert_eq!(
+        repository.deployment_policy().unwrap_err().code,
+        "delivery_policy_unresolved"
+    );
+    let original_revision = configuration.revision().unwrap();
+    let original_contract = fixture.request.contract_digest().unwrap();
+    let source = fixture
+        .acquisition
+        .acquire(fixture.request.clone())
+        .await
+        .unwrap();
+    assert_eq!(source.revision(), &fixture.wire.fixture.revision);
+    let git = Git::new(&fixture.wire.fixture.binary).unwrap();
+    let root = fixture._temp.path().canonicalize().unwrap();
+    let execution = PrivateDir::create(&root.join("discovery-execution")).unwrap();
+    let projection = fixture.runtime.observations.snapshot().unwrap();
+    let parent = projection
+        .parent(Uuid::from_u128(2), Uuid::from_u128(100))
+        .unwrap();
+    let mut work = parent.work.clone().unwrap();
+    work.child = Some(Uuid::from_u128(101));
+    let identity = crate::execution::DirectoryIdentity {
+        schema_version: 1,
+        runtime_id: fixture.request.permit.lease.runtime_id,
+        directory_id: Uuid::new_v4(),
+        repository: source.repository().clone(),
+        work,
+        repository_path: execution.path().join("repository"),
+        operator_checkout: fixture.wire.fixture.root.clone(),
+    };
+    let prepared = git
+        .prepare_acquired_execution_clone(&source, execution.path(), &identity)
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(prepared.join("AGENTS.md")).unwrap(),
+        "Only this fetched revision's instructions apply.\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.wire.fixture.root.join("base.txt")).unwrap(),
+        "uncommitted operator work\n"
+    );
+    assert_eq!(
+        fixture.request.contract_digest().unwrap(),
+        original_contract
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .configuration
+            .snapshot()
+            .unwrap()
+            .revision()
+            .unwrap(),
+        original_revision
+    );
+    assert!(
+        fixture
+            .runtime
+            .current_delivery(&parent.key)
+            .unwrap()
+            .verified_parent()
+            .is_none()
+    );
+    assert!(
+        fixture
+            .runtime
+            .current_delivery(&parent.key)
+            .unwrap()
+            .verified_acceptance()
+            .is_none()
+    );
+    // The injected wire accepts only identity/ref/object reads and upload-pack;
+    // these local source-import records do not constitute hosted or model work.
+    let effect = fixture
+        .runtime
+        .control
+        .operation(fixture.request.effect_id().unwrap())
+        .unwrap();
+    assert_eq!(effect.phase, ReceiptPhase::Acknowledged);
+    assert!(
+        fixture
+            .runtime
+            .executions
+            .active_operations()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fixture.wire.fetches.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
 async fn actual_protocol_import_preserves_dirty_operator_source_and_reuses_only_verified_cache() {

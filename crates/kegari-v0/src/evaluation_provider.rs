@@ -511,13 +511,10 @@ mod tests {
             },
         );
         let transport = registry.transport(&EvaluationBinding::connection(workspace, "github"));
+        let endpoint = url::Url::parse(&EvaluationBinding::endpoint(workspace, "github")).unwrap();
         let request = |path: &str, method: Method| HttpRequest {
             method,
-            url: url::Url::parse(&format!(
-                "{}{path}",
-                EvaluationBinding::endpoint(workspace, "github")
-            ))
-            .unwrap(),
+            url: endpoint.join(path).unwrap(),
             headers: Default::default(),
             body: Vec::new(),
         };

@@ -745,6 +745,10 @@ mod tests {
     }
     #[test]
     fn recovered_local_metadata_remains_pending_without_recreating_a_permit() {
+        // This process-free fixture requires an uncontended reopen. Exclude
+        // unrelated fork fixtures before opening the ownership descriptor;
+        // their pre-exec copies could otherwise extend its actual lifetime.
+        let _spawn_boundary = crate::process_spawn::retirement().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().canonicalize().unwrap().join("host");
         let runtime = Uuid::new_v4();

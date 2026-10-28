@@ -1517,6 +1517,9 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
         "old_metadata",
         "alpha3_metadata",
         "pre_default_workflow_metadata",
+        "pre_optional_policy_metadata",
+        "missing_repository_policy",
+        "unknown_repository_policy",
         "missing_workflow_source",
         "unknown_workflow_source",
         "missing_managed_policy",
@@ -1538,6 +1541,13 @@ async fn replacement_must_explicitly_support_owned_process_and_managed_policy_re
             // Keep the current asset inventory: reader support must be checked
             // directly rather than inferred from the presence of an asset name.
             "pre_default_workflow_metadata" => info["schema_version"] = 3.into(),
+            "pre_optional_policy_metadata" => info["schema_version"] = 4.into(),
+            "missing_repository_policy" => {
+                info.as_object_mut()
+                    .unwrap()
+                    .remove("repository_policy_schema");
+            }
+            "unknown_repository_policy" => info["repository_policy_schema"] = 99.into(),
             "missing_workflow_source" => {
                 info.as_object_mut()
                     .unwrap()

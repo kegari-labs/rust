@@ -194,7 +194,7 @@ impl ProductionObserver {
             }
             return Ok(vec![]);
         }
-        let Deployment::Steps { steps } = &contract.configuration.deployment else {
+        let Deployment::Steps { steps } = contract.configuration.deployment_policy()? else {
             return Err(blocked(
                 "owned target baseline lacks configured deployment inventory",
             ));

@@ -707,7 +707,7 @@ impl HttpTransport for PrerequisiteWire {
             let path = request.url.path();
             self.paths.lock().unwrap().push(path.into());
             let sha = "0123456789012345678901234567890123456789";
-            let repository = json!({"id":101,"name":"repo","owner":{"id":7,"login":"fixture","type":"User"},"default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":true,"push":self.fault!="permission"}});
+            let repository = json!({"id":101,"name":"repo","owner":{"id":7,"login":"fixture","type":"User"},"default_branch":"main","private":true,"archived":false,"disabled":false,"allow_squash_merge":true,"permissions":{"pull":self.fault!="read_permission","push":self.fault!="permission"}});
             let value = match path {
                 "/user" => json!({"id":7,"login":"fixture","type":"User"}),
                 "/user/repos" => {
@@ -767,6 +767,8 @@ async fn repository_prerequisites_read_exact_branches_workflows_and_policy_witho
     assert_eq!(result.len(), 1);
     assert_eq!(result[0]["branches"].as_array().unwrap().len(), 2);
     assert_eq!(result[0]["trusted_reusable_execution"], "unverified");
+    assert_eq!(result[0]["read_access"], true);
+    assert_eq!(result[0]["delivery_prerequisites"]["status"], "verified");
     let paths = wire.paths.lock().unwrap();
     for path in [
         "/repos/fixture/repo/branches/main/protection",
@@ -784,7 +786,14 @@ async fn repository_prerequisites_read_exact_branches_workflows_and_policy_witho
 
 #[tokio::test]
 async fn repository_prerequisites_block_missing_access_workflows_and_incompatible_policy() {
-    for fault in ["missing", "permission", "workflow", "strict", "reviews"] {
+    for fault in [
+        "missing",
+        "read_permission",
+        "permission",
+        "workflow",
+        "strict",
+        "reviews",
+    ] {
         let workspace = prerequisite_workspace();
         let wire = Arc::new(PrerequisiteWire {
             fault,
@@ -802,13 +811,76 @@ async fn repository_prerequisites_block_missing_access_workflows_and_incompatibl
             Some(wire),
         )
         .unwrap();
-        assert!(
-            kegari_v0::configuration::repository_prerequisites(&client, &workspace)
-                .await
-                .is_err(),
-            "{fault} was accepted"
-        );
+        let result = kegari_v0::configuration::repository_prerequisites(&client, &workspace).await;
+        if matches!(fault, "missing" | "read_permission") {
+            assert_eq!(
+                result.unwrap_err().code,
+                "repository_inaccessible",
+                "{fault}"
+            );
+        } else {
+            let result = result.unwrap();
+            assert_eq!(result[0]["read_access"], true, "{fault}");
+            assert_eq!(
+                result[0]["delivery_prerequisites"]["status"], "blocked",
+                "{fault}"
+            );
+            assert!(result[0]["delivery_prerequisites"]["error"]["code"].is_string());
+            assert_eq!(result[0]["trusted_reusable_execution"], "unverified");
+            assert!(result[0].get("branches").is_none());
+        }
     }
+}
+
+#[tokio::test]
+async fn missing_delivery_policy_preserves_read_access_without_probing_dependent_workflows() {
+    let mut workspace = prerequisite_workspace();
+    let repository = workspace.repositories.get_mut("101").unwrap();
+    repository.ci = None;
+    repository.production_ci = None;
+    repository.no_change_validation = None;
+    repository.deployment = None;
+    let wire = Arc::new(PrerequisiteWire {
+        fault: "",
+        paths: Mutex::new(vec![]),
+    });
+    let client = kegari_v0::providers::GithubClient::with_transport(
+        kegari_v0::providers::HttpPolicy::new(
+            "https://github.invalid/",
+            "7".into(),
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap(),
+        workspace.github.clone(),
+        kegari_v0::providers::Credential::new("fixture".into()).unwrap(),
+        Some(wire.clone()),
+    )
+    .unwrap();
+    let result = kegari_v0::configuration::repository_prerequisites(&client, &workspace)
+        .await
+        .unwrap();
+    let report = &result[0];
+    assert_eq!(report["read_access"], true);
+    assert_eq!(report["delivery_prerequisites"]["status"], "blocked");
+    assert_eq!(
+        report["delivery_prerequisites"]["error"]["code"],
+        "delivery_policy_unresolved"
+    );
+    assert_eq!(
+        report["delivery_prerequisites"]["error"]["details"]["unresolved_fields"],
+        json!(["ci", "production_ci", "no_change_validation", "deployment"])
+    );
+    assert_eq!(
+        report["delivery_prerequisites"]["error"]["details"]["delivery_metadata_observed"],
+        false
+    );
+    assert_eq!(report["trusted_reusable_execution"], "unverified");
+    let paths = wire.paths.lock().unwrap();
+    assert!(paths.iter().any(|path| path == "/user/repos"));
+    assert!(paths.iter().all(|path| matches!(
+        path.as_str(),
+        "/user" | "/user/repos" | "/repos/fixture/repo"
+    )));
 }
 
 #[tokio::test]
@@ -1093,7 +1165,16 @@ fn workspace_fixture_config() -> Config {
 
 #[tokio::test]
 async fn invalid_workspace_update_cannot_preserve_known_actor_repository_or_resource_permission() {
-    for reduction in ["authorizer", "repository", "resource", "connection"] {
+    for reduction in [
+        "authorizer",
+        "repository",
+        "resource",
+        "connection",
+        "ci",
+        "production_ci",
+        "no_change_validation",
+        "deployment",
+    ] {
         let f = Fixture::with_configuration(|config| {
             let fixture = workspace_fixture_config();
             config.connections = fixture.connections;
@@ -1125,6 +1206,12 @@ async fn invalid_workspace_update_cannot_preserve_known_actor_repository_or_reso
                     .writable = false
             }
             "connection" => ws.linear_connection = "removed-account".into(),
+            "ci" => ws.repositories.get_mut("42").unwrap().ci = None,
+            "production_ci" => ws.repositories.get_mut("42").unwrap().production_ci = None,
+            "no_change_validation" => {
+                ws.repositories.get_mut("42").unwrap().no_change_validation = None
+            }
+            "deployment" => ws.repositories.get_mut("42").unwrap().deployment = None,
             _ => unreachable!(),
         }
         ws.max_agents = 0;

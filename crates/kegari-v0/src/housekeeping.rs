@@ -2201,6 +2201,9 @@ pub struct HandoverInfo {
     /// Optional file selection and embedded origins in config, instructions and
     /// retained cleanup records. Asset names alone are not a reader contract.
     pub workflow_source_schema: u32,
+    /// Readers must preserve unresolved repository delivery policy instead of
+    /// requiring declarations during discovery or inventing deployment=none.
+    pub repository_policy_schema: u32,
     pub runtime_version: String,
     pub runtime_build: String,
     pub instruction_schema: u32,
@@ -2209,13 +2212,14 @@ pub struct HandoverInfo {
 }
 pub fn handover_info() -> Result<HandoverInfo> {
     Ok(HandoverInfo {
-        schema_version: 4,
+        schema_version: 5,
         api_version: 1,
         config_schema: 1,
         receipt_schema: 1,
         process_schema: 3,
         managed_execution_schema: 5,
         workflow_source_schema: 1,
+        repository_policy_schema: 1,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
         runtime_build: crate::BUILD_ID.into(),
         instruction_schema: crate::instructions::ASSEMBLY_SCHEMA,
@@ -2448,13 +2452,14 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
     let info =
         observed.map_err(|_| Error::new("timeout", "replacement metadata probe timed out"))??;
     binary.revalidate(true)?;
-    if info.schema_version != 4
+    if info.schema_version != 5
         || info.api_version != 1
         || info.config_schema != 1
         || info.receipt_schema != 1
         || info.process_schema != 3
         || info.managed_execution_schema != 5
         || info.workflow_source_schema != 1
+        || info.repository_policy_schema != 1
         || info.instruction_schema != crate::instructions::ASSEMBLY_SCHEMA
         || info.runtime_build.is_empty()
         || info.runtime_version.is_empty()

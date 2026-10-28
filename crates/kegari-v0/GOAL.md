@@ -1,3 +1,12 @@
+# Historical goal prompt — inactive
+
+Goal mode was cancelled on 2026-10-28. Work now proceeds only through individual
+planning and execution prompts. The retained text below records the former
+assignment; it does not authorize automatic continuation or local commits.
+The current alpha.10 stabilization request ends at its packaged checkpoint.
+
+---
+
 /goal Implement and independently validate the complete Kegari v0 application and its delivered agent harness against /Users/lgr/Development/com.kegari/com.kegari.rust/crates/kegari-v0/SPEC.md. After explicit goal resumption under the revised milestone plan, continue through implementation, testing, review and corrections until the specification's definition of done is supported by actual evidence. Preserve its scope, authority, isolation, acceptance, release and recovery guarantees. If a required permission, resource or decision prevents completion, finish all independent authorized work and report the precise blocker without marking the goal complete.
 
 Technology-agnostic execution correction — approved 2026-10-27

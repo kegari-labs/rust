@@ -298,7 +298,7 @@ impl ProductionObserver {
     ) -> Result<VerifiedTargetDeployment> {
         source.validate()?;
         crate::evidence::validate_digest(artifact)?;
-        let Deployment::Steps { steps } = &contract.configuration.deployment else {
+        let Deployment::Steps { steps } = contract.configuration.deployment_policy()? else {
             return Err(blocked(
                 "existing target verification needs a configured deployment target",
             ));
@@ -434,7 +434,7 @@ impl ProductionObserver {
             target_revisions: sources,
             deployed_artifact: common(&artifacts),
             target_artifacts: artifacts,
-            deployment_free: matches!(&contract.configuration.deployment, Deployment::None(value) if value == "none"),
+            deployment_free: matches!(contract.configuration.deployment_policy()?, Deployment::None(value) if value == "none"),
             successor_recovery_operation: Some(successor.predecessor()),
         };
         baseline.validate()?;
@@ -756,11 +756,12 @@ impl ProductionObserver {
         &self,
         contract: &RepositoryContract,
     ) -> Result<VerifiedRecoveryBaseline> {
+        let deployment = contract.configuration.deployment_policy()?;
         let production = self.main(contract).await?;
         let mut targets = Vec::new();
         let mut ids = BTreeSet::new();
         let mut environments = BTreeSet::new();
-        match &contract.configuration.deployment {
+        match deployment {
             Deployment::None(value) if value == "none" => {}
             Deployment::Steps { steps } if !steps.is_empty() => {
                 for step in steps {
@@ -801,6 +802,7 @@ impl ProductionObserver {
         &self,
         contract: &RepositoryContract,
     ) -> Result<VerifiedProductionBaseline> {
+        let deployment = contract.configuration.deployment_policy()?;
         if let Some(successor) = &self.successor {
             return self.observe_successor(contract, successor).await;
         }
@@ -809,7 +811,7 @@ impl ProductionObserver {
         let mut targets = Vec::new();
         let mut target_artifacts = BTreeMap::new();
         let mut owned_targets = Vec::new();
-        let deployment_free = match &contract.configuration.deployment {
+        let deployment_free = match deployment {
             Deployment::None(value) if value == "none" => true,
             Deployment::Steps { steps } if !steps.is_empty() => {
                 let mut environments = BTreeSet::new();
@@ -1209,7 +1211,7 @@ pub fn deployment_context_digest(
 }
 fn step<'a>(contract: &'a RepositoryContract, id: &str) -> Result<&'a DeploymentStep> {
     contract.digest()?;
-    let Deployment::Steps { steps } = &contract.configuration.deployment else {
+    let Deployment::Steps { steps } = contract.configuration.deployment_policy()? else {
         return Err(blocked("repository has no deployment steps"));
     };
     let matches: Vec<_> = steps.iter().filter(|s| s.id == id).collect();

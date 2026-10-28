@@ -69,7 +69,8 @@ impl Targets {
             })
             .unwrap();
         assert_eq!(challenge.source(), &target.source);
-        let crate::config::Deployment::Steps { steps } = &contract.configuration.deployment else {
+        let Some(crate::config::Deployment::Steps { steps }) = &contract.configuration.deployment
+        else {
             panic!()
         };
         let step = steps.iter().find(|step| step.id == target.step).unwrap();

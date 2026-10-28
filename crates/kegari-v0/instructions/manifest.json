@@ -9,6 +9,6 @@
     "review": "sha256:d3439229fa5e4ad3cc04fcd32c6257f1e67f4fb5050da3325ac163f8bf4bccfd",
     "validation": "sha256:20e924b466468b55527eaba2f88fd5c99eae01ae6f3c62fb3d88f09b012dca21"
   },
-  "runtime_version": "0.2.0-alpha.9",
+  "runtime_version": "0.2.0-alpha.10",
   "schema_version": 1
 }

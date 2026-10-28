@@ -345,6 +345,82 @@ fn overview(projection: &RuntimeProjection, intent: Intent) -> Overview {
 }
 
 #[tokio::test]
+async fn unresolved_delivery_policy_preserves_discovery_scope_but_grants_no_production_target() {
+    for requested_target in [false, true] {
+        let fixture = Fixture::new();
+        let mut cfg = config();
+        let repository = cfg
+            .workspaces
+            .get_mut("example")
+            .unwrap()
+            .repositories
+            .get_mut("42")
+            .unwrap();
+        repository.ci = None;
+        repository.production_ci = None;
+        repository.no_change_validation = None;
+        repository.deployment = None;
+        cfg.validate().unwrap();
+        if requested_target {
+            let mut wire = fixture.lock().unwrap();
+            let description = wire.issues[&id(100)]["description"]
+                .as_str()
+                .unwrap()
+                .replace(
+                    "\"production_targets\":[]",
+                    "\"production_targets\":[\"unconfigured-target\"]",
+                );
+            wire.issues.get_mut(&id(100)).unwrap()["description"] = json!(description);
+        }
+        let mut refs = ReconcileRefs::new();
+        let first = refresh(&cfg, &fixture, &refs).await;
+        let parent = first.parent(id(2), id(100)).unwrap();
+        if requested_target {
+            assert!(parent.blockers.iter().any(|b| b.code == "scope_violation"));
+            assert!(
+                parent
+                    .authorization_gate(Utc::now(), Duration::seconds(60))
+                    .is_err()
+            );
+        } else {
+            publish(&first, &mut refs);
+            let current = refresh(&cfg, &fixture, &refs).await;
+            let parent = current.parent(id(2), id(100)).unwrap();
+            let gate = parent
+                .fresh_gate(
+                    Some(id(101)),
+                    GatePurpose::NewOperation,
+                    &DependencyOutcomes::default(),
+                    Utc::now(),
+                    Duration::seconds(60),
+                )
+                .unwrap();
+            assert_eq!(
+                gate.child_scope().unwrap().write_repository.as_deref(),
+                Some("42")
+            );
+            assert!(
+                overview(&current, Intent::Running)
+                    .ready_for_review
+                    .is_empty()
+            );
+            assert_eq!(
+                cfg.workspaces["example"].repositories["42"]
+                    .deployment_policy()
+                    .unwrap_err()
+                    .code,
+                "delivery_policy_unresolved"
+            );
+        }
+        assert!(fixture.lock().unwrap().requests.iter().all(|(_, value)| {
+            value
+                .get("query")
+                .is_none_or(|query| !query.as_str().unwrap().contains("mutation"))
+        }));
+    }
+}
+
+#[tokio::test]
 async fn complete_wire_reads_require_published_authorization_and_exact_gate() {
     let fixture = Fixture::new();
     let cfg = config();

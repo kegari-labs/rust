@@ -28,7 +28,7 @@ plaintext credentials nor standalone secret fingerprints appear in it.
 The commit shares `ControlHost`'s lifecycle and mutation mutex. It rechecks the
 authenticated OS UID or stable Tailscale user ID against the current role mapping,
 including the operator ID, then compares the prepared and client configuration
-revisions and the requested control generation. Identity, account, permission, repository-path and deployment-authority changes
+revisions and the requested control generation. Identity, account, permission, repository-path and delivery-policy changes
 require PAUSED or STOPPED, drained work and no unresolved effects. Ordinary
 selection, Codex profile, workflow, budget and capacity changes apply to future
 admissions; active operations retain their exact admitted settings while current
@@ -150,8 +150,11 @@ Schema-2 resource observations are descriptive and retain their original identit
 Service-member process rows use schema 3, while ordinary process rows remain
 schema 2 and legacy process rows remain readable without promotion. Service-bearing
 check records use schema 3; checks without services retain schemas 1/2. Handover
-metadata is version 4 and requires process schema 3, managed schema 5 and explicit
-workflow-source schema 1 support for selected or installed workflow origins.
+metadata is version 5 and requires process schema 3, managed schema 5, workflow-source
+schema 1 and repository-policy schema 1. The latter requires readers to preserve
+unresolved delivery declarations without converting them to permission or
+deployment-free evidence. Complete configurations retain their existing serialized
+shape and config schema 1; older replacement readers are refused.
 
 The schema-5 policy digest includes the exact build identity. A retained command
 domain from a different build is refused even if its schema number matches;
@@ -161,22 +164,53 @@ Existing account, repository and generic resource permission changes retain
 their configuration fencing and drained-update requirements. Removing the old
 catalog does not change those requirements or resolve outstanding effects.
 
-`config check` returns explicit verified/blocked metadata checks and an
-`operational_qualification: unverified` field. A workspace-limited check keeps the
-full registered configuration revision in its report. Repository checks enumerate
-the complete permitted repository set, require actual read/write permission and
-active repositories, enumerate configured active workflow IDs and exact caller
-paths, read the pinned caller commits, and read both main/staging references,
-branch protection and rulesets. They use the delivery module's shared policy
-validator for strict current-base checks, required CI/review contexts, allowed
-squash merges and incompatible formal/code-owner approval requirements. These
-reads do not issue a delivery proof or mutate provider policy. Trusted reusable
-workflow execution, exact-source artifacts, isolation and locked-session checks
-remain separate explicitly unverified report entries. Identity and workflow
-metadata do not qualify live Codex isolation, GitHub-hosted CI, deployment,
-Tailscale, Keychain locked-session behavior or the required human-reviewed agent
-evaluations. These checks have not been executed against live accounts in this
-builder conversation.
+Repository `ci`, `production_ci`, `no_change_validation` and `deployment` may be
+omitted while agents discover the repository and its requirements. Omission is
+unresolved policy; explicit JSON null, empty CI arrays and malformed supplied
+policies are rejected. Only an explicit `deployment = "none"` establishes a
+configured deployment-free choice. Existing supplied values retain their exact
+serialization and configuration digest. Evaluation repositories still require an
+explicit deployment-free policy.
+
+These declarations describe provider delivery policy, not a prerequisite command
+inventory. Source identity, scoped acquisition, authorization and worker planning
+can proceed without them. Hosted CI, no-change validation, merge, production and
+deployment consumers require the policy for their actual phase before dispatch,
+cached proof reuse or final approval. Missing policy cannot become a passing empty
+suite, an empty release graph or an automatic deployment-free baseline. Changing
+or removing a supplied policy fences the affected workspace even if another field
+makes the proposed update invalid; committing a policy change requires drained,
+paused/stopped ownership.
+
+`config check` returns a top-level `status` of `blocked` when identity, workflow,
+read-access or delivery prerequisite metadata is blocked. Its separate
+`configuration_admission` field records whether configuration identity, selected
+workflow and repository read checks passed. A verified admission field does not
+qualify command execution or delivery. `prepare_initial` uses that narrower
+field for its read-only preflight result; the production bootstrap uses the
+configuration transaction directly, which validates structure, selected workflow
+and affected connection identities. Neither route grants worker or delivery
+authority. A workspace-limited check retains the full registered configuration
+revision in its report.
+
+Repository checks enumerate the complete permitted repository set and require
+observed read permission and active repositories. Missing repositories or read
+access block admission. An unresolved delivery policy reports its missing fields
+without probing dependent workflow/branch metadata. With complete policy, checks
+inspect write permission, active workflow IDs and exact caller paths, pinned
+caller commits, main/staging references, branch protection and rulesets. They use
+the delivery module's shared policy validator for strict current-base checks,
+required CI/review contexts, allowed squash merges and incompatible formal or
+code-owner approval requirements. Failures remain visible delivery blockers while
+scoped discovery remains available.
+
+These reads issue no delivery proof and change no provider policy. Reports keep
+`operational_qualification: unverified`; trusted reusable workflow execution,
+exact-source artifacts, isolation and locked-session checks remain separately
+unverified. Identity and workflow metadata do not qualify live Codex isolation,
+GitHub-hosted CI, deployment, Tailscale, Keychain locked-session behavior or human
+agent evaluations. These checks have not been executed against live accounts in
+this builder conversation.
 
 ## Deterministic evidence
 

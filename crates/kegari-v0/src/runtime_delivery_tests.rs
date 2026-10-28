@@ -115,7 +115,7 @@ pub(crate) async fn fixture_authorization_with_wire(
 ) {
     fixture_authorization_with_configuration(authorized, |_| {}).await
 }
-pub(super) async fn fixture_authorization_with_configuration(
+pub(crate) async fn fixture_authorization_with_configuration(
     authorized: bool,
     adjust: impl FnOnce(&mut crate::config::Config),
 ) -> (
@@ -168,7 +168,7 @@ pub(super) async fn fixture_authorization_with_provider_fixture(
         .repositories
         .values()
         .flat_map(|repository| match &repository.deployment {
-            crate::config::Deployment::Steps { steps } => steps
+            Some(crate::config::Deployment::Steps { steps }) => steps
                 .iter()
                 .map(|step| step.target_id.clone())
                 .collect::<Vec<_>>(),

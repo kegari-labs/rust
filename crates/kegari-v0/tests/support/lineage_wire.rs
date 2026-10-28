@@ -214,7 +214,8 @@ impl RuntimeLineageWire {
         admission: &DeliveryAdmission,
     ) {
         let contract = coordinator.contract(admission).unwrap();
-        let crate::config::Deployment::Steps { steps } = &contract.configuration.deployment else {
+        let Some(crate::config::Deployment::Steps { steps }) = &contract.configuration.deployment
+        else {
             panic!("target fixture needs configured steps")
         };
         for step in steps {
@@ -637,7 +638,8 @@ impl RuntimeLineageWire {
         }
         let (source, run, deployment) = self.serving.lock().unwrap().clone();
         let check = run + 10;
-        let crate::config::Deployment::Steps { steps } = &contract.configuration.deployment else {
+        let Some(crate::config::Deployment::Steps { steps }) = &contract.configuration.deployment
+        else {
             panic!()
         };
         let step = &steps[0];

@@ -102,7 +102,7 @@ fn target_inventory(
                     "already-production repository is no longer configured",
                 )
             })?;
-        match &contract.configuration.deployment {
+        match contract.configuration.deployment_policy()? {
             crate::config::Deployment::None(value) if value == "none" => (),
             crate::config::Deployment::Steps { steps } => {
                 for step in steps {

@@ -2364,6 +2364,167 @@ mod source_tests {
         RepositoryIdentity,
     };
     use std::{collections::VecDeque, future::Future, pin::Pin, sync::Mutex, time::Duration};
+    #[tokio::test]
+    async fn unresolved_delivery_policy_reaches_current_scoped_worker_plan_without_effects() {
+        use crate::app::ConfigurationControl;
+        use crate::reconcile::{DependencyOutcomes, GatePurpose};
+        let (_temp, fixture, _delivery, wire, owner) =
+            crate::runtime_delivery::tests::fixture_authorization_with_configuration(
+                true,
+                |config| {
+                    let workspace = config.workspaces.get_mut("example").unwrap();
+                    workspace.workflow = None;
+                    let repository = workspace.repositories.get_mut("42").unwrap();
+                    repository.local_checks.clear();
+                    repository.integrated_checks.clear();
+                    repository.ci = None;
+                    repository.production_ci = None;
+                    repository.no_change_validation = None;
+                    repository.deployment = None;
+                },
+            )
+            .await;
+        // All omissions precede the real projection and signed authorization.
+        let config = fixture.configuration.snapshot().unwrap();
+        config.validate().unwrap();
+        let config_revision = config.revision().unwrap();
+        let projection = fixture.runtime.observations.snapshot().unwrap();
+        assert_eq!(projection.config_revision, config_revision);
+        let parent = projection
+            .parent(Uuid::from_u128(2), Uuid::from_u128(100))
+            .unwrap();
+        let gate = parent
+            .fresh_gate(
+                Some(Uuid::from_u128(101)),
+                GatePurpose::NewOperation,
+                &DependencyOutcomes::default(),
+                chrono::Utc::now(),
+                chrono::Duration::seconds(30),
+            )
+            .unwrap();
+        let authority = WorkerAuthority::Authorized(gate.clone());
+        let revision = Revision {
+            commit: "a".repeat(40),
+            tree: "b".repeat(40),
+        };
+        {
+            let mut wire = wire.lock().unwrap();
+            wire.github_values.insert("/repos/fixture/repo/git/ref/heads/staging".into(),
+                json!({"ref":"refs/heads/staging","object":{"type":"commit","sha":revision.commit}}));
+            wire.github_values.insert(
+                format!("/repos/fixture/repo/git/commits/{}", revision.commit),
+                json!({"sha":revision.commit,"tree":{"sha":revision.tree},"parents":[]}),
+            );
+        }
+        let selected = resolve_source(&fixture.runtime, &authority)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.repository, "42");
+        assert_eq!(selected.revision, revision);
+        let (lease, _owner_lock) = owner.start(&fixture.runtime);
+        let operations_before =
+            canonical_digest(1, &fixture.runtime.control.operations().unwrap()).unwrap();
+        let request = LaunchRequest {
+            lease,
+            operation_id: Uuid::new_v4(),
+            authority,
+            phase: PhaseKey {
+                work: gate.work_key().unwrap(),
+                generation: canonical_digest(1, &gate.work().generation).unwrap(),
+                phase: "implementation".into(),
+                retry_grant: None,
+            },
+            source: Some(selected),
+            delivery: None,
+            unfinished: None,
+            source_advanced: None,
+            retried_unfinished: None,
+            review_retry: None,
+            validation_retry: None,
+            review_round: None,
+            max_seconds: 30,
+            max_turns: 1,
+        };
+        let plan = Plan::read(&fixture.runtime, request.clone()).unwrap();
+        assert_eq!(plan.role, AgentRole::Testing);
+        assert_eq!(plan.source.as_ref().unwrap().revision, revision);
+        assert_eq!(plan.config.revision().unwrap(), config_revision);
+        assert_eq!(
+            plan.request.authority.digest().unwrap(),
+            gate.digest().unwrap()
+        );
+        assert!(plan.workflow.front_matter.checks.local.is_empty());
+        assert!(plan.workflow.front_matter.checks.integrated.is_empty());
+        assert_eq!(
+            plan.workspace.repositories["42"]
+                .staging_ci()
+                .unwrap_err()
+                .code,
+            "delivery_policy_unresolved"
+        );
+        assert!(plan.context.get("issue").is_some());
+        assert!(
+            fixture
+                .runtime
+                .current_delivery(&parent.key)
+                .unwrap()
+                .verified_parent()
+                .is_none()
+        );
+        assert!(
+            fixture
+                .runtime
+                .current_delivery(&parent.key)
+                .unwrap()
+                .verified_acceptance()
+                .is_none()
+        );
+        // The actual runtime plan accepts neither an unobserved source nor a
+        // caller-selected repository outside the original signed child scope.
+        let mut wrong_source = request.clone();
+        wrong_source.source.as_mut().unwrap().repository = "99".into();
+        assert_eq!(
+            Plan::read(&fixture.runtime, wrong_source)
+                .err()
+                .unwrap()
+                .code,
+            "scope_violation"
+        );
+        let mut missing_source = request.clone();
+        missing_source.source = None;
+        assert_eq!(
+            Plan::read(&fixture.runtime, missing_source)
+                .err()
+                .unwrap()
+                .code,
+            "incompletely_prepared"
+        );
+        fixture
+            .configuration
+            .fences
+            .lock()
+            .unwrap()
+            .workspaces
+            .insert(Uuid::from_u128(2));
+        assert_eq!(
+            Plan::read(&fixture.runtime, request).err().unwrap().code,
+            "permission_fenced"
+        );
+        assert_eq!(
+            canonical_digest(1, &fixture.runtime.control.operations().unwrap()).unwrap(),
+            operations_before
+        );
+        assert!(fixture.processes.operations().unwrap().is_empty());
+        assert!(
+            fixture
+                .runtime
+                .executions
+                .active_operations()
+                .unwrap()
+                .is_empty()
+        );
+    }
     #[test]
     fn preparation_rechecks_selected_attempt_caps_trigger_and_spacing_before_receipt() {
         use crate::control::{ControlHost, Intent, Lifecycle};

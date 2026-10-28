@@ -1,5 +1,66 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Alpha.10 stabilization checkpoint complete; stopped.**
+Work proceeds through individual planning/execution prompts. Do not resume the
+historical goal or carry its automatic continuation/commit authorization forward.
+The current assignment ends after a locally verified, packaged `0.2.0-alpha.10`
+checkpoint; crate separation will be a separate task. No minor milestone closes.
+
+The working tree starts from `c385cffe4a2d1667b247cc6d7bc56dd8f254e77f` plus the
+unfinished discovery-admission patch. Its retained full regression completed with
+1,254 passes, six failures and three native ignores on source
+`sha256:1b562e9872e7b86116ec8546d75835de0ee72b62fa9fab11a6c16d2dd6591db4`.
+The failures cover invalid routing-label fixtures (three), evaluation endpoint
+canonicalization, a false configuration fence, and recovery-test lock contention.
+All original outcomes remain retained under `/private/tmp/kegari-policy-*`.
+
+The four bounded corrections and version/catalog update are complete. Final release
+regression: **1,260 passed, zero failed, three native ignored**, with normal test
+parallelism. Focused regressions, formatting, strict all-target Clippy and contract
+inventory checks passed. The bounded independent review found no material issues.
+All 747 final inputs match source
+`sha256:9c3bd1506eccc818c50050fa3161817b4a91b230bae4b6294dd2f3b508c242e0`.
+
+The optimized arm64 package is under
+`target/prereleases/kegari-v0-0.2.0-alpha.10-aarch64-apple-darwin-c7422735d5b0`
+with an adjacent `.tar.gz`, checksums and extraction inspection record. All five
+inspection commands passed; bytes and embedded assets matched, and no runtime
+state was created. Original failures and the interrupted pre-catalog-version
+compile remain retained alongside final results. Native command admission remains
+blocked. No installation, service start, live qualification, remote operation,
+commit or tag occurred.
+See [the stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md) and
+[MILESTONES.md](MILESTONES.md). Stop at this checkpoint; later work requires a new
+prompt.
+
+### Interrupted onboarding increment — historical goal-mode checkpoint
+
+**Goal active and incomplete; unattended. Target: 0.2.0 / M02-3 onboarding.**
+Current increment starts at `c385cffe4a2d1667b247cc6d7bc56dd8f254e77f`
+(`feat(kegari-v0): expose bounded environment and resource inspection`).
+The working tree now permits omitted hosted CI/no-change/deployment policy during
+scoped discovery while retaining strict supplied declarations and dependent gates.
+Configuration reports distinguish discovery admission from delivery blockers;
+policy removals fence authority and handover metadata requires reader support.
+No native/live action, approval request, installation or activation is authorized.
+
+Integration in progress: initial all-target check failed on two old fixture Option
+patterns; those were mechanically corrected, and the second check passed. A new
+actual configuration-transaction test target is included. Independent review found
+recovery closure needed original contract/current policy checks, and retained
+hosted checks needed complete current requirements before reuse. Corrections and
+regressions are in progress; no final frozen-source regression/build claim yet.
+Logs are under `/private/tmp/kegari-policy-*`. Root owns Cargo and commits; agents
+have non-overlapping slices. No minor milestone is complete.
+
+Next: finish review corrections, freeze source, run meaningful integration checks,
+retain exact-source development build and evidence, then continue authenticated
+output/review paging and empty/unborn baselines. Native qualification remains
+separately blocked by explicit approval; consumed approvals are not reusable.
+Follow [MILESTONES.md](MILESTONES.md).
+
+### Previous environment/resource inspection increment
+
 **Goal active and incomplete; unattended. Target: 0.2.0 / M02-2–M02-4.**
 This increment began on clean `main` at `902adc6eaa14e0e951f734778312d0a9113603e3`
 (`feat(kegari-v0): retain complete validation archives for compact evidence`).
