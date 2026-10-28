@@ -277,8 +277,8 @@ pub(super) async fn run(
         );
         scope.phase = DeliveryPhase::SourceSealing;
         let sealing = begin_phase(&f, scope.clone()).await;
-        let changed = maintain_phase_observations(&f.built.runtime, sealing.coordinator.seal_child_source(&sealing.admission, &claim, &repair.execution, repair.contract.isolation(), crate::git::SourceCommitMetadata {
-            identity: crate::git::CommitIdentity { name:"Disposable Fixture".into(), email:"fixture@example.invalid".into() },
+        let changed = maintain_phase_observations(&f.built.runtime, sealing.coordinator.seal_child_source(&sealing.admission, &claim, &repair.execution, repair.contract.isolation(), kegari_git::SourceCommitMetadata {
+            identity: kegari_git::CommitIdentity { name:"Disposable Fixture".into(), email:"fixture@example.invalid".into() },
             timestamp: chrono::DateTime::from_timestamp(1_767_225_610+i64::from(ordinal),0).unwrap(),
             message:format!("test: seal round {ordinal} repair\n\nSigned-off-by: Disposable Fixture <fixture@example.invalid>\n"),
         })).await.unwrap();

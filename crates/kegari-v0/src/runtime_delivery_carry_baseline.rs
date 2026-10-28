@@ -6,12 +6,13 @@
 use crate::delivery::RepositoryContract;
 use crate::deployment::VerifiedProductionBaseline;
 use crate::evidence::{ProductionBaseline, VerifiedParent, WorkIdentity};
-use crate::git::{ProductionIntegration, RepositoryId, Revision, VerifiedProductionIntegration};
+use crate::git::VerifiedProductionIntegration;
 use crate::release::{ObservedEffect, ResourceKey, StepKind, StepState};
 use crate::runtime_delivery::VerifiedReleaseCompletion;
 use chrono::{Duration, Utc};
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
+use kegari_git::{ProductionIntegration, RepositoryId, Revision};
 use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};

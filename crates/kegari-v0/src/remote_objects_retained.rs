@@ -76,7 +76,7 @@ pub(crate) fn retained_sources(
         let receipt = control.operation(effect)?;
         if record.operator_checkout != Path::new(&contract.configuration.source)
             || record.required_revisions.get(&record.revision.commit) != Some(&record.revision.tree)
-            || record.git_version != crate::git::SUPPORTED_GIT_VERSION
+            || record.git_version != kegari_git::SUPPORTED_GIT_VERSION
             || record.schema_version != 1
             || record.effect != effect
             || receipt.runtime_id != runtime
@@ -197,7 +197,7 @@ impl VerifiedObjectSource {
 pub(crate) fn select_delta_source(
     sources: Vec<VerifiedObjectSource>,
     git: &Git,
-    delta: &crate::git::DeltaManifest,
+    delta: &kegari_git::DeltaManifest,
 ) -> Result<Option<VerifiedObjectSource>> {
     for source in sources {
         if source.contains_delta(delta)? {

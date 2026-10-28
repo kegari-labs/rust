@@ -1,5 +1,44 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Git records extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. `kegari-git` owns fourteen Git data
+types, pinned constants and deterministic naming, validation and digest rules.
+The moved implementations are unchanged except for the three approved public
+validators. Consumers use `kegari_git` directly without compatibility reexports
+or a reverse dependency. Actual Git execution, operation requests, admission,
+process journals, cancellation, clone ownership, protected recovery and private
+candidate/integration construction remain backend-owned. This is the first pass;
+the complete Git adapter remains future work.
+
+All sixteen packages retain `0.2.0-alpha.10`; all 239 external lock entries remain
+unchanged. The eighteen-record serialization/digest corpus captured before
+relocation matches exactly. All **215 focused release tests passed**. The complete
+workspace release suite passed **1,344 tests, zero failed, exactly three native
+ignores**, with normal concurrency. Formatting, strict all-target Clippy, contract
+inventory and its eleven tests passed. One bounded independent review found no
+material issue and confirmed that existing test assertions remain intact.
+
+Initial formatter import-order diagnostics and an early locked-check refusal were
+corrected, and two unused imports were removed. Their diagnostics are retained;
+no test failed or assertion was weakened. The full suite ran once on the final
+reviewed candidate, with no further source changes or broad verification reruns.
+
+The optimized arm64 executable passed all five minimal-environment inspections,
+with consistent identity and no runtime-state creation. Independent reconstruction
+confirmed all 393 application-hash inputs and the 823 reviewed source/test/build
+inputs. See the [Git ownership boundary](../kegari-git/README.md) and
+[verification report](validation/GIT-RECORDS-EXTRACTION.md) for migrations,
+results, retained diagnostics and source/executable identities.
+
+This adds no runner abstraction, operational feature or qualification claim.
+Native/live restrictions, milestone requirements, schemas, instruction/protocol
+assets and the alpha.10 archive remain intact. No live providers, installed Codex,
+Keychain, native qualification, services, goal resumption, release packaging,
+commits or remote operations were involved.
+
+## Previous scheduler extraction checkpoint
+
 **Goal mode cancelled. Scheduler extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. `kegari-scheduler` owns the existing

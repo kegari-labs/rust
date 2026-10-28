@@ -481,7 +481,7 @@ impl DeliveryCoordinator {
                     targets.insert(
                         (repository.clone(), id.clone()),
                         (
-                            crate::git::Revision {
+                            kegari_git::Revision {
                                 commit: source_commit.clone(),
                                 tree: tree.clone(),
                             },

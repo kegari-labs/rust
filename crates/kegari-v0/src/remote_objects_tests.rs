@@ -915,7 +915,7 @@ async fn actual_squash_import_retains_reviewed_head_and_reproduces_exact_delta()
     .await
     .unwrap();
     let git = Git::new(&f.binary).unwrap();
-    let scope = crate::git::WriteScope {
+    let scope = kegari_git::WriteScope {
         paths: vec![
             "AGENTS.md".into(),
             "binary.dat".into(),
@@ -1513,7 +1513,7 @@ async fn delta_recovery_selects_exact_retained_roots_instead_of_latest_source() 
                 child_id: Uuid::from_u128(101),
                 work_generation: &generation,
                 correction_generation: &correction,
-                scope: crate::git::WriteScope {
+                scope: kegari_git::WriteScope {
                     paths: vec![
                         "AGENTS.md".into(),
                         "binary.dat".into(),

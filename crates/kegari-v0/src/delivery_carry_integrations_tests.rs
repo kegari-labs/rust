@@ -1,7 +1,7 @@
 //! Data-only complete-inventory tests. These records are deliberately synthetic;
 //! no test here constructs a VerifiedProductionIntegration or a carry capability.
 use super::*;
-use crate::git::{CandidateManifest, ProductionIntegration, Revision};
+use kegari_git::{CandidateManifest, ProductionIntegration, Revision};
 
 fn revision(value: char) -> Revision {
     Revision {
@@ -42,7 +42,7 @@ fn fixture() -> (CandidateManifest, ProductionIntegration) {
         parent_id: record.parent_id,
         work_generation: canonical_digest(1, &"work").unwrap(),
         correction_generation: canonical_digest(1, &"correction").unwrap(),
-        git_version: crate::git::SUPPORTED_GIT_VERSION.into(),
+        git_version: kegari_git::SUPPORTED_GIT_VERSION.into(),
         production: record.observed_main.clone(),
         ordered_delta_digests: vec![],
         ordered_patch_digests: vec![],

@@ -510,8 +510,8 @@ fn text(value: &str, maximum: usize) -> Result<()> {
 mod tests {
     use super::*;
     use crate::evidence::{Generation, WorkIdentity};
-    use crate::git::{RepositoryId, Revision};
     use kegari_digest::bytes_digest;
+    use kegari_git::{RepositoryId, Revision};
 
     // Deliberate data fixtures for enrollment invariants, not observed reads or
     // native execution evidence. The worker tests exercise the actual producer.

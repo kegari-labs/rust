@@ -12,6 +12,7 @@ use kegari_config::Config;
 use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
+use kegari_git::RepositoryId;
 use kegari_providers::*;
 use kegari_secrets::AttestationKey;
 use kegari_storage::PrivateDir;
@@ -28,7 +29,6 @@ use kegari_v0::evidence::RevisionBinding;
 use kegari_v0::evidence::Verdict;
 use kegari_v0::evidence::no_change_digest;
 use kegari_v0::git::Git;
-use kegari_v0::git::RepositoryId;
 use kegari_v0::providers::*;
 use kegari_v0::reconcile::*;
 use reqwest::header::HeaderMap;
@@ -1952,7 +1952,7 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
         child_dependencies: &dependencies,
         satisfied_children: &satisfied,
         production_integrations: &[],
-        identity: kegari_v0::git::CommitIdentity {
+        identity: kegari_git::CommitIdentity {
             name: "Fixture".into(),
             email: "fixture@example.invalid".into(),
         },
@@ -2129,7 +2129,7 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
     request.phase.phase = assignment.phase().into();
     request.source = Some(kegari_v0::runtime_workers::SourceSelection {
         repository: "42".into(),
-        revision: kegari_v0::git::Revision {
+        revision: kegari_git::Revision {
             commit: "e".repeat(40),
             tree: "f".repeat(40),
         },
@@ -2272,7 +2272,7 @@ async fn production_change_during_candidate_build_retains_candidate_without_prom
         child_dependencies: &dependencies,
         satisfied_children: &satisfied,
         production_integrations: &[],
-        identity: kegari_v0::git::CommitIdentity {
+        identity: kegari_git::CommitIdentity {
             name: "Fixture".into(),
             email: "fixture@example.invalid".into(),
         },

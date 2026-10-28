@@ -1,3 +1,7 @@
+use kegari_git::{
+    CandidateManifest, CommitIdentity, DeltaArtifact, RepositoryId, Revision,
+    SUPPORTED_GIT_VERSION, WriteScope, title_suffix,
+};
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
 #[path = "support/process_probe.rs"]

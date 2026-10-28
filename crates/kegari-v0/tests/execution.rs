@@ -4,10 +4,11 @@
 mod pinned_git;
 use kegari_context::workflow::Workflow;
 use kegari_digest::bytes_digest;
+use kegari_git::RepositoryId;
 use kegari_types::error::{Error, Result};
 use kegari_v0::evidence::{CheckKind, Generation, WorkIdentity};
 use kegari_v0::execution::*;
-use kegari_v0::git::{Git, RepositoryId};
+use kegari_v0::git::Git;
 use kegari_v0::isolation::{
     BoundManagedExecution, CommandOutcome, ExecutionRole, IsolationPlan, PathGrant,
     ValidatedIsolation,
@@ -235,9 +236,9 @@ impl Fixture {
     }
 }
 
-fn source_metadata() -> kegari_v0::git::SourceCommitMetadata {
-    kegari_v0::git::SourceCommitMetadata {
-        identity: kegari_v0::git::CommitIdentity {
+fn source_metadata() -> kegari_git::SourceCommitMetadata {
+    kegari_git::SourceCommitMetadata {
+        identity: kegari_git::CommitIdentity {
             name: "Fixture Human".into(),
             email: "fixture@example.test".into(),
         },
@@ -252,7 +253,7 @@ fn source_metadata() -> kegari_v0::git::SourceCommitMetadata {
 fn trusted_source_commit_preserves_binary_mode_and_shared_checkout() {
     let f = Fixture::new(ExecutionRole::Child);
     let root = &f.boundary.plan().repository;
-    let scope = kegari_v0::git::WriteScope {
+    let scope = kegari_git::WriteScope {
         paths: vec!["a.txt".into()],
     };
     assert!(
@@ -314,7 +315,7 @@ fn trusted_source_commit_preserves_binary_mode_and_shared_checkout() {
                 root,
                 committed.base(),
                 committed.revision(),
-                &kegari_v0::git::WriteScope {
+                &kegari_git::WriteScope {
                     paths: vec!["unrelated/".into()]
                 },
                 source_metadata()
@@ -352,7 +353,7 @@ fn trusted_source_commit_preserves_binary_mode_and_shared_checkout() {
 fn trusted_source_commit_rejects_unscoped_or_staged_bytes_before_changing_head() {
     let f = Fixture::new(ExecutionRole::Child);
     let root = &f.boundary.plan().repository;
-    let scope = kegari_v0::git::WriteScope {
+    let scope = kegari_git::WriteScope {
         paths: vec!["a.txt".into()],
     };
     fs::write(root.join("unscoped"), "unapproved").unwrap();
@@ -388,7 +389,7 @@ fn trusted_source_commit_rejects_unscoped_or_staged_bytes_before_changing_head()
 
 #[test]
 fn trusted_source_commit_preserves_deletion_symlink_and_denies_configured_filters() {
-    let scope = kegari_v0::git::WriteScope {
+    let scope = kegari_git::WriteScope {
         paths: vec!["a.txt".into()],
     };
     let deleted = Fixture::new(ExecutionRole::Child);

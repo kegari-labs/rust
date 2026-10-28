@@ -337,8 +337,8 @@ async fn repair_cycle_inner(
             &claim,
             &original.execution,
             original.contract.isolation(),
-            crate::git::SourceCommitMetadata {
-                identity: crate::git::CommitIdentity {
+            kegari_git::SourceCommitMetadata {
+                identity: kegari_git::CommitIdentity {
                     name: "Disposable Fixture".into(),
                     email: "fixture@example.invalid".into(),
                 },
@@ -972,8 +972,8 @@ async fn repair_cycle_inner(
             &repair_claim,
             &repair.execution,
             repair.contract.isolation(),
-            crate::git::SourceCommitMetadata {
-                identity: crate::git::CommitIdentity {
+            kegari_git::SourceCommitMetadata {
+                identity: kegari_git::CommitIdentity {
                     name: "Disposable Fixture".into(),
                     email: "fixture@example.invalid".into(),
                 },

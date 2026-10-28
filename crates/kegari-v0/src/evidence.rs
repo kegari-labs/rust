@@ -4,12 +4,10 @@
 //! reads. They must never be accepted as worker tool arguments. A worker's prose
 //! or submitted result reference cannot manufacture a `Verified*` value.
 
-use crate::git::{
-    CandidateManifest, DeltaManifest, RepositoryId, Revision, VerifiedProductionIntegration,
-    validate_oid,
-};
+use crate::git::VerifiedProductionIntegration;
 use chrono::{DateTime, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_git::{CandidateManifest, DeltaManifest, RepositoryId, Revision, validate_oid};
 use kegari_secrets::{AttestationKey, Signed};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

@@ -1112,7 +1112,7 @@ impl DeliveryCoordinator {
             StepKind::Deploy { expected_tree, .. }
             | StepKind::DeployExisting {
                 source:
-                    crate::git::Revision {
+                    kegari_git::Revision {
                         tree: expected_tree,
                         ..
                     },
@@ -1127,7 +1127,7 @@ impl DeliveryCoordinator {
                         a,
                         &a.permit,
                         &step.id,
-                        crate::git::Revision {
+                        kegari_git::Revision {
                             commit: payload.exact_source_commit.clone().unwrap(),
                             tree: expected_tree.clone(),
                         },
@@ -1882,7 +1882,7 @@ impl DeliveryCoordinator {
                     observed.effect = Some(ObservedEffect::Merge {
                         repository: repository.clone(),
                         pull_request: *pull_request,
-                        commit: crate::git::Revision {
+                        commit: kegari_git::Revision {
                             commit,
                             tree: candidate.tree.clone(),
                         },
@@ -2164,7 +2164,7 @@ struct ProductionCandidateRecord {
     schema_version: u32,
     operation: Uuid,
     scope: DeliveryScope,
-    candidate: crate::git::CandidateManifest,
+    candidate: kegari_git::CandidateManifest,
     evidence_token: String,
     branch: String,
     pull_request: u64,
@@ -2193,7 +2193,7 @@ impl PreparedProductionCandidate {
     pub fn branch(&self) -> &str {
         &self.signed.payload.branch
     }
-    pub fn candidate(&self) -> &crate::git::CandidateManifest {
+    pub fn candidate(&self) -> &kegari_git::CandidateManifest {
         &self.signed.payload.candidate
     }
 }
@@ -2567,7 +2567,7 @@ impl DeliveryCoordinator {
         &self,
         observation: &DeliveryObservation,
         parent: &evidence::VerifiedParent,
-        candidate: &crate::git::CandidateManifest,
+        candidate: &kegari_git::CandidateManifest,
     ) -> Result<()> {
         let manifest = parent.manifest();
         let result = candidate
@@ -2855,7 +2855,7 @@ impl DeliveryCoordinator {
                 "published tree differs from tested isolated candidate",
             ));
         }
-        let identity = |i: &crate::git::GitCommitIdentity| kegari_providers::CommitIdentity {
+        let identity = |i: &kegari_git::GitCommitIdentity| kegari_providers::CommitIdentity {
             name: i.name.clone(),
             email: i.email.clone(),
             date: i.date.clone(),
@@ -3017,7 +3017,7 @@ impl DeliveryCoordinator {
         observation: &DeliveryObservation,
         parent: &evidence::VerifiedParent,
         prepared: &PreparedProductionCandidate,
-        owned_merge: Option<&crate::git::Revision>,
+        owned_merge: Option<&kegari_git::Revision>,
     ) -> Result<PublishedReview> {
         self.current(
             observation,

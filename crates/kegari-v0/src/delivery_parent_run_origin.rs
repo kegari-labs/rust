@@ -250,7 +250,7 @@ impl ParentAssignmentOrigin {
                 let leaf = format!("delta-{}.json", &digest[7..]);
                 let delta: Signed<Value> = records.read(&leaf)?;
                 coordinator.key.verify("staged_delta", &delta)?;
-                let manifest: crate::git::DeltaManifest =
+                let manifest: kegari_git::DeltaManifest =
                     serde_json::from_value(delta.payload["manifest"].clone())
                         .map_err(|_| invalid("staged delta manifest invalid"))?;
                 if manifest.digest()? != *digest {

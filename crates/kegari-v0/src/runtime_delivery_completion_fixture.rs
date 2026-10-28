@@ -11,7 +11,7 @@ struct TerminalFixture {
     lease: Lease,
     github: RuntimeSeedWire,
     native: Arc<RuntimeLineageWire>,
-    merged: crate::git::Revision,
+    merged: kegari_git::Revision,
     observation_barrier: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -275,7 +275,7 @@ fn terminal_history(
             "release_hold"
         );
         // Divergence at first mint cannot establish a coherent terminal inventory.
-        let divergent = crate::git::Revision {
+        let divergent = kegari_git::Revision {
             commit: "f".repeat(40),
             tree: "e".repeat(40),
         };

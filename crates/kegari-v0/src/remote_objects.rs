@@ -8,13 +8,13 @@ use crate::delivery::DeliveryAdmission;
 use crate::delivery::RepositoryContract;
 use crate::git::Git;
 use crate::git::GitLimits;
-use crate::git::RepositoryId;
-use crate::git::Revision;
 use crate::process_records::ProcessJournal;
 use crate::worker::ExecutionRegistry;
 use crate::worker::WorkerAuthority;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_git::RepositoryId;
+use kegari_git::Revision;
 use kegari_providers::GithubClient;
 use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
@@ -67,8 +67,8 @@ enum Origin {
     },
     Candidate {
         reference: String,
-        staged: Vec<(u64, crate::git::DeltaManifest)>,
-        integrations: Vec<crate::git::ProductionIntegration>,
+        staged: Vec<(u64, kegari_git::DeltaManifest)>,
+        integrations: Vec<kegari_git::ProductionIntegration>,
     },
     StagingMerge {
         expected: kegari_providers::PullRequest,
@@ -639,7 +639,7 @@ impl VerifiedObjectSource {
     pub(crate) fn marker(&self) -> PathBuf {
         self.directory.path().join("source.json")
     }
-    pub(crate) fn contains_delta(&self, delta: &crate::git::DeltaManifest) -> Result<bool> {
+    pub(crate) fn contains_delta(&self, delta: &kegari_git::DeltaManifest) -> Result<bool> {
         let mut required = BTreeMap::new();
         collect_delta_revisions(delta, 0, &mut required)?;
         Ok(self.repository() == &delta.repository
@@ -1047,7 +1047,7 @@ impl ObjectAcquisition {
             directory_device: metadata.dev(),
             directory_inode: metadata.ino(),
             filesystem_digest,
-            git_version: crate::git::SUPPORTED_GIT_VERSION.into(),
+            git_version: kegari_git::SUPPORTED_GIT_VERSION.into(),
             git_binary: self.services.git.object_import_binary().clone(),
         };
         directory.create_bytes_exclusive(
@@ -1171,7 +1171,7 @@ fn insert_revision(revisions: &mut BTreeMap<String, String>, revision: &Revision
     Ok(())
 }
 fn collect_delta_revisions(
-    delta: &crate::git::DeltaManifest,
+    delta: &kegari_git::DeltaManifest,
     depth: usize,
     revisions: &mut BTreeMap<String, String>,
 ) -> Result<()> {

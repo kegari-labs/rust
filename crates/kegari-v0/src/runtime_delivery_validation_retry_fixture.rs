@@ -27,7 +27,7 @@ pub(super) struct ValidationFixture<'a> {
     pub original_claim: Arc<CompletedChildClaim>,
     pub binary: &'a Path,
     pub tool: Arc<Git>,
-    pub repository: &'a crate::git::RepositoryId,
+    pub repository: &'a kegari_git::RepositoryId,
     pub account: &'a str,
     pub wire: &'a Arc<Mutex<crate::corrections::wire_fixture::Fixture>>,
 }

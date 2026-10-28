@@ -108,8 +108,8 @@ impl DeliveryCoordinator {
 }
 
 fn require_complete_records<'a>(
-    candidates: &[crate::git::CandidateManifest],
-    actual: impl IntoIterator<Item = &'a crate::git::ProductionIntegration>,
+    candidates: &[kegari_git::CandidateManifest],
+    actual: impl IntoIterator<Item = &'a kegari_git::ProductionIntegration>,
 ) -> Result<()> {
     let mut declared = BTreeMap::new();
     for candidate in candidates {

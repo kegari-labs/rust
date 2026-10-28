@@ -26,8 +26,8 @@ pub(super) struct ReviewFixture<'a> {
     pub source: &'a Path,
     pub binary: &'a Path,
     pub tool: Arc<Git>,
-    pub revision: &'a crate::git::Revision,
-    pub repository: &'a crate::git::RepositoryId,
+    pub revision: &'a kegari_git::Revision,
+    pub repository: &'a kegari_git::RepositoryId,
     pub account: &'a str,
     pub scope: DeliveryScope,
 }

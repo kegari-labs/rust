@@ -4,13 +4,13 @@ use crate::{
     control::{ControlHost, Permit, Receipt, ReceiptPhase},
     delivery::{DeliveryAdmission, DeliveryPhase, RepositoryContract},
     evidence::{ProductionBaseline, ProductionTargetBaseline},
-    git::Revision,
     providers::{HostedProofExpectation, HostedProofVerifier, ProviderMutation, VerifiedHostedJob},
     reconcile::FreshGate,
 };
 use chrono::{DateTime, Utc};
 use kegari_config::{Deployment, DeploymentStep};
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_git::Revision;
 use kegari_providers::{GithubClient, GithubRecord, WorkflowJob, WorkflowRun};
 use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
@@ -69,14 +69,14 @@ impl VerifiedProductionBaseline {
 /// successful deployment or an ordinary assembly baseline.
 #[derive(Clone, Debug)]
 pub struct VerifiedRecoveryBaseline {
-    repository: crate::git::RepositoryId,
+    repository: kegari_git::RepositoryId,
     production: Revision,
     targets: Vec<ProductionTargetBaseline>,
     contract_digest: String,
     observed_at: DateTime<Utc>,
 }
 impl VerifiedRecoveryBaseline {
-    pub fn repository(&self) -> &crate::git::RepositoryId {
+    pub fn repository(&self) -> &kegari_git::RepositoryId {
         &self.repository
     }
     pub fn production(&self) -> &Revision {

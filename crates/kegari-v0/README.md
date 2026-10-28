@@ -119,10 +119,25 @@ is preserved without introducing new production use. The distinct private releas
 attempt record stays here. See the
 [scheduler extraction report](validation/SCHEDULER-EXTRACTION.md).
 
+Git records, naming rules, pure validation and canonical digest calculations now
+belong to [`kegari-git`](../kegari-git/README.md). Import the fourteen moved types,
+constants and helpers directly from `kegari_git`; this backend provides no
+compatibility reexports. The existing `validate_repo_path`,
+`CommitIdentity::validate` and `SourceCommitMetadata::validate` checks are public
+for retained backend callers without changing their behavior.
+
+This is the first Git extraction pass. `git::Git`, its operation request structs,
+process scopes, journals, gates and cancellation remain here, together with clone
+ownership, protected recovery and privately constructed candidate/integration
+proofs. Branch construction and delta ordering still perform their existing Git
+commands. No unchecked constructors, runner abstraction or new execution authority
+are introduced. The pinned Git version, serialized records and digest inputs are
+unchanged.
+
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all fifteen packages:
+test and lint commands cover all sixteen packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
@@ -152,8 +167,8 @@ retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISS
 execution design has been removed. The source now separates `kegari-cli`,
 `kegari-types`, `kegari-config`, `kegari-digest`, `kegari-providers`,
 `kegari-storage`, `kegari-process`, `kegari-platform`, `kegari-secrets`,
-`kegari-control-api`, `kegari-controller`, `kegari-codex`, `kegari-context`
-and `kegari-scheduler`
+`kegari-control-api`, `kegari-controller`, `kegari-codex`, `kegari-context`,
+`kegari-scheduler` and `kegari-git`
 from the remaining backend while retaining the
 same workspace version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a

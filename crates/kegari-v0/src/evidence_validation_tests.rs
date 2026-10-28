@@ -2,12 +2,12 @@
 //! ValidationPlan, VerifiedCheckExecution, worker outcome or native capability.
 use super::*;
 use crate::execution::{DiscoveredCheckProvenance, ExecutionBinding, SourceSnapshot};
-use crate::git::{RepositoryId, Revision};
 use crate::isolation::{CommandObservation, CommandOutcome};
 use crate::validation::{
     DiscoveryJournalReference, DiscoveryReadContent, DiscoveryReadReference, ValidationRequirement,
 };
 use kegari_digest::bytes_digest;
+use kegari_git::{RepositoryId, Revision};
 use kegari_platform::BinaryIdentity;
 use kegari_types::artifact::ArtifactProof;
 use std::path::PathBuf;
@@ -411,7 +411,7 @@ fn integrated_description() -> (
     ReviewedIntegratedValidation,
     WorkIdentity,
     String,
-    crate::git::CandidateManifest,
+    kegari_git::CandidateManifest,
     RevisionBinding,
 ) {
     let (mut validation, revision) = evidence();
@@ -429,7 +429,7 @@ fn integrated_description() -> (
     let provenance = attempt.discovered.as_mut().unwrap();
     provenance.plan = plan.clone();
     provenance.plan_digest = validation.plan_digest.clone();
-    let candidate = crate::git::CandidateManifest {
+    let candidate = kegari_git::CandidateManifest {
         schema_version: 1,
         operation_id: Uuid::from_u128(30),
         runtime_id: plan.binding.runtime_id,

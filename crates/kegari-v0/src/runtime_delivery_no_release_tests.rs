@@ -1034,7 +1034,7 @@ fn equivalent_target_observation_keeps_semantics_and_changed_delivery_does_not()
             hostname: "github.com".into(),
             id: "42".into(),
         },
-        source: crate::git::Revision {
+        source: kegari_git::Revision {
             commit: "1".repeat(40),
             tree: "2".repeat(40),
         },

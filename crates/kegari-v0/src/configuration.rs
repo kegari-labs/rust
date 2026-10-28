@@ -1132,7 +1132,7 @@ async fn repository_delivery_prerequisites(
             .flat_map(|suite| suite.required_checks.iter().cloned())
             .chain(std::iter::once(configured.review_context.clone()))
             .collect();
-        let identity = crate::git::RepositoryId {
+        let identity = kegari_git::RepositoryId {
             hostname: configured.hostname.clone(),
             id: repository.identity.id.to_string(),
         };

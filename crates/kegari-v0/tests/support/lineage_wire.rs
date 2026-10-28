@@ -2,7 +2,7 @@
 //! OIDC. This cannot execute a confined repository check or qualify live GitHub.
 use super::*;
 use crate::deployment::{ProductionObserver, TargetDeploymentChallenge, deployment_context_digest};
-use crate::git::Revision;
+use kegari_git::Revision;
 use std::path::Path;
 
 #[path = "owned_targets_wire.rs"]

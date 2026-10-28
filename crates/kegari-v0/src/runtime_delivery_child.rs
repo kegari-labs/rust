@@ -5,12 +5,13 @@ use crate::{
     control::{Lease, Permit},
     delivery::*,
     evidence::RevisionBinding,
-    git::{GitExecutionScope, SourceCommitMetadata},
+    git::GitExecutionScope,
     runtime::VerifiedAuthorizedOutcome,
     worker::{WorkerAuthority, WorkerHost},
     worker_run::RunCompletion,
 };
 use kegari_digest::canonical_digest;
+use kegari_git::SourceCommitMetadata;
 use kegari_types::run::PhaseKey;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;

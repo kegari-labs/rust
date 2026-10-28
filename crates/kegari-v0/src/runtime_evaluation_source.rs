@@ -3,10 +3,11 @@
 use super::*;
 use crate::{
     delivery::RepositoryContract,
-    git::{Git, GitLimits, HostGitExecutionScope, RepositoryId, Revision, VerifiedHostReadRoot},
+    git::{Git, GitLimits, HostGitExecutionScope, VerifiedHostReadRoot},
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
     process_records::ProcessJournal,
 };
+use kegari_git::{RepositoryId, Revision};
 use kegari_platform::BinaryIdentity;
 pub(crate) struct VerifiedEvaluationSource {
     workspace: Uuid,

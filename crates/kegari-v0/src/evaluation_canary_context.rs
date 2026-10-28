@@ -21,7 +21,7 @@ pub(crate) struct CanaryOperandBinding {
 impl CanaryOperandBinding {
     fn validate(&self) -> Result<()> {
         self.profile.validate()?;
-        crate::git::validate_oid(&self.head_revision)?;
+        kegari_git::validate_oid(&self.head_revision)?;
         for digest in [
             &self.command_digest,
             &self.request_digest,

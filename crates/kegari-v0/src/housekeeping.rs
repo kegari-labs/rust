@@ -543,7 +543,7 @@ impl VerifiedCleanupReadRoot {
     pub fn root(&self) -> &Path {
         &self.root
     }
-    pub fn repository(&self) -> &crate::git::RepositoryId {
+    pub fn repository(&self) -> &kegari_git::RepositoryId {
         &self.registration.binding.repository
     }
     pub fn runtime_id(&self) -> Uuid {

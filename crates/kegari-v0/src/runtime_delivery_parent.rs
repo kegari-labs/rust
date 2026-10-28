@@ -7,9 +7,9 @@ use crate::{
     delivery::*,
     deployment::VerifiedProductionBaseline,
     evidence::{RevisionBinding, VerifiedParent},
-    git::Revision,
 };
 use kegari_digest::canonical_digest;
+use kegari_git::Revision;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, sync::Mutex};
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

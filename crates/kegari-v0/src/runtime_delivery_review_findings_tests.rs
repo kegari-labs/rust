@@ -237,8 +237,8 @@ pub(super) async fn run(
         )
         .await
         .unwrap();
-    let changed = sealing.coordinator.seal_child_source(&sealing.admission, &claim, &repair.execution, repair.contract.isolation(), crate::git::SourceCommitMetadata {
-        identity: crate::git::CommitIdentity { name:"Disposable Fixture".into(), email:"fixture@example.invalid".into() },
+    let changed = sealing.coordinator.seal_child_source(&sealing.admission, &claim, &repair.execution, repair.contract.isolation(), kegari_git::SourceCommitMetadata {
+        identity: kegari_git::CommitIdentity { name:"Disposable Fixture".into(), email:"fixture@example.invalid".into() },
         timestamp: chrono::DateTime::from_timestamp(1_767_225_602,0).unwrap(), message:"test: repair granted review finding\n\nSigned-off-by: Disposable Fixture <fixture@example.invalid>\n".into(),
     }).await.unwrap();
     assert_ne!(changed.revision().tested_tree, f.revision.tree);

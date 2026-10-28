@@ -301,7 +301,7 @@ impl VerifiedReleaseLineage {
             for candidate in &link.origin.manifest().candidates {
                 for record in &candidate.production_integrations {
                     let key = (record.release_operation, record.repository.clone());
-                    let expected: &crate::git::ProductionIntegration =
+                    let expected: &kegari_git::ProductionIntegration =
                         merged.get(&key).ok_or_else(|| {
                             Error::new(
                                 "production_provenance",
@@ -358,7 +358,7 @@ impl VerifiedReleaseLineage {
                         "historical merge differs from the accepted product patch",
                     ));
                 }
-                let record = crate::git::ProductionIntegration {
+                let record = kegari_git::ProductionIntegration {
                     repository: repository.clone(),
                     parent_id: link.record.work.parent,
                     release_operation: link.record.attempt.plan.operation_id,

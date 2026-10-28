@@ -20,7 +20,7 @@ pub struct ReviewSourceRepository {
 }
 impl ReviewSourceRepository {
     fn validate(&self) -> Result<()> {
-        crate::git::RepositoryId {
+        kegari_git::RepositoryId {
             hostname: self.hostname.clone(),
             id: self.id.clone(),
         }

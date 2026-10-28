@@ -26,7 +26,7 @@ struct VectorRecord {
     contract_digest: String,
     slices: Vec<(RepositoryId, Uuid)>,
     baselines: Vec<ProductionBaseline>,
-    candidates: Vec<crate::git::CandidateManifest>,
+    candidates: Vec<kegari_git::CandidateManifest>,
     targets: Vec<ProductionTargetBaseline>,
     prepared_at: DateTime<Utc>,
 }
@@ -42,7 +42,7 @@ impl ParentCandidateVector {
     pub fn baselines(&self) -> &[ProductionBaseline] {
         &self.signed.payload.baselines
     }
-    pub fn candidates(&self) -> &[crate::git::CandidateManifest] {
+    pub fn candidates(&self) -> &[kegari_git::CandidateManifest] {
         &self.signed.payload.candidates
     }
     pub fn prepared_at(&self) -> DateTime<Utc> {
@@ -56,7 +56,7 @@ fn vector_digest(record: &VectorRecord) -> Result<String> {
     )
 }
 pub(super) fn candidate_binding(
-    candidate: &crate::git::CandidateManifest,
+    candidate: &kegari_git::CandidateManifest,
 ) -> Result<RevisionBinding> {
     let result = candidate
         .result
@@ -1079,7 +1079,7 @@ impl DeliveryCoordinator {
                 let retained: Signed<Value> =
                     self.records.read(&format!("delta-{}.json", &digest[7..]))?;
                 self.key.verify("staged_delta", &retained)?;
-                let manifest: crate::git::DeltaManifest =
+                let manifest: kegari_git::DeltaManifest =
                     serde_json::from_value(retained.payload["manifest"].clone()).map_err(|_| {
                         Error::new("record_corrupt", "original contribution manifest missing")
                     })?;
@@ -2136,7 +2136,7 @@ mod target_equivalence_tests {
                 hostname: "github.com".into(),
                 id: "42".into(),
             },
-            source: crate::git::Revision {
+            source: kegari_git::Revision {
                 commit: "a".repeat(40),
                 tree: "b".repeat(40),
             },

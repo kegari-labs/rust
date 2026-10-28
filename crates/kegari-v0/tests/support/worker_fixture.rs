@@ -14,7 +14,7 @@ use kegari_v0::evidence::Generation;
 use kegari_v0::evidence::WorkIdentity;
 use kegari_v0::execution::*;
 use kegari_v0::git::Git;
-use kegari_v0::git::RepositoryId;
+use kegari_git::{RepositoryId};
 use kegari_context::instructions::*;
 use kegari_v0::isolation::*;
 use kegari_v0::providers::ProviderBroker;

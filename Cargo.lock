@@ -989,6 +989,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kegari-git"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "chrono",
+ "kegari-digest",
+ "kegari-types",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "kegari-platform"
 version = "0.2.0-alpha.10"
 dependencies = [
@@ -1098,6 +1110,7 @@ dependencies = [
  "kegari-context",
  "kegari-control-api",
  "kegari-digest",
+ "kegari-git",
  "kegari-platform",
  "kegari-process",
  "kegari-providers",

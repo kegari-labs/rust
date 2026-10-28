@@ -153,7 +153,6 @@ use crate::evidence::RevisionBinding;
 use crate::evidence::Verdict;
 use crate::evidence::no_change_digest;
 use crate::git::Git;
-use crate::git::RepositoryId;
 use crate::providers::*;
 use crate::reconcile::*;
 use chrono::{Duration, Utc};
@@ -161,6 +160,7 @@ use kegari_config::Config;
 use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
+use kegari_git::RepositoryId;
 use kegari_providers::*;
 use kegari_secrets::AttestationKey;
 use kegari_storage::PrivateDir;
@@ -714,7 +714,7 @@ struct DeliveryFixture {
 #[derive(Clone)]
 pub(crate) struct RuntimeSeedWire(Arc<Mutex<Fixture>>);
 impl RuntimeSeedWire {
-    pub(crate) fn new(production: &crate::git::Revision) -> Self {
+    pub(crate) fn new(production: &kegari_git::Revision) -> Self {
         let inner = Fixture::new();
         {
             let mut wire = inner.lock().unwrap();
@@ -730,7 +730,7 @@ impl RuntimeSeedWire {
         let wire = self.0.lock().unwrap();
         wire.created_prs + wire.dispatch_count + usize::from(wire.merge_parent.is_some())
     }
-    pub(crate) fn set_production(&self, production: &crate::git::Revision) {
+    pub(crate) fn set_production(&self, production: &kegari_git::Revision) {
         let mut wire = self.0.lock().unwrap();
         wire.production = production.commit.clone();
         wire.production_tree = production.tree.clone();
@@ -1200,7 +1200,7 @@ async fn release_fixture() -> (DeliveryFixture, ReleasePlan, ReleaseEffectRecord
         )
         .unwrap();
     f.admission = DeliveryAdmission::bind(permit, f.admission.gate.clone(), scope.clone()).unwrap();
-    let base = crate::git::Revision {
+    let base = kegari_git::Revision {
         commit: scope.revision.base.clone(),
         tree: "b".repeat(40),
     };
@@ -1208,7 +1208,7 @@ async fn release_fixture() -> (DeliveryFixture, ReleasePlan, ReleaseEffectRecord
         repository: scope.repository.clone(),
         pull_request: 17,
         production_base: base,
-        candidate: crate::git::Revision {
+        candidate: kegari_git::Revision {
             commit: scope.revision.head.clone(),
             tree: scope.revision.tested_tree.clone(),
         },
@@ -1976,7 +1976,7 @@ async fn changed_candidate_fixture() -> (
 }
 async fn assemble_seed_slice(
     f: &DeliveryFixture,
-    delta: &crate::git::DeltaArtifact,
+    delta: &kegari_git::DeltaArtifact,
     root: &std::path::Path,
 ) -> IsolatedSlice {
     assemble_wire_slice(&f.coordinator, &f.admission, &f.wire, delta, root).await
@@ -1985,7 +1985,7 @@ async fn assemble_wire_slice(
     coordinator: &DeliveryCoordinator,
     admission: &DeliveryAdmission,
     wire: &Arc<Mutex<Fixture>>,
-    delta: &crate::git::DeltaArtifact,
+    delta: &kegari_git::DeltaArtifact,
     root: &std::path::Path,
 ) -> IsolatedSlice {
     // The reviewed staging source remains explicit synthetic upstream input;
@@ -2077,7 +2077,7 @@ async fn assemble_wire_slice(
                 child_dependencies: &BTreeMap::new(),
                 satisfied_children: &BTreeSet::new(),
                 production_integrations: &[],
-                identity: crate::git::CommitIdentity {
+                identity: kegari_git::CommitIdentity {
                     name: "Fixture".into(),
                     email: "fixture@example.invalid".into(),
                 },
@@ -2127,10 +2127,10 @@ async fn changed_candidate_from(
         exit.exited().unwrap(),
         "fixture Git version probe must fully join"
     );
-    assert_eq!(observed.unwrap(), crate::git::SUPPORTED_GIT_VERSION);
+    assert_eq!(observed.unwrap(), kegari_git::SUPPORTED_GIT_VERSION);
     assert_eq!(
         f.coordinator.git.version(),
-        crate::git::SUPPORTED_GIT_VERSION
+        kegari_git::SUPPORTED_GIT_VERSION
     );
     let source = std::path::PathBuf::from(&f.repository_contract.configuration.source);
     let base = f.admission.scope.revision.base.clone();
@@ -2179,7 +2179,7 @@ async fn changed_candidate_from(
                 child_id: id(101),
                 work_generation: &child_work.generation.definition,
                 correction_generation: &child_work.generation.correction,
-                scope: crate::git::WriteScope {
+                scope: kegari_git::WriteScope {
                     paths: vec!["tests/".into()],
                 },
                 base: &base,
@@ -2224,7 +2224,7 @@ async fn changed_candidate_from(
                     child_dependencies: &BTreeMap::new(),
                     satisfied_children: &BTreeSet::new(),
                     production_integrations: &[],
-                    identity: crate::git::CommitIdentity {
+                    identity: kegari_git::CommitIdentity {
                         name: "Fixture".into(),
                         email: "fixture@example.invalid".into(),
                     },
@@ -2521,7 +2521,7 @@ async fn changed_candidate_from(
                             dependencies: BTreeMap::new(),
                             satisfied_children: BTreeSet::new(),
                             integrations: vec![],
-                            identity: crate::git::CommitIdentity {
+                            identity: kegari_git::CommitIdentity {
                                 name: "Fixture".into(),
                                 email: "fixture@example.invalid".into(),
                             },

@@ -6,7 +6,7 @@ use crate::control::ParentReassemblyReference;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProductionSelection {
-    repository: crate::git::RepositoryId,
+    repository: kegari_git::RepositoryId,
     owner: ReviewReceiptReference,
     existing: bool,
     proof_digest: String,
@@ -61,7 +61,7 @@ impl CarryRecoveryBinding {
         value.validate_shape(&parent.parent.verified().manifest().candidates)?;
         Ok(value)
     }
-    fn validate_shape(&self, candidates: &[crate::git::CandidateManifest]) -> Result<()> {
+    fn validate_shape(&self, candidates: &[kegari_git::CandidateManifest]) -> Result<()> {
         evidence::validate_digest(&self.configuration_revision)?;
         evidence::validate_digest(&self.vector_digest)?;
         let mut operations = BTreeSet::new();

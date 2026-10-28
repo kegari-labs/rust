@@ -128,7 +128,7 @@ pub(super) fn prepare<'a>(
                         // It cannot create a local-check or integrated capability.
                         satisfied_children: gate.required_children(),
                         production_integrations: &[],
-                        identity: crate::git::CommitIdentity {
+                        identity: kegari_git::CommitIdentity {
                             name: "Disposable Fixture Human".into(),
                             email: "fixture@example.test".into(),
                         },

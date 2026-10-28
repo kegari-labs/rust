@@ -611,7 +611,7 @@ impl HistoricalCompletion<'_> {
             Self::NoRelease(proof) => proof.workspace_id(),
         }
     }
-    fn dependency_repositories(&self) -> Result<&BTreeSet<crate::git::RepositoryId>> {
+    fn dependency_repositories(&self) -> Result<&BTreeSet<kegari_git::RepositoryId>> {
         match self {
             Self::Released(proof) => proof.dependency_repositories(),
             Self::NoRelease(proof) => proof.dependency_repositories(),

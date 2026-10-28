@@ -12,12 +12,12 @@ fn reference() -> ReviewReceiptReference {
         receipt_digest: digest("whole fixture receipt"),
     }
 }
-fn candidate(id: &str, existing: bool) -> crate::git::CandidateManifest {
-    crate::git::CandidateManifest {
+fn candidate(id: &str, existing: bool) -> kegari_git::CandidateManifest {
+    kegari_git::CandidateManifest {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
         runtime_id: Uuid::new_v4(),
-        repository: crate::git::RepositoryId {
+        repository: kegari_git::RepositoryId {
             hostname: "github.invalid".into(),
             id: id.into(),
         },
@@ -25,7 +25,7 @@ fn candidate(id: &str, existing: bool) -> crate::git::CandidateManifest {
         work_generation: digest("work"),
         correction_generation: digest("correction"),
         git_version: "fixture data only".into(),
-        production: crate::git::Revision {
+        production: kegari_git::Revision {
             commit: "a".repeat(40),
             tree: "b".repeat(40),
         },
@@ -41,14 +41,14 @@ fn candidate(id: &str, existing: bool) -> crate::git::CandidateManifest {
         },
         selected_contributions: BTreeMap::new(),
         production_integrations: vec![],
-        result: Some(crate::git::Revision {
+        result: Some(kegari_git::Revision {
             commit: "c".repeat(40),
             tree: "d".repeat(40),
         }),
         combined_patch_digest: Some(digest("combined")),
     }
 }
-fn binding(candidates: &[crate::git::CandidateManifest]) -> CarryRecoveryBinding {
+fn binding(candidates: &[kegari_git::CandidateManifest]) -> CarryRecoveryBinding {
     CarryRecoveryBinding {
         schema_version: 1,
         configuration_revision: digest("config"),

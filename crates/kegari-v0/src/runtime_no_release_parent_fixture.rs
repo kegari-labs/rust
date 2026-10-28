@@ -1,9 +1,10 @@
 //! Synthetic provider/check facts passed through production evidence validators.
 //! Actual no-change candidate and baseline come from the separately admitted
 //! Git/vector fixture; this helper supplies no execution or joined capability.
-use crate::{evidence::*, git::*};
+use crate::evidence::*;
 use chrono::{Duration, Utc};
 use kegari_digest::canonical_digest;
+use kegari_git::CandidateManifest;
 use kegari_secrets::{AttestationKey, Signed};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;

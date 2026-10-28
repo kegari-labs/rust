@@ -158,7 +158,7 @@ pub(super) fn fetch_request(commits: &BTreeSet<String>) -> Result<Vec<u8>> {
     append(&mut out, "command=fetch\n");
     out.extend_from_slice(b"0001");
     for commit in commits {
-        crate::git::validate_oid(commit)?;
+        kegari_git::validate_oid(commit)?;
         append(&mut out, &format!("want {commit}\n"));
     }
     append(&mut out, "done\n");

@@ -32,7 +32,7 @@ pub(super) fn bootstrap_auxiliary(data: &mut wire::Fixture) {
 pub(super) fn initialize_auxiliary(
     binary: &std::path::Path,
     source: &std::path::Path,
-) -> crate::git::Revision {
+) -> kegari_git::Revision {
     std::fs::create_dir(source).unwrap();
     git(binary, source, &["init", "-b", "main"]);
     std::fs::write(
@@ -56,14 +56,14 @@ pub(super) fn initialize_auxiliary(
 pub(super) struct Auxiliary {
     pub slice: IsolatedSlice,
     pub baseline: crate::deployment::VerifiedProductionBaseline,
-    pub revision: crate::git::Revision,
+    pub revision: kegari_git::Revision,
 }
 pub(super) fn assemble_auxiliary<'a>(
     delivery: &'a RuntimeDelivery,
     workspace: &'a WorkspaceDelivery,
     gate: &'a FreshGate,
     lease: &'a Lease,
-    revision: &'a crate::git::Revision,
+    revision: &'a kegari_git::Revision,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Auxiliary> + 'a>> {
     Box::pin(async move {
         let contract = workspace
@@ -115,7 +115,7 @@ pub(super) fn assemble_auxiliary<'a>(
                     child_dependencies: &BTreeMap::new(),
                     satisfied_children: gate.required_children(),
                     production_integrations: &[],
-                    identity: crate::git::CommitIdentity {
+                    identity: kegari_git::CommitIdentity {
                         name: "Fixture".into(),
                         email: "fixture@example.test".into(),
                     },
@@ -140,7 +140,7 @@ pub(super) fn vector_phase<'a>(
     workspace: &'a WorkspaceDelivery,
     gate: &'a FreshGate,
     lease: &'a Lease,
-    revision: &'a crate::git::Revision,
+    revision: &'a kegari_git::Revision,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ActivePhase> + 'a>> {
     Box::pin(async move {
         let contract = &workspace.contracts[0];

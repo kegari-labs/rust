@@ -238,7 +238,7 @@ pub enum ChildDeliveryAction<'a> {
     PublishBranch {
         source: &'a SealedChildSource,
         local: &'a LocalPassed,
-        branch: &'a crate::git::BranchName,
+        branch: &'a kegari_git::BranchName,
         previous: Option<&'a PublishedChildBranch>,
     },
     OpenPullRequest {
@@ -578,7 +578,7 @@ struct SourceSealIntent {
     binding: crate::execution::ExecutionBinding,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     correction: Option<crate::execution::CorrectionExecutionProvenance>,
-    metadata: crate::git::SourceCommitMetadata,
+    metadata: kegari_git::SourceCommitMetadata,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -586,7 +586,7 @@ struct SourceSealRecord {
     intent: SourceSealIntent,
     revision: RevisionBinding,
     receipt: Uuid,
-    review: Option<crate::git::ReviewDelta>,
+    review: Option<kegari_git::ReviewDelta>,
 }
 impl DeliveryCoordinator {
     /// Commit only after the implementation process tree is actually known to
@@ -597,7 +597,7 @@ impl DeliveryCoordinator {
         claim: &CompletedChildClaim,
         execution: &crate::worker::WorkerExecution,
         isolation: &crate::isolation::ValidatedIsolation,
-        metadata: crate::git::SourceCommitMetadata,
+        metadata: kegari_git::SourceCommitMetadata,
     ) -> Result<SealedChildSource> {
         self.current(admission, &[DeliveryPhase::SourceSealing])?;
         self.current_child_claim(admission, claim)?;
@@ -689,7 +689,7 @@ impl DeliveryCoordinator {
         let binding = execution.binding.clone();
         let ownership = execution.ownership.clone();
         let boundary = isolation.clone();
-        let write_scope = crate::git::WriteScope {
+        let write_scope = kegari_git::WriteScope {
             paths: scope.write_paths.clone(),
         };
         let metadata = intent.metadata.clone();
@@ -1299,7 +1299,7 @@ impl DeliveryCoordinator {
             .gate
             .child_scope()
             .ok_or_else(|| Error::new("scope_violation", "current child scope missing"))?;
-        let write_scope = crate::git::WriteScope {
+        let write_scope = kegari_git::WriteScope {
             paths: scope.write_paths.clone(),
         };
         let child_scope_digest = admission
@@ -1330,7 +1330,7 @@ impl DeliveryCoordinator {
         let revision = record.revision.clone();
         let (committed, change) = tokio::task::spawn_blocking(move || {
             let git = git.with_execution_scope(execution_scope)?;
-            let head = crate::git::Revision {
+            let head = kegari_git::Revision {
                 commit: revision.head.clone(),
                 tree: revision.tested_tree.clone(),
             };

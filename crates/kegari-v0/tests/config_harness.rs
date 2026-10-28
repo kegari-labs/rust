@@ -141,7 +141,7 @@ fn evaluation_oid_validation_matches_backend_revision_grammar_and_errors() {
         (format!("{}\n", "a".repeat(40)), false),
         ("é".repeat(20), false),
     ] {
-        let expected = kegari_v0::git::validate_oid(&oid);
+        let expected = kegari_git::validate_oid(&oid);
         assert_eq!(expected.is_ok(), accepted, "unexpected grammar for {oid:?}");
         for field in ["base_commit", "head_commit"] {
             let mut declaration = workspace.evaluation.clone().unwrap();

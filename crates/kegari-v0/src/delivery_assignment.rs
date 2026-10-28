@@ -16,7 +16,7 @@ enum SourceOwnership {
 pub struct DeliverySource {
     repository: RepositoryId,
     root: PathBuf,
-    revision: crate::git::Revision,
+    revision: kegari_git::Revision,
     ownership: SourceOwnership,
 }
 impl DeliverySource {
@@ -26,7 +26,7 @@ impl DeliverySource {
     pub fn root(&self) -> &Path {
         &self.root
     }
-    pub fn revision(&self) -> &crate::git::Revision {
+    pub fn revision(&self) -> &kegari_git::Revision {
         &self.revision
     }
     pub fn revalidate_filesystem(&self) -> Result<()> {
@@ -623,7 +623,7 @@ pub(super) fn child_source(
     Ok(DeliverySource {
         repository: admission.scope.repository.clone(),
         root: isolation.plan().repository.clone(),
-        revision: crate::git::Revision {
+        revision: kegari_git::Revision {
             commit: source.revision().head.clone(),
             tree: source.revision().tested_tree.clone(),
         },

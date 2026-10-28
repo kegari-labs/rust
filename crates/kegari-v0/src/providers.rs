@@ -89,7 +89,7 @@ pub enum ProviderMutation {
         reference: String,
         workflow_sha: String,
         source_sha: String,
-        expected_production: Option<crate::git::Revision>,
+        expected_production: Option<kegari_git::Revision>,
         source_input: String,
         operation_input: String,
         inputs: BTreeMap<String, String>,

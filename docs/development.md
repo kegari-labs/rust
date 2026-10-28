@@ -16,6 +16,7 @@ For the product introduction and preview instructions, see the [README](../READM
 | [`kegari-platform`](../crates/kegari-platform/README.md) | OS identity, executable inspection and native host helpers. |
 | [`kegari-secrets`](../crates/kegari-secrets/README.md) | Secret values, Keychain storage and generic signed-record primitives. |
 | [`kegari-control-api`](../crates/kegari-control-api/README.md) | Authenticated transport, request rules, operator identities and snapshot operations. |
+| [`kegari-git`](../crates/kegari-git/README.md) | Git records, naming rules, validation and canonical digest calculations. |
 | [`kegari-scheduler`](../crates/kegari-scheduler/README.md) | Synchronous scheduling, capacity allocation, attempt accounting and retry timing. |
 | [`kegari-context`](../crates/kegari-context/README.md) | Workflow documents, instruction assembly, embedded assets and resume compatibility. |
 | [`kegari-codex`](../crates/kegari-codex/README.md) | Codex protocol client, session recovery, observations, stream transport and pinned schemas. |
@@ -86,6 +87,15 @@ orchestration remain in the backend. The scheduler performs no I/O or process
 management; CLI and controller need no direct dependency. Its existing `Attempts`
 helper does not replace the backend's receipt-based attempt accounting.
 
+The backend imports Git records and deterministic rules directly from
+`kegari-git`, whose production workspace dependencies are `kegari-types` and
+`kegari-digest`. This first pass retains actual Git operations, process journals,
+admission, operation requests and privately constructed proofs in
+`kegari_v0::git`. The three existing pure validation helpers are public for those
+retained callers; no compatibility reexports or unchecked proof constructors are
+added. CLI and controller need no direct Git dependency. The extraction does not
+complete the Git adapter or change its pinned executable version.
+
 All packages use workspace version `0.2.0-alpha.10`; the executable name, process
 roles and serialized schemas remain unchanged. This extraction creates no new
 prerelease or qualification claim.
@@ -95,7 +105,7 @@ prerelease or qualification claim.
 The commands below assume the pinned toolchain and dependencies are already
 cached. For a first build with dependency downloads, follow the root README.
 
-From the workspace root, using the pinned toolchain; `--workspace` checks all fifteen
+From the workspace root, using the pinned toolchain; `--workspace` checks all sixteen
 packages:
 
 ```sh

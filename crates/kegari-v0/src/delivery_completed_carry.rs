@@ -231,9 +231,9 @@ impl DeliveryCoordinator {
 pub(crate) struct CompletedCarryObjects {
     origin: CompletedCarryOrigin,
     repository: RepositoryContract,
-    candidate: crate::git::CandidateManifest,
+    candidate: kegari_git::CandidateManifest,
     observed: Arc<ObservedReleaseStep>,
-    current_main: crate::git::Revision,
+    current_main: kegari_git::Revision,
 }
 impl CompletedCarryObjects {
     pub(crate) fn repository(&self) -> &RepositoryContract {
@@ -242,16 +242,16 @@ impl CompletedCarryObjects {
     pub(crate) fn observed(&self) -> &ObservedReleaseStep {
         &self.observed
     }
-    pub(crate) fn current_main(&self) -> &crate::git::Revision {
+    pub(crate) fn current_main(&self) -> &kegari_git::Revision {
         &self.current_main
     }
-    pub(crate) fn accepted_head(&self) -> &crate::git::Revision {
+    pub(crate) fn accepted_head(&self) -> &kegari_git::Revision {
         self.candidate
             .result
             .as_ref()
             .expect("actual complete accepted candidate")
     }
-    pub(crate) fn required_revisions(&self) -> Result<Vec<crate::git::Revision>> {
+    pub(crate) fn required_revisions(&self) -> Result<Vec<kegari_git::Revision>> {
         let Some(crate::release::ObservedEffect::Merge { commit, .. }) = self.observed.effect()
         else {
             return Err(Error::new(

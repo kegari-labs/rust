@@ -82,7 +82,7 @@ pub struct Preparation {
     pub context: Value,
     pub isolation: IsolationPlan,
     pub repository: Option<RepositoryContext>,
-    pub repository_id: Option<crate::git::RepositoryId>,
+    pub repository_id: Option<kegari_git::RepositoryId>,
     pub read_resources: BTreeMap<PathBuf, ReadResource>,
     pub review: Option<ReviewTarget>,
     pub required_context: Vec<PathBuf>,

@@ -9,14 +9,14 @@ pub(super) struct OwnedTargetFixture {
     github: RuntimeSeedWire,
     native: Arc<RuntimeLineageWire>,
     source: std::path::PathBuf,
-    original: crate::git::Revision,
+    original: kegari_git::Revision,
     owner: Mutex<Option<Uuid>>,
 }
 impl OwnedTargetFixture {
     pub(super) fn wire(
         binary: &std::path::Path,
         source: &std::path::Path,
-        revision: &crate::git::Revision,
+        revision: &kegari_git::Revision,
         data: &Arc<Mutex<crate::corrections::wire_fixture::Fixture>>,
         multiple_targets: bool,
     ) -> Self {
@@ -41,7 +41,7 @@ impl OwnedTargetFixture {
         workspace: &WorkspaceDelivery,
         gate: &FreshGate,
         lease: &Lease,
-        source: &crate::git::Revision,
+        source: &kegari_git::Revision,
     ) -> Result<()> {
         let contract = &workspace.contracts[0];
         // An actual owned upstream fixture effect. Recovery scope avoids
@@ -104,7 +104,7 @@ impl OwnedTargetFixture {
         );
         Ok(())
     }
-    fn move_external_fixture_source(&self, binary: &std::path::Path) -> crate::git::Revision {
+    fn move_external_fixture_source(&self, binary: &std::path::Path) -> kegari_git::Revision {
         // Explicit later upstream state, never controller rollback/deployment.
         std::fs::write(
             self.source.join("later-production.txt"),

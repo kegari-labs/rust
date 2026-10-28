@@ -1931,7 +1931,7 @@ impl RuntimeDelivery {
 }
 
 fn candidate_revision(
-    candidate: &crate::git::CandidateManifest,
+    candidate: &kegari_git::CandidateManifest,
 ) -> Result<evidence::RevisionBinding> {
     let result = candidate
         .result

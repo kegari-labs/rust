@@ -20,7 +20,7 @@ pub(super) struct ChainFixture<'a> {
     pub seed: &'a RuntimeCandidateSeed,
     pub held: &'a AttemptRecord,
     pub gate: &'a FreshGate,
-    pub merged: &'a crate::git::Revision,
+    pub merged: &'a kegari_git::Revision,
     pub observation_barrier: &'a Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -250,7 +250,7 @@ pub(super) fn fixture_phase<'a>(
     workspace: &'a WorkspaceDelivery,
     gate: &'a FreshGate,
     lease: &'a Lease,
-    revision: &'a crate::git::Revision,
+    revision: &'a kegari_git::Revision,
     phase: DeliveryPhase,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ActivePhase> + 'a>> {
     Box::pin(async move {
@@ -501,7 +501,7 @@ pub(super) fn chained_after_merge(
                     child_dependencies: &BTreeMap::new(),
                     satisfied_children: &BTreeSet::new(),
                     production_integrations: &integrations,
-                    identity: crate::git::CommitIdentity {
+                    identity: kegari_git::CommitIdentity {
                         name: "Fixture".into(),
                         email: "fixture@example.test".into(),
                     },
@@ -715,7 +715,7 @@ pub(super) fn chained_after_merge(
                     child_dependencies: &BTreeMap::new(),
                     satisfied_children: &BTreeSet::new(),
                     production_integrations: &integrations,
-                    identity: crate::git::CommitIdentity {
+                    identity: kegari_git::CommitIdentity {
                         name: "Fixture".into(),
                         email: "fixture@example.test".into(),
                     },

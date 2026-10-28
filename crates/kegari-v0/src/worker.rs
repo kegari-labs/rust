@@ -646,7 +646,7 @@ pub struct WorkerContract {
     tools: BoundToolContracts,
     scope_digest: String,
     account_id: String,
-    repository: Option<crate::git::RepositoryId>,
+    repository: Option<kegari_git::RepositoryId>,
     read_resources: BTreeMap<PathBuf, ReadResource>,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -670,7 +670,7 @@ pub struct ContractInput {
     pub context: Value,
     pub review: Option<ReviewTarget>,
     pub account_id: String,
-    pub repository: Option<crate::git::RepositoryId>,
+    pub repository: Option<kegari_git::RepositoryId>,
     /// Host-configured canonical mapping for every read grant outside the main
     /// repository and scratch; worker arguments cannot create this mapping.
     pub read_resources: BTreeMap<PathBuf, ReadResource>,
@@ -999,8 +999,8 @@ impl WorkerContract {
             }
         }
         if let Some(r) = &review {
-            crate::git::validate_oid(&r.head)?;
-            crate::git::validate_oid(&r.base)?;
+            kegari_git::validate_oid(&r.head)?;
+            kegari_git::validate_oid(&r.base)?;
             if !matches!(role, AgentRole::Review | AgentRole::IndependentReview)
                 || r.pull_request == 0
                 || manifest.repository_revision.as_deref() != Some(&r.head)

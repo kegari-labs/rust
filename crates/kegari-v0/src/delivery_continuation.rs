@@ -929,7 +929,7 @@ fn progress_marker(
     tree: &str,
     obligation: &Value,
 ) -> Result<String> {
-    crate::git::validate_oid(tree)?;
+    kegari_git::validate_oid(tree)?;
     canonical_digest(
         1,
         &json!({"work":work,"repository":repository,"tree":tree,"obligation":obligation}),
@@ -1936,9 +1936,9 @@ mod tests {
     use super::*;
     use crate::{
         execution::{ExecutionBinding, ExecutionEvidenceClass, SourceSnapshot},
-        git::Revision,
         isolation::CommandOutcome,
     };
+    use kegari_git::Revision;
     fn work() -> WorkIdentity {
         let digest = bytes_digest(b"continuation fixture");
         WorkIdentity {

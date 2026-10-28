@@ -505,7 +505,7 @@ pub(super) fn known_effect_state(
                 targets.insert(
                     (repository.clone(), id.clone()),
                     (
-                        crate::git::Revision {
+                        kegari_git::Revision {
                             commit: source_commit.clone(),
                             tree: tree.clone(),
                         },
@@ -525,8 +525,8 @@ pub(super) fn known_effect_state(
     Ok((mains, targets))
 }
 type KnownState = (
-    BTreeMap<RepositoryId, crate::git::Revision>,
-    BTreeMap<(RepositoryId, String), (crate::git::Revision, String)>,
+    BTreeMap<RepositoryId, kegari_git::Revision>,
+    BTreeMap<(RepositoryId, String), (kegari_git::Revision, String)>,
 );
 pub(super) fn verify_known_baseline(
     origin: &VerifiedReleaseOrigin,
@@ -620,11 +620,11 @@ mod tests {
                 kind: domain::StepKind::Merge {
                     repository,
                     pull_request: 17,
-                    production_base: crate::git::Revision {
+                    production_base: kegari_git::Revision {
                         commit: "a".repeat(40),
                         tree: "b".repeat(40),
                     },
-                    candidate: crate::git::Revision {
+                    candidate: kegari_git::Revision {
                         commit: "c".repeat(40),
                         tree: "d".repeat(40),
                     },
@@ -707,7 +707,7 @@ mod inventory_tests {
                 hostname: "github.com".into(),
                 id: id.into(),
             },
-            production: crate::git::Revision {
+            production: kegari_git::Revision {
                 commit: "1".repeat(40),
                 tree: "2".repeat(40),
             },

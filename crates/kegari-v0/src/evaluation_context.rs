@@ -249,7 +249,7 @@ impl NativeContextBinding {
                             "native fixture requires an actual repository revision",
                         )
                     })?;
-                    crate::git::validate_oid(revision)?;
+                    kegari_git::validate_oid(revision)?;
                     Value::String(revision.into())
                 }
                 ContextSource::IndependentPullRequestId => {

@@ -16,7 +16,7 @@ pub(super) enum CarryImportStatus {
 pub(super) struct CarryImportReference {
     operation: Uuid,
     source_digest: String,
-    repository: crate::git::RepositoryId,
+    repository: kegari_git::RepositoryId,
     max_attempts: u32,
     attempts: u32,
     status: CarryImportStatus,

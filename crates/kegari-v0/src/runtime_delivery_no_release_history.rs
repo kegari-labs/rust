@@ -7,10 +7,10 @@ use crate::{
     delivery::{AcceptedOriginIdentity, AcceptedOriginRef, RepositoryContract},
     deployment::{OwnedTargetObservationRef, ProductionObserver, VerifiedProductionBaseline},
     evidence::{VerifiedNoReleaseRequired, WorkIdentity},
-    git::{RepositoryId, Revision},
     runtime_delivery::completion_binding::DependencyBinding,
 };
 use chrono::{DateTime, Duration, Utc};
+use kegari_git::{RepositoryId, Revision};
 use kegari_secrets::AttestationKey;
 use kegari_storage::PrivateDir;
 use std::{

@@ -219,7 +219,7 @@ pub(super) struct OrdinaryFixture<'a> {
     pub plan: ReleasePlan,
     pub gate: &'a FreshGate,
     pub references: Vec<PublicationRef>,
-    pub merged: (crate::git::Revision, ObservedReleaseStep),
+    pub merged: (kegari_git::Revision, ObservedReleaseStep),
     pub seed: &'a crate::delivery::RuntimeCandidateSeed,
     pub native: &'a RuntimeLineageWire,
     pub source: &'a std::path::Path,
@@ -617,7 +617,7 @@ pub(super) fn complete_ordinary(
             .unwrap();
         drop(_tamper);
 
-        github.set_production(&crate::git::Revision {
+        github.set_production(&kegari_git::Revision {
             commit: "d".repeat(40),
             tree: "c".repeat(40),
         });

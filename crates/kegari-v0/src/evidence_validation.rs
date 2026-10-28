@@ -415,7 +415,7 @@ impl ReviewedIntegratedValidation {
         parent: &WorkIdentity,
         e2e: Uuid,
         vector: &str,
-        candidates: &[crate::git::CandidateManifest],
+        candidates: &[kegari_git::CandidateManifest],
     ) -> Result<()> {
         let current = self.validation.current()?;
         let mut expected = parent.clone();

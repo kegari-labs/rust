@@ -32,7 +32,7 @@ impl DeliveryCoordinator {
     }
     pub(super) fn retained_delta_object_source(
         &self,
-        delta: &crate::git::DeltaManifest,
+        delta: &kegari_git::DeltaManifest,
     ) -> Result<Option<VerifiedObjectSource>> {
         let contracts: Vec<_> = self.contracts.values().cloned().collect();
         let sources = crate::remote_objects::retained_sources(
@@ -132,7 +132,7 @@ impl DeliveryCoordinator {
             })?;
         let request = AuthorizedObjectRequest::for_staging_merge(
             contract,
-            crate::git::Revision {
+            kegari_git::Revision {
                 commit,
                 tree: admission.scope.revision.tested_tree.clone(),
             },

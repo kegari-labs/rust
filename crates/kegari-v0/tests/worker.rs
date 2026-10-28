@@ -1250,7 +1250,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
                     .map(|execution| execution.binding.revision.clone())
                     .unwrap_or_else(|| {
                         let head = f.input.review.as_ref().unwrap().head.clone();
-                        kegari_v0::git::Revision {
+                        kegari_git::Revision {
                             commit: head,
                             tree: "a".repeat(40),
                         }
@@ -1298,7 +1298,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
         };
         request.source = Some(SourceSelection {
             repository: "999".into(),
-            revision: kegari_v0::git::Revision {
+            revision: kegari_git::Revision {
                 commit: "b".repeat(40),
                 tree: "c".repeat(40),
             },

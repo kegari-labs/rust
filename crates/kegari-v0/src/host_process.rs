@@ -558,7 +558,7 @@ pub(crate) fn validate_metadata_argv(argv: &[String]) -> Result<bool> {
         ));
     }
     let args = &argv[prefix.len()..];
-    let oid = |v: &str| crate::git::validate_oid(v).is_ok();
+    let oid = |v: &str| kegari_git::validate_oid(v).is_ok();
     let revision = |v: &str| {
         v == "HEAD"
             || oid(v)

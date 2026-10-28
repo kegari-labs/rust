@@ -1,11 +1,9 @@
 //! Explicitly declared synthetic provider resources for local evaluations.
 //! This transport never sends network requests or grants worker authority.
-use crate::{
-    configuration::{ConfigurationInputs, NativeConfigurationInputs},
-    git::Revision,
-};
+use crate::configuration::{ConfigurationInputs, NativeConfigurationInputs};
 use kegari_config::{Config, EvaluationBinding};
 use kegari_digest::canonical_digest;
+use kegari_git::Revision;
 use kegari_providers::HttpTransport;
 use kegari_providers::{HttpRequest, HttpResponse, Method};
 use kegari_types::error::{Error, Result};

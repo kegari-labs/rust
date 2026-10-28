@@ -9,7 +9,7 @@ use crate::evidence::{
     Publication, RevisionBinding, Runner, WorkIdentity,
 };
 use crate::execution::VerifiedCheckExecution;
-use crate::git::{Git, RepositoryId};
+use crate::git::Git;
 use crate::providers::{
     HostedProofExpectation, HostedProofVerifier, ProviderBroker, ProviderMutation,
 };
@@ -19,6 +19,7 @@ use kegari_config::{CiSuite, Repository as RepositoryConfig};
 use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_git::RepositoryId;
 use kegari_providers::{GithubClient, RepositoryIdentity};
 use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
@@ -1105,7 +1106,7 @@ impl ChildPullRequest {
 }
 #[derive(Clone, Debug)]
 pub struct StagedDelta {
-    delta: crate::git::DeltaArtifact,
+    delta: kegari_git::DeltaArtifact,
     pull_request: u64,
     merge_receipt: Uuid,
     protection: evidence::RepositoryProtection,
@@ -1132,7 +1133,7 @@ impl PendingStaging {
     }
 }
 impl StagedDelta {
-    pub fn delta(&self) -> &crate::git::DeltaArtifact {
+    pub fn delta(&self) -> &kegari_git::DeltaArtifact {
         &self.delta
     }
     pub fn pull_request(&self) -> u64 {
@@ -1159,7 +1160,7 @@ pub struct ChildObjectPublication<'a> {
     pub change: &'a ScopedChange,
     pub committed: &'a crate::git::CommittedSource,
     pub local: &'a LocalPassed,
-    pub branch: &'a crate::git::BranchName,
+    pub branch: &'a kegari_git::BranchName,
     pub previous: Option<&'a PublishedChildBranch>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1171,14 +1172,14 @@ struct ChildBranchRecord {
     work: WorkIdentity,
     revision: RevisionBinding,
     source_parent: String,
-    branch: crate::git::BranchName,
+    branch: kegari_git::BranchName,
     receipt_id: Uuid,
 }
 pub struct PublishedChildBranch {
     record: Signed<ChildBranchRecord>,
 }
 impl PublishedChildBranch {
-    pub fn branch(&self) -> &crate::git::BranchName {
+    pub fn branch(&self) -> &kegari_git::BranchName {
         &self.record.payload.branch
     }
     pub fn revision(&self) -> &RevisionBinding {
@@ -1186,7 +1187,7 @@ impl PublishedChildBranch {
     }
 }
 impl ScopedChange {
-    pub fn review(&self) -> &crate::git::ReviewDelta {
+    pub fn review(&self) -> &kegari_git::ReviewDelta {
         self.proposal.review()
     }
     pub fn review_digest(&self) -> Result<String> {
@@ -1552,7 +1553,7 @@ impl DeliveryCoordinator {
                 })?,
                 work_generation: &admission.scope.work.generation.definition,
                 correction_generation: &admission.scope.work.generation.correction,
-                scope: crate::git::WriteScope {
+                scope: kegari_git::WriteScope {
                     paths: scope.write_paths.clone(),
                 },
                 base: &admission.scope.revision.base,
@@ -1568,7 +1569,7 @@ impl DeliveryCoordinator {
         &self,
         admission: &DeliveryAdmission,
         local: &LocalPassed,
-        branch: &crate::git::BranchName,
+        branch: &kegari_git::BranchName,
         title: &str,
         summary: &str,
     ) -> Result<ChildPullRequest> {
@@ -3236,8 +3237,8 @@ impl DeliveryCoordinator {
     }
     fn retained_delta(
         &self,
-        manifest: &crate::git::DeltaManifest,
-    ) -> Result<crate::git::DeltaArtifact> {
+        manifest: &kegari_git::DeltaManifest,
+    ) -> Result<kegari_git::DeltaArtifact> {
         let digest = manifest.digest()?;
         let retained: Signed<Value> = self.records.read(&format!("delta-{}.json", &digest[7..]))?;
         self.key.verify("staged_delta", &retained)?;
@@ -3275,7 +3276,7 @@ impl DeliveryCoordinator {
                 "retained patch bytes changed",
             ));
         }
-        Ok(crate::git::DeltaArtifact {
+        Ok(kegari_git::DeltaArtifact {
             manifest: manifest.clone(),
             patch,
         })
@@ -3678,7 +3679,7 @@ pub fn validate_repository_prerequisites(
     required: &BTreeSet<String>,
 ) -> Result<evidence::RepositoryProtection> {
     identity.validate()?;
-    crate::git::validate_oid(base)?;
+    kegari_git::validate_oid(base)?;
     if identity.id != repository.identity.id.to_string() || !["main", "staging"].contains(&branch) {
         return Err(Error::new(
             "repository_policy",
@@ -4111,7 +4112,7 @@ pub struct SliceAssembly<'a> {
     pub child_dependencies: &'a BTreeMap<Uuid, BTreeSet<Uuid>>,
     pub satisfied_children: &'a BTreeSet<Uuid>,
     pub production_integrations: &'a [crate::git::VerifiedProductionIntegration],
-    pub identity: crate::git::CommitIdentity,
+    pub identity: kegari_git::CommitIdentity,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -4121,18 +4122,18 @@ struct SliceIntent {
     request_id: Uuid,
     scope: DeliveryScope,
     execution_root: PathBuf,
-    production: crate::git::Revision,
+    production: kegari_git::Revision,
     selected: Vec<String>,
     dependencies: BTreeMap<Uuid, BTreeSet<Uuid>>,
     satisfied_children: BTreeSet<Uuid>,
-    integrations: Vec<crate::git::ProductionIntegration>,
-    identity: crate::git::CommitIdentity,
+    integrations: Vec<kegari_git::ProductionIntegration>,
+    identity: kegari_git::CommitIdentity,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SliceRecord {
     intent: SliceIntent,
-    candidate: crate::git::CandidateManifest,
+    candidate: kegari_git::CandidateManifest,
     receipt_id: Uuid,
 }
 #[derive(Debug)]
@@ -4144,7 +4145,7 @@ impl IsolatedSlice {
     pub fn provenance_digest(&self) -> Result<String> {
         canonical_digest(1, &self.record)
     }
-    pub fn manifest(&self) -> &crate::git::CandidateManifest {
+    pub fn manifest(&self) -> &kegari_git::CandidateManifest {
         &self.candidate.manifest
     }
     pub fn path(&self) -> &Path {
@@ -4158,7 +4159,7 @@ impl DeliveryCoordinator {
     async fn main_revision(
         &self,
         observation: &DeliveryObservation,
-    ) -> Result<crate::git::Revision> {
+    ) -> Result<kegari_git::Revision> {
         self.current(observation, &[observation.scope.phase])?;
         let contract = self.contract(observation)?;
         let commit = self
@@ -4177,7 +4178,7 @@ impl DeliveryCoordinator {
             .and_then(Value::as_str)
             .ok_or_else(|| Error::new("provider_response", "production tree is unavailable"))?
             .to_owned();
-        let revision = crate::git::Revision { commit, tree };
+        let revision = kegari_git::Revision { commit, tree };
         revision.validate()?;
         Ok(revision)
     }

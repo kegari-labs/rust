@@ -1,6 +1,7 @@
 //! Exact configured identity retained by immutable historical completion seals.
-use crate::{evidence::WorkIdentity, git::RepositoryId};
+use crate::evidence::WorkIdentity;
 use kegari_config::Config;
+use kegari_git::RepositoryId;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
