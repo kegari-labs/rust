@@ -1414,7 +1414,7 @@ impl kegari_v0::configuration::ConfigurationInputs for CacheInputs {
         &'a self,
         _: &'a kegari_config::Connection,
         _: &'a std::path::Path,
-    ) -> Pin<Box<dyn Future<Output = Result<kegari_v0::codex::CodexConnectionMetadata>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<kegari_codex::CodexConnectionMetadata>> + Send + 'a>>
     {
         Box::pin(async { panic!("provider observation must not start Codex") })
     }

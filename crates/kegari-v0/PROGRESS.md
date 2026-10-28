@@ -1,5 +1,41 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Codex protocol/transport extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. `kegari-codex` owns independent protocol
+data, JSON-RPC framing, stream transport, argument encoding and the pinned schema
+assets. Backend `codex` retains `RpcClient`, session state, request/tool gates,
+permission derivation, observations, native ownership and recovery. Its only
+workspace dependency is `kegari-types`; it has no backend dependency, including
+in tests. Consumers import moved interfaces directly without compatibility
+reexports. Transport state and valid-output timing have a single owner, while
+request authorization, deadlines and process cleanup remain backend-owned.
+
+All thirteen packages remain `0.2.0-alpha.10`. All 38 relocated protocol files,
+239 external lock entries, schemas, instruction assets and the alpha.10 archive
+are unchanged. All 168 focused release tests passed. The final workspace release
+suite passed **1,302 tests, zero failed, exactly three native ignores** with
+normal concurrency. Formatting, strict all-target Clippy, contract inventory and
+its 11 tests passed. One bounded independent review found no material issues.
+Initial compile omissions and unused imports were corrected before review;
+original diagnostics remain recorded. No test failed, and the complete suite
+ran once on the final reviewed candidate.
+
+The optimized arm64 executable passed all five minimal-environment inspections
+with consistent metadata and no runtime state. Independent hash reconstruction
+covers the new crate and its protocol assets and matches all 794 reviewed
+source/test/build inputs. See the [crate boundary](../kegari-codex/README.md) and
+[verification report](validation/CODEX-EXTRACTION.md) for import migrations,
+commands, evidence and identity.
+
+This is the first protocol/stream extraction; complete client/session ownership
+requires a separate plan. Native/live restrictions and milestone requirements
+remain in force. No installed Codex, live account, real Keychain, native
+qualification, service activation, release packaging, goal resumption, commit
+or remote operation was performed.
+
+## Previous control API/controller extraction checkpoint
+
 **Goal mode cancelled. Control API/controller extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. `kegari-control-api` owns request

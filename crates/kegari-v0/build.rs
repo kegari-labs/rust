@@ -25,7 +25,8 @@ fn main() {
     for name in [
         "src",
         "instructions",
-        "protocol",
+        "../kegari-codex/protocol",
+        "../kegari-codex/src",
         "examples",
         "../kegari-cli/src",
         "../kegari-control-api/src",
@@ -45,6 +46,7 @@ fn main() {
     for name in [
         "build.rs",
         "Cargo.toml",
+        "../kegari-codex/Cargo.toml",
         "../kegari-cli/Cargo.toml",
         "../kegari-control-api/Cargo.toml",
         "../kegari-controller/Cargo.toml",

@@ -22,7 +22,7 @@ use broker_observation::{BrokerCapture, BrokerJournalReference, BrokerSemantic};
 pub use broker_observation::{BrokerControlBatch, BrokerInventory, IndependentBrokerObservation};
 pub use validation::ValidationHistorySeal;
 
-use crate::codex::{SessionState, ToolBroker, ToolCall};
+use crate::codex::{SessionState, ToolBroker};
 use crate::control::ControlHost;
 use crate::control::Lease;
 use crate::control::MutationRequest;
@@ -45,6 +45,7 @@ use crate::providers::{ProviderBroker, ProviderMutation};
 use crate::reconcile::{FreshGate, IndependentReviewGate};
 use crate::workflow::Workflow;
 use chrono::{Duration, Utc};
+use kegari_codex::ToolCall;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::RepositoryIdentity;
@@ -1408,7 +1409,7 @@ impl ScopedWorker {
         processes: Arc<crate::process_records::ProcessJournal>,
         executable: &std::path::Path,
         auth_home: &std::path::Path,
-        permissions: &crate::codex::PermissionConfiguration,
+        permissions: &kegari_codex::PermissionConfiguration,
         timeout: std::time::Duration,
     ) -> Result<crate::worker_run::WorkerProviderLaunch> {
         crate::worker_run::WorkerProviderLaunch::new(
@@ -3485,7 +3486,7 @@ pub fn recover_session(
                 ));
             }
         }
-        let expected_profile = crate::codex::CodexProfile {
+        let expected_profile = kegari_codex::CodexProfile {
             model: manifest.profile.model.clone(),
             reasoning: manifest.profile.reasoning.clone(),
             speed: match manifest.profile.speed {
@@ -3715,7 +3716,7 @@ mod trial_checkpoint_tests {
         // Session DTO only: this helper cannot mint a scoped worker or a joined
         // completion. It tests the exact comparison used by the real broker.
         let state = SessionState::new(
-            crate::codex::SessionBinding {
+            kegari_codex::SessionBinding {
                 schema_version: 1,
                 account_id: "account".into(),
                 work_identity: "work".into(),
@@ -3723,7 +3724,7 @@ mod trial_checkpoint_tests {
                 generation: kegari_digest::bytes_digest(b"generation"),
                 instruction_digest: kegari_digest::bytes_digest(b"instructions"),
                 isolation_digest: kegari_digest::bytes_digest(b"isolation"),
-                profile: crate::codex::CodexProfile {
+                profile: kegari_codex::CodexProfile {
                     model: "model".into(),
                     reasoning: "high".into(),
                     speed: "standard".into(),

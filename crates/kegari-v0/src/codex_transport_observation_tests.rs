@@ -114,7 +114,7 @@ async fn actual_queued_tail_reaches_eof_without_dispatch_or_complete_claim() {
     };
     checkpoint_notification(&mut state, &mut broker, &method, &params).unwrap();
     assert!(
-        !rpc.messages.is_empty(),
+        rpc.transport.has_queued_messages(),
         "the test must cover actual queued tail data"
     );
     let prior = state.completed_turns.clone();
@@ -126,7 +126,7 @@ async fn actual_queued_tail_reaches_eof_without_dispatch_or_complete_claim() {
         )
         .await;
     assert!(is_clean(&end));
-    assert!(rpc.clean_read_eof);
+    assert!(rpc.transport.clean_eof_observed());
     assert_eq!(broker.calls, 0);
     let mut response_byte = [0_u8; 1];
     assert!(
@@ -246,7 +246,7 @@ async fn original_deadline_and_single_use_refuse_new_eof_window() {
     assert!(
         matches!(end.diagnostic(),ProtocolTransportEndDiagnostic::Incomplete{error,..}if error.code=="timeout")
     );
-    assert!(!rpc.clean_read_eof);
+    assert!(!rpc.transport.clean_eof_observed());
     let again = rpc
         .observe_declared_tail(
             &mut state,
@@ -278,7 +278,7 @@ async fn decoder_error_or_partial_line_never_produces_typed_eof() {
             .await;
         task.await.unwrap();
         assert!(!is_clean(&end));
-        assert!(!rpc.clean_read_eof);
+        assert!(!rpc.transport.clean_eof_observed());
         assert!(
             matches!(end.diagnostic(),ProtocolTransportEndDiagnostic::Incomplete{error,..}if error.code=="protocol_error")
         );
@@ -324,8 +324,7 @@ async fn tail_wire_bytes_include_whitespace_and_oversize_stream_poisoning() {
     assert!(
         matches!(end.diagnostic(),ProtocolTransportEndDiagnostic::Incomplete{error,..}if error.code=="bounded_input")
     );
-    assert!(rpc.decoder.poisoned);
-    assert!(!rpc.clean_read_eof);
+    assert!(!rpc.transport.clean_eof_observed());
 }
 
 #[tokio::test]
@@ -447,7 +446,7 @@ async fn actual_thread_start_failure_does_not_establish_tentative_thread() {
     };
     let isolation = plan.validate().unwrap();
     let permissions =
-        PermissionConfiguration::for_isolation(&isolation, &root.join("auth")).unwrap();
+        crate::codex::permission_configuration(&isolation, &root.join("auth")).unwrap();
     let mut binding = active().binding;
     binding.cwd = plan.cwd.clone();
     binding.isolation_digest = isolation.digest().into();
@@ -579,8 +578,11 @@ async fn original_partial_decoder_bytes_count_against_tail_bound() {
     })
     .await;
     drop(read);
-    assert_eq!(rpc.decoder.pending.len(), 8 * 1024 * 1024 + 1);
-    assert_eq!(rpc.transport_read_bytes, rpc.decoder.pending.len() as u64);
+    assert_eq!(rpc.transport.pending_bytes(), 8 * 1024 * 1024 + 1);
+    assert_eq!(
+        rpc.transport.wire_bytes_read(),
+        rpc.transport.pending_bytes() as u64
+    );
     let mut state = completed();
     let mut broker = TailBroker::new(Some(&state));
     let end = rpc
@@ -595,7 +597,7 @@ async fn original_partial_decoder_bytes_count_against_tail_bound() {
         wire_bytes, error, ..
     } if *wire_bytes == 8 * 1024 * 1024 + 1 && error.code == "bounded_input")
     );
-    assert!(!rpc.clean_read_eof);
+    assert!(!rpc.transport.clean_eof_observed());
     assert!(
         broker
             .result(&state, &end)
@@ -623,7 +625,7 @@ async fn queued_frame_limit_stops_without_claiming_eof() {
         frames: 4097, error, ..
     } if error.code == "bounded_input")
     );
-    assert!(!rpc.clean_read_eof);
+    assert!(!rpc.transport.clean_eof_observed());
     assert!(
         broker
             .result(&state, &end)

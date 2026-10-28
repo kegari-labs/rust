@@ -2,13 +2,11 @@
 //!
 //! Live execution requires a host authority lease and the real production broker.
 //! Recorded/replayed observations exercise graders only and cannot qualify behavior.
-use crate::codex::{
-    CodexProfile, EventKind, PermissionConfiguration, SessionBinding, SessionState, ToolBroker,
-    ToolCall,
-};
+use crate::codex::{SessionState, ToolBroker};
 use crate::instructions::{self, AgentRole, AssembledInstructions, AssemblyInput};
 use crate::isolation::{ExecutionRole, PathGrant, ValidatedIsolation};
 use chrono::Utc;
+use kegari_codex::{CodexProfile, EventKind, PermissionConfiguration, SessionBinding, ToolCall};
 use kegari_config::Profile;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_types::error::{Error, Result};
@@ -2136,7 +2134,7 @@ pub(crate) async fn run_live_trial_until(
         &operation.assembled.manifest.permissions,
     )?;
     let effective =
-        PermissionConfiguration::for_isolation(operation.isolation, &operation.fixture.codex_home)?;
+        crate::codex::permission_configuration(operation.isolation, &operation.fixture.codex_home)?;
     if operation.permissions.settings != effective.settings
         || operation.permissions.profile_id != effective.profile_id
         || operation.assembled.manifest.prompt_digest

@@ -1,11 +1,8 @@
 //! Declared-evaluation diagnostics on the original transport. No tool dispatch,
 //! pipe writes, native exit proof, permission renewal or complete-channel claim.
 use super::*;
+use kegari_codex::TransportRead;
 
-pub(super) enum TransportRead {
-    Message(RpcMessage),
-    CleanEof,
-}
 /// A diagnostic created only by reading this actual client's transport. Its
 /// serialized projection is ordinary report data, never a native capability.
 pub struct ProtocolTransportEnd {
@@ -88,8 +85,8 @@ impl RpcClient {
         // Residual bytes were really read by this client before the tail began.
         // Include them in the wire budget; queued decoded frames are bounded
         // separately because their original whitespace is no longer retained.
-        let residual = self.decoder.pending.len() as u64;
-        let before_wire = self.transport_read_bytes.saturating_sub(residual);
+        let residual = self.transport.pending_bytes() as u64;
+        let before_wire = self.transport.wire_bytes_read().saturating_sub(residual);
         if residual > MAX_TAIL_BYTES {
             observer.observe_protocol(ProtocolObservation::Issue {
                 state: Some(state),
@@ -107,14 +104,14 @@ impl RpcClient {
                 return incomplete(
                     frames,
                     bytes,
-                    self.transport_read_bytes - before_wire,
+                    self.transport.wire_bytes_read() - before_wire,
                     Error::new("timeout", "original protocol collection deadline expired"),
                 );
             }
             let incoming = match timeout_at(
                 deadline,
                 self.read_transport_bounded(Some(
-                    MAX_TAIL_BYTES.saturating_sub(self.transport_read_bytes - before_wire),
+                    MAX_TAIL_BYTES.saturating_sub(self.transport.wire_bytes_read() - before_wire),
                 )),
             )
             .await
@@ -123,7 +120,7 @@ impl RpcClient {
                     return incomplete(
                         frames,
                         bytes,
-                        self.transport_read_bytes - before_wire,
+                        self.transport.wire_bytes_read() - before_wire,
                         Error::new("timeout", "original protocol collection deadline expired"),
                     );
                 }
@@ -137,7 +134,7 @@ impl RpcClient {
                     return incomplete(
                         frames,
                         bytes,
-                        self.transport_read_bytes - before_wire,
+                        self.transport.wire_bytes_read() - before_wire,
                         error,
                     );
                 }
@@ -149,7 +146,7 @@ impl RpcClient {
                         return incomplete(
                             frames,
                             bytes,
-                            self.transport_read_bytes - before_wire,
+                            self.transport.wire_bytes_read() - before_wire,
                             Error::new(
                                 "timeout",
                                 "EOF observation exceeded original collection deadline",
@@ -160,7 +157,7 @@ impl RpcClient {
                         diagnostic: ProtocolTransportEndDiagnostic::CleanEof {
                             frames,
                             decoded_bytes: bytes,
-                            wire_bytes: self.transport_read_bytes - before_wire,
+                            wire_bytes: self.transport.wire_bytes_read() - before_wire,
                         },
                     };
                 }
@@ -173,7 +170,7 @@ impl RpcClient {
                     return incomplete(
                         frames,
                         bytes,
-                        self.transport_read_bytes - before_wire,
+                        self.transport.wire_bytes_read() - before_wire,
                         error,
                     );
                 }
@@ -187,7 +184,7 @@ impl RpcClient {
                 return incomplete(
                     frames,
                     bytes,
-                    self.transport_read_bytes - before_wire,
+                    self.transport.wire_bytes_read() - before_wire,
                     Error::new(
                         "bounded_input",
                         "declared tail observation resource bound exceeded",
@@ -198,7 +195,7 @@ impl RpcClient {
                 return incomplete(
                     frames,
                     bytes,
-                    self.transport_read_bytes - before_wire,
+                    self.transport.wire_bytes_read() - before_wire,
                     error,
                 );
             }
@@ -207,7 +204,7 @@ impl RpcClient {
                 return incomplete(
                     frames,
                     bytes,
-                    self.transport_read_bytes - before_wire,
+                    self.transport.wire_bytes_read() - before_wire,
                     Error::new(
                         "timeout",
                         "tail recording exceeded original collection deadline",

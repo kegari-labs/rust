@@ -1,5 +1,10 @@
 # Codex protocol and isolation profile
 
+Protocol data and stream framing/I/O live in `kegari-codex`. Backend
+`kegari_v0::codex` retains RPC/session policy, request gates, permission derivation,
+observations and native process/recovery ownership. Stream EOF is not owned
+process-exit or successful-work evidence.
+
 The adapter targets **codex-cli 0.164.0-alpha.11.1**, profile
 `kegari-codex-0.164.0-alpha.11.1-v1`. Its deterministic tests pass; live account,
 agent, tool-discovery and OS-boundary qualification remain incomplete. This is
@@ -10,7 +15,7 @@ not permission to activate a coordinator.
 On 2026-10-25 the installed executable reported the exact version above.
 `codex app-server generate-json-schema --experimental --out target/codex-schema`
 completed without creating a session or running a model. The compact schemas in
-[`../protocol/codex-0.164.0-alpha.11.1/`](../protocol/codex-0.164.0-alpha.11.1/)
+[`kegari-codex` protocol assets](../../kegari-codex/protocol/codex-0.164.0-alpha.11.1/)
 retain generated structural constraints, omitting descriptive prose and titles.
 `manifest.json` records both original generated-byte digests and compact-byte
 digests. These files describe the installed protocol, not a hand-invented API.
@@ -144,7 +149,8 @@ and failure; never convert these missing checks into passes.
 From the Rust repository:
 
 ```sh
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test -p kegari-v0 --test codex_protocol
+CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo +stable test --offline --locked -p kegari-codex
+CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo +stable test --offline --locked -p kegari-v0 --test codex_protocol
 ```
 
 The local environment uses the preinstalled stable alias for the exact 1.99.1

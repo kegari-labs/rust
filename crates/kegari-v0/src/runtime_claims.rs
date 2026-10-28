@@ -355,7 +355,7 @@ mod tests {
     use super::*;
     use crate::{
         authority::{ChildScope, Corrections, IssueKey, Responsibility},
-        codex::{CodexProfile, SessionBinding, SessionState},
+        codex::SessionState,
         control::ReceiptPhase,
         evidence::{Generation, WorkIdentity},
         instructions::InstructionManifest,
@@ -363,6 +363,7 @@ mod tests {
         scheduler::PhaseKey,
     };
     use chrono::{Duration, Utc};
+    use kegari_codex::{CodexProfile, SessionBinding};
     use kegari_config::{Profile, ReleaseMode, Speed};
     use kegari_digest::bytes_digest;
     use serde_json::json;

@@ -1,5 +1,6 @@
 //! Real private storage/control serialization with labeled provider/Keychain fixtures.
 //! No native Keychain, account login, provider network or agent process is invoked.
+use kegari_codex::CodexConnectionMetadata;
 use kegari_config::{Config, Connection};
 use kegari_control_api::identity::Actor;
 use kegari_control_api::identity::Principal;
@@ -12,7 +13,6 @@ use kegari_providers::{HttpRequest, HttpResponse};
 use kegari_secrets::{Secret, SecretStore};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
-use kegari_v0::codex::CodexConnectionMetadata;
 use kegari_v0::config::config_revision;
 use kegari_v0::configuration::ConfigManager;
 use kegari_v0::configuration::ConfigurationInputs;

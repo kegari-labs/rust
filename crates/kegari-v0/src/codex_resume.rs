@@ -1,5 +1,6 @@
 //! Exact submitted-input provenance and narrowly bounded thread recovery.
 use super::*;
+use kegari_codex::MAX_FRAME_BYTES;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1264,6 +1265,7 @@ mod chain_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kegari_codex::{CodexProfile, PriorUnattributedUsage};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 

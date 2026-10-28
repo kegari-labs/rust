@@ -2,6 +2,7 @@
 #[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
 mod worker_bundle;
 use chrono::{Duration, Utc};
+use kegari_codex::{CodexProfile, SessionBinding, ToolCall};
 use kegari_config::{Profile, ReleaseMode, Speed};
 use kegari_types::error::{Error, Result};
 use kegari_storage::PrivateDir;

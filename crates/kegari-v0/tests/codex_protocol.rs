@@ -1,3 +1,7 @@
+use kegari_codex::{
+    CodexProfile, EventKind, PermissionConfiguration, SUPPORTED_CODEX_VERSION, SessionBinding,
+    ToolCall,
+};
 use kegari_v0::codex::*;
 use kegari_v0::isolation::*;
 use serde_json::{Value, json};
@@ -90,40 +94,7 @@ fn fixture() -> (tempfile::TempDir, IsolationPlan) {
 }
 
 #[test]
-fn fragmented_coalesced_json_rpc_is_atomic_and_bounded() {
-    let mut decoder = JsonRpcDecoder::default();
-    assert!(decoder.push(b"{\"id\":1,\"res").unwrap().is_empty());
-    let messages = decoder
-        .push(b"ult\":{}}\n{\"method\":\"tick\",\"params\":{}}\n")
-        .unwrap();
-    assert_eq!(messages.len(), 2);
-    assert!(matches!(&messages[0],RpcMessage::Response{id,..} if id==1));
-    decoder.finish().unwrap();
-    let mut decoder = JsonRpcDecoder::default();
-    assert!(
-        decoder
-            .push(&vec![b'x'; MAX_FRAME_BYTES])
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(decoder.push(b"x").unwrap_err().code, "protocol_error");
-    assert!(decoder.push(b"{}\n").is_err());
-    let mut decoder = JsonRpcDecoder::default();
-    assert!(decoder.push(b"{\"id\":null,\"result\":{}}\n").is_err());
-}
-#[test]
 fn malformed_required_protocol_is_not_success() {
-    for bytes in [
-        b"[]\n".as_slice(),
-        b"{\"id\":1,\"result\":{},\"error\":{}}\n",
-        b"{\"method\":\"\"}\n",
-        b"not-json\n",
-    ] {
-        assert!(JsonRpcDecoder::default().push(bytes).is_err());
-    }
-    let mut d = JsonRpcDecoder::default();
-    d.push(b"{\"id\":1").unwrap();
-    assert!(d.finish().is_err());
     let mut s = active();
     assert!(
         s.notification(
@@ -217,39 +188,6 @@ fn correction_completion_requires_current_consumption_not_delivery() {
     assert!(!s.completion_is_current());
 }
 #[test]
-fn usage_preserves_account_thread_baselines_on_recovery() {
-    let mut usage = UsageLedger::default();
-    assert_eq!(usage.observe("a", "t", 100, true), 100);
-    assert_eq!(usage.observe("a", "t", 100, false), 0);
-    let mut restored: UsageLedger =
-        serde_json::from_slice(&serde_json::to_vec(&usage).unwrap()).unwrap();
-    assert_eq!(restored.observe("a", "t", 110, false), 10);
-    assert_eq!(restored.observe("a", "t", 80, false), 0);
-    assert_eq!(restored.observe("a", "t", 115, false), 5);
-    assert_eq!(restored.observe("b", "t", 60, false), 0);
-    assert!(restored.earlier_usage_unknown.contains("b\0t"));
-    restored.finish_elapsed("operation", 300);
-    restored.finish_elapsed("operation", 500);
-    assert_eq!(restored.ended_operations["operation"], 300);
-    let prior = serde_json::to_value(&restored).unwrap();
-    let mut next = restored.resumed_session("a", "t");
-    assert!(next.observed_tokens.is_empty());
-    assert!(next.ended_operations.is_empty());
-    assert_eq!(next.observe("a", "t", 140, false), 25);
-    assert_eq!(next.observe("a", "t", 140, false), 0);
-    next.finish_elapsed("next-operation", 200);
-    assert_eq!(next.ended_operations.len(), 1);
-    assert_eq!(serde_json::to_value(&restored).unwrap(), prior);
-    let mut unknown = restored.resumed_session("a", "unobserved-thread");
-    assert!(
-        unknown
-            .earlier_usage_unknown
-            .contains("a\0unobserved-thread")
-    );
-    assert_eq!(unknown.observe("a", "unobserved-thread", 75, false), 0);
-    assert_eq!(unknown.observe("a", "unobserved-thread", 80, false), 5);
-}
-#[test]
 fn interrupted_turn_identity_survives_restart_until_exact_terminal_observation() {
     let mut state = active();
     let event = state.interruption("process_exit");
@@ -269,25 +207,6 @@ fn interrupted_turn_identity_survives_restart_until_exact_terminal_observation()
     SessionState::restore(&serde_json::to_vec(&restored).unwrap()).unwrap();
 }
 #[test]
-fn profile_and_resume_cannot_fallback_or_cross_scope() {
-    let p = binding().profile;
-    let catalog = vec![
-        json!({"model":"fixture-model","supportedReasoningEfforts":[{"reasoningEffort":"high"}],"serviceTiers":[]}),
-    ];
-    p.validate_catalog(&catalog).unwrap();
-    let mut fast = p.clone();
-    fast.speed = "fast".into();
-    assert!(fast.validate_catalog(&catalog).is_err());
-    let mut other = binding();
-    other.account_id = "other".into();
-    assert!(other.compatible_resume(&binding()).is_err());
-    let mut resumed = binding();
-    resumed.operation_id = "new-operation".into();
-    resumed.compatible_resume(&binding()).unwrap();
-    resumed.instruction_digest = "changed".into();
-    assert!(resumed.compatible_resume(&binding()).is_err());
-}
-#[test]
 fn sandbox_paths_roles_and_environment_fail_closed() {
     let (_temp, mut plan) = fixture();
     let isolated = plan.validate().unwrap();
@@ -295,7 +214,7 @@ fn sandbox_paths_roles_and_environment_fail_closed() {
     assert!(profile.contains("(deny default)"));
     assert!(!profile.contains("(allow network"));
     let permissions =
-        PermissionConfiguration::for_isolation(&isolated, &plan.execution_root.join("auth"))
+        kegari_v0::codex::permission_configuration(&isolated, &plan.execution_root.join("auth"))
             .unwrap();
     let fs = &permissions.settings["permissions"][&permissions.profile_id]["filesystem"];
     assert_eq!(fs[":root"], "deny");
@@ -506,41 +425,6 @@ async fn synchronous_request_timeout_is_bounded_and_identified() {
     assert_eq!(error.details["outcome"], "uncertain");
 }
 #[test]
-fn checked_in_protocol_manifest_matches_bytes_and_schema_capabilities() {
-    use sha2::{Digest, Sha256};
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/codex-0.164.0-alpha.11.1");
-    let manifest: Value =
-        serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["cli_version"], SUPPORTED_CODEX_VERSION);
-    for file in manifest["files"].as_array().unwrap() {
-        let bytes = std::fs::read(root.join(file["file"].as_str().unwrap())).unwrap();
-        assert_eq!(
-            hex::encode(Sha256::digest(&bytes)),
-            file["sha256"].as_str().unwrap()
-        );
-        let _: Value = serde_json::from_slice(&bytes).unwrap();
-    }
-    let steer: Value =
-        serde_json::from_slice(&std::fs::read(root.join("v2_TurnSteerParams.json")).unwrap())
-            .unwrap();
-    assert!(
-        steer["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("expectedTurnId"))
-    );
-    let errors: Value =
-        serde_json::from_slice(&std::fs::read(root.join("v2_ErrorNotification.json")).unwrap())
-            .unwrap();
-    assert!(
-        errors["definitions"]["CodexErrorInfo"]["anyOf"][0]["enum"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("misalignmentPolicyViolation"))
-    );
-}
-
-#[test]
 fn duplicate_terminal_events_preserve_one_outcome_and_no_new_turn() {
     let mut state = active();
     let completion = json!({"threadId":"thread-one","turn":{"id":"turn-one","status":"completed"}});
@@ -719,7 +603,7 @@ fn conforms(value: &Value, schema: &Value, root: &Value) -> bool {
 
 fn assert_wire_schema(params: &Value, name: &str) {
     let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("protocol/codex-0.164.0-alpha.11.1")
+        .join("../kegari-codex/protocol/codex-0.164.0-alpha.11.1")
         .join(name);
     let schema: Value = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
     assert!(
@@ -733,7 +617,7 @@ async fn production_session_requests_follow_pinned_schema_and_completion_races()
     let (_temp, plan) = fixture();
     let isolation = plan.validate().unwrap();
     let permissions =
-        PermissionConfiguration::for_isolation(&isolation, &plan.execution_root.join("auth"))
+        kegari_v0::codex::permission_configuration(&isolation, &plan.execution_root.join("auth"))
             .unwrap();
     let response = thread_response(&plan.cwd, &permissions);
     let effective = permissions.settings.clone();
@@ -899,7 +783,7 @@ async fn connection_metadata_uses_only_bounded_read_protocol_without_model_work(
     let (_temp, plan) = fixture();
     let isolation = plan.validate().unwrap();
     let permissions =
-        PermissionConfiguration::for_isolation(&isolation, &plan.execution_root.join("auth"))
+        kegari_v0::codex::permission_configuration(&isolation, &plan.execution_root.join("auth"))
             .unwrap();
     let effective = permissions.settings.clone();
     let (client, server) = tokio::io::duplex(65536);
@@ -1080,7 +964,7 @@ async fn owned_fixture_provider_cancellation_waits_and_reaps_without_pid_adoptio
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::set_permissions(root.join("auth"), std::fs::Permissions::from_mode(0o700)).unwrap();
     let permissions =
-        PermissionConfiguration::for_isolation(&plan.validate().unwrap(), &root.join("auth"))
+        kegari_v0::codex::permission_configuration(&plan.validate().unwrap(), &root.join("auth"))
             .unwrap();
     let verified = RpcClient::verify_executable(&binary, Duration::from_secs(2))
         .await
@@ -1177,7 +1061,7 @@ fn test_resource_writes_are_separate_exact_grants_and_never_reopen_source_or_con
     plan.read_roots.push(grant.clone());
     let boundary = plan.validate().unwrap();
     let permissions =
-        PermissionConfiguration::for_isolation(&boundary, &plan.execution_root.join("auth"))
+        kegari_v0::codex::permission_configuration(&boundary, &plan.execution_root.join("auth"))
             .unwrap();
     assert_eq!(
         permissions.settings["permissions"][&permissions.profile_id]["filesystem"]

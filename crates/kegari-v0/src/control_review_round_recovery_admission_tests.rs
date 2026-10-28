@@ -16,7 +16,7 @@ struct FailedPair {
 }
 fn failed_session(run: &RunReference, operation: Uuid) -> crate::codex::SessionState {
     let mut state = crate::codex::SessionState::new(
-        crate::codex::SessionBinding {
+        kegari_codex::SessionBinding {
             schema_version: 1,
             account_id: run.account.clone(),
             work_identity: run.phase.work.clone(),
@@ -24,7 +24,7 @@ fn failed_session(run: &RunReference, operation: Uuid) -> crate::codex::SessionS
             generation: run.phase.generation.clone(),
             instruction_digest: run.instruction_digest.clone(),
             isolation_digest: digest("synthetic isolation"),
-            profile: crate::codex::CodexProfile {
+            profile: kegari_codex::CodexProfile {
                 model: "fixture".into(),
                 reasoning: "high".into(),
                 speed: "standard".into(),

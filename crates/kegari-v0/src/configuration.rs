@@ -1,8 +1,5 @@
 //! Serialized host configuration transactions. Verification is read-only;
 //! credential import and durable configuration replacement share the mutation gate.
-use crate::codex::CodexConnectionMetadata;
-use crate::codex::CodexProfile;
-use crate::codex::PermissionConfiguration;
 use crate::connections::VerifiedCredential;
 use crate::connections::verify_credential;
 use crate::control::ControlHost;
@@ -12,6 +9,8 @@ use crate::control::Receipt;
 use crate::isolation::ExecutionRole;
 use crate::isolation::IsolationPlan;
 use crate::platform::Registration;
+use kegari_codex::CodexConnectionMetadata;
+use kegari_codex::CodexProfile;
 use kegari_config::{Config, Connection, ControlRole, Deployment, ProviderKind, Speed, Workspace};
 use kegari_control_api::identity::Actor;
 use kegari_control_api::identity::Principal;
@@ -111,7 +110,7 @@ impl ConfigurationInputs for NativeConfigurationInputs {
                 managed_execution: None,
             }
             .validate()?;
-            let permissions = PermissionConfiguration::for_isolation(&plan, &auth_home)?;
+            let permissions = crate::codex::permission_configuration(&plan, &auth_home)?;
             crate::codex::probe_connection(
                 &executable,
                 &auth_home,
@@ -1315,8 +1314,8 @@ fn verify_codex(
     metadata: &CodexConnectionMetadata,
 ) -> Result<()> {
     if metadata.account_id != connection.account_id
-        || metadata.supported_version != crate::codex::SUPPORTED_CODEX_VERSION
-        || metadata.protocol_profile != crate::codex::PROTOCOL_PROFILE
+        || metadata.supported_version != kegari_codex::SUPPORTED_CODEX_VERSION
+        || metadata.protocol_profile != kegari_codex::PROTOCOL_PROFILE
         || metadata.argument_digest.is_none()
         || connection
             .auth_home

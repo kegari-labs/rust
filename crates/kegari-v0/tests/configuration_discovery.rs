@@ -1,6 +1,9 @@
 //! Configuration admission through actual typed/provider verifiers and private
 //! transactions. Provider wire, Codex metadata and process identity are injected;
 //! no native probe, model, Keychain write, service or network action is performed.
+use kegari_codex::CodexConnectionMetadata;
+use kegari_codex::PROTOCOL_PROFILE;
+use kegari_codex::SUPPORTED_CODEX_VERSION;
 use kegari_config::{Config, Connection};
 use kegari_control_api::identity::Actor;
 use kegari_control_api::identity::Principal;
@@ -14,9 +17,6 @@ use kegari_providers::{HttpRequest, HttpResponse, Method};
 use kegari_secrets::{Secret, SecretStore};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
-use kegari_v0::codex::CodexConnectionMetadata;
-use kegari_v0::codex::PROTOCOL_PROFILE;
-use kegari_v0::codex::SUPPORTED_CODEX_VERSION;
 use kegari_v0::config::{config_revision, load_workflows};
 use kegari_v0::configuration::ConfigManager;
 use kegari_v0::configuration::ConfigurationInputs;

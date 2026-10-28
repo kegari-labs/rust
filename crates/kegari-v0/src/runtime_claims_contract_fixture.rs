@@ -3,9 +3,10 @@
 //! command evidence. Its caller must retain actual execution capabilities.
 use super::*;
 use crate::{
-    codex::{CodexProfile, SessionBinding, SessionState},
+    codex::SessionState,
     worker::{WorkerAuthority, WorkerContract},
 };
+use kegari_codex::{CodexProfile, SessionBinding};
 use kegari_config::Speed;
 use serde_json::json;
 

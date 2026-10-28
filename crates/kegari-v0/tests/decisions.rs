@@ -358,7 +358,7 @@ impl kegari_v0::configuration::ConfigurationInputs for Inputs {
         &'a self,
         _: &'a kegari_config::Connection,
         _: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<kegari_v0::codex::CodexConnectionMetadata>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<kegari_codex::CodexConnectionMetadata>> + Send + 'a>>
     {
         Box::pin(async { panic!("human decisions must not start Codex") })
     }

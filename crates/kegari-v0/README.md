@@ -77,10 +77,21 @@ the existing durable reservation and final authorization sequence. Import moved
 adapter types directly from `kegari_providers`; import hash functions directly
 from [`kegari-digest`](../kegari-digest/README.md), without compatibility reexports.
 
+Codex protocol data, JSON-RPC framing, stream transport and pinned schemas now
+belong to [`kegari-codex`](../kegari-codex/README.md). Import moved types directly
+from `kegari_codex`, without backend compatibility reexports. This backend keeps
+`RpcClient`, `SessionState`, tool/request gates, permission derivation, history,
+observations, native launch and owned cleanup/recovery. Replace
+`PermissionConfiguration::for_isolation` with
+`kegari_v0::codex::permission_configuration`, `RpcClient::app_server_argv` with
+`kegari_codex::app_server_argv`, and the `RpcClient.last_valid_output` field with
+`RpcClient::last_valid_output()`. Transport state and its activity timestamp
+have one owner; request deadlines and semantic-event timing remain here.
+
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all twelve packages:
+test and lint commands cover all thirteen packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
@@ -110,7 +121,7 @@ retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISS
 execution design has been removed. The source now separates `kegari-cli`,
 `kegari-types`, `kegari-config`, `kegari-digest`, `kegari-providers`,
 `kegari-storage`, `kegari-process`, `kegari-platform`, `kegari-secrets`,
-`kegari-control-api` and `kegari-controller`
+`kegari-control-api`, `kegari-controller` and `kegari-codex`
 from the remaining backend while retaining the
 same workspace version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a

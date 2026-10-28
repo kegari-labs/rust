@@ -128,13 +128,14 @@ pub(super) async fn failed_validation(
     failure_code: Option<&str>,
     request_gate: Arc<ValidationProtocol>,
 ) -> Arc<RunCompletion> {
-    use crate::codex::{CodexProfile, RpcClient, SessionBinding, SessionState};
+    use crate::codex::{RpcClient, SessionState};
+    use kegari_codex::{CodexProfile, SessionBinding};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     struct Deny;
     impl crate::codex::ToolBroker for Deny {
         fn call<'a>(
             &'a mut self,
-            _: &'a crate::codex::ToolCall,
+            _: &'a kegari_codex::ToolCall,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + 'a>>
         {
             Box::pin(async {
@@ -198,7 +199,7 @@ pub(super) async fn failed_validation(
     let mut rpc = RpcClient::from_transport(cr, cw, std::time::Duration::from_secs(2)).unwrap();
     rpc.bind_request_gate(request_gate).unwrap();
     rpc.initialize().await.unwrap();
-    let permissions = crate::codex::PermissionConfiguration::for_isolation(
+    let permissions = crate::codex::permission_configuration(
         contract.isolation(),
         &contract.isolation().plan().execution_root.join("auth"),
     )

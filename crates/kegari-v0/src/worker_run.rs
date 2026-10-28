@@ -1,11 +1,8 @@
 //! Actual assembled worker sessions. The host chooses work and reserves the
 //! immutable contract; this module owns the bounded adapter/task lifetime.
-use crate::codex::CodexProfile;
 use crate::codex::OwnedProviderCancellation;
-use crate::codex::PermissionConfiguration;
 use crate::codex::RequestGate;
 use crate::codex::RpcClient;
-use crate::codex::SessionBinding;
 use crate::codex::SessionState;
 use crate::control::ControlHost;
 use crate::control::InFlightEffect;
@@ -34,6 +31,9 @@ use crate::worker::WorkerExecution;
 use crate::worker::WorkerHost;
 use crate::worker::WorkerServices;
 use crate::workflow::Workflow;
+use kegari_codex::CodexProfile;
+use kegari_codex::PermissionConfiguration;
+use kegari_codex::SessionBinding;
 use kegari_config::{Config, ProviderKind, Speed};
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
@@ -201,7 +201,7 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
     );
     kegari_storage::PrivateDir::open(&auth_home)?;
     let isolation = input.isolation.validate()?;
-    let permissions = PermissionConfiguration::for_isolation(&isolation, &auth_home)?;
+    let permissions = crate::codex::permission_configuration(&isolation, &auth_home)?;
     let repository_execution =
         input.role.permits_repository_execution() && input.repository_id.is_some();
     let definitions = crate::worker::operation_tool_definitions(
@@ -791,7 +791,7 @@ impl WorkerProviderLaunch {
         registry: Arc<ExecutionRegistry>,
     ) -> Result<Self> {
         let expected =
-            PermissionConfiguration::for_isolation(contract.isolation(), &input.auth_home)?;
+            crate::codex::permission_configuration(contract.isolation(), &input.auth_home)?;
         let manifest = &contract.instructions().manifest;
         let admitted = crate::control::RunReference::from_receipt(
             &input.control.operation(input.permit.operation_id)?,
@@ -987,7 +987,7 @@ async fn launch_provider(
             cwd: input.isolation.plan().cwd.clone(),
             executable: input.executable.clone(),
             observed_executables: vec![],
-            argv_digest: canonical_digest(1, &RpcClient::app_server_argv(&input.permissions)?)?,
+            argv_digest: canonical_digest(1, &kegari_codex::app_server_argv(&input.permissions)?)?,
             kind: "codex-app-server".into(),
         })?;
         let spawned = RpcClient::start_verified_guarded(

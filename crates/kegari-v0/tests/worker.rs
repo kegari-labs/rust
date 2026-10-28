@@ -902,7 +902,7 @@ fn native_fixture_run(
     let marker = base.join("fixture-provider-started");
     // A disposable protocol/process fixture, never the installed Codex binary.
     // It returns only version metadata and then waits without starting any turn.
-    std::fs::write(&executable,format!("#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{}'; exit 0; fi\nprintf '%s' $$ > '{}'\nexec /bin/sleep 30\n",kegari_v0::codex::SUPPORTED_CODEX_VERSION,marker.display())).unwrap();
+    std::fs::write(&executable,format!("#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{}'; exit 0; fi\nprintf '%s' $$ > '{}'\nexec /bin/sleep 30\n",kegari_codex::SUPPORTED_CODEX_VERSION,marker.display())).unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut input = run_preparation(f);
     Arc::make_mut(&mut input.config)
@@ -1468,7 +1468,7 @@ fn repository_free_child_keeps_reasoning_role_without_execution_or_fabricated_gi
 
 #[test]
 fn recovered_session_retains_earlier_intervention_and_rejects_wrong_account_or_missing_events() {
-    use kegari_v0::codex::{ProviderIntervention, SessionBinding};
+    use kegari_codex::{ProviderIntervention, SessionBinding};
     let f = Fixture::new(AgentRole::Coordination);
     let (prepared, permit, mut services, _) = native_fixture_run(&f);
     let contract = prepared.contract().clone();
@@ -1490,7 +1490,7 @@ fn recovered_session_retains_earlier_intervention_and_rejects_wrong_account_or_m
             generation: manifest.work_generation.clone(),
             instruction_digest: contract.instructions().manifest_digest.clone(),
             isolation_digest: prepared.isolation().digest().into(),
-            profile: kegari_v0::codex::CodexProfile {
+            profile: kegari_codex::CodexProfile {
                 model: manifest.profile.model.clone(),
                 reasoning: manifest.profile.reasoning.clone(),
                 speed: "standard".into(),

@@ -449,7 +449,7 @@ impl ConfigurationInputs for EvaluationConfigurationInputs {
         &'a self,
         connection: &'a kegari_config::Connection,
         root: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::codex::CodexConnectionMetadata>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<kegari_codex::CodexConnectionMetadata>> + Send + 'a>>
     {
         self.native.codex(connection, root)
     }

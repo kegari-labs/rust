@@ -3652,7 +3652,8 @@ mod tests {
     }
     #[test]
     fn unfinished_selection_requires_joined_terminal_session_without_blockers() {
-        use crate::codex::{CodexProfile, ProviderIntervention, SessionBinding, SessionState};
+        use crate::codex::SessionState;
+        use kegari_codex::{CodexProfile, ProviderIntervention, SessionBinding};
         let operation = Uuid::from_u128(44);
         let digest = canonical_digest(1, &"fixture").unwrap();
         let mut session = SessionState::new(
@@ -4047,7 +4048,8 @@ mod tests {
     }
     #[test]
     fn provider_hold_cannot_be_cleared_by_later_success_or_transplanted_binding() {
-        use crate::codex::{CodexProfile, ProviderIntervention, SessionBinding, SessionState};
+        use crate::codex::SessionState;
+        use kegari_codex::{CodexProfile, ProviderIntervention, SessionBinding};
         let operation = Uuid::from_u128(1);
         let digest = canonical_digest(1, &"fixture").unwrap();
         let mut session = SessionState::new(

@@ -374,7 +374,7 @@ fn pure_chunk_scan_charges_before_work_and_never_loses_split_match() {
 }
 fn session_data() -> SessionState {
     let mut state = SessionState::new(
-        crate::codex::SessionBinding {
+        kegari_codex::SessionBinding {
             schema_version: 1,
             account_id: "component".into(),
             work_identity: "component".into(),
@@ -382,7 +382,7 @@ fn session_data() -> SessionState {
             generation: "component".into(),
             instruction_digest: bytes_digest(b"instructions"),
             isolation_digest: bytes_digest(b"isolation"),
-            profile: crate::codex::CodexProfile {
+            profile: kegari_codex::CodexProfile {
                 model: "component".into(),
                 reasoning: "high".into(),
                 speed: "standard".into(),

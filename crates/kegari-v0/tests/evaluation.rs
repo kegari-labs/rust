@@ -603,8 +603,7 @@ fn grader_and_reports_are_outside_all_worker_grants() {
     assert!(!fixture.repository.join("scorer").exists());
     assert!(!fixture.repository.join("manifest.json").exists());
     let profile =
-        kegari_v0::codex::PermissionConfiguration::for_isolation(&isolation, &fixture.codex_home)
-            .unwrap();
+        kegari_v0::codex::permission_configuration(&isolation, &fixture.codex_home).unwrap();
     let fs = &profile.settings["permissions"][&profile.profile_id]["filesystem"];
     assert_eq!(fs[fixture.grader_root.to_str().unwrap()], "deny");
     assert_eq!(fs[reports.to_str().unwrap()], "deny");

@@ -136,7 +136,7 @@ impl RecoveryProviderLaunch {
         )
         .canonicalize()
         .map_err(|e| Error::io("resolve recovery auth home", e))?;
-        let permissions = PermissionConfiguration::for_isolation(contract.isolation(), &auth_home)?;
+        let permissions = crate::codex::permission_configuration(contract.isolation(), &auth_home)?;
         let journal = RecoveryJournal::open(
             &input.records,
             &original,
@@ -156,7 +156,7 @@ impl RecoveryProviderLaunch {
         };
         let scope = canonical_digest(
             1,
-            &json!({"kind":"session_recovery_metadata","candidate":candidate.digest(),"thread":candidate.state().thread_id,"cwd":candidate.state().binding.cwd,"executable":executable,"auth_home":auth_home,"permissions":permissions,"methods":["initialize","account/read","config/read","thread/read"],"protocol":crate::codex::PROTOCOL_PROFILE}),
+            &json!({"kind":"session_recovery_metadata","candidate":candidate.digest(),"thread":candidate.state().thread_id,"cwd":candidate.state().binding.cwd,"executable":executable,"auth_home":auth_home,"permissions":permissions,"methods":["initialize","account/read","config/read","thread/read"],"protocol":kegari_codex::PROTOCOL_PROFILE}),
         )?;
         // Ordinary scope bytes remain unchanged. Paired readback additionally
         // binds its exact immutable round/candidate metadata in the scope.
@@ -343,7 +343,7 @@ impl RecoveryProviderLaunch {
         let proof = result?;
         let digest = canonical_digest(
             1,
-            &json!({"observation":proof.digest(),"preparation":receipt,"executable":self.input.executable,"permissions":self.input.permissions,"protocol":crate::codex::PROTOCOL_PROFILE}),
+            &json!({"observation":proof.digest(),"preparation":receipt,"executable":self.input.executable,"permissions":self.input.permissions,"protocol":kegari_codex::PROTOCOL_PROFILE}),
         )?;
         Ok(VerifiedProviderRecovery {
             observation: proof,

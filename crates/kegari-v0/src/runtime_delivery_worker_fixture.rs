@@ -736,13 +736,14 @@ pub(crate) async fn failed_admitted_review_with_gate(
     failure_code: Option<&str>,
     request_gate: Option<Arc<dyn crate::codex::RequestGate>>,
 ) -> Arc<RunCompletion> {
-    use crate::codex::{CodexProfile, RpcClient, SessionBinding, SessionState};
+    use crate::codex::{RpcClient, SessionState};
+    use kegari_codex::{CodexProfile, SessionBinding};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     struct Deny;
     impl crate::codex::ToolBroker for Deny {
         fn call<'a>(
             &'a mut self,
-            _: &'a crate::codex::ToolCall,
+            _: &'a kegari_codex::ToolCall,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + 'a>>
         {
             Box::pin(async {

@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
+kegari-codex = { path = "../kegari-codex" }
 kegari-control-api = { path = "../kegari-control-api" }
 kegari-secrets = { path = "../kegari-secrets" }
 kegari-platform = { path = "../kegari-platform" }
