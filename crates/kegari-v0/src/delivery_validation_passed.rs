@@ -398,7 +398,8 @@ fn current_inputs(
         .configuration
         .authority_fences()?
         .check_workspace(gate.workspace_id())?;
-    if runtime.configuration.snapshot()?.revision()? != gate.config_revision() {
+    if crate::config::config_revision(&runtime.configuration.snapshot()?)? != gate.config_revision()
+    {
         return Err(Error::new(
             "stale_config",
             "validation successor configuration changed",

@@ -139,7 +139,8 @@ impl RuntimeDelivery {
                 .verify_active_owner(&phase.permit.lease)?;
             let admitted = phase.admission.fresh_gate();
             (self.retained_gate())(admitted)?;
-            if phase.workspace.configuration.revision()? != admitted.config_revision()
+            if crate::config::config_revision(&phase.workspace.configuration)?
+                != admitted.config_revision()
                 || phase.workspace.workflow.digest != admitted.workflow_digest()
                 || phase.admission.operation_id() != phase.permit.operation_id
                 || phase.admission.scope().digest()? != phase.permit.scope_digest
@@ -1433,7 +1434,7 @@ mod lifecycle_tests {
             let mut config = fixture.configuration.config.lock().unwrap();
             config.runtime.max_agents = 3;
             config.workspaces.get_mut("example").unwrap().linear.teams =
-                crate::config::Selector::Ids(vec![Uuid::from_u128(999).to_string()]);
+                kegari_config::Selector::Ids(vec![Uuid::from_u128(999).to_string()]);
         }
         // Discovery obeys the new team selector; ID refresh still returns the
         // retained parent and its child for current active authority checks.

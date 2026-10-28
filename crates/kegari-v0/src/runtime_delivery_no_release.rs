@@ -103,8 +103,8 @@ fn target_inventory(
                 )
             })?;
         match contract.configuration.deployment_policy()? {
-            crate::config::Deployment::None(value) if value == "none" => (),
-            crate::config::Deployment::Steps { steps } => {
+            kegari_config::Deployment::None(value) if value == "none" => (),
+            kegari_config::Deployment::Steps { steps } => {
                 for step in steps {
                     if inventory
                         .insert(
@@ -347,7 +347,7 @@ impl RuntimeDelivery {
             .configuration
             .authority_fences()?
             .check_workspace(intent.workspace)?;
-        if config.revision()? != intent.config_revision
+        if crate::config::config_revision(&config)? != intent.config_revision
             || gate.config_revision() != intent.config_revision
             || gate.workflow_digest() != intent.workflow_digest
             || gate.workspace_id() != intent.workspace
@@ -1197,7 +1197,7 @@ impl RuntimeDelivery {
         let target_digest = canonical_digest(1, target)?;
         let actual = self.runtime.control.reconcile_operation_observed(decision.actor(), target.operation_id, |current, snapshot| {
             self.operation_recovery_gate(decision, snapshot)?;
-            if self.runtime.configuration.snapshot()?.revision()? != config.revision()?
+            if crate::config::config_revision(&self.runtime.configuration.snapshot()?)? != crate::config::config_revision(&config)?
                 || canonical_digest(1, current)? != target_digest
                 || snapshot.active_operations.iter().any(|permit| permit.operation_id == admission_id)
                 || snapshot.pending_external_effects.contains(&effect.operation_id)

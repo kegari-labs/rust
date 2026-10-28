@@ -22,7 +22,7 @@ impl ActiveParentGrantObserver {
         configuration: Config,
     ) -> Result<Self> {
         if configuration.runtime.id != permit.lease.runtime_id
-            || configuration.revision()? != gate.config_revision()
+            || crate::config::config_revision(&configuration)? != gate.config_revision()
             || permit.work_key != gate.work_key()?
             || gate.work().child.is_some()
         {
@@ -42,7 +42,9 @@ impl ActiveParentGrantObserver {
         &self.configuration
     }
     pub(crate) fn require_configuration(&self, configuration: &Config) -> Result<()> {
-        if self.configuration.revision()? != configuration.revision()? {
+        if crate::config::config_revision(&self.configuration)?
+            != crate::config::config_revision(configuration)?
+        {
             return Err(Error::new(
                 "stale_config",
                 "active grant configuration differs",

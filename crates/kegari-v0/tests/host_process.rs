@@ -7,11 +7,11 @@ mod git_reuse;
 mod pinned_git;
 #[path = "support/process_probe.rs"]
 mod process_probe;
+use kegari_config::Config;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     app::{ConfigurationControl, HostFuture},
-    config::Config,
     control::{Actor, Intent, Lifecycle, MutationRequest, Receipt},
     delivery::RepositoryContract,
     git::{Git, GitLimits, HostGitExecutionScope, RepositoryId, configured_host_read_root},

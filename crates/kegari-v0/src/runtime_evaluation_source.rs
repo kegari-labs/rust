@@ -63,7 +63,8 @@ impl VerifiedEvaluationSource {
     pub(super) fn validate(&self, runtime: &RuntimeCoordinator) -> Result<()> {
         self.subject.verify(runtime)?;
         self.root.revalidate_filesystem()?;
-        if runtime.configuration.snapshot()?.revision()? != self.root.config_revision()
+        if crate::config::config_revision(&runtime.configuration.snapshot()?)?
+            != self.root.config_revision()
             || canonical_digest(1, &runtime.control.operation(self.receipt.operation_id)?)?
                 != canonical_digest(1, &self.receipt)?
             || crate::evaluation::tree_digest(self.root.root())? != self.files_digest

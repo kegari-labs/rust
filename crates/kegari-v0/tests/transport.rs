@@ -1,9 +1,9 @@
 use chrono::Utc;
+use kegari_config::{ControlConfig, ControlRole, HttpsConfig, Operator};
 use kegari_types::api::CommandRequest;
 use kegari_types::error::Result;
 use kegari_v0::{
     api::{ApiState, Authentication, DispatchResult, Dispatcher, Peer},
-    config::{ControlConfig, ControlRole, HttpsConfig, Operator},
     control::Actor,
     secrets::Secret,
     storage::PrivateDir,

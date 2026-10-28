@@ -3,7 +3,6 @@
 //! progression. No cold receipt becomes a worker or provider capability.
 use super::*;
 use crate::{
-    config::Config,
     control::{
         ControlSnapshot, Intent, Receipt, ReceiptPhase, SessionRecoveryPreparationReference,
     },
@@ -18,6 +17,7 @@ use crate::{
         RecoveryPreparation, RecoveryProviderLaunch, RunOutcome, VerifiedProviderRecovery,
     },
 };
+use kegari_config::Config;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -301,7 +301,7 @@ impl RuntimeCoordinator {
             }
             None
         };
-        let mut identity = json!({"predecessor":previous.operation_id,"candidate":retained.digest(),"receipt":retained.admission_digest(),"config":config.revision()?,"contract":contract.scope_digest()});
+        let mut identity = json!({"predecessor":previous.operation_id,"candidate":retained.digest(),"receipt":retained.admission_digest(),"config":crate::config::config_revision(&config)?,"contract":contract.scope_digest()});
         if let Some(paired) = &paired {
             identity["paired_recovery"] = json!(paired.digest());
         }
@@ -336,7 +336,9 @@ impl RuntimeCoordinator {
             .as_ref()
             .ok_or_else(|| incompatible("joined contract missing"))?;
         let config = self.configuration.snapshot()?;
-        if config.revision()? != candidate.config.revision()? {
+        if crate::config::config_revision(&config)?
+            != crate::config::config_revision(&candidate.config)?
+        {
             return Err(incompatible("recovery configuration changed"));
         }
         let authority = self.current_admission_authority(contract.authority())?;
@@ -836,7 +838,7 @@ fn recovery_model_plan(
     runtime: Uuid,
     candidate: OriginalRecoveryHistory<'_>,
     receipts: &[Receipt],
-    limits: &crate::config::RuntimeConfig,
+    limits: &kegari_config::RuntimeConfig,
     now: chrono::DateTime<Utc>,
 ) -> Result<RunSchedule> {
     let original = candidate.reference;
@@ -937,7 +939,7 @@ fn metadata_plan(
     candidate: &crate::codex::RetainedResumeSession,
     proof: Option<&VerifiedProviderRecovery>,
     receipts: &[Receipt],
-    limits: &crate::config::RuntimeConfig,
+    limits: &kegari_config::RuntimeConfig,
     now: chrono::DateTime<Utc>,
 ) -> Result<(u32, u32, chrono::DateTime<Utc>)> {
     let predecessor: Uuid = candidate
@@ -1106,8 +1108,8 @@ mod tests {
         // provider, protected candidate or opaque recovery capability here.
         let prior = host.retire_local(permit.operation_id, json!({"outcome":"failed","local_exit_confirmed":true,"hook_error":null,"error":Error::new("turn_incomplete","terminal failure"),"session":{"terminal":"failed","input_required":false,"intervention":null}})).unwrap();
         let digest = canonical_digest(1, &prior).unwrap();
-        let mut limits: crate::config::RuntimeConfig = serde_json::from_value(json!({"id":runtime,"host_id":"fixture","max_agents":1,"max_attempts_per_phase":9,"max_turns":99,"max_review_rounds":9})).unwrap();
-        let plan = |receipts: &[Receipt], limits: &crate::config::RuntimeConfig, now| {
+        let mut limits: kegari_config::RuntimeConfig = serde_json::from_value(json!({"id":runtime,"host_id":"fixture","max_agents":1,"max_attempts_per_phase":9,"max_turns":99,"max_review_rounds":9})).unwrap();
+        let plan = |receipts: &[Receipt], limits: &kegari_config::RuntimeConfig, now| {
             recovery_model_plan(
                 runtime,
                 OriginalRecoveryHistory {

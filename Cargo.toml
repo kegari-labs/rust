@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/kegari-cli", "crates/kegari-types", "crates/kegari-v0"]
+members = ["crates/kegari-cli", "crates/kegari-config", "crates/kegari-types", "crates/kegari-v0"]
 resolver = "3"
 
 [workspace.package]

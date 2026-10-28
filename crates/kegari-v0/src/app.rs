@@ -3,7 +3,6 @@
 use crate::{
     api::{DispatchResult, Dispatcher},
     authority::IssueKey,
-    config::{Config, ControlRole, Operator},
     control::{
         Actor, ControlHost, ControlSnapshot, Intent, Lifecycle, MutationRequest, Principal,
         Receipt, ReceiptPhase,
@@ -13,6 +12,7 @@ use crate::{
     snapshot::Snapshots,
 };
 use chrono::{Duration, Utc};
+use kegari_config::{Config, ControlRole, Operator};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
@@ -99,7 +99,7 @@ pub async fn bootstrap(configuration: &str, request_id: Uuid) -> Result<Dispatch
     let receipt = manager.execute(actor, request, None).await?;
     let current = manager.snapshot()?;
     Ok(DispatchResult {
-        config_revision: Some(current.revision()?),
+        config_revision: Some(crate::config::config_revision(&current)?),
         operation_id: Some(receipt.operation_id),
         state: Some("stopped".into()),
         data: json!({"runtime_id":current.runtime.id,"receipt":receipt,"desired":"STOPPED","next_action":"Explicitly install/start the registered control service, inspect prerequisites, then start orchestration when qualified"}),
@@ -219,7 +219,7 @@ impl HostDispatcher {
             metadata.retain(|_, m| m.expires_at > Utc::now());
             let recorded = if page.cursor.is_none() {
                 let record = SnapshotMetadata {
-                    config_revision: config.revision()?,
+                    config_revision: crate::config::config_revision(config)?,
                     state: state.into(),
                     operation,
                     expires_at: page.expires_at,
@@ -242,7 +242,7 @@ impl HostDispatcher {
             });
         }
         Ok(DispatchResult {
-            config_revision: Some(config.revision()?),
+            config_revision: Some(crate::config::config_revision(config)?),
             operation_id: operation,
             state: Some(state.into()),
             data,
@@ -358,7 +358,7 @@ impl HostDispatcher {
             Overview | Show | Open => {
                 let view = self.services.workflow.inspect().await?;
                 if view.projection.runtime_id != self.runtime
-                    || view.projection.config_revision != config.revision()?
+                    || view.projection.config_revision != crate::config::config_revision(&config)?
                 {
                     return Err(Error::new(
                         "stale_config",
@@ -467,7 +467,7 @@ impl HostDispatcher {
                     if let Some(workspace) = workspace {
                         effective.workspaces.retain(|_, w| w.id == workspace);
                     }
-                    json!({"configuration":effective,"revision":config.revision()?,"provenance":"registered execution-host configuration","runtime_build":crate::BUILD_ID})
+                    json!({"configuration":effective,"revision":crate::config::config_revision(&config)?,"provenance":"registered execution-host configuration","runtime_build":crate::BUILD_ID})
                 };
                 self.result(
                     &config,

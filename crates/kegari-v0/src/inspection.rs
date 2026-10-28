@@ -3,13 +3,13 @@
 use crate::{
     app::RuntimeInspection,
     authority::IssueKey,
-    config::Config,
     control::ControlSnapshot,
     evidence::WorkIdentity,
     reconcile::{HistoryRow, Overview, OverviewInputs, RuntimeProjection},
     release::ReleaseAttempt,
 };
 use chrono::{DateTime, Duration, Utc};
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};

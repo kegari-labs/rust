@@ -855,7 +855,9 @@ async fn reconcile(h: &Harness, target: Uuid) -> Result<Receipt> {
         runtime_id: h.lease.runtime_id,
         command: kegari_types::api::CommandName::OperationReconcile,
         args: json!({"operation":target}),
-        expected_config_revision: Some(h.built.runtime.configuration.snapshot()?.revision()?),
+        expected_config_revision: Some(crate::config::config_revision(
+            &h.built.runtime.configuration.snapshot()?,
+        )?),
         expected_control_generation: Some(h.built.runtime.control.snapshot()?.intent.generation),
     };
     let mut mutation =

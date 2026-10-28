@@ -1,9 +1,9 @@
 //! Reconciliation through production provider parsers; all HTTP is injected.
 use chrono::{Duration, Utc};
+use kegari_config::Config;
 use kegari_types::error::Result;
 use kegari_v0::{
     authority::CommentClass,
-    config::Config,
     control::{ControlSnapshot, Intent, IntentRecord},
     digest::canonical_digest,
     evidence::{self, AttestationKey, Publication},
@@ -659,7 +659,7 @@ async fn admitted_gate_can_drain_filter_only_config_change_but_not_actor_policy_
         )
         .unwrap();
     cfg.workspaces.get_mut("example").unwrap().linear.users =
-        kegari_v0::config::Selector::Ids(vec![id(999).to_string()]);
+        kegari_config::Selector::Ids(vec![id(999).to_string()]);
     fixture.lock().unwrap().selected = false;
     let excluded = refresh(&cfg, &fixture, &refs).await;
     let draining = excluded
@@ -1410,7 +1410,7 @@ impl kegari_v0::configuration::ConfigurationInputs for CacheInputs {
     }
     fn codex<'a>(
         &'a self,
-        _: &'a kegari_v0::config::Connection,
+        _: &'a kegari_config::Connection,
         _: &'a std::path::Path,
     ) -> Pin<Box<dyn Future<Output = Result<kegari_v0::codex::CodexConnectionMetadata>> + Send + 'a>>
     {
@@ -2224,7 +2224,7 @@ async fn active_snapshot_drains_filter_exclusion_but_provider_loss_or_correction
         .get_mut("example")
         .unwrap()
         .linear
-        .teams = kegari_v0::config::Selector::Ids(vec![id(999).to_string()]);
+        .teams = kegari_config::Selector::Ids(vec![id(999).to_string()]);
     f.wire.lock().unwrap().selected = false;
     let next = f.cache.refresh().await.unwrap();
     assert!(

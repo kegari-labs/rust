@@ -182,7 +182,7 @@ pub(super) fn prepare_deployment_free_observation(
             ));
         };
         if !matches!(contract.configuration.deployment_policy()?,
-            crate::config::Deployment::None(value) if value == "none")
+            kegari_config::Deployment::None(value) if value == "none")
             || !baseline.deployment_free
             || !current.targets().is_empty()
             || !baseline.target_artifacts.is_empty()
@@ -1320,7 +1320,8 @@ impl RuntimeDelivery {
         self.runtime.control.serialize_observation(|snapshot| {
             self.runtime.registration.verify_control_owner()?;
             let now = Utc::now();
-            if self.runtime.configuration.snapshot()?.revision()? != prepared.config_revision
+            if crate::config::config_revision(&self.runtime.configuration.snapshot()?)?
+                != prepared.config_revision
                 || now - observation.observed_at > Duration::seconds(30)
                 || origin_observed_at.is_some_and(|observed| now - observed > Duration::seconds(30))
                 || now - prepared.sealed_at > Duration::seconds(30)

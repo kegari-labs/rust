@@ -1155,12 +1155,7 @@ async fn execute_recovery(
         command: CommandName::ReleaseRecover,
         args: json!({"parent":"TEST-100","operation":operation,"action":action,"reason":"Explicit fixture recovery after genuine not-sent observation"}),
         expected_config_revision: Some(
-            runtime
-                .configuration
-                .snapshot()
-                .unwrap()
-                .revision()
-                .unwrap(),
+            crate::config::config_revision(&runtime.configuration.snapshot().unwrap()).unwrap(),
         ),
         expected_control_generation: Some(runtime.control.snapshot().unwrap().intent.generation),
     };

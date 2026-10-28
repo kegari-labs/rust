@@ -1,6 +1,7 @@
 //! Synthetic provider facts only; shared with production-path correction tests.
-use crate::{config::Config, providers::*};
+use crate::providers::*;
 use chrono::Utc;
+use kegari_config::Config;
 use kegari_types::error::Result;
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
@@ -305,7 +306,7 @@ impl crate::configuration::ConfigurationInputs for CacheInputs {
     }
     fn codex<'a>(
         &'a self,
-        _: &'a crate::config::Connection,
+        _: &'a kegari_config::Connection,
         _: &'a std::path::Path,
     ) -> Pin<Box<dyn Future<Output = Result<crate::codex::CodexConnectionMetadata>> + Send + 'a>>
     {

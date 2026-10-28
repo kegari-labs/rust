@@ -8,9 +8,9 @@ mod pinned_git;
 mod process_probe;
 use base64::Engine as _;
 use chrono::{Duration, Utc};
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    config::Config,
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
     delivery::*,
     digest::canonical_digest,
@@ -441,7 +441,7 @@ impl DeliveryFixture {
         candidate: bool,
         local: bool,
         integrated: bool,
-        adjust: impl FnOnce(&mut kegari_v0::config::Repository),
+        adjust: impl FnOnce(&mut kegari_config::Repository),
     ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().canonicalize().unwrap();

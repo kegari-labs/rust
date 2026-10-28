@@ -1,7 +1,6 @@
 //! Host-only connection construction and verified credential imports. No worker
 //! receives this registry, Keychain access, an arbitrary endpoint or a raw token.
 use crate::{
-    config::{Config, Connection, ProviderKind},
     digest::canonical_digest,
     providers::{
         AccountIdentity, GithubClient, HttpPolicy, HttpTransport, LinearClient,
@@ -10,6 +9,7 @@ use crate::{
     reconcile::WorkspaceClients,
     secrets::{Secret, SecretStore, resolve_reference},
 };
+use kegari_config::{Config, Connection, ProviderKind};
 use kegari_types::error::{Error, Result};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -183,14 +183,14 @@ impl ConnectionRegistry {
             }
         }
         Ok(Self {
-            revision: config.revision()?,
+            revision: crate::config::config_revision(config)?,
             clients,
             blocked,
             secret_environment,
         })
     }
     pub fn clients(&self, config: &Config) -> Result<&BTreeMap<Uuid, WorkspaceClients>> {
-        if config.revision()? != self.revision {
+        if crate::config::config_revision(config)? != self.revision {
             return Err(Error::new(
                 "stale_config",
                 "provider registry belongs to an earlier configuration revision",

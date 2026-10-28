@@ -1,12 +1,12 @@
 //! Explicitly declared synthetic provider resources for local evaluations.
 //! This transport never sends network requests or grants worker authority.
 use crate::{
-    config::{Config, EvaluationBinding},
     configuration::{ConfigurationInputs, NativeConfigurationInputs},
     digest::canonical_digest,
     git::Revision,
     providers::{HttpRequest, HttpResponse, HttpTransport, Method},
 };
+use kegari_config::{Config, EvaluationBinding};
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
@@ -446,7 +446,7 @@ impl ConfigurationInputs for EvaluationConfigurationInputs {
     }
     fn codex<'a>(
         &'a self,
-        connection: &'a crate::config::Connection,
+        connection: &'a kegari_config::Connection,
         root: &'a Path,
     ) -> Pin<Box<dyn Future<Output = Result<crate::codex::CodexConnectionMetadata>> + Send + 'a>>
     {

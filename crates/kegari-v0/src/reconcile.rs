@@ -5,7 +5,6 @@ use crate::{
         self, ChildScope, CommentRevision, Corrections, IssueKey, LabelTransition, ParentMetadata,
         ScopeSnapshot,
     },
-    config::{Config, Profile, ReleaseMode, Workspace},
     digest::canonical_digest,
     evidence::{
         AttestationKey, Generation, Publication, Signed, VerifiedAcceptance, VerifiedChild,
@@ -18,6 +17,7 @@ use crate::{
     workflow::Workflow,
 };
 use chrono::{DateTime, Duration, Utc};
+use kegari_config::{Config, Profile, ReleaseMode, Workspace};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -323,7 +323,7 @@ impl Reconciler {
         retained: &ReconcileRefs,
     ) -> Result<RuntimeProjection> {
         config.validate()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(config)?;
         let mut output = RuntimeProjection {
             runtime_id: config.runtime.id,
             config_revision: revision.clone(),
@@ -629,7 +629,7 @@ fn project(
     facts: Collected,
     now: DateTime<Utc>,
 ) -> Result<WorkspaceProjection> {
-    let revision = config.revision()?;
+    let revision = crate::config::config_revision(config)?;
     let mut output = WorkspaceProjection {
         workspace_id: workspace.id,
         workspace_name: name.into(),
@@ -821,8 +821,8 @@ fn project(
                 .flat_map(|r| match &r.deployment {
                     // Absence contributes no admitted production targets. It
                     // does not establish the explicit deployment-free policy.
-                    None | Some(crate::config::Deployment::None(_)) => Vec::new(),
-                    Some(crate::config::Deployment::Steps { steps }) => {
+                    None | Some(kegari_config::Deployment::None(_)) => Vec::new(),
+                    Some(kegari_config::Deployment::Steps { steps }) => {
                         steps.iter().map(|s| s.target_id.clone()).collect()
                     }
                 })
@@ -1433,7 +1433,7 @@ impl DependencyOutcomes {
     pub(crate) fn released(
         &mut self,
         proof: &crate::runtime_delivery::VerifiedReleaseCompletion,
-        config: &crate::config::Config,
+        config: &kegari_config::Config,
     ) -> Result<()> {
         let success = proof.validate_for_configuration(config)?;
         let work = proof.work();
@@ -1454,7 +1454,7 @@ impl DependencyOutcomes {
     pub(crate) fn historical_no_release(
         &mut self,
         proof: &crate::runtime_delivery::VerifiedNoReleaseCompletion,
-        config: &crate::config::Config,
+        config: &kegari_config::Config,
     ) -> Result<()> {
         let success = proof.validate_for_configuration(config)?;
         let work = proof.work();

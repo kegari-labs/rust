@@ -94,7 +94,7 @@ async fn parent_grant_capture_uses_actual_retry_command_and_current_native_publi
         runtime_id: config.runtime.id,
         command: kegari_types::api::CommandName::Retry,
         args: json!({"work":"TEST-100","reason":"The known failed parent task is understood; retry with a bounded budget"}),
-        expected_config_revision: Some(config.revision().unwrap()),
+        expected_config_revision: Some(crate::config::config_revision(&config).unwrap()),
         expected_control_generation: Some(
             built.runtime.control.snapshot().unwrap().intent.generation,
         ),
@@ -325,7 +325,7 @@ async fn parent_grant_capture_uses_actual_retry_command_and_current_native_publi
             .find(|w| w.id == gate.workspace_id())
             .unwrap()
             .linear
-            .teams = crate::config::Selector::Ids(vec![Uuid::from_u128(999).to_string()]);
+            .teams = kegari_config::Selector::Ids(vec![Uuid::from_u128(999).to_string()]);
     }
     wire.lock().unwrap().set_selected(false);
     let next = built.runtime.observations.refresh().await.unwrap();

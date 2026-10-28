@@ -2,10 +2,10 @@
 //! This is a child module of delivery; no public JSON value can construct these
 //! capabilities. Provider baselines and execution results are independently sealed.
 use super::*;
-use crate::config::Config;
 use crate::deployment::{ProductionObserver, VerifiedProductionBaseline};
 use crate::evidence::{IntegratedRun, ProductionBaseline, ProductionTargetBaseline};
 use crate::execution::{ArtifactProof, CheckExecutionRecord};
+use kegari_config::Config;
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -1765,11 +1765,11 @@ impl DeliveryCoordinator {
     pub async fn refresh_delivery(
         &self,
         input: ParentHydrationInputs<'_>,
-        configuration: &crate::config::Config,
+        configuration: &kegari_config::Config,
     ) -> Result<VerifiedDeliverySnapshot> {
         let contract = input.contract;
         (self.current_gate)(&contract.gate)?;
-        if configuration.revision()? != contract.gate.config_revision() {
+        if crate::config::config_revision(configuration)? != contract.gate.config_revision() {
             return Err(Error::new(
                 "stale_config",
                 "delivery inspection needs current configuration",

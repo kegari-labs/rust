@@ -4,7 +4,6 @@
 //! No serde implementation can recreate any type in this module.
 use super::*;
 use crate::{
-    config::Config,
     control::{
         FindingsReference, PreparationReference, ReceiptPhase, RepairValidationReference,
         ReviewReceiptReference, ReviewRoundCause, ReviewRoundReference, ReviewedSourceReference,
@@ -17,6 +16,7 @@ use crate::{
     worker::{WorkerAuthority, WorkerContract},
     worker_run::{RunCompletion, RunOutcome},
 };
+use kegari_config::Config;
 
 #[path = "delivery_review_validation.rs"]
 mod validation_lineage;
@@ -1584,7 +1584,9 @@ fn implementation_inventory(
     canonical_digest(1, &selected)
 }
 fn current_round_limit(config: &Config, gate: &FreshGate) -> Result<u32> {
-    if config.revision()? != gate.config_revision() || config.runtime.max_review_rounds == 0 {
+    if crate::config::config_revision(config)? != gate.config_revision()
+        || config.runtime.max_review_rounds == 0
+    {
         return Err(blocked(
             "round planning configuration differs from current pinned authority",
         ));

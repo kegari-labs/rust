@@ -85,7 +85,7 @@ impl VerifiedPairedRecoveryCandidate {
         (readers.current_gate)(current)?;
         self.verify_joined(readers)?;
         self.provenance.validate()?;
-        if config.revision()? != self.config_revision
+        if crate::config::config_revision(config)? != self.config_revision
             || current.config_revision() != self.config_revision
             || !self.plan.reference().is_repair()
             || self.plan.reference().ordinal > config.runtime.max_review_rounds
@@ -263,7 +263,7 @@ impl VerifiedPairedRecoveryCandidate {
         };
         let review_inventory = inventory(&receipts, input.plan.reference())?;
         let implementation_inventory = implementation_inventory(&receipts, input.plan.reference())?;
-        let config_revision = input.config.revision()?;
+        let config_revision = crate::config::config_revision(input.config)?;
         let digest = canonical_digest(
             1,
             &json!({"purpose":"paired_recovery_candidate",

@@ -243,7 +243,7 @@ impl RuntimeCoordinator {
                 .check_workspace(expected.workspace_id())?;
             if snapshot.work().child.is_some()
                 || snapshot.work() != expected.work()
-                || expected.config_revision() != config.revision()?
+                || expected.config_revision() != crate::config::config_revision(&config)?
                 || snapshot.observed_at() > Utc::now() + Duration::seconds(5)
                 || Utc::now() - snapshot.observed_at() > Duration::seconds(30)
             {
@@ -258,7 +258,7 @@ impl RuntimeCoordinator {
             let (_, outcomes) = effective_evidence(
                 &state,
                 &projection,
-                &config.revision()?,
+                &crate::config::config_revision(&config)?,
                 &self.configuration.authority_fences()?,
                 &config,
                 &self.observations,
@@ -353,7 +353,7 @@ impl RuntimeCoordinator {
             let (delivery, outcomes) = effective_evidence(
                 &state,
                 &projection,
-                &config.revision()?,
+                &crate::config::config_revision(&config)?,
                 &self.configuration.authority_fences()?,
                 &config,
                 &self.observations,
@@ -575,7 +575,7 @@ impl RuntimeCoordinator {
     }
     fn schedule_review_round(
         &self,
-        limits: &crate::config::RuntimeConfig,
+        limits: &kegari_config::RuntimeConfig,
         receipts: &[crate::control::Receipt],
         round: &crate::delivery::VerifiedReviewRoundPlan,
         readmission: Option<WorkerReadmission<'_>>,
@@ -1000,7 +1000,7 @@ impl RuntimeCoordinator {
     pub fn current_delivery(&self, parent: &IssueKey) -> Result<ParentDelivery> {
         let projection = self.observations.admission_snapshot()?;
         let config = self.configuration.snapshot()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(&config)?;
         let state = self
             .state
             .lock()
@@ -1020,7 +1020,7 @@ impl RuntimeCoordinator {
     pub fn dependency_outcomes(&self) -> Result<DependencyOutcomes> {
         let projection = self.observations.admission_snapshot()?;
         let config = self.configuration.snapshot()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(&config)?;
         let state = self
             .state
             .lock()
@@ -1052,7 +1052,7 @@ impl RuntimeCoordinator {
         }
         let projection = self.observations.admission_snapshot()?;
         let config = self.configuration.snapshot()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(&config)?;
         let fences = self.configuration.authority_fences()?;
         let mut state = self
             .state
@@ -1119,7 +1119,7 @@ impl RuntimeCoordinator {
                 snapshot.authority(),
                 snapshot.observed_at(),
                 &projection,
-                &config.revision()?,
+                &crate::config::config_revision(&config)?,
                 &fences,
                 Utc::now(),
             ) {
@@ -1144,7 +1144,7 @@ impl RuntimeCoordinator {
     ) -> Result<()> {
         let projection = self.observations.admission_snapshot()?;
         let config = self.configuration.snapshot()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(&config)?;
         let fences = self.configuration.authority_fences()?;
         let now = Utc::now();
         if eligibility.checked_at() > now + Duration::seconds(5)
@@ -1427,7 +1427,7 @@ impl RuntimeCoordinator {
     ) -> Result<()> {
         let config = self.configuration.snapshot()?;
         if projection.runtime_id != self.runtime_id
-            || projection.config_revision != config.revision()?
+            || projection.config_revision != crate::config::config_revision(&config)?
         {
             return Err(Error::new(
                 "stale_config",
@@ -1511,7 +1511,8 @@ impl RuntimeCoordinator {
         }
         let revision = canonical_digest(1, projection)?;
         self.control.serialize_observation(|_| {
-            if self.configuration.snapshot()?.revision()? != config.revision()?
+            if crate::config::config_revision(&self.configuration.snapshot()?)?
+                != crate::config::config_revision(&config)?
                 || canonical_digest(1, &self.observations.admission_snapshot()?)? != revision
             {
                 return Err(Error::new(
@@ -2048,7 +2049,7 @@ impl RuntimeCoordinator {
             }
             let expected_state = match contract.authority() {
                 WorkerAuthority::Authorized(gate) => {
-                    if gate.config_revision() != config.revision()? {
+                    if gate.config_revision() != crate::config::config_revision(&config)? {
                         return Err(Error::new(
                             "stale_config",
                             "new worker preparation predates current configuration",
@@ -2069,7 +2070,7 @@ impl RuntimeCoordinator {
                     issue.state_name.trim().to_lowercase()
                 }
                 WorkerAuthority::Independent(gate) => {
-                    if gate.config_revision() != config.revision()? {
+                    if gate.config_revision() != crate::config::config_revision(&config)? {
                         return Err(Error::new(
                             "stale_config",
                             "new review preparation predates current configuration",
@@ -2646,7 +2647,7 @@ impl RuntimeCoordinator {
             .authority_fences()?
             .check_workspace(workspace)?;
         let projection = self.observations.admission_snapshot()?;
-        if projection.config_revision != config.revision()? {
+        if projection.config_revision != crate::config::config_revision(&config)? {
             return Err(Error::new(
                 "stale_config",
                 "provider observation predates current configuration",
@@ -2671,7 +2672,7 @@ impl RuntimeCoordinator {
     pub fn inspection(&self) -> Result<RuntimeInspection> {
         let projection = self.observations.snapshot()?;
         let config = self.configuration.snapshot()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(&config)?;
         let active = self
             .control
             .snapshot()?
@@ -3141,7 +3142,7 @@ impl WorkerHost for RuntimeCoordinator {
     fn observed_state(&self, operation: Uuid) -> Result<Value> {
         let projection = self.observations.admission_snapshot()?;
         let config = self.configuration.snapshot()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(&config)?;
         let state = self
             .state
             .lock()
@@ -3210,7 +3211,7 @@ fn effective_evidence(
     projection: &crate::reconcile::RuntimeProjection,
     revision: &str,
     fences: &crate::configuration::AuthorityFences,
-    config: &crate::config::Config,
+    config: &kegari_config::Config,
     observations: &ObservationCache,
 ) -> (BTreeMap<IssueKey, ParentDelivery>, DependencyOutcomes) {
     let mut delivery = BTreeMap::new();
@@ -4123,11 +4124,11 @@ mod tests {
     ) {
         use crate::{
             authority::Corrections,
-            config::{Profile, ReleaseMode, Speed},
             digest::bytes_digest,
             evidence::{Generation, WorkIdentity},
             reconcile::{ParentProjection, RuntimeProjection, WorkspaceProjection},
         };
+        use kegari_config::{Profile, ReleaseMode, Speed};
         let runtime = Uuid::from_u128(1);
         let workspace = Uuid::from_u128(2);
         let parent_id = Uuid::from_u128(3);

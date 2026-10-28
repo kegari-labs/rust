@@ -99,7 +99,7 @@ impl RecoveryProviderLaunch {
         let operation = Uuid::parse_str(&candidate.state().binding.operation_id)
             .map_err(|_| Error::new("record_corrupt", "recovery operation is invalid"))?;
         let original = input.control.operation(operation)?;
-        if input.config.revision()? != revision
+        if crate::config::config_revision(&input.config)? != revision
             || connection.kind != ProviderKind::Codex
             || connection.account_id != reference.account
             || contract.account_id() != reference.account

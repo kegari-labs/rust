@@ -178,7 +178,7 @@ impl RuntimeCoordinator {
         &self,
         candidate: &crate::delivery::VerifiedPairedRecoveryCandidate,
         current: &crate::reconcile::FreshGate,
-        config: &crate::config::Config,
+        config: &kegari_config::Config,
         receipts: &[crate::control::Receipt],
         grants: &[crate::decisions::VerifiedRetryGrant],
     ) -> Result<()> {

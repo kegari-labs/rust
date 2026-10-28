@@ -2,7 +2,6 @@
 //! current native sources, scoped child routes and final intake records verify.
 use crate::{
     authority::{CommentClass, CommentRevision, Corrections, IssueKey},
-    config::{Config, Workspace},
     control::{ControlHost, Receipt, ReceiptPhase},
     digest::{bytes_digest, canonical_digest},
     evidence::{AttestationKey, Signed, WorkIdentity, decode_signed_publication},
@@ -10,6 +9,7 @@ use crate::{
     reconcile::{ParentProjection, ReconcileRefs, RuntimeProjection},
 };
 use chrono::{DateTime, Utc};
+use kegari_config::{Config, Workspace};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -783,7 +783,7 @@ impl CorrectionPublisher {
             .authority_fences()?
             .check_workspace(plan.gate.workspace_id())?;
         let config = self.services.configuration.snapshot()?;
-        if config.revision()? != plan.gate.config_revision() {
+        if crate::config::config_revision(&config)? != plan.gate.config_revision() {
             return Err(invalid(
                 "configuration changed during correction publication",
             ));
@@ -1265,7 +1265,9 @@ impl CorrectionPublisher {
         completed: &crate::runtime::VerifiedCoordinationOutcome,
         operation: Uuid,
     ) -> Result<CorrectionPublication> {
-        if self.services.configuration.snapshot()?.revision()? != config.revision()? {
+        if crate::config::config_revision(&self.services.configuration.snapshot()?)?
+            != crate::config::config_revision(config)?
+        {
             return Err(invalid(
                 "configuration changed after classification publication",
             ));
@@ -1430,7 +1432,8 @@ impl CorrectionPublisher {
             ..
         } = publication;
         (self.services.control_owner_check)()?;
-        let configuration = self.services.configuration.snapshot()?.revision()?;
+        let configuration =
+            crate::config::config_revision(&self.services.configuration.snapshot()?)?;
         if owned.operation_id != *operation
             || owned.runtime_id != self.services.configuration.snapshot()?.runtime.id
             || owned.kind != "linear_comment"
@@ -1492,7 +1495,7 @@ impl CorrectionPublisher {
             result:serde_json::json!({"correction_publication":kind,"comment_id":comment.id,"body_digest":comment.body_digest}),
             payload_digest:owned.payload_digest.clone(),actor:owned.actor.clone()}, || {
             (self.services.control_owner_check)()?;
-            if self.services.configuration.snapshot()?.revision()? != configuration { return Err(invalid("configuration changed before correction receipt reconciliation")); }
+            if crate::config::config_revision(&self.services.configuration.snapshot()?)? != configuration { return Err(invalid("configuration changed before correction receipt reconciliation")); }
             Ok(())
         })?;
         // This exact admission owned only the finite metadata publication, never

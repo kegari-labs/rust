@@ -2312,7 +2312,7 @@ pub struct HandoverPlan {
 }
 struct HandoverState {
     owner: OwnerRecord,
-    config: crate::config::Config,
+    config: kegari_config::Config,
     intent: crate::control::IntentRecord,
     shutdown: ServiceShutdown,
     receipts: Vec<Receipt>,
@@ -2360,13 +2360,13 @@ fn handover_state(
         ));
     }
     let bytes = root.read_bytes("config.toml", 8 * 1024 * 1024)?;
-    let config = crate::config::Config::parse(
+    let config = kegari_config::Config::parse(
         std::str::from_utf8(&bytes)
             .map_err(|_| Error::invalid("persisted configuration is not UTF-8"))?,
     )?;
     if config.runtime.id != owner.runtime_id
         || config.runtime.host_id != owner.host_id
-        || owner.config_revision.as_deref() != Some(&config.revision()?)
+        || owner.config_revision.as_deref() != Some(&crate::config::config_revision(&config)?)
     {
         return Err(Error::new(
             "handover_blocked",
@@ -2512,7 +2512,7 @@ pub async fn inspect_handover(
             operator.id == qualification.record.reviewed_by
                 && operator
                     .roles
-                    .contains(&crate::config::ControlRole::Configure)
+                    .contains(&kegari_config::ControlRole::Configure)
         })
     {
         return Err(Error::new(
@@ -2539,7 +2539,7 @@ pub async fn inspect_handover(
         replacement,
         replacement_info: info,
         owner_digest: canonical_digest(1, &state.owner)?,
-        config_digest: state.config.revision()?,
+        config_digest: crate::config::config_revision(&state.config)?,
         intent_digest: canonical_digest(1, &state.intent)?,
         shutdown_digest: canonical_digest(1, &state.shutdown)?,
         receipts_digest: canonical_digest(1, &state.receipts)?,
@@ -2581,7 +2581,7 @@ pub async fn apply_handover(
         let root = PrivateDir::open(&host.state_root())?;
         let _control = root.lock("control.lock")?;
         let config_bytes = root.read_bytes("config.toml", 8 * 1024 * 1024)?;
-        let config = crate::config::Config::parse(
+        let config = kegari_config::Config::parse(
             std::str::from_utf8(&config_bytes)
                 .map_err(|_| Error::invalid("persisted config is not UTF-8"))?,
         )?;
@@ -2608,7 +2608,7 @@ pub async fn apply_handover(
     crate::app::verify_current_actor(&state.config, &actor, "configure")?;
     crate::app::verify_current_actor(&state.config, &actor, "recover")?;
     if canonical_digest(1, &state.owner)? != plan.owner_digest
-        || state.config.revision()? != plan.config_digest
+        || crate::config::config_revision(&state.config)? != plan.config_digest
         || canonical_digest(1, &state.intent)? != plan.intent_digest
         || canonical_digest(1, &state.shutdown)? != plan.shutdown_digest
         || canonical_digest(1, &state.receipts)? != plan.receipts_digest

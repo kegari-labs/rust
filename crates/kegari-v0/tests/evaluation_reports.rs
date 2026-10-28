@@ -326,11 +326,11 @@ fn actual_report_fixture(suite: &SuiteManifest) -> TrialReport {
 fn successful_actual_shape_requires_a_turn_trace_and_ordered_durable_times() {
     let mut suite = suite();
     suite.profiles[0].binding = Some(ProfileBinding {
-        profile: kegari_v0::config::Profile {
+        profile: kegari_config::Profile {
             tool: "codex".into(),
             model: "report-fixture-model".into(),
             reasoning: "high".into(),
-            speed: kegari_v0::config::Speed::Standard,
+            speed: kegari_config::Speed::Standard,
         },
         account_id: "report-fixture".into(),
         operator_reference: "not-live-authority".into(),
@@ -375,11 +375,11 @@ fn successful_actual_shape_requires_a_turn_trace_and_ordered_durable_times() {
 fn actual_agent_label_cannot_replace_missing_runtime_provenance() {
     let mut suite = suite();
     suite.profiles[0].binding = Some(ProfileBinding {
-        profile: kegari_v0::config::Profile {
+        profile: kegari_config::Profile {
             tool: "codex".into(),
             model: "fixture-model".into(),
             reasoning: "high".into(),
-            speed: kegari_v0::config::Speed::Standard,
+            speed: kegari_config::Speed::Standard,
         },
         account_id: "fixture-account".into(),
         operator_reference: "fixture-only-no-live-authority".into(),
@@ -589,11 +589,11 @@ fn grading_error_is_an_independent_assessment_blocker() {
     // capability or a claim that native model execution occurred.
     let mut suite = suite();
     suite.profiles[0].binding = Some(ProfileBinding {
-        profile: kegari_v0::config::Profile {
+        profile: kegari_config::Profile {
             tool: "codex".into(),
             model: "report-fixture-model".into(),
             reasoning: "high".into(),
-            speed: kegari_v0::config::Speed::Standard,
+            speed: kegari_config::Speed::Standard,
         },
         account_id: "report-fixture".into(),
         operator_reference: "not-live-authority".into(),
@@ -806,11 +806,11 @@ fn broker_actual_report_shape_rejects_context_tools_source_and_permission_contra
         .unwrap();
     suite.variants.swap(0, independent);
     suite.profiles[0].binding = Some(ProfileBinding {
-        profile: kegari_v0::config::Profile {
+        profile: kegari_config::Profile {
             tool: "codex".into(),
             model: "report-fixture-model".into(),
             reasoning: "high".into(),
-            speed: kegari_v0::config::Speed::Standard,
+            speed: kegari_config::Speed::Standard,
         },
         account_id: "report-fixture".into(),
         operator_reference: "not-live-authority".into(),

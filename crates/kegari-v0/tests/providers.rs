@@ -1,9 +1,9 @@
 //! Production provider algorithms with an injected wire boundary. No request in
 //! these tests contacts Linear, GitHub, or a live agent.
 use base64::Engine;
+use kegari_config::{GithubSelection, LinearSelection, Selector};
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    config::{GithubSelection, LinearSelection, Selector},
     control::{Actor, ControlHost, MutationRequest, ReceiptPhase},
     digest::bytes_digest,
     providers::*,
@@ -111,7 +111,7 @@ fn gh_identity() -> Result<HttpResponse> {
 
 #[tokio::test]
 async fn connection_identity_preflight_needs_no_workspace_and_never_mutates() {
-    use kegari_v0::config::ProviderKind;
+    use kegari_config::ProviderKind;
     let wire = Wire::fixture(vec![linear_identity()]);
     let identity = verify_connection_identity(
         HttpPolicy::new(
@@ -212,7 +212,7 @@ async fn connection_identity_preflight_needs_no_workspace_and_never_mutates() {
 
 #[tokio::test]
 async fn connection_preflight_rejects_non_user_identity_and_partial_rate_limited_identity() {
-    use kegari_v0::config::ProviderKind;
+    use kegari_config::ProviderKind;
     for kind in [Value::Null, json!("Bot"), json!("Organization")] {
         let wire = Wire::fixture(vec![response(
             json!({"id":7,"login":"fixture","type":kind}),

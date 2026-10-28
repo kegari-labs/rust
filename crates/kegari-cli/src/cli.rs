@@ -1,9 +1,9 @@
 //! Complete command grammar and client-device input handling. Parsing never starts work.
 use crate::client::{API_VERSION, ControlClient, Endpoint, Target, TargetStore};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use kegari_config::{Config, Connection, ProviderKind, Workspace};
 use kegari_types::api::{CommandName, CommandRequest, Envelope};
 use kegari_types::error::{Error, Result};
-use kegari_v0::config::{Config, Connection, ProviderKind, Workspace};
 use kegari_v0::secrets::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

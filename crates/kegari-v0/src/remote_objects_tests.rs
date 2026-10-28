@@ -384,7 +384,7 @@ async fn unresolved_delivery_policy_still_acquires_exact_scoped_source_and_owned
         repository.deployment_policy().unwrap_err().code,
         "delivery_policy_unresolved"
     );
-    let original_revision = configuration.revision().unwrap();
+    let original_revision = crate::config::config_revision(&configuration).unwrap();
     let original_contract = fixture.request.contract_digest().unwrap();
     let source = fixture
         .acquisition
@@ -426,13 +426,7 @@ async fn unresolved_delivery_policy_still_acquires_exact_scoped_source_and_owned
         original_contract
     );
     assert_eq!(
-        fixture
-            .runtime
-            .configuration
-            .snapshot()
-            .unwrap()
-            .revision()
-            .unwrap(),
+        crate::config::config_revision(&fixture.runtime.configuration.snapshot().unwrap()).unwrap(),
         original_revision
     );
     assert!(

@@ -1,6 +1,6 @@
 #![cfg(target_os = "macos")]
+use kegari_config::Config;
 use kegari_v0::{
-    config::Config,
     control::{Actor, Lifecycle, MutationRequest},
     platform::*,
     storage::PrivateDir,

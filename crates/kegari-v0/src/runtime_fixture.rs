@@ -24,11 +24,11 @@ use std::{
 use uuid::Uuid;
 
 pub(crate) struct FixtureConfiguration {
-    pub config: Mutex<crate::config::Config>,
+    pub config: Mutex<kegari_config::Config>,
     pub fences: Mutex<AuthorityFences>,
 }
 impl ConfigurationControl for FixtureConfiguration {
-    fn snapshot(&self) -> Result<crate::config::Config> {
+    fn snapshot(&self) -> Result<kegari_config::Config> {
         Ok(self.config.lock().unwrap().clone())
     }
     fn authority_fences(&self) -> Result<AuthorityFences> {
@@ -59,7 +59,7 @@ impl ConfigurationControl for FixtureConfiguration {
 }
 pub(crate) struct FixtureInputs {
     pub root: PathBuf,
-    pub configuration: crate::config::Config,
+    pub configuration: kegari_config::Config,
     pub inputs: Arc<dyn ConfigurationInputs>,
     pub secrets: Arc<dyn SecretStore>,
     pub key: Arc<AttestationKey>,

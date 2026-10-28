@@ -432,7 +432,7 @@ async fn run_component(fail_finished: bool) {
         github: Some(
             GithubClient::with_transport(
                 HttpPolicy::new("https://github.invalid/api/v3", "7".into(), WAIT + WAIT).unwrap(),
-                kegari_v0::config::GithubSelection {
+                kegari_config::GithubSelection {
                     repositories: vec!["42".into()],
                     organizations: vec![],
                     pr_authors: vec!["7".into()],

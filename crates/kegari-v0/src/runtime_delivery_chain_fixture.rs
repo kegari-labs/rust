@@ -24,7 +24,7 @@ pub(super) struct ChainFixture<'a> {
 }
 
 struct BaselineReload {
-    configuration: crate::config::Config,
+    configuration: kegari_config::Config,
     workflow: std::path::PathBuf,
     contents: Vec<u8>,
     admissions: String,
@@ -109,7 +109,7 @@ fn reloaded_predecessor<'a>(
                 let mut changed = configuration.clone();
                 changed.runtime.max_agents += 1;
                 changed.workspaces.get_mut("example").unwrap().linear.teams =
-                    crate::config::Selector::Ids(vec![wire::id(999).to_string()]);
+                    kegari_config::Selector::Ids(vec![wire::id(999).to_string()]);
                 *f.built.configuration.config.lock().unwrap() = changed;
                 let mut changed_workflow = contents.clone();
                 changed_workflow
@@ -1077,12 +1077,7 @@ async fn authorize_link(
         command: CommandName::ReleaseRecover,
         args: json!({"parent":"TEST-100","operation":original.attempt.plan.operation_id,"action":"supersede","result":child.attempt.plan.evidence_token,"reason":"Explicit historical successor fixture; upstream acceptance is synthetic"}),
         expected_config_revision: Some(
-            runtime
-                .configuration
-                .snapshot()
-                .unwrap()
-                .revision()
-                .unwrap(),
+            crate::config::config_revision(&runtime.configuration.snapshot().unwrap()).unwrap(),
         ),
         expected_control_generation: Some(runtime.control.snapshot().unwrap().intent.generation),
     };

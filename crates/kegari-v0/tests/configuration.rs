@@ -1,10 +1,11 @@
 //! Real private storage/control serialization with labeled provider/Keychain fixtures.
 //! No native Keychain, account login, provider network or agent process is invoked.
+use kegari_config::{Config, Connection};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
+use kegari_v0::config::config_revision;
 use kegari_v0::{
     codex::CodexConnectionMetadata,
-    config::{Config, Connection},
     configuration::{ConfigManager, ConfigurationInputs},
     control::{Actor, ControlHost, Intent, Lifecycle, MutationRequest, Principal, ReceiptPhase},
     platform::{
@@ -220,7 +221,9 @@ impl Fixture {
             request_id: Uuid::new_v4(),
             command,
             args,
-            expected_config_revision: Some(self.manager.snapshot().unwrap().revision().unwrap()),
+            expected_config_revision: Some(
+                config_revision(&self.manager.snapshot().unwrap()).unwrap(),
+            ),
             expected_control_generation: Some(self.control.snapshot().unwrap().intent.generation),
         }
     }
@@ -258,7 +261,10 @@ async fn verified_secret_import_commits_atomically_and_exact_replay_does_not_pro
     assert_eq!(receipt.phase, ReceiptPhase::Acknowledged);
     assert_eq!(f.store.writes.load(Ordering::SeqCst), 1);
     let current = f.manager.snapshot().unwrap();
-    assert_eq!(current.revision().unwrap(), f.stored().revision().unwrap());
+    assert_eq!(
+        config_revision(&current).unwrap(),
+        config_revision(&f.stored()).unwrap()
+    );
     let reference = current.connections["github"]
         .credential_ref
         .as_ref()
@@ -303,7 +309,7 @@ async fn verified_secret_import_commits_atomically_and_exact_replay_does_not_pro
 #[tokio::test]
 async fn wrong_identity_and_stale_configuration_write_no_secret_or_config() {
     let f = Fixture::new();
-    let before = f.stored().revision().unwrap();
+    let before = config_revision(&f.stored()).unwrap();
     f.inputs.wire.account.store(8, Ordering::SeqCst);
     assert_eq!(
         f.manager
@@ -318,7 +324,7 @@ async fn wrong_identity_and_stale_configuration_write_no_secret_or_config() {
         "identity_mismatch"
     );
     assert_eq!(f.store.writes.load(Ordering::SeqCst), 0);
-    assert_eq!(f.stored().revision().unwrap(), before);
+    assert_eq!(config_revision(&f.stored()).unwrap(), before);
     f.inputs.wire.account.store(7, Ordering::SeqCst);
     let mut request = f.add();
     request.expected_config_revision = Some("sha256:v1:wrong".into());
@@ -335,13 +341,13 @@ async fn wrong_identity_and_stale_configuration_write_no_secret_or_config() {
         "stale_config"
     );
     assert_eq!(f.store.writes.load(Ordering::SeqCst), 0);
-    assert_eq!(f.stored().revision().unwrap(), before);
+    assert_eq!(config_revision(&f.stored()).unwrap(), before);
 }
 
 #[tokio::test]
 async fn keychain_failure_preserves_old_configuration_and_requires_reconciliation() {
     let f = Fixture::new();
-    let before = f.stored().revision().unwrap();
+    let before = config_revision(&f.stored()).unwrap();
     f.store.fail.store(true, Ordering::SeqCst);
     let request = f.add();
     let id = request.request_id;
@@ -357,8 +363,11 @@ async fn keychain_failure_preserves_old_configuration_and_requires_reconciliatio
             .code,
         "operation_uncertain"
     );
-    assert_eq!(f.stored().revision().unwrap(), before);
-    assert_eq!(f.manager.snapshot().unwrap().revision().unwrap(), before);
+    assert_eq!(config_revision(&f.stored()).unwrap(), before);
+    assert_eq!(
+        config_revision(&f.manager.snapshot().unwrap()).unwrap(),
+        before
+    );
     assert_eq!(f.control.operation(id).unwrap().phase, ReceiptPhase::Sent);
     assert!(
         !f.control
@@ -425,7 +434,7 @@ async fn principal_role_revocation_during_preflight_is_rechecked_inside_commit_g
         .values_mut()
         .next()
         .unwrap()
-        .roles = [kegari_v0::config::ControlRole::Inspect].into();
+        .roles = [kegari_config::ControlRole::Inspect].into();
     let request = f.request(
         CommandName::Setup,
         json!({"configuration":toml::to_string(&replacement).unwrap()}),
@@ -487,13 +496,13 @@ async fn metadata_check_is_read_only_and_does_not_claim_operational_qualificatio
         )
         .await
         .unwrap();
-    let before = f.stored().revision().unwrap();
+    let before = config_revision(&f.stored()).unwrap();
     let writes = f.store.writes.load(Ordering::SeqCst);
     let report = f.manager.check(None).await.unwrap();
     assert_eq!(report["status"], "verified");
     assert_eq!(report["operational_qualification"], "unverified");
     assert_eq!(f.store.writes.load(Ordering::SeqCst), writes);
-    assert_eq!(f.stored().revision().unwrap(), before);
+    assert_eq!(config_revision(&f.stored()).unwrap(), before);
 }
 
 #[tokio::test]
@@ -668,18 +677,21 @@ async fn same_account_reconnect_reuses_secret_and_preserves_revision() {
         )
         .await
         .unwrap();
-    let before = f.manager.snapshot().unwrap().revision().unwrap();
+    let before = config_revision(&f.manager.snapshot().unwrap()).unwrap();
     let request = f.request(CommandName::ConnectionReconnect, json!({"name":"github"}));
     f.manager
         .execute(f.actor.clone(), request, None)
         .await
         .unwrap();
-    assert_eq!(f.manager.snapshot().unwrap().revision().unwrap(), before);
+    assert_eq!(
+        config_revision(&f.manager.snapshot().unwrap()).unwrap(),
+        before
+    );
     assert_eq!(f.store.writes.load(Ordering::SeqCst), 1);
     assert_eq!(f.inputs.wire.calls.load(Ordering::SeqCst), 2);
 }
 
-fn prerequisite_workspace() -> kegari_v0::config::Workspace {
+fn prerequisite_workspace() -> kegari_config::Workspace {
     let sha = "0123456789012345678901234567890123456789";
     let proof = json!({"workflow_ref":"fixture/repo/.github/workflows/ci.yml@refs/heads/trusted","workflow_sha":sha,"job_workflow_ref":format!("fixture/trust/.github/workflows/proof.yml@{sha}"),"job_workflow_sha":sha,"event_name":"workflow_dispatch"});
     serde_json::from_value(json!({
@@ -896,7 +908,7 @@ async fn invalid_update_fences_known_role_reduction_across_restart_until_explici
         .next()
         .unwrap()
         .roles
-        .remove(&kegari_v0::config::ControlRole::Lifecycle);
+        .remove(&kegari_config::ControlRole::Lifecycle);
     proposed.runtime.max_agents = 0; // Independent invalid execution setting.
     let request = f.request(
         CommandName::Setup,
@@ -909,8 +921,8 @@ async fn invalid_update_fences_known_role_reduction_across_restart_until_explici
             .is_err()
     );
     assert_eq!(
-        f.manager.snapshot().unwrap().revision().unwrap(),
-        before.revision().unwrap()
+        config_revision(&f.manager.snapshot().unwrap()).unwrap(),
+        config_revision(&before).unwrap()
     );
     assert_eq!(
         f.manager
@@ -969,7 +981,7 @@ async fn invalid_update_fences_known_role_reduction_across_restart_until_explici
         .next()
         .unwrap()
         .roles
-        .remove(&kegari_v0::config::ControlRole::Lifecycle);
+        .remove(&kegari_config::ControlRole::Lifecycle);
     let update = f.request(
         CommandName::Setup,
         json!({"configuration":toml::to_string(&resolved).unwrap()}),
@@ -995,7 +1007,7 @@ async fn invalid_update_fences_known_role_reduction_across_restart_until_explici
             .next()
             .unwrap()
             .roles
-            .contains(&kegari_v0::config::ControlRole::Lifecycle)
+            .contains(&kegari_config::ControlRole::Lifecycle)
     );
 }
 
@@ -1029,7 +1041,7 @@ async fn unknown_runtime_effect_does_not_preserve_reliably_revoked_permission() 
         .next()
         .unwrap()
         .roles
-        .remove(&kegari_v0::config::ControlRole::Lifecycle);
+        .remove(&kegari_config::ControlRole::Lifecycle);
     next.runtime.max_agents = 0;
     let request = f.request(
         CommandName::Setup,
@@ -1115,7 +1127,7 @@ async fn missing_persisted_fence_provenance_cannot_restore_old_roles_after_resta
         .next()
         .unwrap()
         .roles
-        .remove(&kegari_v0::config::ControlRole::Lifecycle);
+        .remove(&kegari_config::ControlRole::Lifecycle);
     next.runtime.max_agents = 0;
     let request = f.request(
         CommandName::Setup,
@@ -1186,7 +1198,7 @@ async fn invalid_workspace_update_cannot_preserve_known_actor_repository_or_reso
                 .test_resources
                 .insert(
                     "scratch-fixture".into(),
-                    kegari_v0::config::TestResource {
+                    kegari_config::TestResource {
                         path: "/private/tmp/test-resource".into(),
                         writable: true,
                         disposable: true,
@@ -1259,7 +1271,7 @@ async fn obsolete_catalog_rejection_preserves_configuration_and_generic_resource
                     .test_resources
                     .insert(
                         "data".into(),
-                        kegari_v0::config::TestResource {
+                        kegari_config::TestResource {
                             path: "/private/tmp/scoped-data".into(),
                             writable: false,
                             disposable: false,
@@ -1267,7 +1279,7 @@ async fn obsolete_catalog_rejection_preserves_configuration_and_generic_resource
                     );
             });
             let original = f.manager.snapshot().unwrap();
-            let revision = original.revision().unwrap();
+            let revision = config_revision(&original).unwrap();
             let bytes = f
                 .registration
                 .root()
@@ -1303,8 +1315,11 @@ async fn obsolete_catalog_rejection_preserves_configuration_and_generic_resource
                     .await
                     .is_err()
             );
-            assert_eq!(f.manager.snapshot().unwrap().revision().unwrap(), revision);
-            assert_eq!(f.stored().revision().unwrap(), revision);
+            assert_eq!(
+                config_revision(&f.manager.snapshot().unwrap()).unwrap(),
+                revision
+            );
+            assert_eq!(config_revision(&f.stored()).unwrap(), revision);
             assert_eq!(
                 f.registration
                     .root()
@@ -1347,7 +1362,7 @@ async fn earlier_success_cannot_resolve_a_later_reduction_and_resolution_provena
         .next()
         .unwrap()
         .roles
-        .remove(&kegari_v0::config::ControlRole::Lifecycle);
+        .remove(&kegari_config::ControlRole::Lifecycle);
     next.runtime.max_agents = 0;
     let request = f.request(
         CommandName::Setup,

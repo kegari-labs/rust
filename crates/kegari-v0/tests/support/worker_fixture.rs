@@ -2,11 +2,11 @@
 #[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
 mod worker_bundle;
 use chrono::{Duration, Utc};
+use kegari_config::{Profile, ReleaseMode, Speed};
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     authority::*,
     codex::*,
-    config::{Profile, ReleaseMode, Speed},
     control::*,
     digest::*,
     evaluation::TrialHost,
@@ -64,8 +64,7 @@ struct Fixture {
     permit: Permit,
     execution: Option<Arc<WorkerExecution>>,
 }
-type ConfiguredContract =
-    fn(ContractInput, &kegari_v0::config::Workspace) -> Result<WorkerContract>;
+type ConfiguredContract = fn(ContractInput, &kegari_config::Workspace) -> Result<WorkerContract>;
 impl Fixture {
     fn new(role: AgentRole) -> Self {
         Self::with_hooks(role, "")
@@ -266,7 +265,7 @@ impl Fixture {
             source_digest: bytes_digest(b"sources"),
             config_revision: configured_workspace.as_ref().map_or_else(
                 || bytes_digest(b"config"),
-                |config| config.revision().unwrap(),
+                |config| kegari_v0::config::config_revision(config).unwrap(),
             ),
             drain_config_revision: bytes_digest(b"config-drain"),
             workflow_digest: workflow.digest.clone(),

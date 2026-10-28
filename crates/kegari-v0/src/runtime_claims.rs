@@ -356,7 +356,6 @@ mod tests {
     use crate::{
         authority::{ChildScope, Corrections, IssueKey, Responsibility},
         codex::{CodexProfile, SessionBinding, SessionState},
-        config::{Profile, ReleaseMode, Speed},
         control::ReceiptPhase,
         digest::bytes_digest,
         evidence::{Generation, WorkIdentity},
@@ -365,6 +364,7 @@ mod tests {
         scheduler::PhaseKey,
     };
     use chrono::{Duration, Utc};
+    use kegari_config::{Profile, ReleaseMode, Speed};
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
     fn id(n: u128) -> Uuid {

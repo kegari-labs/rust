@@ -85,7 +85,7 @@ impl RuntimeLineageWire {
     }
     pub(crate) fn configure(config: &mut Config) {
         for connection in config.connections.values_mut() {
-            if connection.kind == crate::config::ProviderKind::Github {
+            if connection.kind == kegari_config::ProviderKind::Github {
                 connection.endpoint = Some("https://api.github.com/".into());
             }
         }
@@ -214,7 +214,7 @@ impl RuntimeLineageWire {
         admission: &DeliveryAdmission,
     ) {
         let contract = coordinator.contract(admission).unwrap();
-        let Some(crate::config::Deployment::Steps { steps }) = &contract.configuration.deployment
+        let Some(kegari_config::Deployment::Steps { steps }) = &contract.configuration.deployment
         else {
             panic!("target fixture needs configured steps")
         };
@@ -638,7 +638,7 @@ impl RuntimeLineageWire {
         }
         let (source, run, deployment) = self.serving.lock().unwrap().clone();
         let check = run + 10;
-        let Some(crate::config::Deployment::Steps { steps }) = &contract.configuration.deployment
+        let Some(kegari_config::Deployment::Steps { steps }) = &contract.configuration.deployment
         else {
             panic!()
         };

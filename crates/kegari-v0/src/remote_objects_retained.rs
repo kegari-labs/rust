@@ -138,7 +138,7 @@ pub(crate) fn retained_sources(
 impl VerifiedObjectSource {
     pub(crate) fn host_read_root(
         &self,
-        configuration: &crate::config::Config,
+        configuration: &kegari_config::Config,
         workspace: Uuid,
         contract: &RepositoryContract,
     ) -> Result<crate::git::VerifiedHostReadRoot> {
@@ -188,7 +188,7 @@ impl VerifiedObjectSource {
             ));
         }
         self.revalidate_filesystem()?;
-        crate::git::retained_object_read_root(self, configuration.revision()?)
+        crate::git::retained_object_read_root(self, crate::config::config_revision(configuration)?)
     }
 }
 

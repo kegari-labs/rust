@@ -1,7 +1,6 @@
 //! Select real finite host actions from current authority and evidence.
 use crate::{
     authority::IssueKey,
-    config::Config,
     decisions::VerifiedRetryGrant,
     digest::canonical_digest,
     reconcile::{
@@ -12,6 +11,7 @@ use crate::{
     worker::WorkerAuthority,
 };
 use chrono::{Duration, Utc};
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -51,7 +51,7 @@ pub(crate) fn select(
         grants,
     } = input;
     if projection.runtime_id != config.runtime.id
-        || projection.config_revision != config.revision()?
+        || projection.config_revision != crate::config::config_revision(config)?
     {
         return Err(Error::new(
             "stale_config",
@@ -325,12 +325,12 @@ mod tests {
     use super::*;
     use crate::{
         authority::{ChildScope, CommentRevision, Corrections, Responsibility},
-        config::{Profile, ReleaseMode, Speed},
         digest::bytes_digest,
         evidence::{Generation, WorkIdentity},
         providers::Issue,
         reconcile::{ChildProjection, ParentProjection, WorkspaceProjection},
     };
+    use kegari_config::{Profile, ReleaseMode, Speed};
     use serde_json::json;
     fn id(n: u128) -> Uuid {
         Uuid::from_u128(n)
@@ -427,7 +427,7 @@ mod tests {
             blockers: vec![],
             prerequisites: BTreeSet::new(),
             source_digest: digest.clone(),
-            config_revision: config.revision().unwrap(),
+            config_revision: crate::config::config_revision(&config).unwrap(),
             workflow_digest: digest.clone(),
             coordination_profile: profile,
             drain_config_revision: digest.clone(),
@@ -435,7 +435,7 @@ mod tests {
         };
         let projection = RuntimeProjection {
             runtime_id: id(1),
-            config_revision: config.revision().unwrap(),
+            config_revision: crate::config::config_revision(&config).unwrap(),
             observed_at: Utc::now(),
             workspaces: BTreeMap::from([(
                 id(3),
@@ -448,7 +448,7 @@ mod tests {
                     repositories: BTreeMap::new(),
                     independent_jobs: vec![],
                     error: None,
-                    config_revision: config.revision().unwrap(),
+                    config_revision: crate::config::config_revision(&config).unwrap(),
                     workflow_digest: digest,
                     independent_review_profile: None,
                 },

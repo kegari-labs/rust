@@ -123,13 +123,13 @@ impl SubjectPlan {
 impl TrialSubject {
     pub(super) fn derive(
         suite: &crate::evaluation::SuiteManifest,
-        binding: &crate::config::EvaluationBinding,
+        binding: &kegari_config::EvaluationBinding,
         trial: &TrialKey,
         request: &CommandRequest,
         command: &Receipt,
     ) -> Result<Self> {
         let workspace = evaluation_workspace(request)?;
-        let endpoint = url::Url::parse(&crate::config::EvaluationBinding::endpoint(
+        let endpoint = url::Url::parse(&kegari_config::EvaluationBinding::endpoint(
             workspace, "github",
         ))
         .map_err(|_| Error::invalid("invalid evaluation subject endpoint"))?;

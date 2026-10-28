@@ -3,11 +3,11 @@
 //! construct a current VerifiedCarry or relabel the human-reviewed token.
 use super::accepted_origin::{AcceptedOriginIdentity, AcceptedOriginRef};
 use super::*;
-use crate::config::Config;
 use crate::control::{ReceiptPhase, ReviewReceiptReference};
 use crate::evidence::{CarriedAcceptance, VerifiedAcceptance, VerifiedCarry};
 use crate::runtime_delivery::ActiveParentGrantObserver;
 use crate::worker_run::RunCompletion;
+use kegari_config::Config;
 
 type ParentGrantObserver = Arc<
     dyn Fn(&crate::evidence::WorkIdentity) -> Result<Vec<crate::decisions::VerifiedRetryGrant>>
@@ -663,7 +663,8 @@ impl DeliveryCoordinator {
         if admission.scope.work != current.manifest().work
             || admission.scope.candidate_vector_digest.as_deref()
                 != Some(reassembled.source.vector().digest())
-            || configuration.revision()? != admission.fresh_gate().config_revision()
+            || crate::config::config_revision(configuration)?
+                != admission.fresh_gate().config_revision()
         {
             return Err(invalid(
                 "carry publication differs from exact admitted parent vector",

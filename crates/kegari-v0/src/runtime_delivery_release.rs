@@ -5,7 +5,6 @@ use super::parent::ParentSources;
 use super::*;
 use crate::{
     authority::IssueKey,
-    config::ReleaseMode,
     control::{ControlSnapshot, Intent, Lease, Permit, ReceiptPhase},
     delivery::*,
     digest::canonical_digest,
@@ -17,6 +16,7 @@ use crate::{
         ReleasePlan, ReleaseQueue, StepState,
     },
 };
+use kegari_config::ReleaseMode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeSet, sync::Mutex};
@@ -1191,7 +1191,7 @@ impl RuntimeDelivery {
             .configuration
             .authority_fences()?
             .check_workspace(record.workspace)?;
-        if active.is_none() && config.revision()? != record.config_revision {
+        if active.is_none() && crate::config::config_revision(&config)? != record.config_revision {
             return Err(Error::new("stale_config", "release configuration changed"));
         }
         let workspace = config
@@ -2122,7 +2122,7 @@ impl RuntimeDelivery {
                 && r.record.payload.work == preparation.reference.work
                 && r.evidence_token() == plan.evidence_token
                 && r.record.payload.config_revision
-                    == workspace.configuration.revision().unwrap_or_default()
+                    == crate::config::config_revision(&workspace.configuration).unwrap_or_default()
         });
         let successor = self.successor_intent(&plan, gate.work(), &acceptance)?;
         let successor_holds = if successor.is_some() {
@@ -2224,7 +2224,9 @@ impl RuntimeDelivery {
                     predecessor.revalidate()?;
                 }
                 let current_config = self.runtime.configuration.snapshot()?;
-                if current_config.revision()? != workspace.configuration.revision()? {
+                if crate::config::config_revision(&current_config)?
+                    != crate::config::config_revision(&workspace.configuration)?
+                {
                     return Err(Error::new(
                         "stale_config",
                         "release configuration changed during admission",
@@ -2467,7 +2469,9 @@ impl RuntimeDelivery {
             if let Some(carry) = &carry {
                 // This is the actual LiveRelease workspace captured at admission,
                 // not a current configuration snapshot or an inferred revision.
-                if admitted_configuration.revision()? != gate.config_revision() {
+                if crate::config::config_revision(&admitted_configuration)?
+                    != gate.config_revision()
+                {
                     return Err(Error::new(
                         "ownership_conflict",
                         "carried release lost its actual pinned admission configuration",

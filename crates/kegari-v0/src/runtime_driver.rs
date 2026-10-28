@@ -1,7 +1,6 @@
 //! Native scheduler driver. Owned launch tasks survive pause/force until their
 //! actual completion is joined; recovery preserves uncertain process/effect holds.
 use crate::{
-    config::Config,
     control::{ControlSnapshot, Intent, Lease, ReceiptPhase},
     digest::canonical_digest,
     preparation::AuthorizationPublisher,
@@ -17,6 +16,7 @@ use crate::{
     worker::WorkerHost,
 };
 use chrono::Utc;
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -954,7 +954,7 @@ fn preadmission_plan(
     publication: Uuid,
     snapshot: &str,
     receipts: &[crate::control::Receipt],
-    config: &crate::config::RuntimeConfig,
+    config: &kegari_config::RuntimeConfig,
     now: chrono::DateTime<Utc>,
 ) -> Result<MetadataDispatch> {
     let observed_admissions = receipts
@@ -1702,7 +1702,7 @@ mod tests {
     }
     #[test]
     fn metadata_preparation_retry_is_finite_backed_off_and_never_replays_dispatch() {
-        let mut config: crate::config::RuntimeConfig = serde_json::from_value(
+        let mut config: kegari_config::RuntimeConfig = serde_json::from_value(
             json!({"id":id(1),"host_id":"fixture","max_agents":1,"max_attempts_per_phase":2}),
         )
         .unwrap();

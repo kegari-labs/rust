@@ -241,7 +241,7 @@ impl RuntimeDelivery {
             resources.insert(domain::ResourceKey::Repository {
                 repository: repository.repository.clone(),
             });
-            if let crate::config::Deployment::Steps { steps } =
+            if let kegari_config::Deployment::Steps { steps } =
                 repository.configuration.deployment_policy()?
             {
                 resources.extend(steps.iter().map(|step| domain::ResourceKey::Target {

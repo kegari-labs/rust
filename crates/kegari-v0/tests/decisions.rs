@@ -3,10 +3,9 @@
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
 use chrono::Utc;
+use kegari_config::Config;
 use kegari_types::error::Result;
-use kegari_v0::{
-    config::Config, digest::canonical_digest, evidence::AttestationKey, providers::*, reconcile::*,
-};
+use kegari_v0::{digest::canonical_digest, evidence::AttestationKey, providers::*, reconcile::*};
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
 use std::{
@@ -348,7 +347,7 @@ impl kegari_v0::configuration::ConfigurationInputs for Inputs {
     }
     fn codex<'a>(
         &'a self,
-        _: &'a kegari_v0::config::Connection,
+        _: &'a kegari_config::Connection,
         _: &'a Path,
     ) -> Pin<Box<dyn Future<Output = Result<kegari_v0::codex::CodexConnectionMetadata>> + Send + 'a>>
     {
@@ -548,7 +547,8 @@ impl DecisionFixture {
             command: command.clone(),
             args,
             expected_config_revision: Some(
-                self.configuration.snapshot().unwrap().revision().unwrap(),
+                kegari_v0::config::config_revision(&self.configuration.snapshot().unwrap())
+                    .unwrap(),
             ),
             expected_control_generation: Some(self.control.snapshot().unwrap().intent.generation),
         };

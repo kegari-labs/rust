@@ -278,12 +278,12 @@ impl PreparedFixture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Profile, Speed};
     use crate::instructions::{
         PermissionManifest, ProviderDiscovery, RepositoryContext, WorkerNetwork,
     };
     use crate::isolation::IsolationPlan;
     use crate::workflow::Workflow;
+    use kegari_config::{Profile, Speed};
     use serde_json::json;
     use tempfile::TempDir;
     use uuid::Uuid;

@@ -5,7 +5,6 @@ use crate::{
         CodexProfile, OwnedProviderCancellation, PermissionConfiguration, RequestGate, RpcClient,
         SessionBinding, SessionState,
     },
-    config::{Config, ProviderKind, Speed},
     control::{Actor, ControlHost, InFlightEffect, MutationRequest, Permit},
     digest::canonical_digest,
     evaluation::TrialHost,
@@ -22,6 +21,7 @@ use crate::{
     },
     workflow::Workflow,
 };
+use kegari_config::{Config, ProviderKind, Speed};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -76,7 +76,7 @@ pub struct PreparedRun {
     permissions: PermissionConfiguration,
     executable: BinaryIdentity,
     auth_home: PathBuf,
-    runtime: crate::config::RuntimeConfig,
+    runtime: kegari_config::RuntimeConfig,
 }
 impl PreparedRun {
     pub fn contract(&self) -> &Arc<WorkerContract> {
@@ -109,7 +109,7 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
             "independent-review".into(),
         ),
     };
-    if input.config.revision()? != revision || input.operation_id.is_nil() {
+    if crate::config::config_revision(&input.config)? != revision || input.operation_id.is_nil() {
         return Err(Error::new(
             "stale_config",
             "worker preparation differs from admitted configuration",
@@ -121,7 +121,7 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
         .values()
         .find(|w| w.id == workspace_id)
         .ok_or_else(|| Error::new("scope_violation", "worker workspace is not configured"))?;
-    if !workspace.load_workflow()?.same_source(&input.workflow) {
+    if !crate::config::load_workflow(workspace)?.same_source(&input.workflow) {
         return Err(Error::new(
             "stale_config",
             "workflow changed before worker assembly",

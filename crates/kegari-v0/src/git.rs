@@ -3948,7 +3948,7 @@ impl CleanupRead {
 }
 pub fn cleanup_host_read_root(
     proof: &crate::housekeeping::VerifiedCleanupReadRoot,
-    configuration: &crate::config::Config,
+    configuration: &kegari_config::Config,
 ) -> Result<VerifiedHostReadRoot> {
     proof.revalidate_filesystem()?;
     if proof.runtime_id() != configuration.runtime.id {
@@ -3960,7 +3960,7 @@ pub fn cleanup_host_read_root(
     host_read_root(
         proof.repository().clone(),
         proof.root(),
-        configuration.revision()?,
+        crate::config::config_revision(configuration)?,
         proof.digest()?,
         None,
     )
@@ -3968,7 +3968,7 @@ pub fn cleanup_host_read_root(
 /// This constructor performs only filesystem/configuration reads. Provider
 /// repository identity still requires its ordinary current account/scope check.
 pub fn configured_host_read_root(
-    configuration: &crate::config::Config,
+    configuration: &kegari_config::Config,
     workspace: Uuid,
     contract: &crate::delivery::RepositoryContract,
 ) -> Result<VerifiedHostReadRoot> {
@@ -3996,7 +3996,7 @@ pub fn configured_host_read_root(
     host_read_root(
         contract.repository.clone(),
         root,
-        configuration.revision()?,
+        crate::config::config_revision(configuration)?,
         contract.digest()?,
         marker.is_file().then_some(marker),
     )

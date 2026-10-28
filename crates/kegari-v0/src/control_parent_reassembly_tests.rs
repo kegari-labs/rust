@@ -503,7 +503,7 @@ fn actual_marked_parent_history_cannot_be_dropped_in_a_new_grant_namespace() {
     assert_eq!(error.code, "parent_reassembly_required");
     assert!(!callback.load(Ordering::SeqCst));
     assert_eq!(f.host.operations().unwrap().len(), before);
-    let runtime: crate::config::RuntimeConfig = serde_json::from_value(
+    let runtime: kegari_config::RuntimeConfig = serde_json::from_value(
         json!({"id":f.lease.runtime_id,"host_id":"component","max_agents":1}),
     )
     .unwrap();
@@ -860,7 +860,7 @@ fn marked_failed_parent_grant_preserves_source_and_renews_only_exact_budget() {
     f.spaced();
     verify_parent_reassembly_reference(&f.host.snapshot().unwrap(), &f.reference, &receipts)
         .unwrap();
-    let runtime: crate::config::RuntimeConfig = serde_json::from_value(json!({
+    let runtime: kegari_config::RuntimeConfig = serde_json::from_value(json!({
         "id":f.reference.runtime,"host_id":"component","max_agents":1,"retry_cap_ms":40000
     }))
     .unwrap();

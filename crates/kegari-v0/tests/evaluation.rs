@@ -1,5 +1,5 @@
 //! Deterministic replay/grader tests only. No model, account, or live provider is invoked.
-use kegari_v0::config::{Profile, Speed};
+use kegari_config::{Profile, Speed};
 use kegari_v0::digest::bytes_digest;
 use kegari_v0::evaluation::*;
 use kegari_v0::instructions::{

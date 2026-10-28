@@ -1,9 +1,9 @@
 //! Real filesystem/Workflow/assembly components; no runtime permit or native worker.
 use super::*;
-use crate::config::Speed;
 use crate::instructions::{PermissionManifest, ProviderDiscovery, WorkerNetwork};
 use crate::isolation::IsolationPlan;
 use crate::workflow::Workflow;
+use kegari_config::Speed;
 use serde_json::json;
 use uuid::Uuid;
 

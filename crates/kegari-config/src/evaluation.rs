@@ -19,10 +19,10 @@ pub struct EvaluationBinding {
     pub head_commit: String,
 }
 impl EvaluationBinding {
-    pub(crate) fn connection(workspace: Uuid, provider: &str) -> String {
+    pub fn connection(workspace: Uuid, provider: &str) -> String {
         format!("evaluation-{workspace}-{provider}")
     }
-    pub(crate) fn endpoint(workspace: Uuid, provider: &str) -> String {
+    pub fn endpoint(workspace: Uuid, provider: &str) -> String {
         format!(
             "https://{provider}.{workspace}.evaluation.invalid{}",
             if provider == "linear" {
@@ -32,7 +32,7 @@ impl EvaluationBinding {
             }
         )
     }
-    pub(crate) fn validate(&self, config: &Config, workspace: &Workspace) -> Result<()> {
+    pub fn validate(&self, config: &Config, workspace: &Workspace) -> Result<()> {
         if self.schema_version != 1
             || self.repository_id == 0
             || self.pull_request == 0
@@ -40,9 +40,9 @@ impl EvaluationBinding {
         {
             return Err(Error::invalid("invalid declared evaluation namespace"));
         }
-        crate::evidence::validate_digest(&self.suite_digest)?;
-        crate::git::validate_oid(&self.base_commit)?;
-        crate::git::validate_oid(&self.head_commit)?;
+        validate_digest(&self.suite_digest)?;
+        validate_oid(&self.base_commit)?;
+        validate_oid(&self.head_commit)?;
         if self.base_commit == self.head_commit {
             return Err(Error::invalid(
                 "evaluation requires an actual distinct PR base/head",
@@ -121,11 +121,7 @@ impl EvaluationBinding {
     }
     /// Filesystem/current source checks are repeated by the explicit producer.
     /// This structural check already rejects obvious exposure before preflight.
-    pub(crate) fn validate_resolved_paths(
-        &self,
-        config: &Config,
-        _workspace: &Workspace,
-    ) -> Result<()> {
+    pub fn validate_resolved_paths(&self, config: &Config, _workspace: &Workspace) -> Result<()> {
         let report = Path::new(&self.report_root);
         let fixture = Path::new(&self.fixture_root);
         let suite = Path::new(&self.suite_manifest);
@@ -173,6 +169,37 @@ pub(crate) fn validate_bindings(config: &Config) -> Result<()> {
                 "reserved evaluation connections require an evaluation-only workspace",
             ));
         }
+    }
+    Ok(())
+}
+
+// Field syntax only; these checks do not verify evidence or Git objects.
+fn validate_digest(value: &str) -> Result<()> {
+    let suffix = value
+        .strip_prefix("sha256:v1:")
+        .or_else(|| value.strip_prefix("sha256:"));
+    if !suffix.is_some_and(|s| {
+        s.len() == 64
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return Err(Error::invalid(
+            "evidence reference requires an explicit SHA-256 digest/schema",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_oid(value: &str) -> Result<()> {
+    if !matches!(value.len(), 40 | 64)
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(Error::new(
+            "invalid_revision",
+            "an exact lowercase Git object ID is required",
+        ));
     }
     Ok(())
 }

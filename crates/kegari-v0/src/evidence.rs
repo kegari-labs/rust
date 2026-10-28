@@ -2317,7 +2317,7 @@ pub(crate) fn carry_verified_acceptance(
     newer: &VerifiedParent,
     acceptance: &VerifiedAcceptance,
     baseline: &crate::runtime_delivery::VerifiedBaselineTransition,
-    configuration: &crate::config::Config,
+    configuration: &kegari_config::Config,
     production_validation: &[VerifiedProduction],
     now: DateTime<Utc>,
 ) -> Result<VerifiedCarry> {

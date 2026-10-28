@@ -4,7 +4,6 @@ use crate::test_process_probe as process_probe;
 use crate::{
     app::{ConfigurationControl, HostFuture},
     authority::IssueKey,
-    config::Config,
     control::{Actor, Lifecycle, MutationRequest, Receipt},
     delivery::RepositoryContract,
     git::{Git, GitLimits, HostGitExecutionScope, RepositoryId, configured_host_read_root},
@@ -27,6 +26,7 @@ use crate::{
     isolation::{ExecutionRole, IsolationPlan, ValidatedIsolation},
     workflow::Workflow,
 };
+use kegari_config::Config;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
@@ -785,7 +785,7 @@ async fn enrolled_family_cleanup_preserves_copy_and_tombstones_both_operations()
             std::time::Duration::from_secs(2),
         )
         .unwrap(),
-        crate::config::GithubSelection {
+        kegari_config::GithubSelection {
             organizations: vec![],
             repositories: vec!["42".into()],
             pr_authors: vec![],

@@ -1,12 +1,12 @@
 //! macOS registration and process ownership. Metadata is evidence to inspect;
 //! live OS locks and unreaped owned child handles establish exclusive control.
 use crate::{
-    config::Config,
     control::{ControlHost, Intent, IntentRecord, Lease},
     digest::{bytes_digest, canonical_digest},
     storage::{ExclusiveLock, PrivateDir},
 };
 use chrono::{DateTime, Utc};
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -468,7 +468,7 @@ impl Registration {
         )?;
         if config.runtime.id != owner.runtime_id
             || config.runtime.host_id != host.host_id
-            || owner.config_revision.as_deref() != Some(&config.revision()?)
+            || owner.config_revision.as_deref() != Some(&crate::config::config_revision(&config)?)
         {
             return Err(Error::new(
                 "config_reconciliation",
@@ -636,7 +636,7 @@ impl Registration {
         let text = toml::to_string_pretty(config)
             .map_err(|_| Error::invalid("configuration encoding failed"))?;
         self.root.write_bytes("config.toml", text.as_bytes())?;
-        owner.config_revision = Some(config.revision()?);
+        owner.config_revision = Some(crate::config::config_revision(config)?);
         owner.setup_complete = true;
         owner.updated_at = Utc::now();
         self.root.write("owner.json", &*owner)
@@ -667,7 +667,7 @@ impl Registration {
             std::str::from_utf8(&current)
                 .map_err(|_| Error::new("invalid_config", "configuration is not UTF-8"))?,
         )?;
-        if current.revision()? != expected_revision {
+        if crate::config::config_revision(&current)? != expected_revision {
             return Err(Error::new(
                 "config_reconciliation",
                 "stored configuration no longer matches registered revision",
@@ -676,7 +676,7 @@ impl Registration {
         let text = toml::to_string_pretty(config)
             .map_err(|_| Error::invalid("configuration encoding failed"))?;
         self.root.write_bytes("config.toml", text.as_bytes())?;
-        owner.config_revision = Some(config.revision()?);
+        owner.config_revision = Some(crate::config::config_revision(config)?);
         owner.updated_at = Utc::now();
         self.root.write("owner.json", &*owner)
     }

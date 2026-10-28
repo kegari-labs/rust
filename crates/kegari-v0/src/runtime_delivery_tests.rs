@@ -117,7 +117,7 @@ pub(crate) async fn fixture_authorization_with_wire(
 }
 pub(crate) async fn fixture_authorization_with_configuration(
     authorized: bool,
-    adjust: impl FnOnce(&mut crate::config::Config),
+    adjust: impl FnOnce(&mut kegari_config::Config),
 ) -> (
     tempfile::TempDir,
     crate::runtime_fixture::RuntimeFixture,
@@ -134,8 +134,8 @@ pub(crate) async fn fixture_authorization_with_configuration(
 }
 pub(super) async fn fixture_authorization_with_provider_fixture(
     authorized: bool,
-    adjust: impl FnOnce(&mut crate::config::Config),
-    adjust_wire: impl FnOnce(&crate::config::Config, &mut wire::Fixture),
+    adjust: impl FnOnce(&mut kegari_config::Config),
+    adjust_wire: impl FnOnce(&kegari_config::Config, &mut wire::Fixture),
 ) -> (
     tempfile::TempDir,
     crate::runtime_fixture::RuntimeFixture,
@@ -168,7 +168,7 @@ pub(super) async fn fixture_authorization_with_provider_fixture(
         .repositories
         .values()
         .flat_map(|repository| match &repository.deployment {
-            Some(crate::config::Deployment::Steps { steps }) => steps
+            Some(kegari_config::Deployment::Steps { steps }) => steps
                 .iter()
                 .map(|step| step.target_id.clone())
                 .collect::<Vec<_>>(),
@@ -252,12 +252,7 @@ async fn canonical_repository_id_builds_current_workspace_without_any_process_or
             .is_empty()
     );
     assert_eq!(
-        fixture
-            .configuration
-            .snapshot()
-            .unwrap()
-            .revision()
-            .unwrap(),
+        crate::config::config_revision(&fixture.configuration.snapshot().unwrap()).unwrap(),
         projection.config_revision
     );
 }
@@ -659,7 +654,7 @@ async fn manual_release_recovery_uses_actual_queued_command_identity() {
         parent: parent.key.clone(),
         evidence_token: canonical_digest(1, &"fixture accepted token").unwrap(),
         actor,
-        config_revision: config.revision().unwrap(),
+        config_revision: crate::config::config_revision(&config).unwrap(),
         queued_at: Utc::now(),
     };
     let signed = fixture

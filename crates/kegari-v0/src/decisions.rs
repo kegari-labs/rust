@@ -5,7 +5,6 @@ use crate::{
         ConfigurationControl, HostFuture, mutation_request, verified_operator, verify_current_actor,
     },
     authority::IssueKey,
-    config::Config,
     configuration::ConfigurationInputs,
     connections::ConnectionRegistry,
     control::{
@@ -29,6 +28,7 @@ use crate::{
     secrets::SecretStore,
 };
 use chrono::{DateTime, Duration, Utc};
+use kegari_config::Config;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -331,7 +331,7 @@ impl AuthorizedDecision {
             &self.actor,
             crate::api::command_role(&self.request.command, &self.request.args),
         )?;
-        if config.revision() != Ok(self.config_revision.clone())
+        if crate::config::config_revision(config) != Ok(self.config_revision.clone())
             || snapshot.intent.generation != self.control_generation
             || !snapshot
                 .background_commands
@@ -384,7 +384,7 @@ impl AuthorizedOperationRecovery {
     }
     pub fn recheck(&self, config: &Config, snapshot: &ControlSnapshot) -> Result<()> {
         verify_current_actor(config, &self.actor, "recover")?;
-        if config.revision() != Ok(self.config_revision.clone())
+        if crate::config::config_revision(config) != Ok(self.config_revision.clone())
             || snapshot.intent.generation != self.control_generation
             || !snapshot
                 .background_commands
@@ -576,7 +576,7 @@ impl DecisionManager {
         if request
             .expected_config_revision
             .as_ref()
-            .is_some_and(|v| config.revision().as_ref() != Ok(v))
+            .is_some_and(|v| crate::config::config_revision(&config).as_ref() != Ok(v))
         {
             return Err(Error::new(
                 "stale_config",
@@ -719,7 +719,7 @@ impl DecisionManager {
             &ctx.actor,
             crate::api::command_role(&ctx.request.command, &ctx.request.args),
         )?;
-        if config.revision()? != ctx.config.revision()?
+        if crate::config::config_revision(&config)? != crate::config::config_revision(&ctx.config)?
             || snapshot.intent.generation != ctx.generation
             || snapshot.service_stopping
             || !snapshot
@@ -760,7 +760,7 @@ impl DecisionManager {
             .authority_fences()?
             .check_workspace(ctx.workspace)?;
         let current = self.services.observations.admission_snapshot()?;
-        if current.config_revision != ctx.config.revision()?
+        if current.config_revision != crate::config::config_revision(&ctx.config)?
             || !current
                 .workspaces
                 .get(&ctx.workspace)
@@ -815,9 +815,10 @@ impl DecisionManager {
     fn stage_request(&self, ctx: &Context, stage: &str) -> Result<MutationRequest> {
         let mut request = self.lineage(&ctx.actor, &ctx.request, &ctx.parent_command)?;
         request.request_id = stage_id(ctx.request.request_id, stage);
-        request
-            .expected
-            .insert("config_revision".into(), ctx.config.revision()?);
+        request.expected.insert(
+            "config_revision".into(),
+            crate::config::config_revision(&ctx.config)?,
+        );
         request
             .expected
             .insert("control_generation".into(), ctx.generation.to_string());
@@ -1476,7 +1477,7 @@ impl DecisionManager {
                 .get("result")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            config_revision: ctx.config.revision()?,
+            config_revision: crate::config::config_revision(&ctx.config)?,
             control_generation: ctx.generation,
             authorization: None,
         };
@@ -1648,7 +1649,7 @@ impl DecisionManager {
         if request.command == CommandName::Cleanup {
             let github = self.cleanup_github(operation, &config)?;
             let this = self.clone();
-            let revision = config.revision()?;
+            let revision = crate::config::config_revision(&config)?;
             let mut original = mutation_request(&actor, &request, parent.canonical_targets.clone());
             original.kind = "cleanup".into();
             return self
@@ -1667,7 +1668,7 @@ impl DecisionManager {
                             .authority_fences()?
                             .check_actor(actor, "recover")?;
                         verify_current_actor(&config, actor, "recover")?;
-                        if config.revision()? != revision {
+                        if crate::config::config_revision(&config)? != revision {
                             return Err(Error::new(
                                 "stale_config",
                                 "cleanup configuration changed",
@@ -1691,7 +1692,7 @@ impl DecisionManager {
             request: request.clone(),
             parent_command: parent.clone(),
             operation: target,
-            config_revision: config.revision()?,
+            config_revision: crate::config::config_revision(&config)?,
             control_generation: snapshot.intent.generation,
         };
         decision.recheck(&config, &snapshot)?;

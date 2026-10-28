@@ -20,13 +20,13 @@ pub(super) fn configuration(
     auth: &std::path::Path,
     workflow: &std::path::Path,
     source: &std::path::Path,
-    profile: kegari_v0::config::Profile,
-) -> kegari_v0::config::Config {
+    profile: kegari_config::Profile,
+) -> kegari_config::Config {
     use serde_json::json;
     use uuid::Uuid;
     let id = Uuid::from_u128;
     let proof = json!({"workflow_ref":"fixture/repo/.github/workflows/caller.yml@refs/heads/trusted","workflow_sha":"0123456789012345678901234567890123456789","job_workflow_ref":"fixture/trusted/.github/workflows/proof.yml@0123456789012345678901234567890123456789","job_workflow_sha":"0123456789012345678901234567890123456789","event_name":"workflow_dispatch"});
-    let config: kegari_v0::config::Config = serde_json::from_value(json!({
+    let config: kegari_config::Config = serde_json::from_value(json!({
         "schema_version":1,"runtime":{"id":id(1),"host_id":"fixture-host","max_agents":2},
         "connections":{
             "linear":{"kind":"linear","account_id":"linear-fixture","endpoint":"https://linear.invalid/graphql","credential_ref":"keychain:fixture-linear"},
@@ -43,7 +43,7 @@ pub(super) fn configuration(
         }},"control":{"local_users":{"501":{"id":"fixture-operator","linear_user_id":id(5),"roles":["inspect","configure","lifecycle","correct","accept","release","recover"]}}}
     })).unwrap();
     config.validate().unwrap();
-    config.load_workflows().unwrap();
+    kegari_v0::config::load_workflows(&config).unwrap();
     config
 }
 

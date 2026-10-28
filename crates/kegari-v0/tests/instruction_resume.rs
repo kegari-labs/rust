@@ -1,9 +1,6 @@
 //! Real assembly fixtures; no manifest JSON is promoted to resume authority.
-use kegari_v0::{
-    config::{Profile, Speed},
-    instructions::*,
-    workflow::Workflow,
-};
+use kegari_config::{Profile, Speed};
+use kegari_v0::{instructions::*, workflow::Workflow};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use tempfile::TempDir;

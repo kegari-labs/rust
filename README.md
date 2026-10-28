@@ -3,18 +3,23 @@
 | Package | Responsibility |
 | --- | --- |
 | [`kegari-types`](crates/kegari-types/README.md) | Shared command, response, error and snapshot data types. |
+| [`kegari-config`](crates/kegari-config/README.md) | Configuration models, TOML parsing, validation and path resolution. |
 | [`kegari-cli`](crates/kegari-cli/README.md) | Public CLI, control client and the `kegari-v0` executable. |
 | [`kegari-v0`](crates/kegari-v0/README.md) | Remaining backend library and the `kegari-v0-evaluation` inspection executable. |
 
-Both CLI and backend depend directly on `kegari-types`. The CLI also temporarily
-depends on the backend; the backend does not depend on the CLI. Shared types are
-imported from `kegari_types`, without backend compatibility reexports. Validation,
-authorization, exit-code mapping and snapshot operations remain in the backend.
+Both CLI and backend depend directly on `kegari-config` and `kegari-types`;
+`kegari-config` depends on `kegari-types`. The CLI also temporarily depends on the
+backend; the backend does not depend on the CLI. Shared types and configuration
+models are imported directly from their owning crates, without backend
+compatibility reexports. Configuration transactions, workflow integration,
+canonical hashing, command validation, authorization, exit-code mapping and
+snapshot operations remain in the backend.
 All packages use workspace version `0.2.0-alpha.10`; the executable name, process
 roles and serialized schemas remain unchanged. This extraction creates no new
 prerelease or qualification claim.
 
-From the workspace root, using the pinned toolchain:
+From the workspace root, using the pinned toolchain; `--workspace` checks all four
+packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0

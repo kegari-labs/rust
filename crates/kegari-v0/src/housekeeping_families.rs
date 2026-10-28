@@ -281,7 +281,7 @@ impl Housekeeping {
     /// No Git process runs here and no unchanged-source claim is made.
     pub(crate) fn retained_execution_read_root(
         &self,
-        configuration: &crate::config::Config,
+        configuration: &kegari_config::Config,
         binding: &ExecutionBinding,
         isolation: &crate::isolation::ValidatedIsolation,
         directory: &OwnedDirectory,
@@ -326,7 +326,7 @@ impl Housekeeping {
             let configured_root = Path::new(&configuration.runtime.execution_root)
                 .canonicalize()
                 .map_err(|e| Error::io("resolve configured execution root", e))?;
-            let configured_workflow = workspace.load_workflow()?;
+            let configured_workflow = crate::config::load_workflow(workspace)?;
             if configuration.runtime.id != binding.runtime_id
                 || registration.binding != *binding
                 || registration.directory_digest != directory.digest()
@@ -403,7 +403,7 @@ impl Housekeeping {
                 &json!({
                     "purpose":"retained_execution_read","registration":registration,
                     "family":family.digest,"observations":observations,"receipt":receipt,
-                    "configuration":configuration.revision()?,"workflow":workflow.digest,
+                    "configuration":crate::config::config_revision(configuration)?,"workflow":workflow.digest,
                 }),
             )?;
             crate::git::retained_execution_host_read_root(

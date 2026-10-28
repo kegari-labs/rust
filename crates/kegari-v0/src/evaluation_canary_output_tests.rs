@@ -453,11 +453,11 @@ fn partial_output_data_survives_archive_failure_record_and_old_absence_bytes() {
         .position(|v| v.id == "independent_malicious")
         .unwrap();
     suite.profiles[0].binding = Some(ProfileBinding {
-        profile: crate::config::Profile {
+        profile: kegari_config::Profile {
             tool: "codex".into(),
             model: "component-only".into(),
             reasoning: "high".into(),
-            speed: crate::config::Speed::Standard,
+            speed: kegari_config::Speed::Standard,
         },
         account_id: "component-only".into(),
         operator_reference: "no-native-capability".into(),

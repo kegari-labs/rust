@@ -92,7 +92,9 @@ impl AuthorizationPublisher {
         self.configuration
             .authority_fences()?
             .check_workspace(gate.workspace_id())?;
-        if self.configuration.snapshot()?.revision()? != gate.config_revision() {
+        if crate::config::config_revision(&self.configuration.snapshot()?)?
+            != gate.config_revision()
+        {
             return Err(Error::new(
                 "stale_config",
                 "configuration changed before authorization publication",
@@ -106,7 +108,7 @@ impl AuthorizationPublisher {
     }
     fn client(&self, gate: &AuthorizationGate) -> Result<(LinearClient, String, Uuid)> {
         let config = self.configuration.snapshot()?;
-        if config.revision()? != gate.config_revision() {
+        if crate::config::config_revision(&config)? != gate.config_revision() {
             return Err(Error::new(
                 "stale_config",
                 "authorization preparation configuration changed",
@@ -300,7 +302,7 @@ impl AuthorizationPublisher {
             payload_digest:receipt.payload_digest.clone(),actor:receipt.actor.clone(),
         },||{
             current_owner()?;
-            if self.configuration.snapshot()?.revision()?!=config.revision()? {
+            if crate::config::config_revision(&self.configuration.snapshot()?)?!=crate::config::config_revision(&config)? {
                 return Err(Error::new("stale_config","authorization recovery configuration changed"));
             }
             Ok(())
@@ -531,7 +533,7 @@ fn publication_attempt(
     snapshot: &str,
     work: &str,
     receipts: &[Receipt],
-    config: &crate::config::RuntimeConfig,
+    config: &kegari_config::RuntimeConfig,
     now: chrono::DateTime<Utc>,
 ) -> Result<PublicationAttempt> {
     metadata_publication_attempt(
@@ -550,7 +552,7 @@ pub(crate) fn metadata_publication_attempt(
     snapshot: &str,
     work: &str,
     receipts: &[Receipt],
-    config: &crate::config::RuntimeConfig,
+    config: &kegari_config::RuntimeConfig,
     now: chrono::DateTime<Utc>,
 ) -> Result<PublicationAttempt> {
     if !matches!(purpose, "parent_authorization" | "no_release_required") {
@@ -756,7 +758,7 @@ fn publication_id(runtime: Uuid, snapshot: &str, phase: &str) -> Result<Uuid> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn config() -> crate::config::RuntimeConfig {
+    fn config() -> kegari_config::RuntimeConfig {
         serde_json::from_value(json!({"id":Uuid::from_u128(1),"host_id":"fixture","max_agents":3}))
             .unwrap()
     }
@@ -822,7 +824,7 @@ mod tests {
     }
     fn planned(
         receipts: &[Receipt],
-        config: &crate::config::RuntimeConfig,
+        config: &kegari_config::RuntimeConfig,
     ) -> Result<PublicationAttempt> {
         publication_attempt(
             config.id,
@@ -917,7 +919,7 @@ mod tests {
     fn no_release_metadata_retries_are_separate_bounded_and_never_replay_unknowns() {
         let mut config = config();
         let snapshot = canonical_digest(1, &"snapshot").unwrap();
-        let make = |receipts: &[Receipt], config: &crate::config::RuntimeConfig| {
+        let make = |receipts: &[Receipt], config: &kegari_config::RuntimeConfig| {
             metadata_publication_attempt(
                 "no_release_required",
                 config.id,

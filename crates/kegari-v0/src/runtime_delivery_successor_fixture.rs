@@ -55,7 +55,7 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
                             .repositories
                             .get_mut("42")
                             .unwrap()
-                            .deployment = Some(crate::config::Deployment::None("none".into()));
+                            .deployment = Some(kegari_config::Deployment::None("none".into()));
                         extra_completion_fixture::configure_auxiliary(configuration);
                     }
                 }
@@ -964,8 +964,8 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
 
 fn fixture_deployment_route(
     contract: &RepositoryContract,
-) -> &crate::config::ExactRevisionWorkflow {
-    let Some(crate::config::Deployment::Steps { steps }) = &contract.configuration.deployment
+) -> &kegari_config::ExactRevisionWorkflow {
+    let Some(kegari_config::Deployment::Steps { steps }) = &contract.configuration.deployment
     else {
         panic!("lineage fixture requires an actual configured deployment route")
     };
@@ -977,7 +977,7 @@ fn fixture_deployment_route(
     &selected[0].workflow
 }
 
-fn fixture_dispatch_ref(route: &crate::config::ExactRevisionWorkflow) -> String {
+fn fixture_dispatch_ref(route: &kegari_config::ExactRevisionWorkflow) -> String {
     route
         .proof
         .workflow_ref

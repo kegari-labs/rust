@@ -1,6 +1,5 @@
 //! Explicit host delivery phases. Model output remains a claim until actual
 //! execution/provider observations have established the corresponding gate.
-use crate::config::{CiSuite, Repository as RepositoryConfig};
 use crate::control::{Actor, ControlHost, MutationRequest, Permit, Receipt};
 use crate::digest::{bytes_digest, canonical_digest};
 use crate::evidence::{
@@ -17,6 +16,7 @@ use crate::reconcile::FreshGate;
 use crate::storage::PrivateDir;
 use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
+use kegari_config::{CiSuite, Repository as RepositoryConfig};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -2740,7 +2740,7 @@ impl DeliveryCoordinator {
         &self,
         admission: &DeliveryAdmission,
         result: &PublishedChild,
-        config: &crate::config::Config,
+        config: &kegari_config::Config,
     ) -> Result<Receipt> {
         self.current(
             admission,
@@ -2751,7 +2751,7 @@ impl DeliveryCoordinator {
             ],
         )?;
         self.key.verify("child_result", &result.signed)?;
-        if config.revision()? != admission.gate.config_revision()
+        if crate::config::config_revision(config)? != admission.gate.config_revision()
             || result.verified.evidence().work != admission.scope.work
             || result.verified.evidence().revision != admission.scope.revision
             || result.signed.payload.contract_digest != admission.scope.contract_digest
@@ -4745,7 +4745,7 @@ impl DeliveryCoordinator {
         for target in &authorized.scope.production_targets {
             let mut found = false;
             for contract in self.contracts.values() {
-                if let Some(crate::config::Deployment::Steps { steps }) =
+                if let Some(kegari_config::Deployment::Steps { steps }) =
                     &contract.configuration.deployment
                     && steps.iter().any(|step| &step.target_id == target)
                 {

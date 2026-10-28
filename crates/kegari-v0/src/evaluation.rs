@@ -6,11 +6,11 @@ use crate::codex::{
     CodexProfile, EventKind, PermissionConfiguration, SessionBinding, SessionState, ToolBroker,
     ToolCall,
 };
-use crate::config::Profile;
 use crate::digest::{bytes_digest, canonical_digest};
 use crate::instructions::{self, AgentRole, AssembledInstructions, AssemblyInput};
 use crate::isolation::{ExecutionRole, PathGrant, ValidatedIsolation};
 use chrono::Utc;
+use kegari_config::Profile;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -2241,8 +2241,8 @@ pub(crate) async fn run_live_trial_until(
                 model: profile.profile.model.clone(),
                 reasoning: profile.profile.reasoning.clone(),
                 speed: match profile.profile.speed {
-                    crate::config::Speed::Standard => "standard",
-                    crate::config::Speed::Fast => "fast",
+                    kegari_config::Speed::Standard => "standard",
+                    kegari_config::Speed::Fast => "fast",
                 }
                 .into(),
             },

@@ -31,7 +31,7 @@ fn config() -> Config {
 fn projection(config: &Config) -> RuntimeProjection {
     RuntimeProjection {
         runtime_id: config.runtime.id,
-        config_revision: config.revision().unwrap(),
+        config_revision: crate::config::config_revision(config).unwrap(),
         observed_at: Utc::now(),
         workspaces: BTreeMap::new(),
     }
@@ -301,7 +301,7 @@ fn verify_shared_native_issue_workspace_filter(
         parent.parent_reference = format!("{second}/{}", parent.key.issue);
     }
     scoped.projection.workspaces.insert(second, observed);
-    scoped.projection.config_revision = config.revision().unwrap();
+    scoped.projection.config_revision = crate::config::config_revision(&config).unwrap();
     for workspace in scoped.projection.workspaces.values_mut() {
         workspace.config_revision = scoped.projection.config_revision.clone();
         for parent in workspace.parents.values_mut() {

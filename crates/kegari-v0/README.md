@@ -12,13 +12,23 @@ client and `kegari-v0` executable. This package retains the backend library and
 `kegari-v0-evaluation` inspection tool. Both CLI and backend import shared command,
 response, error and snapshot data directly from
 [`kegari-types`](../kegari-types/README.md); there are no backend compatibility
-reexports. The backend retains validation, command classification, role and
+reexports. The backend retains command validation and classification, role and
 exit-code decisions, and snapshot operations. The temporary CLI-to-backend
 dependency remains; application arguments and hidden process modes are unchanged.
 
+Configuration models, TOML parsing, validation and path resolution now belong to
+[`kegari-config`](../kegari-config/README.md), imported directly as `kegari_config`.
+The backend's `config` module retains `config_revision(&Config)`,
+`load_workflow(&Workspace)`, `load_workflows(&Config)`, `ConfigReload` and
+`inspect_reload`; it does not reexport configuration types. Configuration
+transactions and provider verification remain in `configuration`, while shared
+canonical hashing remains in `digest`. See the configuration crate's
+[Rust migration notes](../kegari-config/README.md#rust-consumer-migration).
+
 ## Build and deterministic checks
 
-Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain:
+Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
+test and lint commands cover all four packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
@@ -45,9 +55,9 @@ The archived stabilization checkpoint is `0.2.0-alpha.10`, built before CLI
 extraction. Its final release suite passed 1,260 tests, with
 three native qualification tests ignored. See the artifact links, checksums and
 retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md). The Cargo-specific
-execution design has been removed. The source now separates `kegari-cli` and
-`kegari-types` from the remaining backend while retaining the same workspace
-version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
+execution design has been removed. The source now separates `kegari-cli`,
+`kegari-types` and `kegari-config` from the remaining backend while retaining the
+same workspace version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a
 new prerelease, and native execution remains blocked.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or

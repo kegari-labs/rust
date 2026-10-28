@@ -163,12 +163,12 @@ impl HttpTransport for Wire {
         })
     }
 }
-struct NativeReadConfiguration(kegari_v0::config::Config);
+struct NativeReadConfiguration(kegari_config::Config);
 impl kegari_v0::app::ConfigurationControl for NativeReadConfiguration {
     fn authority_fences(&self) -> Result<kegari_v0::configuration::AuthorityFences> {
         Ok(Default::default())
     }
-    fn snapshot(&self) -> Result<kegari_v0::config::Config> {
+    fn snapshot(&self) -> Result<kegari_config::Config> {
         Ok(self.0.clone())
     }
     fn execute(
@@ -261,7 +261,7 @@ impl Fixture {
                 probe.clone(),
             )
             .unwrap();
-            let configuration:kegari_v0::config::Config=serde_json::from_value(json!({"schema_version":1,"runtime":{"id":id(2),"host_id":"fixture","max_agents":1,"execution_root":home.join("execution")},"connections":{},"workspaces":{},"control":{"local_users":{unsafe{libc::geteuid()}.to_string():{"id":"fixture-human","linear_user_id":id(99),"roles":["inspect","recover","configure","lifecycle"]}}}})).unwrap();
+            let configuration:kegari_config::Config=serde_json::from_value(json!({"schema_version":1,"runtime":{"id":id(2),"host_id":"fixture","max_agents":1,"execution_root":home.join("execution")},"connections":{},"workspaces":{},"control":{"local_users":{unsafe{libc::geteuid()}.to_string():{"id":"fixture-human","linear_user_id":id(99),"roles":["inspect","recover","configure","lifecycle"]}}}})).unwrap();
             registration.complete_setup(&configuration).unwrap();
             let processes = Arc::new(
                 kegari_v0::process_records::ProcessJournal::with_probe(
@@ -435,7 +435,7 @@ impl Fixture {
                 std::time::Duration::from_secs(2),
             )
             .unwrap(),
-            kegari_v0::config::GithubSelection {
+            kegari_config::GithubSelection {
                 organizations: vec![],
                 repositories: vec!["101".into()],
                 pr_authors: vec![],
@@ -1302,7 +1302,7 @@ impl HandoverFixture {
         let previous = metadata_binary(&home.join("old-kegari"), &info);
         info.runtime_build = "reviewed-replacement-fixture-build".into();
         let replacement = metadata_binary(&home.join("new-kegari"), &info);
-        let config:kegari_v0::config::Config=serde_json::from_value(json!({"schema_version":1,"runtime":{"id":id(2),"host_id":"fixture-host","execution_root":home.join("runs"),"max_agents":2},"connections":{},"workspaces":{},"control":{"local_users":{uid.to_string():{"id":"fixture-human","linear_user_id":id(3),"roles":["configure","recover"]}}}})).unwrap();
+        let config:kegari_config::Config=serde_json::from_value(json!({"schema_version":1,"runtime":{"id":id(2),"host_id":"fixture-host","execution_root":home.join("runs"),"max_agents":2},"connections":{},"workspaces":{},"control":{"local_users":{uid.to_string():{"id":"fixture-human","linear_user_id":id(3),"roles":["configure","recover"]}}}})).unwrap();
         let control =
             ControlHost::setup(PrivateDir::open(root.path()).unwrap(), id(2), id(8)).unwrap();
         drop(control);
@@ -1319,7 +1319,7 @@ impl HandoverFixture {
                 binary: previous.clone(),
                 runtime_build: kegari_v0::BUILD_ID.into(),
                 setup_complete: true,
-                config_revision: Some(config.revision().unwrap()),
+                config_revision: Some(kegari_v0::config::config_revision(&config).unwrap()),
                 control_process: None,
                 pending_owner: None,
                 orchestration: None,

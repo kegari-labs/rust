@@ -552,7 +552,7 @@ impl RemoteListener {
         state: &ApiState,
     ) -> Result<()> {
         let config = configuration.snapshot()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(&config)?;
         let digest = canonical_digest(1, &config.control.https)?;
         let changed = self.contract.as_deref() != Some(&digest);
         if changed {
@@ -589,7 +589,7 @@ impl RemoteListener {
         let server = transport::start_direct_tls(remote, https, tailscale).await?;
         let mut server = Some(server);
         let install = control.serialize_observation(|_| {
-            if configuration.snapshot()?.revision()? != revision {
+            if crate::config::config_revision(&configuration.snapshot()?)? != revision {
                 return Err(Error::new(
                     "stale_config",
                     "TLS configuration changed while listener started",
@@ -614,11 +614,13 @@ fn install_current_authentication(
     control: &ControlHost,
     configuration: &dyn ConfigurationControl,
     authentication: &TransportAuthentication,
-    expected: &crate::config::Config,
+    expected: &kegari_config::Config,
     tailscale: Option<TailscaleClient>,
 ) -> Result<()> {
     control.serialize_observation(|_| {
-        if configuration.snapshot()?.revision()? != expected.revision()? {
+        if crate::config::config_revision(&configuration.snapshot()?)?
+            != crate::config::config_revision(expected)?
+        {
             return Err(Error::new(
                 "stale_config",
                 "TLS configuration changed before authentication installation",
@@ -683,12 +685,12 @@ pub async fn reconcile_control_socket(registration: &Registration) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct ReadConfiguration(crate::config::Config);
+    struct ReadConfiguration(kegari_config::Config);
     impl ConfigurationControl for ReadConfiguration {
         fn authority_fences(&self) -> Result<crate::configuration::AuthorityFences> {
             Ok(Default::default())
         }
-        fn snapshot(&self) -> Result<crate::config::Config> {
+        fn snapshot(&self) -> Result<kegari_config::Config> {
             Ok(self.0.clone())
         }
         fn execute(
@@ -708,7 +710,7 @@ mod tests {
     async fn unavailable_existing_key_preserves_inspection_but_cannot_admit_or_mutate() {
         let temp = tempfile::tempdir().unwrap();
         let runtime = Uuid::new_v4();
-        let config:crate::config::Config=serde_json::from_value(json!({"schema_version":1,"runtime":{"id":runtime,"host_id":"fixture","max_agents":1},"connections":{},"workspaces":{},"control":{"local_users":{"501":{"id":"fixture","linear_user_id":Uuid::new_v4(),"roles":["inspect","configure"]}}}})).unwrap();
+        let config:kegari_config::Config=serde_json::from_value(json!({"schema_version":1,"runtime":{"id":runtime,"host_id":"fixture","max_agents":1},"connections":{},"workspaces":{},"control":{"local_users":{"501":{"id":"fixture","linear_user_id":Uuid::new_v4(),"roles":["inspect","configure"]}}}})).unwrap();
         config.validate().unwrap();
         let backend = SwitchableBackend::new(
             Arc::new(ReadConfiguration(config)),
@@ -748,10 +750,10 @@ mod tests {
             PrivateDir::create(&temp.path().canonicalize().unwrap().join("runtime")).unwrap();
         let runtime = Uuid::new_v4();
         let control = ControlHost::setup(root, runtime, Uuid::new_v4()).unwrap();
-        let old:crate::config::Config=serde_json::from_value(json!({"schema_version":1,"runtime":{"id":runtime,"host_id":"fixture","max_agents":1},"connections":{},"workspaces":{},"control":{"local_users":{"501":{"id":"fixture","linear_user_id":Uuid::new_v4(),"roles":["inspect","configure"]}}}})).unwrap();
+        let old:kegari_config::Config=serde_json::from_value(json!({"schema_version":1,"runtime":{"id":runtime,"host_id":"fixture","max_agents":1},"connections":{},"workspaces":{},"control":{"local_users":{"501":{"id":"fixture","linear_user_id":Uuid::new_v4(),"roles":["inspect","configure"]}}}})).unwrap();
         let mut current = old.clone();
         current.control.local_users.get_mut("501").unwrap().roles =
-            std::collections::BTreeSet::from([crate::config::ControlRole::Inspect]);
+            std::collections::BTreeSet::from([kegari_config::ControlRole::Inspect]);
         let authentication = TransportAuthentication::new(current.control.clone(), None);
         let configuration = ReadConfiguration(current);
         assert_eq!(

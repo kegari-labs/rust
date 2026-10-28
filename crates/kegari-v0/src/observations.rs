@@ -3,7 +3,6 @@
 use crate::{
     app::ConfigurationControl,
     authority::IssueKey,
-    config::Config,
     configuration::{ConfigurationInputs, NativeConfigurationInputs},
     connections::ConnectionRegistry,
     control::{ControlHost, Receipt, ReceiptPhase},
@@ -19,6 +18,7 @@ use crate::{
     workflow::Workflow,
 };
 use chrono::{DateTime, Utc};
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -418,7 +418,7 @@ impl ObservationCache {
             .refresh_active(&config, &workflows, &retained, &receipts)
             .await?;
         self.control.serialize_observation(|_| {
-        if self.configuration.snapshot()?.revision()? != config.revision()? {
+        if crate::config::config_revision(&self.configuration.snapshot()?)? != crate::config::config_revision(&config)? {
             return Err(Error::new(
                 "stale_config",
                 "configuration changed during complete provider observation",
@@ -445,7 +445,7 @@ impl ObservationCache {
                 health: json!({"status":if complete{"observed"}else{"provider_blocked"},"observed_at":projection.observed_at,"config_revision":projection.config_revision,"runtime_build":crate::BUILD_ID}),
             };
             for (snapshot, result) in active {
-                *snapshot.current.write().map_err(|_| Error::new("observation_unavailable", "active snapshot lock failed"))? = ActiveObservation { configuration_revision: config.revision()?, projection: result };
+                *snapshot.current.write().map_err(|_| Error::new("observation_unavailable", "active snapshot lock failed"))? = ActiveObservation { configuration_revision: crate::config::config_revision(&config)?, projection: result };
             }
             Ok(())
         })?;
@@ -560,7 +560,7 @@ fn load_workflows(config: &Config) -> (BTreeMap<Uuid, Workflow>, BTreeMap<Uuid, 
     for (name, workspace) in &config.workspaces {
         let mut scoped = config.clone();
         scoped.workspaces.retain(|key, _| key == name);
-        match scoped.load_workflows() {
+        match crate::config::load_workflows(&scoped) {
             Ok(workflows) => loaded.extend(workflows),
             Err(error) => {
                 errors.insert(workspace.id, error);
@@ -824,7 +824,9 @@ impl ObservationCache {
         workflow_digest: &str,
     ) -> Result<ActiveSnapshot> {
         self.admission_snapshot()?;
-        if self.configuration.snapshot()?.revision()? != configuration_revision {
+        if crate::config::config_revision(&self.configuration.snapshot()?)?
+            != configuration_revision
+        {
             return Err(Error::new(
                 "stale_config",
                 "admission configuration changed before snapshot retention",
@@ -837,7 +839,7 @@ impl ObservationCache {
             .current
             .read()
             .map_err(|_| Error::new("observation_unavailable", "snapshot lock failed"))?;
-        if snapshot.configuration.revision()? != configuration_revision
+        if crate::config::config_revision(&snapshot.configuration)? != configuration_revision
             || snapshot.projection.config_revision != configuration_revision
             || !snapshot
                 .projection
@@ -912,7 +914,9 @@ impl ObservationCache {
                 "active authority state unavailable",
             )
         })?;
-        if self.configuration.snapshot()?.revision()? != current.configuration_revision {
+        if crate::config::config_revision(&self.configuration.snapshot()?)?
+            != current.configuration_revision
+        {
             return Err(Error::new(
                 "stale_config",
                 "active authority has not observed current permissions",
@@ -968,7 +972,7 @@ impl ObservationCache {
         let current = self.configuration.snapshot()?;
         let adjusted =
             active_configuration(&current, &snapshot.configuration, admitted.workspace_id())?;
-        if adjusted.revision()? != projection.config_revision
+        if crate::config::config_revision(&adjusted)? != projection.config_revision
             || !projection
                 .workspaces
                 .get(&admitted.workspace_id())

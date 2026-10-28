@@ -2,7 +2,6 @@
 //! permit; only a fully assembled contract consumes a model-attempt admission.
 use crate::{
     authority::{ChildScope, Responsibility},
-    config::{Config, Workspace},
     connections::ConnectionRegistry,
     control::{
         Actor, Lease, MutationRequest, Permit, PreparationAdmission, PreparationReference,
@@ -35,6 +34,7 @@ use crate::{
     },
     workflow::Workflow,
 };
+use kegari_config::{Config, Workspace};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -129,7 +129,9 @@ pub async fn resolve_source(
                 "source identity resolution exceeded its finite bound",
             )
         })??;
-    if runtime.configuration.snapshot()?.revision()? != config.revision()? {
+    if crate::config::config_revision(&runtime.configuration.snapshot()?)?
+        != crate::config::config_revision(&config)?
+    {
         return Err(Error::new(
             "stale_config",
             "source configuration changed during provider observation",
@@ -575,7 +577,7 @@ async fn prepare_admitted_inner(
     }
     let _retained = runtime.observations.capture_active(
         plan.workspace.id,
-        &plan.config.revision()?,
+        &crate::config::config_revision(&plan.config)?,
         &plan.workflow.digest,
     )?;
     let prep_id = preparation_operation(plan.request.operation_id)?;
@@ -1097,7 +1099,7 @@ impl Plan {
                     "worker workspace is no longer configured",
                 )
             })?;
-        let workflow = workspace.load_workflow()?;
+        let workflow = crate::config::load_workflow(&workspace)?;
         let projection = runtime.observations.admission_snapshot()?;
         let (mut role, mut context, review, generation, normalized_state) = match &request.authority
         {
@@ -2387,7 +2389,7 @@ mod source_tests {
         // All omissions precede the real projection and signed authorization.
         let config = fixture.configuration.snapshot().unwrap();
         config.validate().unwrap();
-        let config_revision = config.revision().unwrap();
+        let config_revision = crate::config::config_revision(&config).unwrap();
         let projection = fixture.runtime.observations.snapshot().unwrap();
         assert_eq!(projection.config_revision, config_revision);
         let parent = projection
@@ -2449,7 +2451,10 @@ mod source_tests {
         let plan = Plan::read(&fixture.runtime, request.clone()).unwrap();
         assert_eq!(plan.role, AgentRole::Testing);
         assert_eq!(plan.source.as_ref().unwrap().revision, revision);
-        assert_eq!(plan.config.revision().unwrap(), config_revision);
+        assert_eq!(
+            crate::config::config_revision(&plan.config).unwrap(),
+            config_revision
+        );
         assert_eq!(
             plan.request.authority.digest().unwrap(),
             gate.digest().unwrap()
@@ -2687,7 +2692,7 @@ mod source_tests {
                 Duration::from_secs(1),
             )
             .unwrap(),
-            crate::config::GithubSelection {
+            kegari_config::GithubSelection {
                 repositories: vec!["42".into()],
                 organizations: vec![],
                 pr_authors: vec![],

@@ -111,7 +111,7 @@ pub struct DeliveryWorkerAssignment {
 impl DeliveryWorkerAssignment {
     pub(crate) fn prepare_parent_origin(
         &self,
-        config: &crate::config::Config,
+        config: &kegari_config::Config,
         contract: &Arc<crate::worker::WorkerContract>,
         preparation: &Receipt,
         records: &PrivateDir,

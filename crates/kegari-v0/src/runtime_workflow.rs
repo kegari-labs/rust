@@ -229,14 +229,14 @@ pub(crate) fn recover_retry_comment(
     Ok(grant)
 }
 pub(crate) fn current_retry_grants(
-    config: &crate::config::Config,
+    config: &kegari_config::Config,
     projection: &crate::reconcile::RuntimeProjection,
     work: &WorkIdentity,
     receipts: &[Receipt],
     key: &AttestationKey,
 ) -> Result<Vec<VerifiedRetryGrant>> {
     if projection.runtime_id != config.runtime.id
-        || projection.config_revision != config.revision()?
+        || projection.config_revision != crate::config::config_revision(config)?
     {
         return Err(Error::new(
             "stale_config",
@@ -296,7 +296,7 @@ pub(crate) fn current_retry_grants(
 /// its actual owner/permit, pinned configuration and registered active snapshot.
 /// In particular, this never substitutes a current projection for retained work.
 pub(crate) fn retained_parent_retry_grants(
-    config: &crate::config::Config,
+    config: &kegari_config::Config,
     parent: &crate::reconcile::ParentProjection,
     work: &WorkIdentity,
     receipts: &[Receipt],
@@ -323,7 +323,7 @@ pub(crate) fn retained_parent_retry_grants(
             .and_then(|child| child.work.as_ref()),
         None => parent.work.as_ref(),
     };
-    if connection.kind != crate::config::ProviderKind::Linear
+    if connection.kind != kegari_config::ProviderKind::Linear
         || parent.key != key_parent
         || work.linear_endpoint != key_parent.endpoint
         || work.linear_workspace != key_parent.workspace
@@ -412,7 +412,7 @@ pub(crate) fn require_current_grant<'a>(
 /// started. This observes the original history; it does not select new work or
 /// reconcile any successor process/effect.
 pub(crate) fn published_retry_target(
-    config: &crate::config::Config,
+    config: &kegari_config::Config,
     expected: &VerifiedRetryGrant,
     current: &[VerifiedRetryGrant],
     receipts: &[Receipt],
@@ -544,7 +544,7 @@ pub(crate) fn select_retry_target_with_unfinished(
     receipts: &[Receipt],
     grants: &[VerifiedRetryGrant],
     unfinished: &[Arc<crate::delivery::UnfinishedChildWork>],
-    limits: &crate::config::RuntimeConfig,
+    limits: &kegari_config::RuntimeConfig,
 ) -> Result<RetryTarget> {
     let mut completed = BTreeMap::new();
     for proof in unfinished {

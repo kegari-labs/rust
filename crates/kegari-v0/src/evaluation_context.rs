@@ -349,7 +349,7 @@ mod tests {
             tool: "codex".into(),
             model: "deterministic-fixture-model".into(),
             reasoning: "high".into(),
-            speed: crate::config::Speed::Standard,
+            speed: kegari_config::Speed::Standard,
         }
     }
     #[test]

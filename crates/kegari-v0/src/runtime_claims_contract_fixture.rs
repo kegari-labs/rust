@@ -4,9 +4,9 @@
 use super::*;
 use crate::{
     codex::{CodexProfile, SessionBinding, SessionState},
-    config::Speed,
     worker::{WorkerAuthority, WorkerContract},
 };
+use kegari_config::Speed;
 use serde_json::json;
 
 pub(crate) fn test_completed_contract_fixture(

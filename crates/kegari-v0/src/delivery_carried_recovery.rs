@@ -42,7 +42,7 @@ impl CarryRecoveryBinding {
         };
         let value = Self {
             schema_version: 1,
-            configuration_revision: config.revision()?,
+            configuration_revision: crate::config::config_revision(config)?,
             vector_digest: parent.source.vector().digest().into(),
             integrated: exact(integrated.operation_id)?,
             review: exact(review.operation_id)?,
@@ -297,7 +297,7 @@ impl ReobservedCarry {
         host: &ControlHost,
         grants: &dyn Fn(&FreshGate) -> Result<Vec<crate::decisions::VerifiedRetryGrant>>,
     ) -> Result<()> {
-        if config.revision()? != self.configuration_revision {
+        if crate::config::config_revision(config)? != self.configuration_revision {
             return Err(Error::new(
                 "stale_config",
                 "recovered current carry configuration changed",
@@ -461,11 +461,11 @@ impl DeliveryCoordinator {
             }
         }
         let gate = input.contract.gate.clone();
-        if config.revision()? != subject.binding()?.configuration_revision
-            || config.revision()? != gate.config_revision()
+        if crate::config::config_revision(config)? != subject.binding()?.configuration_revision
+            || crate::config::config_revision(config)? != gate.config_revision()
             || read.identity().runtime_id != config.runtime.id
             || read.identity().work_key != gate.work_key()?
-            || read.identity().config_revision != config.revision()?
+            || read.identity().config_revision != crate::config::config_revision(config)?
         {
             return Err(Error::new(
                 "stale_config",
@@ -582,7 +582,7 @@ impl DeliveryCoordinator {
                 parent,
                 acceptance,
                 subject: subject.clone(),
-                configuration_revision: config.revision()?,
+                configuration_revision: crate::config::config_revision(config)?,
                 phase_gates,
                 integrations: integration_history.cloned(),
                 current_grants,

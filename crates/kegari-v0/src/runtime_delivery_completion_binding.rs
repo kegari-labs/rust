@@ -1,5 +1,6 @@
 //! Exact configured identity retained by immutable historical completion seals.
-use crate::{config::Config, evidence::WorkIdentity, git::RepositoryId};
+use crate::{evidence::WorkIdentity, git::RepositoryId};
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -32,7 +33,7 @@ impl DependencyBinding {
             .values()
             .find(|w| w.id == workspace_id)
             .ok_or_else(|| invalid("completed release workspace is no longer configured"))?;
-        let provider = |name: &str, kind: crate::config::ProviderKind| -> Result<ProviderBinding> {
+        let provider = |name: &str, kind: kegari_config::ProviderKind| -> Result<ProviderBinding> {
             let connection = config
                 .connections
                 .get(name)
@@ -66,11 +67,11 @@ impl DependencyBinding {
         Ok(Self {
             linear: provider(
                 &workspace.linear_connection,
-                crate::config::ProviderKind::Linear,
+                kegari_config::ProviderKind::Linear,
             )?,
             github: provider(
                 &workspace.github_connection,
-                crate::config::ProviderKind::Github,
+                kegari_config::ProviderKind::Github,
             )?,
             linear_workspace: workspace.linear_workspace_id,
             repositories,

@@ -1160,12 +1160,7 @@ mod tests {
             command: CommandName::ReleaseRecover,
             args: json!({"parent":"TEST-100","operation":plan.operation_id,"action":"abandon","reason":"Preserve unknown remote action; retire only known unstarted work"}),
             expected_config_revision: Some(
-                runtime
-                    .configuration
-                    .snapshot()
-                    .unwrap()
-                    .revision()
-                    .unwrap(),
+                crate::config::config_revision(&runtime.configuration.snapshot().unwrap()).unwrap(),
             ),
             expected_control_generation: Some(
                 runtime.control.snapshot().unwrap().intent.generation,
@@ -1265,7 +1260,9 @@ mod tests {
             runtime_id: runtime.configuration.snapshot()?.runtime.id,
             command: command_name,
             args,
-            expected_config_revision: Some(runtime.configuration.snapshot()?.revision()?),
+            expected_config_revision: Some(crate::config::config_revision(
+                &runtime.configuration.snapshot()?,
+            )?),
             expected_control_generation: Some(runtime.control.snapshot()?.intent.generation),
         };
         let mut mutation =

@@ -139,7 +139,7 @@ pub struct ReleaseRepositoryEvidence<'a> {
 pub struct ReleasePlanInput<'a> {
     pub runtime_id: Uuid,
     pub operation_id: Uuid,
-    pub workspace: &'a crate::config::Workspace,
+    pub workspace: &'a kegari_config::Workspace,
     pub parent: &'a evidence::VerifiedParent,
     pub acceptance: &'a evidence::VerifiedAcceptance,
     pub carried: Option<&'a evidence::VerifiedCarry>,
@@ -274,15 +274,15 @@ pub fn build_release_plan(input: ReleasePlanInput<'_>) -> Result<ReleasePlan> {
             }
         }
         match contract.configuration.deployment_policy()? {
-            crate::config::Deployment::None(value) if value == "none" => {
+            kegari_config::Deployment::None(value) if value == "none" => {
                 if changed {
                     deployment_free.insert(contract.repository.clone());
                 }
             }
-            crate::config::Deployment::None(_) => {
+            kegari_config::Deployment::None(_) => {
                 return Err(production_error("unknown production behavior"));
             }
-            crate::config::Deployment::Steps {
+            kegari_config::Deployment::Steps {
                 steps: configured_steps,
             } => {
                 let step_id = |prefix: &str, id: &str| {
@@ -731,7 +731,7 @@ fn release_effect_leaf(operation: Uuid, step: &str, attempt: u32) -> String {
 fn configured_deployment<'a>(
     contract: &'a RepositoryContract,
     kind: &StepKind,
-) -> Result<&'a crate::config::DeploymentStep> {
+) -> Result<&'a kegari_config::DeploymentStep> {
     let target = match kind {
         StepKind::Deploy { target, .. }
         | StepKind::DeployExisting { target, .. }
@@ -743,7 +743,7 @@ fn configured_deployment<'a>(
     let ResourceKey::Target { provider, id } = target else {
         return Err(production_error("deployment target is not canonical"));
     };
-    let crate::config::Deployment::Steps { steps } = contract.configuration.deployment_policy()?
+    let kegari_config::Deployment::Steps { steps } = contract.configuration.deployment_policy()?
     else {
         return Err(production_error("repository has no deployment contract"));
     };

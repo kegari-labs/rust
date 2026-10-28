@@ -373,11 +373,11 @@ mod tests {
         // execution claim. It invokes the same actual final grading helper.
         let mut f = Fixture::new();
         f.suite.profiles[0].binding = Some(ProfileBinding {
-            profile: crate::config::Profile {
+            profile: kegari_config::Profile {
                 tool: "codex".into(),
                 model: "deterministic-component-only".into(),
                 reasoning: "high".into(),
-                speed: crate::config::Speed::Standard,
+                speed: kegari_config::Speed::Standard,
             },
             account_id: "component-only-no-native-account".into(),
             operator_reference: "component-only-no-authority".into(),

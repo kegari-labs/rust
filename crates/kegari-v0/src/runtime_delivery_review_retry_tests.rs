@@ -561,7 +561,7 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
 async fn another_failed_review(
     f: &ReviewFixture<'_>,
     prior: &Arc<ReviewRetryWork>,
-    config: &crate::config::Config,
+    config: &kegari_config::Config,
 ) -> Option<ReviewRetryWork> {
     let host = &f.built.runtime.control;
     let inventory = host.operations().unwrap();

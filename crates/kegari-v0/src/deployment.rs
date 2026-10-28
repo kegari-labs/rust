@@ -1,7 +1,6 @@
 //! Production baselines from complete provider reads and authenticated target
 //! evidence. Deployment requests/status text never establish artifact identity.
 use crate::{
-    config::{Deployment, DeploymentStep},
     control::{ControlHost, Permit, Receipt, ReceiptPhase},
     delivery::{DeliveryAdmission, DeliveryPhase, RepositoryContract},
     digest::{bytes_digest, canonical_digest},
@@ -15,6 +14,7 @@ use crate::{
     storage::PrivateDir,
 };
 use chrono::{DateTime, Utc};
+use kegari_config::{Deployment, DeploymentStep};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

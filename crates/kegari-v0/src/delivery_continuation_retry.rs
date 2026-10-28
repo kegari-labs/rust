@@ -154,7 +154,7 @@ impl UnfinishedChildWork {
     }
     pub(crate) fn retry_blocker(
         &self,
-        limits: &crate::config::RuntimeConfig,
+        limits: &kegari_config::RuntimeConfig,
         receipts: &[Receipt],
     ) -> Result<bool> {
         self.verify_retry_basis(receipts)?;

@@ -15,7 +15,7 @@ const MAX_DEPTH: usize = 128;
 /// exact original admission. It grants fixed read-only metadata access, not
 /// clean-source, process-exit or session-resumption authority.
 pub(crate) fn retained_execution_host_read_root(
-    configuration: &crate::config::Config,
+    configuration: &kegari_config::Config,
     binding: &ExecutionBinding,
     boundary: &ValidatedIsolation,
     ownership: &OwnedDirectory,
@@ -33,7 +33,7 @@ pub(crate) fn retained_execution_host_read_root(
     host_read_root(
         binding.repository.clone(),
         &boundary.plan().repository,
-        configuration.revision()?,
+        crate::config::config_revision(configuration)?,
         lineage_digest,
         Some(ownership.marker().into()),
     )

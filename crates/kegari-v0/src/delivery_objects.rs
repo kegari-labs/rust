@@ -9,7 +9,7 @@ use crate::remote_objects::{
 impl DeliveryCoordinator {
     pub(crate) fn retained_object_read_roots(
         &self,
-        configuration: &crate::config::Config,
+        configuration: &kegari_config::Config,
         workspace: Uuid,
     ) -> Result<Vec<crate::git::VerifiedHostReadRoot>> {
         let contracts: Vec<_> = self.contracts.values().cloned().collect();

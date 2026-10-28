@@ -88,7 +88,7 @@ impl LocalProcessPermit {
         let process = owner.control_process.ok_or_else(|| {
             Error::new("ownership_conflict", "registered control process is absent")
         })?;
-        let revision = services.configuration.snapshot()?.revision()?;
+        let revision = crate::config::config_revision(&services.configuration.snapshot()?)?;
         let mut roots = BTreeSet::new();
         for root in &request.roots {
             if root.config_revision() != revision || !roots.insert(root.root().to_path_buf()) {
@@ -187,7 +187,7 @@ impl LocalProcessPermit {
                 1,
                 &json!({"plan":proof.plan().digest(),"root":read.digest()?,"binary":binary}),
             )?,
-            config_revision: configuration.revision()?,
+            config_revision: crate::config::config_revision(&configuration)?,
             cleanup_receipt: Some(proof.receipt().payload_digest.clone()),
         };
         Ok(Arc::new(Self {
@@ -512,7 +512,8 @@ fn verify_identity(services: &HostProcessServices, identity: &HostProcessIdentit
     if owner.runtime_id != identity.runtime_id
         || owner.owner_generation != identity.owner_generation
         || owner.control_process.as_ref() != Some(&identity.process)
-        || services.configuration.snapshot()?.revision()? != identity.config_revision
+        || crate::config::config_revision(&services.configuration.snapshot()?)?
+            != identity.config_revision
     {
         return Err(Error::new(
             "ownership_conflict",

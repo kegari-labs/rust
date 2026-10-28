@@ -476,7 +476,7 @@ impl RuntimeDelivery {
             || &intent.work != work
             || intent.acceptance_digest != acceptance.digest()
             || intent.accepted_at != acceptance.acceptance().accepted_at
-            || intent.config_revision != config.revision()?
+            || intent.config_revision != crate::config::config_revision(&config)?
             || original.kind != "admission"
             || original.runtime_id != plan.runtime_id
             || original.payload_digest != intent.predecessor_admission_digest

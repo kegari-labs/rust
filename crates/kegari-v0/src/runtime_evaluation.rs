@@ -37,8 +37,8 @@ struct VerifiedEvaluationRequest {
     request: CommandRequest,
     lease: Lease,
     workspace: Uuid,
-    configuration: Arc<crate::config::Config>,
-    binding: crate::config::EvaluationBinding,
+    configuration: Arc<kegari_config::Config>,
+    binding: kegari_config::EvaluationBinding,
     suite: crate::evaluation::SuiteManifest,
     variant: crate::evaluation::Variant,
     trial: TrialKey,
@@ -81,7 +81,8 @@ impl VerifiedEvaluationRequest {
             .configuration
             .authority_fences()?
             .check_actor(&self.actor, "evaluate")?;
-        if config.revision()? != self.configuration.revision()?
+        if crate::config::config_revision(&config)?
+            != crate::config::config_revision(&self.configuration)?
             || self.request.expected_control_generation != Some(snapshot.intent.generation)
             || !snapshot.admission_open
             || !snapshot.reconciled
@@ -342,7 +343,7 @@ impl RuntimeCoordinator {
             || trial.profile != binding.profile
             || !suite.plan()?.contains(&trial)
             || request.expected_config_revision.as_deref()
-                != Some(configuration.revision()?.as_str())
+                != Some(crate::config::config_revision(&configuration)?.as_str())
         {
             return Err(Error::new(
                 "evaluation_fidelity",

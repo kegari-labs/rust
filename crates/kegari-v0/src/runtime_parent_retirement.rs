@@ -12,7 +12,7 @@ const LIMIT: u64 = 8 * 1024 * 1024;
 
 pub(crate) struct ParentRunRegistrationInput<'a> {
     pub(crate) assignment: &'a crate::delivery::DeliveryWorkerAssignment,
-    pub(crate) configuration: &'a crate::config::Config,
+    pub(crate) configuration: &'a kegari_config::Config,
     pub(crate) preparation: &'a Receipt,
     pub(crate) records: &'a PrivateDir,
 }

@@ -1,11 +1,11 @@
 //! Durable worker-attempt planning. This selects a possible future admission;
 //! it never grants a permit, consumes a slot or turns a worker exit into delivery.
 use crate::{
-    config::RuntimeConfig,
     control::{Receipt, ReceiptPhase, RunReference},
     scheduler::{PhaseKey, Trigger, retry_at},
 };
 use chrono::{DateTime, Utc};
+use kegari_config::RuntimeConfig;
 use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -937,7 +937,7 @@ fn reconciled_exit(receipt: &Receipt) -> bool {
 /// Final capacity check uses actual active admission records under the host lock.
 /// Missing historical state names count against every applicable state limit.
 pub fn ensure_capacity(
-    config: &crate::config::Config,
+    config: &kegari_config::Config,
     active: &[RunReference],
     next: &RunReference,
     quota: Option<&crate::scheduler::Quota>,
@@ -966,7 +966,7 @@ pub(crate) struct CapacityRequest<'a> {
     pub normalized_state: &'a str,
 }
 pub(crate) fn check_capacity(
-    config: &crate::config::Config,
+    config: &kegari_config::Config,
     active: &[RunReference],
     next: CapacityRequest<'_>,
     quota: Option<&crate::scheduler::Quota>,

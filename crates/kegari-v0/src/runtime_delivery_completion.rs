@@ -1439,7 +1439,7 @@ impl RuntimeDelivery {
             schema_version: 2,
             runtime: record.runtime,
             workspace: record.workspace,
-            config_revision: workspace.configuration.revision()?,
+            config_revision: crate::config::config_revision(&workspace.configuration)?,
             terminal: record.attempt.plan.operation_id,
             attempts: lineage
                 .links
@@ -1690,7 +1690,8 @@ impl RuntimeDelivery {
             let record = &proof.record;
             if fresh.is_some()
                 && (Utc::now() - record.observed_at > Duration::seconds(30)
-                    || self.runtime.configuration.snapshot()?.revision()? != record.config_revision)
+                    || crate::config::config_revision(&self.runtime.configuration.snapshot()?)?
+                        != record.config_revision)
             {
                 return Err(invalid(
                     "initial completion observation/configuration changed before persistence",

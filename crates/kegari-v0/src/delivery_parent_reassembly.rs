@@ -4,7 +4,6 @@
 use super::accepted_origin::{AcceptedOriginIdentity, VerifiedAcceptedOriginRefs};
 use super::*;
 use crate::{
-    config::Config,
     control::{ParentReassemblyReference, ReviewReceiptReference, RunReference},
     decisions::VerifiedRetryGrant,
     evidence::VerifiedParent,
@@ -13,6 +12,7 @@ use crate::{
     worker::{WorkerAuthority, WorkerContract},
     worker_run::{RunCompletion, RunOutcome},
 };
+use kegari_config::Config;
 
 #[path = "delivery_parent_reassembly_grants.rs"]
 mod grant_lineage;
@@ -115,7 +115,7 @@ impl AcceptedParentOrigin {
         self.validate(config)
     }
     pub(crate) fn validate(&self, config: &Config) -> Result<()> {
-        if config.revision()? != self.configuration_revision {
+        if crate::config::config_revision(config)? != self.configuration_revision {
             return Err(Error::new(
                 "stale_config",
                 "parent reassembly configuration changed",
@@ -679,7 +679,7 @@ impl DeliveryCoordinator {
     ) -> Result<AcceptedParentOrigin> {
         let gate = &contract.gate;
         (self.current_gate)(gate)?;
-        if config.revision()? != gate.config_revision()
+        if crate::config::config_revision(config)? != gate.config_revision()
             || gate.work() != &published.verified().manifest().work
         {
             return Err(blocked(
@@ -774,7 +774,7 @@ impl DeliveryCoordinator {
             .await?;
         let digest = canonical_digest(
             1,
-            &json!({"origin":references.reference(),"original_parent":published.publication_digest()?,"acceptance":acceptance.digest(),"configuration":config.revision()?}),
+            &json!({"origin":references.reference(),"original_parent":published.publication_digest()?,"acceptance":acceptance.digest(),"configuration":crate::config::config_revision(config)?}),
         )?;
         let result = AcceptedParentOrigin {
             published: published.clone(),
@@ -786,7 +786,7 @@ impl DeliveryCoordinator {
             key: self.key.clone(),
             linear: linear.clone(),
             workspace: gate.workspace_id(),
-            configuration_revision: config.revision()?,
+            configuration_revision: crate::config::config_revision(config)?,
             digest,
         };
         result.validate(config)?;

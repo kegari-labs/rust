@@ -174,7 +174,7 @@ impl Fixture {
                 std::time::Duration::from_secs(2),
             )
             .unwrap(),
-            crate::config::GithubSelection {
+            kegari_config::GithubSelection {
                 repositories: vec!["42".into()],
                 organizations: vec![],
                 pr_authors: vec!["7".into()],

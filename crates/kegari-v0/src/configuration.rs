@@ -2,7 +2,6 @@
 //! credential import and durable configuration replacement share the mutation gate.
 use crate::{
     codex::{CodexConnectionMetadata, CodexProfile, PermissionConfiguration},
-    config::{Config, Connection, ControlRole, Deployment, ProviderKind, Speed, Workspace},
     connections::{VerifiedCredential, verify_credential},
     control::{Actor, ControlHost, Intent, MutationRequest, Principal, Receipt},
     digest::{bytes_digest, canonical_digest},
@@ -13,6 +12,7 @@ use crate::{
     storage::PrivateDir,
     transport::TransportAuthentication,
 };
+use kegari_config::{Config, Connection, ControlRole, Deployment, ProviderKind, Speed, Workspace};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use serde::Serialize;
@@ -174,7 +174,7 @@ pub struct ConfigManager {
 impl ConfigManager {
     pub async fn check(&self, workspace: Option<Uuid>) -> Result<Value> {
         let mut config = self.snapshot()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(&config)?;
         if let Some(id) = workspace {
             if !config
                 .workspaces
@@ -246,7 +246,7 @@ impl ConfigManager {
         config.validate()?;
         inputs.configure_evaluations(&config)?;
         let owner = registration.snapshot()?;
-        let revision = config.revision()?;
+        let revision = crate::config::config_revision(&config)?;
         if owner.runtime_id != config.runtime.id
             || owner.host_id != config.runtime.host_id
             || owner
@@ -514,9 +514,10 @@ impl ConfigManager {
         mutation
             .expected
             .insert("configuration_before".into(), prepared.before.clone());
-        mutation
-            .expected
-            .insert("configuration_after".into(), prepared.config.revision()?);
+        mutation.expected.insert(
+            "configuration_after".into(),
+            crate::config::config_revision(&prepared.config)?,
+        );
         mutation.expected.insert(
             "permission_resolution".into(),
             canonical_digest(1, &prepared.permission_resolution)?,
@@ -656,7 +657,7 @@ impl ConfigManager {
             .ok_or_else(|| Error::invalid("registered state root has no host home"))?;
         candidate.resolve_paths(home, |name| self.inputs.environment(name))?;
         self.inputs.configure_evaluations(&candidate)?;
-        candidate.load_workflows()?;
+        crate::config::load_workflows(&candidate)?;
         let mut imports = Vec::new();
         let mut observations = Vec::new();
         for name in verify {
@@ -772,7 +773,7 @@ impl ConfigManager {
             .collect();
         Ok(Prepared {
             permission_resolution,
-            before: current.revision()?,
+            before: crate::config::config_revision(current)?,
             config: candidate,
             imports,
             observations,
@@ -793,7 +794,7 @@ impl ConfigManager {
         self.control.mutate_observed(mutation,None,Some("configure"),|control|{
             let current=self.snapshot()?;require_current_operator(&current,&actor)?;self.fences_except(Some(request.request_id))?.check_actor(&actor,"configure")?;
             if parent_command.is_some_and(|id|!control.background_commands.contains(&id)){return Err(Error::new("request_conflict","configuration command is no longer owned by the host background queue"));}
-            if current.revision()?!=prepared.before || request.expected_config_revision.as_ref().is_some_and(|value|value!=&prepared.before){return Err(Error::new("stale_config","configuration changed after preparation or differs from the client's revision"));}
+            if crate::config::config_revision(&current)?!=prepared.before || request.expected_config_revision.as_ref().is_some_and(|value|value!=&prepared.before){return Err(Error::new("stale_config","configuration changed after preparation or differs from the client's revision"));}
             if request.expected_control_generation.is_some_and(|generation|generation!=control.intent.generation){return Err(Error::new("stale_generation","runtime intent changed during configuration preparation"));}
             if prepared.identity_change && (control.intent.desired==Intent::Running||control.draining||!control.active_operations.is_empty()||!control.unresolved_operations.is_empty()){return Err(Error::new("configuration_busy","identity or permission replacement requires paused/stopped, drained work and reconciled effects"));}
             Ok(())
@@ -810,7 +811,7 @@ impl ConfigManager {
             }
             if self.registration.snapshot()?.setup_complete {self.registration.commit_configuration(&prepared.before,&prepared.config)?;}else{self.registration.complete_setup(&prepared.config)?;}
             self.authentication.replace_config(prepared.config.control.clone())?;
-            let revision=prepared.config.revision()?;*stored=prepared.config;
+            let revision=crate::config::config_revision(&prepared.config)?;*stored=prepared.config;
             self.resolve_fences(prepared.permission_resolution)?;
             Ok((BTreeMap::from([("config_revision".into(),revision.clone())]),json!({"config_revision":revision,"connections":prepared.observations,"mutation_effect":"configuration_committed"})))
         })
@@ -864,7 +865,7 @@ async fn verification_report(
     let mut checks = Vec::new();
     let mut failed = false;
     let mut delivery_blocked = false;
-    match config.load_workflows() {
+    match crate::config::load_workflows(config) {
         Ok(workflows) => {
             checks.push(json!({"check":"workflows","status":"verified","count":workflows.len()}))
         }
@@ -955,7 +956,7 @@ async fn verification_report(
         }
     }
     Ok(
-        json!({"config_revision":config.revision()?,"status":if failed || delivery_blocked {"blocked"}else{"verified"},"configuration_admission":if failed {"blocked"}else{"verified"},"checks":checks,"operational_qualification":"unverified","qualification_reason":"Identity/profile/workflow metadata checks do not execute hooks, tests, agent turns or qualify live isolation, CI, deployment or human evaluation"}),
+        json!({"config_revision":crate::config::config_revision(config)?,"status":if failed || delivery_blocked {"blocked"}else{"verified"},"configuration_admission":if failed {"blocked"}else{"verified"},"checks":checks,"operational_qualification":"unverified","qualification_reason":"Identity/profile/workflow metadata checks do not execute hooks, tests, agent turns or qualify live isolation, CI, deployment or human evaluation"}),
     )
 }
 
@@ -1018,7 +1019,7 @@ pub async fn repository_prerequisites(
 }
 async fn repository_delivery_prerequisites(
     client: &GithubClient,
-    configured: &crate::config::Repository,
+    configured: &kegari_config::Repository,
     repository: &crate::providers::Repository,
 ) -> Result<Value> {
     let unresolved: Vec<_> = [
@@ -1456,7 +1457,7 @@ impl FenceResolution {
         };
         Ok(Self {
             request_id: request.request_id,
-            configuration_after: config.revision()?,
+            configuration_after: crate::config::config_revision(config)?,
             proposals: BTreeSet::new(),
             all_workspaces: request.command == CommandName::Setup,
             workspaces,
@@ -1786,7 +1787,10 @@ impl ConfigManager {
             restrictions,
         };
         let request_id = fence_operation(request.request_id);
-        let mut expected = BTreeMap::from([("configuration_before".into(), current.revision()?)]);
+        let mut expected = BTreeMap::from([(
+            "configuration_before".into(),
+            crate::config::config_revision(current)?,
+        )]);
         expected.insert(
             "permission_restriction".into(),
             canonical_digest(1, &entry)?,
@@ -1810,11 +1814,12 @@ impl ConfigManager {
                 require_current_operator(&self.snapshot()?, actor)?;
                 self.fences_except(Some(request.request_id))?
                     .check_actor(actor, "configure")?;
-                if self.snapshot()?.revision()? != current.revision()?
+                if crate::config::config_revision(&self.snapshot()?)?
+                    != crate::config::config_revision(current)?
                     || request
                         .expected_config_revision
                         .as_ref()
-                        .is_some_and(|r| current.revision().as_ref() != Ok(r))
+                        .is_some_and(|r| crate::config::config_revision(current).as_ref() != Ok(r))
                 {
                     return Err(Error::new(
                         "stale_config",

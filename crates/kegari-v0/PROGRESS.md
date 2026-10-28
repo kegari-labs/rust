@@ -1,5 +1,71 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. `kegari-config` extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. Starting from
+`5d74996e8bcb729e807600823167335ffdb25ba5` on `main`, configuration models,
+TOML parsing, read-only loading, validation and path resolution moved into
+`kegari-config`. Both CLI and backend import them directly, without compatibility
+reexports. Its sole application dependency is `kegari-types`; it has no backend
+dependency, including for tests. The temporary CLI → backend dependency remains.
+All four packages inherit `0.2.0-alpha.10`; configuration schema `1`, instruction
+assets `7`, other persisted/API schemas and executable name are unchanged.
+
+The backend retains `config::config_revision(&Config)`, which calls the existing
+`canonical_digest(1, config)` without validation or normalization. It also retains
+`config::load_workflow(&Workspace)`, `config::load_workflows(&Config)`, `ConfigReload`
+and `inspect_reload`. Workflow defaults, selection and required-check validation
+retain their original order. Transactions, provider/credential verification,
+persistence and permission fencing remain with their existing owners.
+See [the configuration migration notes](../kegari-config/README.md).
+
+All 43 original configuration-harness tests remain: 14 moved to the new crate and
+29 retained in the backend. Two bounded parity tests compare configuration-local
+digest/OID syntax checks with backend validators, including exact errors.
+The legacy serialization/revision oracle remains in the backend. The bounded
+independent review found no material issues in ownership, dependency direction,
+semantics, call ordering, public validation helpers, assertions or build identity.
+External dependency lock entries are unchanged.
+
+Verification used pinned Rust/Cargo 1.99.1 through the verified `stable` alias and
+`CARGO_HOME=/private/tmp/kegari-v0-cargo-cache`. Lockfile resolution was offline;
+builds/tests/lint used `--offline --locked` afterward. Normal concurrency and all
+three native ignores were preserved. The final source needed one complete suite
+run; no failure reruns or further broad passes were needed.
+
+| Check | Result |
+| --- | --- |
+| Configuration crate alone, with reduced UUID features | 14 passed. |
+| Focused backend configuration/discovery/workflow and CLI coverage | 63 + 44 passed. |
+| Formatting and strict workspace all-target Clippy | Passed. |
+| Contract inventory and its tests | 519 blocks, 140 named requirements; 11 tests passed. |
+| Complete workspace release regression | 1,267 passed, 0 failed, 3 native ignored; 49 result groups. |
+| Optimized application build from `kegari-cli` | Passed; aarch64-apple-darwin. |
+| Minimal-environment help/version/setup-help/build/handover inspection | Passed; consistent identity, unchanged schemas/assets, no runtime state created. |
+
+Exact commands, logs, source snapshot and independent review are indexed in
+`/private/tmp/kegari-config-extraction-checks.json`. Initial compiler diagnostics
+for relocated method calls and unused test imports are retained there; those were
+resolved before final verification. All 758 source/test/build inputs match
+`/private/tmp/kegari-config-extraction-source.json`, digest
+`sha256:e5c501e2c028b93a36c5e708fb59dd749b52adb9cb2edcea1eb4865e27492f38`.
+
+Independent recomputation matches the 355-input application build identity,
+including the new configuration manifest and both source files:
+`sha256:da4a8b144cefe550b631382a47ebe91dba438ef79931ba855ddbe236f76417e1`.
+The inspected development executable is `target/release/kegari-v0`, SHA-256
+`d12f50f9110b8762ee7e3be6656d1a8db3cbfb0b9da0b702a1219b96f0bb799d`.
+Inspection evidence is `/private/tmp/kegari-config-extraction-inspection.json`.
+
+The alpha.10 archive digest and all 381 files listed in its checksum manifest
+remain unchanged. No new prerelease was packaged. This refactor closes no minor
+milestone and does not change operational qualification: no native/live
+qualification, installation, activation, commit or remote operation occurred.
+The existing execution restrictions remain. Stop at this reviewed, uncommitted
+checkpoint; further work requires a separate prompt.
+
+### Types extraction — historical checkpoint (committed as `5d74996`)
+
 **Goal mode cancelled. `kegari-types` extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. Starting from

@@ -7,7 +7,7 @@ use crate::runtime_delivery::VerifiedReleaseCompletion;
 pub(crate) struct CompletedCarryOrigin {
     completion: VerifiedReleaseCompletion,
     origin: VerifiedReleaseOrigin,
-    configuration: crate::config::Config,
+    configuration: kegari_config::Config,
     parent_authority: FreshGate,
     selected: BTreeSet<RepositoryId>,
 }
@@ -17,7 +17,7 @@ impl CompletedCarryOrigin {
         self.completion
             .validate_for_configuration(&self.configuration)?;
         if !self.selected.contains(repository)
-            || self.configuration.revision()? != gate.config_revision()
+            || crate::config::config_revision(&self.configuration)? != gate.config_revision()
             || self.completion.work().parent == gate.work().parent
             || self.completion.work().linear_endpoint != gate.work().linear_endpoint
             || self.completion.work().linear_workspace != gate.work().linear_workspace
@@ -43,7 +43,7 @@ impl DeliveryCoordinator {
         &self,
         gate: &FreshGate,
         completion: VerifiedReleaseCompletion,
-        configuration: &crate::config::Config,
+        configuration: &kegari_config::Config,
         selected: BTreeSet<RepositoryId>,
     ) -> Result<CompletedCarryOrigin> {
         (self.current_gate)(gate)?;
@@ -465,7 +465,7 @@ impl DeliveryCoordinator {
         &self,
         admission: &DeliveryAdmission,
         original: &AcceptedParentOrigin,
-        configuration: &crate::config::Config,
+        configuration: &kegari_config::Config,
     ) -> Result<()> {
         self.current(admission, &[DeliveryPhase::CandidateAssembly])?;
         original.reobserve_native(configuration).await?;

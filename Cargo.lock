@@ -857,6 +857,7 @@ version = "0.2.0-alpha.10"
 dependencies = [
  "chrono",
  "clap",
+ "kegari-config",
  "kegari-types",
  "kegari-v0",
  "libc",
@@ -868,6 +869,18 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "toml",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "kegari-config"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "kegari-types",
+ "serde",
+ "serde_json",
  "toml",
  "url",
  "uuid",
@@ -897,6 +910,7 @@ dependencies = [
  "hmac",
  "hyper",
  "hyper-util",
+ "kegari-config",
  "kegari-types",
  "libc",
  "reqwest",

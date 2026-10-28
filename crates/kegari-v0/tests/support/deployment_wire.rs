@@ -2,10 +2,10 @@
 use super::fixture_api as kegari_v0;
 pub(crate) use base64::Engine as _;
 pub(crate) use chrono::{Duration, Utc};
+pub(crate) use kegari_config::{GithubSelection, Profile, ReleaseMode, Speed};
 pub(crate) use kegari_types::error::{Error, Result};
 pub(crate) use kegari_v0::{
     authority::{Corrections, IssueKey},
-    config::{GithubSelection, Profile, ReleaseMode, Speed},
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest, Permit},
     delivery::{DeliveryAdmission, DeliveryPhase, DeliveryScope, RepositoryContract},
     deployment::*,
@@ -550,7 +550,7 @@ impl Fixture {
         mutate: impl FnOnce(&mut Value),
     ) {
         let step = match &c.configuration.deployment {
-            Some(kegari_v0::config::Deployment::Steps { steps }) => &steps[0],
+            Some(kegari_config::Deployment::Steps { steps }) => &steps[0],
             _ => panic!(),
         };
         let (run_id, deployment_id) = {

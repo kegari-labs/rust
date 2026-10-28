@@ -207,12 +207,7 @@ async fn publish_inner(
         command: kegari_types::api::CommandName::Retry,
         args: json!({"work":"TEST-101","reason":"The exact finding is understood; grant a bounded repair budget after the previous limit"}),
         expected_config_revision: Some(
-            runtime
-                .configuration
-                .snapshot()
-                .unwrap()
-                .revision()
-                .unwrap(),
+            crate::config::config_revision(&runtime.configuration.snapshot().unwrap()).unwrap(),
         ),
         expected_control_generation: Some(runtime.control.snapshot().unwrap().intent.generation),
     };

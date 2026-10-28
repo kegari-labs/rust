@@ -3,12 +3,9 @@ use kegari_cli::{
     client::{Endpoint, Target},
     local_cli::*,
 };
+use kegari_config::{Config, ProviderKind};
 use kegari_types::error::Result;
-use kegari_v0::{
-    config::{Config, ProviderKind},
-    platform::*,
-    storage::PrivateDir,
-};
+use kegari_v0::{platform::*, storage::PrivateDir};
 use serde_json::json;
 use std::{
     io::Cursor,
@@ -362,12 +359,12 @@ fn initial_setup_collects_fields_and_reviews_exact_empty_scope_before_submission
     assert!(
         operator
             .roles
-            .contains(&kegari_v0::config::ControlRole::Configure)
+            .contains(&kegari_config::ControlRole::Configure)
     );
     assert!(
         !operator
             .roles
-            .contains(&kegari_v0::config::ControlRole::Evaluate)
+            .contains(&kegari_config::ControlRole::Evaluate)
     );
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains(&document));

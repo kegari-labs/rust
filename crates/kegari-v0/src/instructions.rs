@@ -1,8 +1,8 @@
 //! Immutable runtime instructions, explicit repository context and provenance.
 //! Assembly does not attest provider discovery or grant sandbox permissions.
-use crate::config::{Profile, validate_write_path};
 use crate::digest::{bytes_digest, canonical_digest};
 use crate::workflow::{Workflow, canonical_roots, contained_path};
+use kegari_config::{Profile, validate_write_path};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -993,7 +993,7 @@ mod validation_review_assembly_tests {
             tool: "codex".into(),
             model: "fixture-model".into(),
             reasoning: "high".into(),
-            speed: crate::config::Speed::Standard,
+            speed: kegari_config::Speed::Standard,
         };
         let operation = Uuid::new_v4();
         let context = json!({"issue":{"description":"Assess every actual attempt"},"parent":{},"children":[],

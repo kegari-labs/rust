@@ -4,10 +4,10 @@ use crate::{
     cli::{GuidanceRequest, LocalActions, LocalCommand, LocalFuture, OutputEnvelope},
     client::{ControlClient, Endpoint, Target, TargetStore},
 };
+use kegari_config::{Config, Connection, ControlRole, Workspace};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    config::{Config, Connection, ControlRole, Workspace},
     platform::{self, AccountHome, HostIdentity, OwnerRecord, ServiceStartState},
     storage::PrivateDir,
 };

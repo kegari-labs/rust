@@ -361,7 +361,7 @@ impl VerifiedCompletedPairedResume {
         plan.authority().compare_admitted_authority(current)?;
         plan.verify_joined(&|id| (readers.joined)(id))?;
         require_joined(completion, &|id| (readers.joined)(id))?;
-        if config.revision()? != current.config_revision()
+        if crate::config::config_revision(config)? != current.config_revision()
             || !matches!(completion.outcome, RunOutcome::Completed)
         {
             return Err(recovery_blocked(

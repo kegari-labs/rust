@@ -9,7 +9,7 @@ pub(super) fn configure_auxiliary(config: &mut Config) {
     let encoded = serde_json::to_string(original)
         .unwrap()
         .replace("fixture/repo/", "fixture/aux/");
-    let mut auxiliary: crate::config::Repository = serde_json::from_str(&encoded).unwrap();
+    let mut auxiliary: kegari_config::Repository = serde_json::from_str(&encoded).unwrap();
     auxiliary.source = source.to_str().unwrap().into();
     workspace.repositories.insert("84".into(), auxiliary);
     workspace.github.repositories.push("84".into());

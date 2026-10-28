@@ -1,11 +1,12 @@
 //! Configuration admission through actual typed/provider verifiers and private
 //! transactions. Provider wire, Codex metadata and process identity are injected;
 //! no native probe, model, Keychain write, service or network action is performed.
+use kegari_config::{Config, Connection};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
+use kegari_v0::config::{config_revision, load_workflows};
 use kegari_v0::{
     codex::{CodexConnectionMetadata, PROTOCOL_PROFILE, SUPPORTED_CODEX_VERSION},
-    config::{Config, Connection},
     configuration::{ConfigManager, ConfigurationInputs, prepare_initial},
     control::{Actor, Principal, ReceiptPhase},
     digest::canonical_digest,
@@ -243,7 +244,7 @@ fn assert_discovery_report(report: &Value) {
 #[tokio::test]
 async fn initial_preflight_admits_discovery_but_reports_unresolved_delivery_and_no_qualification() {
     let f = Fixture::new(Observation::Readable);
-    let original = f.config.revision().unwrap();
+    let original = config_revision(&f.config).unwrap();
     let prepared = prepare_initial(
         f.config.clone(),
         &f.host,
@@ -253,9 +254,9 @@ async fn initial_preflight_admits_discovery_but_reports_unresolved_delivery_and_
     )
     .await
     .unwrap();
-    assert_eq!(prepared.config.revision().unwrap(), original);
+    assert_eq!(config_revision(&prepared.config).unwrap(), original);
     assert_discovery_report(&prepared.report);
-    let workflows = prepared.config.load_workflows().unwrap();
+    let workflows = load_workflows(&prepared.config).unwrap();
     assert!(workflows[&id(2)].path.is_none());
     assert!(workflows[&id(2)].embedded.is_some());
     for name in ["ci", "production_ci", "no_change_validation", "deployment"] {
@@ -374,7 +375,7 @@ async fn actual_setup_and_workspace_add_commit_discovery_configuration_then_repo
             request_id: Uuid::new_v4(),
             command,
             args,
-            expected_config_revision: Some(initial.revision().unwrap()),
+            expected_config_revision: Some(config_revision(&initial).unwrap()),
             expected_control_generation: Some(control.snapshot().unwrap().intent.generation),
         };
         let actor = Actor {
@@ -388,8 +389,8 @@ async fn actual_setup_and_workspace_add_commit_discovery_configuration_then_repo
             .unwrap();
         assert_eq!(receipt.phase, ReceiptPhase::Acknowledged);
         assert_eq!(
-            manager.snapshot().unwrap().revision().unwrap(),
-            f.config.revision().unwrap()
+            config_revision(&manager.snapshot().unwrap()).unwrap(),
+            config_revision(&f.config).unwrap()
         );
         let stored = Config::parse(
             std::str::from_utf8(
@@ -401,7 +402,10 @@ async fn actual_setup_and_workspace_add_commit_discovery_configuration_then_repo
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(stored.revision().unwrap(), f.config.revision().unwrap());
+        assert_eq!(
+            config_revision(&stored).unwrap(),
+            config_revision(&f.config).unwrap()
+        );
         assert_discovery_report(&manager.check(None).await.unwrap());
         let calls = f.inputs.wire.paths.lock().unwrap().len();
         let probes = f.inputs.codex_calls.load(Ordering::SeqCst);

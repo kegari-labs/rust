@@ -2,13 +2,13 @@
 //! Every use rechecks the immutable proof and current provider/account visibility.
 use super::*;
 use crate::{
-    config::Config,
     configuration::AuthorityFences,
     reconcile::RuntimeProjection,
     runtime_delivery::{
         ReleaseCompletionAnchor, VerifiedNoReleaseCompletion, VerifiedReleaseCompletion,
     },
 };
+use kegari_config::Config;
 
 const MAX_COMPLETIONS: usize = 4096;
 
@@ -628,7 +628,7 @@ fn require_current_observation(
     let now = Utc::now();
     let fresh = |at| at <= now + Duration::seconds(5) && now - at <= Duration::seconds(30);
     if projection.runtime_id != config.runtime.id
-        || projection.config_revision != config.revision()?
+        || projection.config_revision != crate::config::config_revision(config)?
         || !fresh(projection.observed_at)
     {
         return Err(Error::new(

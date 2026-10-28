@@ -48,11 +48,11 @@ impl Case {
         });
         // Explicit component metadata only; it authorizes no actual account/run.
         suite.profiles[0].binding = Some(ProfileBinding {
-            profile: crate::config::Profile {
+            profile: kegari_config::Profile {
                 tool: "codex".into(),
                 model: "component-only".into(),
                 reasoning: "high".into(),
-                speed: crate::config::Speed::Standard,
+                speed: kegari_config::Speed::Standard,
             },
             account_id: "component-only".into(),
             operator_reference: "no-live-authority".into(),

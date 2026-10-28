@@ -1,9 +1,9 @@
 //! Production HTTPS adapters. Provider input is untrusted; collection reads are
 //! atomic and mutation transmission is reachable only through the control broker.
-use crate::config::{GithubSelection, LinearSelection, Selector};
 use crate::control::{ControlHost, ControlSnapshot, MutationRequest, Permit, Receipt};
 use crate::digest::{bytes_digest, canonical_digest};
 use chrono::{DateTime, Utc};
+use kegari_config::{GithubSelection, LinearSelection, Selector};
 use kegari_types::error::{Error, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -524,10 +524,10 @@ pub struct AccountIdentity {
 pub async fn verify_connection_identity(
     policy: HttpPolicy,
     credential: Credential,
-    kind: crate::config::ProviderKind,
+    kind: kegari_config::ProviderKind,
     transport: Option<Arc<dyn HttpTransport>>,
 ) -> Result<AccountIdentity> {
-    use crate::config::ProviderKind;
+    use kegari_config::ProviderKind;
     if kind == ProviderKind::Codex {
         return Err(Error::new(
             "unsupported_provider",

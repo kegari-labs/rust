@@ -277,7 +277,7 @@ pub enum ChildDeliveryAction<'a> {
     },
     Close {
         result: &'a PublishedChild,
-        configuration: &'a crate::config::Config,
+        configuration: &'a kegari_config::Config,
     },
 }
 pub enum ChildDeliveryProgress {

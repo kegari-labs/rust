@@ -6,15 +6,17 @@ Command arguments, output, local setup, service actions and hidden process
 entrypoints retain their existing behaviour.
 
 The CLI imports shared command/response, error and snapshot data directly from
-[`kegari-types`](../kegari-types/README.md). Its temporary dependency on
-`kegari-v0` remains for configuration, validation, command classification, role
-and exit-code decisions, snapshot operations, storage, credentials, platform
-operations and the runtime. The backend also depends on `kegari-types`, without
-reexporting those types. This is not yet a lightweight standalone client.
+[`kegari-types`](../kegari-types/README.md), and configuration models directly from
+[`kegari-config`](../kegari-config/README.md). Its temporary dependency on
+`kegari-v0` remains for configuration transactions and workflow integration,
+command validation and classification, role and exit-code decisions, snapshot
+operations, storage, credentials, platform operations and the runtime. The
+backend imports the same shared types and configuration models without
+reexporting them. This is not yet a lightweight standalone client.
 
 All packages share workspace version `0.2.0-alpha.10`. CLI version output and
 internal metadata identify the same assembled application; its build identity
-must cover the application sources in all three packages.
+must cover the application sources in all four packages.
 
 From the workspace root:
 
@@ -24,8 +26,8 @@ cargo run --offline --locked -p kegari-cli -- --help
 cargo test --offline --locked -p kegari-cli
 ```
 
-Use `--workspace` for the complete test and lint checks. The evaluation-inspection
-binary remains in the backend package. See the [command guide](../kegari-v0/docs/cli.md),
+Use `--workspace` for complete test and lint checks across all four packages. The
+evaluation-inspection binary remains in the backend package. See the [command guide](../kegari-v0/docs/cli.md),
 [backend documentation](../kegari-v0/README.md) and [progress](../kegari-v0/PROGRESS.md).
 The archived alpha.10 package is unchanged by this source refactor; no new
 prerelease, native qualification or service activation is implied.

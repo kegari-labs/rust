@@ -69,7 +69,7 @@ impl Targets {
             })
             .unwrap();
         assert_eq!(challenge.source(), &target.source);
-        let Some(crate::config::Deployment::Steps { steps }) = &contract.configuration.deployment
+        let Some(kegari_config::Deployment::Steps { steps }) = &contract.configuration.deployment
         else {
             panic!()
         };

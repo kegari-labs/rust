@@ -2,7 +2,6 @@
 //! issuance, proxy, plaintext remote listener or host configuration mutation.
 use crate::{
     api::{ApiState, Authentication, MAX_HEADERS, Peer, REQUEST_DEADLINE, connection_router},
-    config::{ControlConfig, ControlRole, HttpsConfig, Operator, is_tailscale_address},
     control::{Actor, Principal},
     digest::bytes_digest,
     storage::PrivateDir,
@@ -13,6 +12,7 @@ use hyper_util::{
     rt::{TokioIo, TokioTimer},
     service::TowerToHyperService,
 };
+use kegari_config::{ControlConfig, ControlRole, HttpsConfig, Operator, is_tailscale_address};
 use kegari_types::error::{Error, Result};
 use rustls::{
     RootCertStore, ServerConfig,

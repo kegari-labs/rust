@@ -3,7 +3,6 @@
 //! This narrow producer covers baseline changes made by completed terminal
 //! merges of other parents. It does not infer successful release from main,
 //! tracker history, a raw artifact reference, or a partial ancestor's merge.
-use crate::config::Config;
 use crate::delivery::RepositoryContract;
 use crate::deployment::VerifiedProductionBaseline;
 use crate::digest::canonical_digest;
@@ -12,6 +11,7 @@ use crate::git::{ProductionIntegration, RepositoryId, Revision, VerifiedProducti
 use crate::release::{ObservedEffect, ResourceKey, StepKind, StepState};
 use crate::runtime_delivery::VerifiedReleaseCompletion;
 use chrono::{Duration, Utc};
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -261,7 +261,7 @@ impl VerifiedBaselineTransition {
                 "carry must account for every changed baseline, supplied release and current target",
             ));
         }
-        let configuration_revision = configuration.revision()?;
+        let configuration_revision = crate::config::config_revision(configuration)?;
         let current_baselines = new_baselines.into_values().cloned().collect::<Vec<_>>();
         let digest = canonical_digest(
             1,
@@ -288,7 +288,7 @@ impl VerifiedBaselineTransition {
     /// Immutable closure and complete configuration only, never renewed provider
     /// observations. The next admitted phase separately calls verify_current.
     pub(crate) fn revalidate(&self, configuration: &Config) -> Result<()> {
-        if configuration.revision()? != self.configuration_revision {
+        if crate::config::config_revision(configuration)? != self.configuration_revision {
             return Err(blocked("carry baseline configuration changed"));
         }
         for completion in &self.completions {

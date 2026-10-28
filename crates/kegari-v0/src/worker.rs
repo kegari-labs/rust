@@ -773,7 +773,7 @@ impl WorkerContract {
     }
     pub(crate) fn new_configured(
         input: ContractInput,
-        workspace: &crate::config::Workspace,
+        workspace: &kegari_config::Workspace,
     ) -> Result<Self> {
         if workspace.id != input.authority.workspace() {
             return Err(Error::new(
@@ -1376,8 +1376,8 @@ impl ScopedWorker {
             || state.binding.profile.reasoning != m.profile.reasoning
             || state.binding.profile.speed
                 != match m.profile.speed {
-                    crate::config::Speed::Standard => "standard",
-                    crate::config::Speed::Fast => "fast",
+                    kegari_config::Speed::Standard => "standard",
+                    kegari_config::Speed::Fast => "fast",
                 }
         {
             return Err(Error::new(
@@ -3484,8 +3484,8 @@ pub fn recover_session(
             model: manifest.profile.model.clone(),
             reasoning: manifest.profile.reasoning.clone(),
             speed: match manifest.profile.speed {
-                crate::config::Speed::Standard => "standard",
-                crate::config::Speed::Fast => "fast",
+                kegari_config::Speed::Standard => "standard",
+                kegari_config::Speed::Fast => "fast",
             }
             .into(),
         };

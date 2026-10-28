@@ -4,12 +4,12 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
+use kegari_config::Config;
 use kegari_types::api::{CommandName, CommandRequest, Envelope};
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     api::{self, Dispatcher, Peer},
     app::*,
-    config::Config,
     control::*,
     reconcile::RuntimeProjection,
     secrets::Secret,
@@ -85,7 +85,7 @@ impl WorkflowControl for Workflow {
             Ok(RuntimeInspection {
                 projection: RuntimeProjection {
                     runtime_id: config.runtime.id,
-                    config_revision: config.revision()?,
+                    config_revision: kegari_v0::config::config_revision(&config)?,
                     observed_at: chrono::Utc::now(),
                     workspaces: BTreeMap::new(),
                 },
@@ -138,7 +138,7 @@ async fn human_workflow_commands_keep_owned_lineage_and_scoped_targets_after_htt
             .get_mut("501")
             .unwrap()
             .roles
-            .insert(kegari_v0::config::ControlRole::Correct);
+            .insert(kegari_config::ControlRole::Correct);
         f.auth.replace_config(config.control.clone()).unwrap();
     }
     let gate = Arc::new(Notify::new());

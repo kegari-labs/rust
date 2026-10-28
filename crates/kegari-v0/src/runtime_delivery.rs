@@ -1,7 +1,6 @@
 //! Runtime delivery composition. Every reconstructed gate comes from current
 //! providers plus authenticated retained execution records, never tracker state.
 use crate::{
-    config::Config,
     connections::ConnectionRegistry,
     delivery::{
         DeliveryCoordinator, DeliveryServices, GateCheck, ParentHydrationInputs, RepositoryContract,
@@ -16,6 +15,7 @@ use crate::{
     workflow::Workflow,
 };
 use chrono::{Duration, Utc};
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use serde_json::json;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
@@ -115,7 +115,9 @@ impl RuntimeDelivery {
                 .configuration
                 .authority_fences()?
                 .check_workspace(expected.workspace_id())?;
-            if runtime.configuration.snapshot()?.revision()? != expected.config_revision() {
+            if crate::config::config_revision(&runtime.configuration.snapshot()?)?
+                != expected.config_revision()
+            {
                 return Err(Error::new("stale_config", "delivery configuration changed"));
             }
             let projection = runtime.observations.admission_snapshot()?;
@@ -151,7 +153,7 @@ impl RuntimeDelivery {
         workspace: Uuid,
     ) -> Result<WorkspaceDelivery> {
         let configuration = self.runtime.configuration.snapshot()?;
-        if configuration.revision()? != projection.config_revision
+        if crate::config::config_revision(&configuration)? != projection.config_revision
             || configuration.runtime.id != projection.runtime_id
         {
             return Err(Error::new(
@@ -248,8 +250,7 @@ impl RuntimeDelivery {
             contract.digest()?;
             contracts.push(contract);
         }
-        let workflow = configuration
-            .load_workflows()?
+        let workflow = crate::config::load_workflows(&configuration)?
             .remove(&workspace)
             .ok_or_else(|| {
                 Error::new("workflow_unavailable", "delivery workflow is unavailable")
@@ -802,7 +803,7 @@ impl RuntimeDelivery {
             parent: decision.parent().clone(),
             evidence_token: parent.token().into(),
             actor: decision.actor().clone(),
-            config_revision: configuration.revision()?,
+            config_revision: crate::config::config_revision(&configuration)?,
             queued_at: decision.parent_command().updated_at,
         };
         let signed = self

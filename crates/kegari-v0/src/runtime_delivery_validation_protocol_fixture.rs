@@ -166,8 +166,8 @@ pub(super) async fn failed_validation(
                 model: manifest.profile.model.clone(),
                 reasoning: manifest.profile.reasoning.clone(),
                 speed: match manifest.profile.speed {
-                    crate::config::Speed::Standard => "standard",
-                    crate::config::Speed::Fast => "fast",
+                    kegari_config::Speed::Standard => "standard",
+                    kegari_config::Speed::Fast => "fast",
                 }
                 .into(),
             },

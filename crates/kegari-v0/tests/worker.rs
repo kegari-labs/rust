@@ -461,7 +461,7 @@ async fn adapter_observation_binds_interleaved_tool_before_start_response() {
 fn run_preparation(f: &Fixture) -> kegari_v0::worker_run::Preparation {
     let proof = json!({"workflow_ref":"fixture/repo/.github/workflows/caller.yml@refs/heads/trusted","workflow_sha":"0123456789012345678901234567890123456789","job_workflow_ref":"fixture/trusted/.github/workflows/proof.yml@0123456789012345678901234567890123456789","job_workflow_sha":"0123456789012345678901234567890123456789","event_name":"workflow_dispatch"});
     let auth = f._temp.path().canonicalize().unwrap().join("auth");
-    let config: kegari_v0::config::Config = serde_json::from_value(json!({
+    let config: kegari_config::Config = serde_json::from_value(json!({
         "schema_version":1,"runtime":{"id":id(1),"host_id":"fixture-host","max_agents":2},
         "connections":{
             "linear":{"kind":"linear","account_id":"linear-fixture","endpoint":"https://linear.invalid/graphql","credential_ref":"keychain:fixture-linear"},
@@ -479,7 +479,7 @@ fn run_preparation(f: &Fixture) -> kegari_v0::worker_run::Preparation {
     })).unwrap();
     config.validate().unwrap();
     let mut parent = f.parent.clone();
-    parent.config_revision = config.revision().unwrap();
+    parent.config_revision = kegari_v0::config::config_revision(&config).unwrap();
     let child = f.input.assembled.manifest.role.permits_source_writes();
     let gate = parent
         .fresh_gate(
@@ -913,7 +913,7 @@ fn native_fixture_run(
         .unwrap()
         .argv[0] = executable.to_string_lossy().into_owned();
     let mut parent = f.parent.clone();
-    parent.config_revision = input.config.revision().unwrap();
+    parent.config_revision = kegari_v0::config::config_revision(&input.config).unwrap();
     input.authority = WorkerAuthority::Authorized(
         parent
             .fresh_gate(
@@ -1349,14 +1349,14 @@ fn authorized_resource_write_contract_rejects_unconfigured_flags_and_scope_expan
         .test_resources
         .insert(
             "database".into(),
-            kegari_v0::config::TestResource {
+            kegari_config::TestResource {
                 path: resource.to_str().unwrap().into(),
                 writable: true,
                 disposable: true,
             },
         );
     let mut parent = f.parent.clone();
-    parent.config_revision = preparation.config.revision().unwrap();
+    parent.config_revision = kegari_v0::config::config_revision(&preparation.config).unwrap();
     parent
         .children
         .get_mut(&id(11))
@@ -1427,7 +1427,7 @@ fn repository_free_child_keeps_reasoning_role_without_execution_or_fabricated_gi
     let f = Fixture::new(AgentRole::Documentation);
     let mut input = run_preparation(&f);
     let mut parent = f.parent.clone();
-    parent.config_revision = input.config.revision().unwrap();
+    parent.config_revision = kegari_v0::config::config_revision(&input.config).unwrap();
     let scope = parent
         .children
         .get_mut(&id(11))

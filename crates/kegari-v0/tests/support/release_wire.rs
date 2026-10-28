@@ -143,7 +143,6 @@ mod process_probe {
     }
 }
 use crate::{
-    config::Config,
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
     digest::canonical_digest,
     evidence::{AttestationKey, Publication},
@@ -155,6 +154,7 @@ use crate::{
     workflow::Workflow,
 };
 use chrono::{Duration, Utc};
+use kegari_config::Config;
 use kegari_types::error::{Error, Result};
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
@@ -838,7 +838,7 @@ impl DeliveryFixture {
     async fn build_configured(
         extra_check: bool,
         candidate: bool,
-        adjust: impl FnOnce(&mut crate::config::Repository),
+        adjust: impl FnOnce(&mut kegari_config::Repository),
     ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().canonicalize().unwrap();
@@ -1824,7 +1824,7 @@ async fn delivery_effect_policy_is_phase_specific_and_release_requires_explicit_
             .code,
         "delivery_policy_unresolved"
     );
-    contract.configuration.deployment = Some(crate::config::Deployment::None("none".into()));
+    contract.configuration.deployment = Some(kegari_config::Deployment::None("none".into()));
     require_effect_policy(&contract, DeliveryPhase::Release).unwrap();
     assert_eq!(
         require_effect_policy(&contract, DeliveryPhase::Staging)
