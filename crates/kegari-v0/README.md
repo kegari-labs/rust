@@ -7,14 +7,19 @@ for the actual checkpoint, failed or blocked checks, and current work.
 [MILESTONES.md](MILESTONES.md) defines version targets, immediate 0.2.0 correction
 packages, completion gates and progress reporting. Goal mode is cancelled; work proceeds through individual planning and execution prompts.
 
+The [`kegari-cli` package](../kegari-cli/README.md) now owns the public CLI, control
+client and `kegari-v0` executable. This package retains the backend library and
+`kegari-v0-evaluation` inspection tool. The temporary dependency points from CLI
+to backend only; application arguments and hidden process modes remain unchanged.
+
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain:
 
 ```sh
-cargo build --locked -p kegari-v0
-cargo test --locked -p kegari-v0
-cargo clippy --locked -p kegari-v0 --all-targets -- -D warnings
+cargo build --offline --locked -p kegari-cli --bin kegari-v0
+cargo test --offline --locked --workspace
+cargo clippy --offline --locked --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 python3 crates/kegari-v0/tools/contract_inventory.py --check
 ```
@@ -32,12 +37,15 @@ new requests must follow the generic backend and milestone plan.
 
 ## Versioned prerelease executable
 
-The locally verified and packaged checkpoint is `0.2.0-alpha.10`; the package and
-executable remain `kegari-v0`. The final release suite passed 1,260 tests, with
+The archived stabilization checkpoint is `0.2.0-alpha.10`, built before CLI
+extraction. Its final release suite passed 1,260 tests, with
 three native qualification tests ignored. See the artifact links, checksums and
 retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md). The Cargo-specific
-execution design has been removed. This is a checkpoint before a separately
-planned crate split, with native execution still blocked.
+execution design has been removed. The source now separates `kegari-cli` from
+the remaining backend while retaining the same workspace version and executable
+name. Its build identity changes with the refactor; the archived alpha.10 bytes
+and historical evidence remain untouched. This extraction does not package a
+new prerelease, and native execution remains blocked.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or
 unqualified declared profiles (`managed_profile_unqualified`), and native,
 provider, actual-agent and human qualification remain incomplete.
@@ -45,7 +53,7 @@ provider, actual-agent and human qualification remain incomplete.
 Build the optimized executable from the workspace root:
 
 ```sh
-cargo build --locked --release -p kegari-v0 --bin kegari-v0
+cargo build --offline --locked --release -p kegari-cli --bin kegari-v0
 ./target/release/kegari-v0 --version
 ./target/release/kegari-v0 --help
 ./target/release/kegari-v0 __build-info

@@ -1,9 +1,11 @@
-use kegari_v0::{
+use kegari_cli::{
     cli::GuidanceRequest,
     client::{Endpoint, Target},
+    local_cli::*,
+};
+use kegari_v0::{
     config::{Config, ProviderKind},
     error::Result,
-    local_cli::*,
     platform::*,
     storage::PrivateDir,
 };
@@ -306,7 +308,7 @@ fn guided_toml_uses_exact_typed_schema_and_never_echoes_document() {
 }
 #[test]
 fn guided_configuration_bound_and_supplied_error_request_identity_are_preserved() {
-    let huge = format!("{}\n.\n", "x".repeat(kegari_v0::cli::MAX_CONFIG + 1));
+    let huge = format!("{}\n.\n", "x".repeat(kegari_cli::cli::MAX_CONFIG + 1));
     assert_eq!(
         guided_document(&GuidanceRequest::Setup, Cursor::new(huge), Vec::new())
             .unwrap_err()

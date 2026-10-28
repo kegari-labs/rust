@@ -78,6 +78,45 @@ pub fn account_home() -> Result<AccountHome> {
     }
     Ok(AccountHome { uid, user, home })
 }
+
+/// Launch the invoking device's browser through the shared spawn boundary.
+/// The CLI validates the destination before calling this OS-only adapter.
+pub async fn launch_client_browser(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = tokio::process::Command::new("/usr/bin/open");
+    #[cfg(not(target_os = "macos"))]
+    let mut command = tokio::process::Command::new("xdg-open");
+    command
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let result = tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), async {
+        let mut child = crate::process_spawn::spawn_tokio(&mut command, Some(cutoff))?;
+        child.wait().await
+    })
+    .await
+    .map_err(|_| Error::new("timeout", "client browser launch timed out"))?
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::TimedOut {
+            Error::new("timeout", "client browser launch timed out")
+        } else {
+            Error::new(
+                "target_unavailable",
+                "client browser launcher is unavailable",
+            )
+        }
+    })?;
+    if !result.success() {
+        return Err(Error::new(
+            "target_unavailable",
+            "client browser launch failed",
+        ));
+    }
+    Ok(())
+}
 impl HostIdentity {
     pub fn discover() -> Result<Self> {
         native::host()

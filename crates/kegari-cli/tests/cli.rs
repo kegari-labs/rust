@@ -1,7 +1,7 @@
 use clap::Parser;
+use kegari_cli::cli::*;
+use kegari_cli::client::*;
 use kegari_v0::api::{CommandName, CommandRequest};
-use kegari_v0::cli::*;
-use kegari_v0::client::*;
 use kegari_v0::error::{Error, Result};
 use kegari_v0::secrets::Secret;
 use kegari_v0::snapshot::Snapshots;
@@ -920,7 +920,7 @@ async fn guided_initial_setup_uses_local_identity_only_for_absent_local_registra
     // Real pure guidance/typed validation; the LocalActions transaction below
     // is deliberately a fixture, with no native discovery or Keychain action.
     let answers = format!("operator\n{}\n2\n\n\ncreate\n", Uuid::from_u128(42));
-    let document = kegari_v0::local_cli::guided_initial_setup(
+    let document = kegari_cli::local_cli::guided_initial_setup(
         &host,
         std::io::Cursor::new(answers),
         Vec::new(),
@@ -1013,7 +1013,7 @@ async fn initial_setup_registration_race_never_submits_generated_config_to_exist
         user: "fixture-operator".into(),
         home: home.clone(),
     };
-    let document = kegari_v0::local_cli::guided_initial_setup(
+    let document = kegari_cli::local_cli::guided_initial_setup(
         &host,
         std::io::Cursor::new(format!(
             "operator\n{}\n2\n\n\ncreate\n",
@@ -1073,9 +1073,9 @@ async fn no_argument_first_launch_explains_setup_without_registering_or_starting
         user: "first-launch-fixture".into(),
         home: temp.path().canonicalize().unwrap(),
     };
-    let store = kegari_v0::local_cli::target_store(&account).unwrap();
+    let store = kegari_cli::local_cli::target_store(&account).unwrap();
     assert!(
-        kegari_v0::local_cli::registered_target(&account, &store)
+        kegari_cli::local_cli::registered_target(&account, &store)
             .unwrap()
             .is_none()
     );
@@ -1118,7 +1118,7 @@ async fn no_argument_first_launch_explains_setup_without_registering_or_starting
     assert_eq!(local.services, 0);
     assert!(local.browsers.is_empty());
     assert!(
-        std::fs::read_dir(kegari_v0::local_cli::state_root(&account))
+        std::fs::read_dir(kegari_cli::local_cli::state_root(&account))
             .unwrap()
             .next()
             .is_none()

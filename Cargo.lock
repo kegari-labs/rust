@@ -852,6 +852,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kegari-cli"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "chrono",
+ "clap",
+ "kegari-v0",
+ "libc",
+ "reqwest",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "kegari-v0"
 version = "0.2.0-alpha.10"
 dependencies = [

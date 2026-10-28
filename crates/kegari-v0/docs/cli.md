@@ -1,5 +1,11 @@
 # CLI and client transport
 
+The `kegari-cli` package owns the `cli`, `client`, `local_cli` modules and the
+`kegari-v0` executable. Build or run it with `-p kegari-cli`. Its temporary backend
+dependency supplies shared contracts and native operations without a reverse
+dependency. Both packages remain workspace default members; use `--workspace`
+for complete validation. The evaluation-inspection tool stays in `kegari-v0`.
+
 The executable routes public commands through the typed local/HTTPS client and
 dispatches exact hidden build/supervisor/host entrypoints. `local_cli` implements client-only preferences,
 bounded terminal TOML guidance, explicit local bootstrap, browser opening and
@@ -272,8 +278,9 @@ acceptance or release.
 ## Deterministic validation
 
 ```sh
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test -p kegari-v0 --test cli --test local_cli --test platform
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy -p kegari-v0 --test cli -- -D warnings
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-cli --test cli --test local_cli --test main
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-v0 --test platform
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy --offline --locked --workspace --all-targets -- -D warnings
 ```
 
 Fixtures exercise real Unix HTTP transport, TLS rejection, parser/input rules,

@@ -3,7 +3,8 @@
 Goal mode was cancelled on 2026-10-28. Work now proceeds only through individual
 planning and execution prompts. The retained text below records the former
 assignment; it does not authorize automatic continuation or local commits.
-The current alpha.10 stabilization request ends at its packaged checkpoint.
+The alpha.10 stabilization request ended at its packaged checkpoint. Current
+individually authorized work is recorded in [PROGRESS.md](PROGRESS.md).
 
 ---
 

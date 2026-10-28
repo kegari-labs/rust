@@ -1,10 +1,12 @@
 //! CLI-only pinned control transport. No redirects, proxies, retries or fallback.
-use crate::api::{CommandName, CommandRequest, Envelope, MAX_BODY, MAX_HEADERS, REQUEST_DEADLINE};
-use crate::error::{Error, Result};
-use crate::secrets::Secret;
-use crate::snapshot::{self, Page};
-use crate::storage::PrivateDir;
 use chrono::Utc;
+use kegari_v0::api::{
+    CommandName, CommandRequest, Envelope, MAX_BODY, MAX_HEADERS, REQUEST_DEADLINE,
+};
+use kegari_v0::error::{Error, Result};
+use kegari_v0::secrets::Secret;
+use kegari_v0::snapshot::{self, Page};
+use kegari_v0::storage::PrivateDir;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

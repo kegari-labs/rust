@@ -1,10 +1,11 @@
 # Kegari v0 version milestones
 
-**0.2.0-alpha.10 stabilization checkpoint complete; stopped. Goal mode cancelled; work proceeds through individual prompts. No minor milestone is complete.**
+**`kegari-cli` extraction verified; stopped for review. Goal mode cancelled; work proceeds through individual prompts. No minor milestone is complete.**
 
-The alpha.10 checkpoint retains the native-execution restriction and existing
-milestone exit criteria. Crate separation is a subsequent, separately planned
-task. Historical automatic-continuation instructions do not authorize further
+The archived alpha.10 checkpoint retains the native-execution restriction and
+existing milestone exit criteria. The approved first crate extraction moves only
+CLI ownership, with a temporary dependency on the remaining backend and no new
+prerelease packaging. Historical automatic-continuation instructions do not authorize further
 work or commits. See [the stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md).
 
 Plan revised on 2026-10-27 under [SPEC 1.4](SPEC.md). This is the single
@@ -159,3 +160,10 @@ send messages elsewhere.
   preserve all native/live approval boundaries and report dependent blockers.
 
 - **2026-10-28, cancellation and stabilization:** User cancelled goal mode and selected regular planning/execution prompts. Alpha.10 is a clean checkpoint before a separately planned crate split; native execution remains blocked.
+
+- **2026-10-28, CLI extraction:** The first approved extraction is locally verified:
+  `kegari-cli` owns the existing executable and CLI/client modules, temporarily
+  depending on `kegari-v0`. The full workspace suite passed 1,260 tests with three
+  native ignores; independent review and build/identity checks passed. Workspace
+  version stays alpha.10, its archived package is unchanged, and no new prerelease
+  or minor milestone is claimed. See [PROGRESS.md](PROGRESS.md).

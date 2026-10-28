@@ -1,5 +1,54 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. `kegari-cli` extraction verified; stopped for review.**
+
+Starting from `ae71891ba4ea3052aa919d74f6ab90b5283fd23f` on `main`, the CLI,
+control client, local CLI wiring and application entry point moved into `kegari-cli`.
+The temporary dependency is CLI → backend; the executable remains `kegari-v0`.
+Both packages inherit `0.2.0-alpha.10` from the workspace. The backend retains
+the evaluation-inspection executable and all shared/runtime contracts.
+
+All 44 CLI/local-CLI/executable tests moved with their code and retain existing
+assertions. Browser launching still uses the original backend spawn interlock;
+CLI URL policy remains client-side. One shared build identity now includes the
+new CLI manifest and source tree. The bounded independent review found no material
+issues; hidden entrypoints, original test assertions and spawn behaviour were
+preserved. All external dependency lock entries are unchanged.
+
+Verification on the final source, using the pinned Rust/Cargo 1.99.1 toolchain
+through the verified `stable` alias and `CARGO_HOME=/private/tmp/kegari-v0-cargo-cache`:
+
+| Check | Result |
+| --- | --- |
+| Focused CLI/local-CLI/executable release tests | 44 passed. |
+| Formatting and strict workspace all-target Clippy | Passed. |
+| Contract inventory and its tests | 519 blocks, 140 named requirements, no implicit passes; 11 tests passed. |
+| Complete workspace release regression, normal concurrency | 1,260 passed, 0 failed, 3 native ignored; 43 result groups. |
+| Optimized `kegari-cli` build of `kegari-v0` | Passed; aarch64-apple-darwin. |
+| Minimal-environment executable inspection | Help, version, setup help, build info and handover info passed with no runtime state created. |
+
+Build/test/lint dependency resolution used `--offline --locked` after the offline
+lockfile update. Exact commands/results are retained in
+`/private/tmp/kegari-cli-extraction-checks.json`; focused/full logs use the same
+prefix. All 749 final source/test inputs match
+`/private/tmp/kegari-cli-extraction-source.json`, digest
+`sha256:f9b2222dd3f852b3b6d805c59ca075173022e84af0713048377309bd047d3998`.
+
+Independent recomputation matches the 348-input release build identity, including
+the new CLI manifest and all five CLI source files:
+`sha256:cfe8ed659c9c3be0e443f30533f0927aac71a12cd66c3e0ebdeafba338ac9c51`.
+The development executable remains `target/release/kegari-v0`, SHA-256
+`ae0130cc433f6a441d5104cc052d9bedcd3d29d0e232ed70b77d3d33b80ff2be`.
+Inspection output is `/private/tmp/kegari-cli-extraction-inspection.json`.
+
+This task stops at a verified, uncommitted refactor, with no new prerelease archive.
+Archived alpha.10 package checksums and archive digest remain unchanged; historical
+reports below retain their original source scope. Native admission remains blocked.
+No native/live qualification, installation, activation, commit or remote operation
+occurred. Further extraction requires a separate prompt.
+
+### Packaged alpha.10 stabilization — historical checkpoint
+
 **Goal mode cancelled. Alpha.10 stabilization checkpoint complete; stopped.**
 Work proceeds through individual planning/execution prompts. Do not resume the
 historical goal or carry its automatic continuation/commit authorization forward.

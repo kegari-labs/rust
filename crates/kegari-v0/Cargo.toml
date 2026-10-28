@@ -1,7 +1,6 @@
 [package]
 name = "kegari-v0"
-default-run = "kegari-v0"
-version = "0.2.0-alpha.10"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 

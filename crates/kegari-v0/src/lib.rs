@@ -8,11 +8,12 @@ pub(crate) mod test_pinned_git;
 /// Deterministic identity of compiled runtime sources, assets and dependency lock.
 /// The installed executable also has a separate exact-byte digest in owner metadata.
 pub const BUILD_ID: &str = env!("KEGARI_BUILD_ID");
+/// Public CLI and internal metadata identify the same assembled application.
+pub const VERSION_WITH_BUILD: &str =
+    concat!(env!("CARGO_PKG_VERSION"), " ", env!("KEGARI_BUILD_ID"));
 pub mod api;
 pub mod app;
 pub mod authority;
-pub mod cli;
-pub mod client;
 pub mod codex;
 pub mod config;
 pub mod configuration;
@@ -33,7 +34,6 @@ pub mod housekeeping;
 pub mod inspection;
 pub mod instructions;
 pub mod isolation;
-pub mod local_cli;
 pub mod observations;
 pub mod orchestration;
 pub mod platform;

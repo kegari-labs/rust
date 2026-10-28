@@ -1,10 +1,10 @@
 //! Complete command grammar and client-device input handling. Parsing never starts work.
-use crate::api::{CommandName, CommandRequest, Envelope};
 use crate::client::{API_VERSION, ControlClient, Endpoint, Target, TargetStore};
-use crate::config::{Config, Connection, ProviderKind, Workspace};
-use crate::error::{Error, Result};
-use crate::secrets::Secret;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use kegari_v0::api::{CommandName, CommandRequest, Envelope};
+use kegari_v0::config::{Config, Connection, ProviderKind, Workspace};
+use kegari_v0::error::{Error, Result};
+use kegari_v0::secrets::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::future::Future;
@@ -19,7 +19,7 @@ pub const MAX_SECRET: usize = 64 * 1024;
 #[derive(Parser, Debug)]
 #[command(
     name = "kegari-v0",
-    version = concat!(env!("CARGO_PKG_VERSION"), " ", env!("KEGARI_BUILD_ID")),
+    version = kegari_v0::VERSION_WITH_BUILD,
     about = "Kegari v0 scoped delivery control"
 )]
 pub struct Cli {
@@ -827,7 +827,7 @@ impl Cli {
             }
             Command::Evaluation(EvaluationCommand::Run(value)) => {
                 not_nil(value.workspace)?;
-                crate::evidence::validate_digest(&value.suite_digest)?;
+                kegari_v0::evidence::validate_digest(&value.suite_digest)?;
                 nonempty(&value.expected_config, "expected config")?;
                 if value.repetition == 0 {
                     return Err(Error::new(
@@ -1290,40 +1290,7 @@ pub fn validate_linear_url(text: &str) -> Result<()> {
 /// Native client browser operation; no shell, and never requested on the remote host.
 pub async fn open_client_browser(url: &str) -> Result<()> {
     validate_linear_url(url)?;
-    #[cfg(target_os = "macos")]
-    let mut command = tokio::process::Command::new("/usr/bin/open");
-    #[cfg(not(target_os = "macos"))]
-    let mut command = tokio::process::Command::new("xdg-open");
-    command
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let result = tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), async {
-        let mut child = crate::process_spawn::spawn_tokio(&mut command, Some(cutoff))?;
-        child.wait().await
-    })
-    .await
-    .map_err(|_| Error::new("timeout", "client browser launch timed out"))?
-    .map_err(|error| {
-        if error.kind() == std::io::ErrorKind::TimedOut {
-            Error::new("timeout", "client browser launch timed out")
-        } else {
-            Error::new(
-                "target_unavailable",
-                "client browser launcher is unavailable",
-            )
-        }
-    })?;
-    if !result.success() {
-        return Err(Error::new(
-            "target_unavailable",
-            "client browser launch failed",
-        ));
-    }
-    Ok(())
+    kegari_v0::platform::launch_client_browser(url).await
 }
 /// Emits exactly one JSON envelope on stdout. Callers send parser diagnostics only
 /// to stderr; never print input TOML, correction bodies or credential values there.

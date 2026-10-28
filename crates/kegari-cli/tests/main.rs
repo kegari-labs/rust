@@ -16,6 +16,7 @@ fn public_help_and_version_work_without_runtime_account_or_provider() {
         vec!["--version"],
         vec!["release", "--help"],
         vec!["config", "--help"],
+        vec!["setup", "--help"],
     ] {
         let output = run(&arguments);
         assert!(output.status.success());
@@ -37,6 +38,21 @@ fn exact_identity_entrypoints_report_the_bound_build_and_assets() {
         actual,
         serde_json::to_value(kegari_v0::platform::build_info()).unwrap()
     );
+    assert_eq!(actual["runtime_version"], env!("CARGO_PKG_VERSION"));
+    let version_with_build = format!(
+        "{} {}",
+        actual["runtime_version"].as_str().unwrap(),
+        actual["runtime_build"].as_str().unwrap()
+    );
+    assert_eq!(version_with_build, kegari_v0::VERSION_WITH_BUILD);
+    let build_info = actual;
+    let output = run(&["--version"]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("kegari-v0 {version_with_build}\n")
+    );
     let output = run(&["__handover-info"]);
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
@@ -47,6 +63,8 @@ fn exact_identity_entrypoints_report_the_bound_build_and_assets() {
     assert_eq!(actual["process_schema"], 3);
     assert_eq!(actual["managed_execution_schema"], 5);
     assert_eq!(actual["asset_version"], "7");
+    assert_eq!(actual["runtime_version"], build_info["runtime_version"]);
+    assert_eq!(actual["runtime_build"], build_info["runtime_build"]);
     assert_eq!(
         actual,
         serde_json::to_value(kegari_v0::housekeeping::handover_info().unwrap()).unwrap()

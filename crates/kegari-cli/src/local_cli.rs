@@ -1,9 +1,11 @@
 //! Client-device entry wiring. OS account lookup does not probe a runtime, boot
 //! identity, credentials or launchd unless the operator selects a local action.
 use crate::{
-    api::{CommandName, CommandRequest},
     cli::{GuidanceRequest, LocalActions, LocalCommand, LocalFuture, OutputEnvelope},
     client::{ControlClient, Endpoint, Target, TargetStore},
+};
+use kegari_v0::{
+    api::{CommandName, CommandRequest},
     config::{Config, Connection, ControlRole, Workspace},
     error::{Error, Result},
     platform::{self, AccountHome, HostIdentity, OwnerRecord, ServiceStartState},
@@ -114,7 +116,7 @@ impl LocalActions for NativeLocalActions {
     ) -> LocalFuture<'a, OutputEnvelope> {
         Box::pin(async move {
             let runtime = Config::parse(configuration)?.runtime.id;
-            let result = crate::app::bootstrap(configuration, request_id).await?;
+            let result = kegari_v0::app::bootstrap(configuration, request_id).await?;
             if result
                 .data
                 .get("runtime_id")

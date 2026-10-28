@@ -1,4 +1,5 @@
-use kegari_v0::{error::Result, local_cli, platform};
+use kegari_cli::local_cli;
+use kegari_v0::{error::Result, platform};
 use std::io::Write;
 
 /// Hidden process entrypoints are closed argument forms; public commands always
