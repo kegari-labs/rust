@@ -76,6 +76,7 @@ Running without a command checks local status; it does not start an orchestrator
 
 [Configuration](crates/kegari-v0/docs/configuration.md) ·
 [CLI reference](docs/cli.md) ·
+[Workspace overview](docs/workspace.md) ·
 [Developer guide](docs/development.md)
 
 ## Licenses

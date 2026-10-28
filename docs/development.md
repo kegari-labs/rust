@@ -5,25 +5,8 @@ For the product introduction and preview instructions, see the [README](../READM
 
 ## Workspace packages
 
-| Package | Responsibility |
-| --- | --- |
-| [`kegari-types`](../crates/kegari-types/README.md) | Shared command, response, error, snapshot, run and artifact data types. |
-| [`kegari-config`](../crates/kegari-config/README.md) | Configuration models, TOML parsing, validation and path resolution. |
-| [`kegari-digest`](../crates/kegari-digest/README.md) | Shared byte hashing and canonical JSON identities. |
-| [`kegari-providers`](../crates/kegari-providers/README.md) | Typed GitHub/Linear network adapters and records. |
-| [`kegari-storage`](../crates/kegari-storage/README.md) | Protected filesystem access, durable records and lock primitives. |
-| [`kegari-process`](../crates/kegari-process/README.md) | Guarded process spawning, owned process groups and exit evidence. |
-| [`kegari-platform`](../crates/kegari-platform/README.md) | OS identity, executable inspection and native host helpers. |
-| [`kegari-secrets`](../crates/kegari-secrets/README.md) | Secret values, Keychain storage and generic signed-record primitives. |
-| [`kegari-control-api`](../crates/kegari-control-api/README.md) | Authenticated transport, request rules, operator identities and snapshot operations. |
-| [`kegari-execution`](../crates/kegari-execution/README.md) | Managed environments, isolation, resource binding and process-free observations. |
-| [`kegari-git`](../crates/kegari-git/README.md) | Git records, naming rules, validation and canonical digest calculations. |
-| [`kegari-scheduler`](../crates/kegari-scheduler/README.md) | Synchronous scheduling, capacity allocation, attempt accounting and retry timing. |
-| [`kegari-context`](../crates/kegari-context/README.md) | Workflow documents, instruction assembly, embedded assets and resume compatibility. |
-| [`kegari-codex`](../crates/kegari-codex/README.md) | Codex protocol client, session recovery, observations, stream transport and pinned schemas. |
-| [`kegari-controller`](../crates/kegari-controller/README.md) | Control-host composition, dispatch, supervision and orchestration channel. |
-| [`kegari-cli`](../crates/kegari-cli/README.md) | Public CLI, control client and the `kegari-v0` executable. |
-| [`kegari-v0`](../crates/kegari-v0/README.md) | Remaining backend library and the `kegari-v0-evaluation` inspection executable. |
+See the [workspace overview](workspace.md) for the crate index and a concise
+summary of responsibilities.
 
 ## Package boundaries
 
