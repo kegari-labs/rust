@@ -79,7 +79,7 @@ async fn protocol_ack_records_exact_sent_request_when_native_generation_changes(
             &lease,
             Uuid::new_v4(),
             authority.work_key().unwrap(),
-            crate::digest::bytes_digest(b"scope"),
+            kegari_digest::bytes_digest(b"scope"),
             || Ok(()),
         )
         .unwrap();

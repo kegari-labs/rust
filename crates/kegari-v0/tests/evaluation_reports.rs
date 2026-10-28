@@ -1,4 +1,5 @@
-use kegari_v0::{digest::bytes_digest, evaluation::*, evaluation_reports::*};
+use kegari_digest::bytes_digest;
+use kegari_v0::{evaluation::*, evaluation_reports::*};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -307,7 +308,7 @@ fn actual_report_fixture(suite: &SuiteManifest) -> TrialReport {
     claim.permission_configuration = Some(json!({"network":"denied"}));
     claim.tool_definitions = Some(vec![]);
     claim.tool_contract_digest =
-        Some(kegari_v0::digest::canonical_digest(1, &Vec::<Value>::new()).unwrap());
+        Some(kegari_digest::canonical_digest(1, &Vec::<Value>::new()).unwrap());
     claim.authority_reference = Some("report-fixture-no-live-authority".into());
     claim.input_digest = bytes_digest(b"fixture input");
     claim.turns_started = 1;
@@ -686,7 +687,7 @@ fn declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence() 
         operation: uuid::Uuid::from_u128(21),
         runtime: uuid::Uuid::from_u128(22),
         workspace: uuid::Uuid::from_u128(23),
-        trial_digest: Some(kegari_v0::digest::canonical_digest(1, &data.trial).unwrap()),
+        trial_digest: Some(kegari_digest::canonical_digest(1, &data.trial).unwrap()),
         suite_digest: data.suite_digest.clone(),
         fixture_digest: data.fixture_digest.clone(),
         contract_scope_digest: bytes_digest(b"report-only scope"),
@@ -794,7 +795,7 @@ fn broker_actual_report_shape_rejects_context_tools_source_and_permission_contra
     // Existing report-reader data fixture only. It creates no live registry,
     // permit, native process, accepted claim or execution capability. Even its
     // consistent case remains Blocked and carries an explicit synthetic gap.
-    use kegari_v0::digest::canonical_digest;
+    use kegari_digest::canonical_digest;
     let mut suite = suite();
     let independent = suite
         .variants

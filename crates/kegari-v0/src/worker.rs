@@ -24,7 +24,6 @@ pub use validation::ValidationHistorySeal;
 
 use crate::codex::{SessionState, ToolBroker, ToolCall};
 use crate::control::{Actor, ControlHost, Lease, MutationRequest, Permit};
-use crate::digest::{bytes_digest, canonical_digest};
 use crate::evaluation::{
     AgentSummary, BoundToolContracts, CheckStatus, ObservedArtifact, ObservedCheck, ObservedFacts,
     TrialHost,
@@ -39,11 +38,13 @@ use crate::instructions::{
     AgentRole, AssembledInstructions, ExposedTool, InstructionManifest, ToolCapability,
 };
 use crate::isolation::{ExecutionRole, ValidatedIsolation};
-use crate::providers::{ProviderBroker, ProviderMutation, RepositoryIdentity};
+use crate::providers::{ProviderBroker, ProviderMutation};
 use crate::reconcile::{FreshGate, IndependentReviewGate};
 use crate::storage::{ExclusiveLock, PrivateDir};
 use crate::workflow::Workflow;
 use chrono::{Duration, Utc};
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::RepositoryIdentity;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1425,7 +1426,7 @@ impl ScopedWorker {
     pub(crate) fn correction_wake(&self) -> Result<Option<Arc<tokio::sync::Notify>>> {
         self.host.correction_wake(self.permit.operation_id)
     }
-    pub(crate) fn independent_pull_request(&self) -> Option<&crate::providers::PullRequest> {
+    pub(crate) fn independent_pull_request(&self) -> Option<&kegari_providers::PullRequest> {
         match self.contract.authority() {
             WorkerAuthority::Independent(gate) => Some(gate.pull_request()),
             WorkerAuthority::Authorized(_) => None,
@@ -3715,9 +3716,9 @@ mod trial_checkpoint_tests {
                 account_id: "account".into(),
                 work_identity: "work".into(),
                 operation_id: Uuid::new_v4().to_string(),
-                generation: crate::digest::bytes_digest(b"generation"),
-                instruction_digest: crate::digest::bytes_digest(b"instructions"),
-                isolation_digest: crate::digest::bytes_digest(b"isolation"),
+                generation: kegari_digest::bytes_digest(b"generation"),
+                instruction_digest: kegari_digest::bytes_digest(b"instructions"),
+                isolation_digest: kegari_digest::bytes_digest(b"isolation"),
                 profile: crate::codex::CodexProfile {
                     model: "model".into(),
                     reasoning: "high".into(),
@@ -3738,7 +3739,7 @@ mod trial_checkpoint_tests {
         changed.binding.operation_id = Uuid::new_v4().to_string();
         assert!(verify_trial_checkpoint(&state, None, &changed, None).is_err());
         changed = state.clone();
-        changed.binding.instruction_digest = crate::digest::bytes_digest(b"changed contract");
+        changed.binding.instruction_digest = kegari_digest::bytes_digest(b"changed contract");
         assert!(verify_trial_checkpoint(&state, None, &changed, None).is_err());
     }
 }

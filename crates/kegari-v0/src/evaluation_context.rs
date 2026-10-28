@@ -40,7 +40,7 @@ pub(super) struct HostContext<'a> {
     pub work_generation: &'a str,
     pub correction_revision: &'a str,
     pub repository_revision: Option<&'a str>,
-    pub independent_pull_request: Option<&'a crate::providers::PullRequest>,
+    pub independent_pull_request: Option<&'a kegari_providers::PullRequest>,
 }
 impl NativeContextBinding {
     pub(super) fn validate(&self, input: &Value) -> Result<()> {
@@ -550,7 +550,7 @@ mod tests {
         }
         binding.slots.sort_by(|a, b| a.pointer.cmp(&b.pointer));
         let profile = profile();
-        let pr = crate::providers::PullRequest {
+        let pr = kegari_providers::PullRequest {
             repository_id: 41,
             id: 803,
             number: 803,
@@ -682,7 +682,7 @@ mod tests {
                 "Review the current source for inclusive-boundary correctness. Provide feedback only."
             )
         );
-        let pr = crate::providers::PullRequest {
+        let pr = kegari_providers::PullRequest {
             repository_id: 101,
             id: 810,
             number: 810,

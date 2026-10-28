@@ -226,7 +226,7 @@ impl PublishedCarry {
             .ok_or_else(|| invalid("carry parent not currently observed"))?;
         self.verify_native_comments(&observation.comments)
     }
-    fn verify_native_comments(&self, comments: &[crate::providers::Comment]) -> Result<()> {
+    fn verify_native_comments(&self, comments: &[kegari_providers::Comment]) -> Result<()> {
         let work = &self.parent().verified().manifest().work;
         let publications = [
             (
@@ -333,7 +333,7 @@ impl PublishedCarry {
 }
 
 pub(super) fn require_original_acceptance_selection(
-    comments: &[crate::providers::Comment],
+    comments: &[kegari_providers::Comment],
     selected: &Signed<evidence::Acceptance>,
     selected_id: Uuid,
     key: &AttestationKey,
@@ -909,7 +909,7 @@ impl DeliveryCoordinator {
         plan: &crate::release::ReleasePlan,
         current: &Signed<ParentResultRecord>,
         accepted: &Signed<evidence::Acceptance>,
-        comments: &[crate::providers::Comment],
+        comments: &[kegari_providers::Comment],
     ) -> Result<CarriedOriginRef> {
         let workspace = self
             .records

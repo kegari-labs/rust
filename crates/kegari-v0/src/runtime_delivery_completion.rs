@@ -473,7 +473,7 @@ impl VerifiedReleaseCompletion {
                     ] {
                         let leaf = format!(
                             "{prefix}-{id}-{}-attempt-{ordinal}.json",
-                            &crate::digest::bytes_digest(step.as_bytes())[7..]
+                            &kegari_digest::bytes_digest(step.as_bytes())[7..]
                         );
                         match workspace.read::<Signed<Value>>(&leaf) {
                             Ok(signed) => {

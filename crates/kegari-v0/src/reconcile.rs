@@ -5,19 +5,18 @@ use crate::{
         self, ChildScope, CommentRevision, Corrections, IssueKey, LabelTransition, ParentMetadata,
         ScopeSnapshot,
     },
-    digest::canonical_digest,
     evidence::{
         AttestationKey, Generation, Publication, Signed, VerifiedAcceptance, VerifiedChild,
         VerifiedParent, WorkIdentity,
-    },
-    providers::{
-        Comment, Dependency, GithubClient, HistoryEntry, Issue, LinearClient, PullRequest,
-        Repository,
     },
     workflow::Workflow,
 };
 use chrono::{DateTime, Duration, Utc};
 use kegari_config::{Config, Profile, ReleaseMode, Workspace};
+use kegari_digest::canonical_digest;
+use kegari_providers::{
+    Comment, Dependency, GithubClient, HistoryEntry, Issue, LinearClient, PullRequest, Repository,
+};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -257,7 +256,7 @@ pub struct IndependentJob {
     pub pull_request: PullRequest,
     /// Ephemeral task input: never serialize the provider body into general status.
     #[serde(skip)]
-    pub pull_request_text: Option<crate::providers::PullRequestText>,
+    pub pull_request_text: Option<kegari_providers::PullRequestText>,
     pub review_identity: String,
     pub phase: String,
 }
@@ -291,7 +290,7 @@ struct Collected {
     issues: BTreeMap<Uuid, IssueObservation>,
     missing: BTreeSet<Uuid>,
     repositories: BTreeMap<u64, Repository>,
-    independent: BTreeMap<u64, Vec<crate::providers::IndependentPullRequest>>,
+    independent: BTreeMap<u64, Vec<kegari_providers::IndependentPullRequest>>,
 }
 #[derive(Clone, Debug)]
 pub struct Reconciler {
@@ -1903,7 +1902,7 @@ pub struct IndependentReviewGate {
     workspace_id: Uuid,
     repository_id: u64,
     pull_request: PullRequest,
-    pull_request_text: crate::providers::PullRequestText,
+    pull_request_text: kegari_providers::PullRequestText,
     review_identity: String,
     config_revision: String,
     workflow_digest: String,
@@ -1921,13 +1920,13 @@ impl IndependentReviewGate {
     pub fn pull_request(&self) -> &PullRequest {
         &self.pull_request
     }
-    pub fn pull_request_text(&self) -> &crate::providers::PullRequestText {
+    pub fn pull_request_text(&self) -> &kegari_providers::PullRequestText {
         &self.pull_request_text
     }
     /// Complete literal context from the actual scoped observation, not an
     /// authority decoder or a way to substitute arbitrary task fields.
-    pub fn context_pull_request(&self) -> crate::providers::IndependentPullRequest {
-        crate::providers::IndependentPullRequest {
+    pub fn context_pull_request(&self) -> kegari_providers::IndependentPullRequest {
+        kegari_providers::IndependentPullRequest {
             pull_request: self.pull_request.clone(),
             text: self.pull_request_text.clone(),
         }
@@ -2944,7 +2943,7 @@ mod historical_authority_tests {
         let (_root, transition) = crate::corrections::test_transition_fixture().await;
         let original = transition.current_authority();
         let mut observed = original.clone();
-        observed.sources_digest = crate::digest::bytes_digest(b"new raw native observation");
+        observed.sources_digest = kegari_digest::bytes_digest(b"new raw native observation");
         observed.observed_at = Utc::now() - Duration::minutes(10);
         assert_ne!(original.digest().unwrap(), observed.digest().unwrap());
         original.compare_admitted_authority(&observed).unwrap();
@@ -2962,7 +2961,7 @@ mod historical_authority_tests {
         profile.profile.model = "another-model".into();
         profile.profile_digest = canonical_digest(1, &profile.profile).unwrap();
         let mut work = observed.clone();
-        work.work.generation.definition = crate::digest::bytes_digest(b"new definition");
+        work.work.generation.definition = kegari_digest::bytes_digest(b"new definition");
         let mut scope = observed.clone();
         scope
             .child_scope

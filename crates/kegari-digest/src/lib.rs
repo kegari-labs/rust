@@ -59,6 +59,48 @@ pub fn canonical_digest<T: Serialize + ?Sized>(schema: u32, value: &T) -> Result
 mod tests {
     use super::*;
     #[test]
+    fn fixed_byte_and_canonical_vectors_preserve_hash_identity() {
+        assert_eq!(
+            bytes_digest(b""),
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            bytes_digest(b"abc"),
+            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let value = serde_json::json!({"b":[1,"two"],"a":true});
+        assert_eq!(
+            canonical_bytes(&value).unwrap(),
+            br#"{"a":true,"b":[1,"two"]}"#
+        );
+        assert_eq!(
+            canonical_digest(1, &value).unwrap(),
+            "sha256:v1:e75f1c66fb37047ed8c904526793282ef3a3b95b8735159e40d2d9d9fda945ee"
+        );
+        assert_ne!(
+            canonical_digest(1, &value).unwrap(),
+            canonical_digest(2, &value).unwrap()
+        );
+        assert_ne!(
+            canonical_digest(1, &[1, 2]).unwrap(),
+            canonical_digest(1, &[2, 1]).unwrap()
+        );
+    }
+    #[test]
+    fn zero_schema_and_nested_floating_point_identities_are_rejected() {
+        assert_eq!(
+            canonical_digest(0, &true).unwrap_err(),
+            Error::invalid("digest schema must be positive")
+        );
+        for value in [serde_json::json!(1.0), serde_json::json!({"nested":[1.5]})] {
+            assert_eq!(
+                canonical_bytes(&value).unwrap_err(),
+                Error::invalid("floating point evidence identities are not supported")
+            );
+            assert!(canonical_digest(1, &value).is_err());
+        }
+    }
+    #[test]
     fn invalid_serialization_returns_error_and_valid_digest_bytes_stay_unchanged() {
         let invalid = std::collections::BTreeMap::from([(vec![1u8, 2], 3)]);
         assert_eq!(

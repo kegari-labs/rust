@@ -1,13 +1,13 @@
 //! Protected worker proposals are provenance, never passed workflow gates.
 use crate::{
     control::{Receipt, RunReference},
-    digest::canonical_digest,
     evidence::{AttestationKey, Signed},
     instructions::AgentRole,
     reconcile::{FreshGate, GatePurpose},
     storage::PrivateDir,
     worker::{WorkerOutcome, recover_session},
 };
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde_json::Value;
 use uuid::Uuid;
@@ -357,7 +357,6 @@ mod tests {
         authority::{ChildScope, Corrections, IssueKey, Responsibility},
         codex::{CodexProfile, SessionBinding, SessionState},
         control::ReceiptPhase,
-        digest::bytes_digest,
         evidence::{Generation, WorkIdentity},
         instructions::InstructionManifest,
         reconcile::{ChildProjection, DependencyOutcomes, ParentProjection},
@@ -365,6 +364,7 @@ mod tests {
     };
     use chrono::{Duration, Utc};
     use kegari_config::{Profile, ReleaseMode, Speed};
+    use kegari_digest::bytes_digest;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
     fn id(n: u128) -> Uuid {

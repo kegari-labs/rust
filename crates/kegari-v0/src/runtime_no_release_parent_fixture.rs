@@ -1,8 +1,9 @@
 //! Synthetic provider/check facts passed through production evidence validators.
 //! Actual no-change candidate and baseline come from the separately admitted
 //! Git/vector fixture; this helper supplies no execution or joined capability.
-use crate::{digest::canonical_digest, evidence::*, git::*};
+use crate::{evidence::*, git::*};
 use chrono::{Duration, Utc};
+use kegari_digest::canonical_digest;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 fn d(value: &str) -> String {

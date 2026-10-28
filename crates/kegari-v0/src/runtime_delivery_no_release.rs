@@ -3,10 +3,11 @@
 use super::*;
 use crate::{
     control::{Actor, MutationRequest, Receipt},
-    digest::{bytes_digest, canonical_digest},
     evidence::{NoReleaseRequired, NoReleaseRequirements, ProductionTargetBaseline, Publication},
-    providers::{Comment, ProviderMutation},
+    providers::ProviderMutation,
 };
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::Comment;
 
 #[path = "runtime_delivery_no_release_history.rs"]
 pub(super) mod history;

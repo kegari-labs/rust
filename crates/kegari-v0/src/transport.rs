@@ -3,7 +3,6 @@
 use crate::{
     api::{ApiState, Authentication, MAX_HEADERS, Peer, REQUEST_DEADLINE, connection_router},
     control::{Actor, Principal},
-    digest::bytes_digest,
     storage::PrivateDir,
 };
 use chrono::{DateTime, Utc};
@@ -13,6 +12,7 @@ use hyper_util::{
     service::TowerToHyperService,
 };
 use kegari_config::{ControlConfig, ControlRole, HttpsConfig, Operator, is_tailscale_address};
+use kegari_digest::bytes_digest;
 use kegari_types::error::{Error, Result};
 use rustls::{
     RootCertStore, ServerConfig,

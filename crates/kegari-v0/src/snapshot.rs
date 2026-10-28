@@ -1,7 +1,7 @@
 //! Immutable, actor-bound, in-memory control snapshots. This is pagination state,
 //! not authoritative work persistence. Clients verify completeness before output.
-use crate::digest::{bytes_digest, canonical_digest};
 use chrono::{DateTime, Duration, Utc};
+use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_types::error::{Error, Result};
 use kegari_types::snapshot::{Node, Page, Segment};
 use serde_json::Value;

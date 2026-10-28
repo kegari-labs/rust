@@ -1,7 +1,7 @@
 //! Historical correction provenance only. Recovery never turns these records
 //! into a live transition capability; native gates must authorize further work.
 use super::*;
-use crate::digest::bytes_digest;
+use kegari_digest::bytes_digest;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 

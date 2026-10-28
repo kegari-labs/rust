@@ -4,15 +4,16 @@ use crate::{
     codex::{CodexConnectionMetadata, CodexProfile, PermissionConfiguration},
     connections::{VerifiedCredential, verify_credential},
     control::{Actor, ControlHost, Intent, MutationRequest, Principal, Receipt},
-    digest::{bytes_digest, canonical_digest},
     isolation::{ExecutionRole, IsolationPlan},
     platform::{HostIdentity, Registration},
-    providers::{AccountIdentity, GithubClient, HttpPolicy, HttpTransport},
     secrets::{Secret, SecretStore, resolve_reference},
     storage::PrivateDir,
     transport::TransportAuthentication,
 };
 use kegari_config::{Config, Connection, ControlRole, Deployment, ProviderKind, Speed, Workspace};
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::HttpTransport;
+use kegari_providers::{AccountIdentity, GithubClient, HttpPolicy};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use serde::Serialize;
@@ -1020,7 +1021,7 @@ pub async fn repository_prerequisites(
 async fn repository_delivery_prerequisites(
     client: &GithubClient,
     configured: &kegari_config::Repository,
-    repository: &crate::providers::Repository,
+    repository: &kegari_providers::Repository,
 ) -> Result<Value> {
     let unresolved: Vec<_> = [
         ("ci", configured.ci.is_none()),

@@ -1,9 +1,9 @@
 use chrono::{Duration, Utc};
 use kegari_config::RuntimeConfig;
+use kegari_digest::canonical_digest;
 use kegari_types::error::Error;
 use kegari_v0::{
     control::{Receipt, ReceiptPhase, RunReference},
-    digest::canonical_digest,
     runtime_schedule::{occupying_runs, plan, require_provider_clear},
     scheduler::{PhaseKey, Trigger},
 };

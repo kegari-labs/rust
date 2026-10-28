@@ -1,7 +1,6 @@
 //! Data-only archive fixtures. These do not create ValidationPlan, worker,
 //! execution or native capabilities. Signed data is tested as data only.
 use super::*;
-use crate::digest::canonical_digest;
 use crate::evidence::{Generation, WorkIdentity};
 use crate::execution::{
     CheckExecutionRecord, DiscoveredCheckProvenance, ExecutionEvidenceClass, SourceSnapshot,
@@ -14,6 +13,7 @@ use crate::validation::{
     ValidationRequirement,
 };
 use chrono::{DateTime, Utc};
+use kegari_digest::canonical_digest;
 use std::path::PathBuf;
 
 fn at(seconds: i64) -> DateTime<Utc> {

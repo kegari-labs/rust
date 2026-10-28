@@ -34,6 +34,6 @@ pub fn prepare(root: &Path) -> PathBuf {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).unwrap();
     }
     let identity = kegari_v0::platform::BinaryIdentity::inspect(&target, false).unwrap();
-    assert_eq!(identity.digest, kegari_v0::digest::bytes_digest(&expected));
+    assert_eq!(identity.digest, kegari_digest::bytes_digest(&expected));
     target
 }

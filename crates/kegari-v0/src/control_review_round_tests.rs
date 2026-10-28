@@ -1,7 +1,8 @@
 //! Data-only decoder tests. Receipts are deliberately synthetic observations:
 //! no ControlHost, permit, actual joined completion or source capability exists.
 use super::*;
-use crate::{control::ReceiptPhase, digest::bytes_digest};
+use crate::control::ReceiptPhase;
+use kegari_digest::bytes_digest;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 

@@ -95,7 +95,7 @@ impl DeliveryCoordinator {
             .account_id
             .parse()
             .map_err(|_| Error::new("identity_mismatch", "Linear account ID is not canonical"))?;
-        let key = linear.issue_key(plan.parent_id)?;
+        let key = crate::providers::linear_issue_key(linear, plan.parent_id)?;
         if key.workspace != plan.linear_workspace
             || admission.canonical_targets != vec![key.identity()?]
         {

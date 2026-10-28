@@ -1,6 +1,6 @@
 //! Pinned stdio app-server protocol. Provider messages are data, never authority.
-use crate::digest::canonical_digest;
 use crate::isolation::ValidatedIsolation;
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1328,7 +1328,7 @@ impl RpcClient {
         if let Some(guard) = &guard
             && (guard.binding().executable != *executable
                 || guard.binding().argv_digest
-                    != crate::digest::canonical_digest(1, &vec!["--version"])?
+                    != kegari_digest::canonical_digest(1, &vec!["--version"])?
                 || guard.binding().kind != "codex-version"
                 || !guard.binding().observed_executables.is_empty())
         {
@@ -1438,7 +1438,7 @@ impl RpcClient {
         let args = Self::app_server_argv(permissions)?;
         if let Some(guard) = &guard
             && (guard.binding().executable != executable.0
-                || guard.binding().argv_digest != crate::digest::canonical_digest(1, &args)?
+                || guard.binding().argv_digest != kegari_digest::canonical_digest(1, &args)?
                 || guard.binding().kind != "codex-app-server"
                 || !guard.binding().observed_executables.is_empty())
         {

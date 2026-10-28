@@ -6,11 +6,11 @@ use crate::codex::{
     CodexProfile, EventKind, PermissionConfiguration, SessionBinding, SessionState, ToolBroker,
     ToolCall,
 };
-use crate::digest::{bytes_digest, canonical_digest};
 use crate::instructions::{self, AgentRole, AssembledInstructions, AssemblyInput};
 use crate::isolation::{ExecutionRole, PathGrant, ValidatedIsolation};
 use chrono::Utc;
 use kegari_config::Profile;
+use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

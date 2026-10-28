@@ -858,6 +858,7 @@ dependencies = [
  "chrono",
  "clap",
  "kegari-config",
+ "kegari-digest",
  "kegari-types",
  "kegari-v0",
  "libc",
@@ -887,6 +888,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "kegari-digest"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "hex",
+ "kegari-types",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "kegari-providers"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "kegari-config",
+ "kegari-digest",
+ "kegari-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "kegari-types"
 version = "0.2.0-alpha.10"
 dependencies = [
@@ -911,6 +940,8 @@ dependencies = [
  "hyper",
  "hyper-util",
  "kegari-config",
+ "kegari-digest",
+ "kegari-providers",
  "kegari-types",
  "libc",
  "reqwest",

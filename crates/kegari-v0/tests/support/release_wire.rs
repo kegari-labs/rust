@@ -42,7 +42,7 @@ mod pinned_git {
             fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).unwrap();
         }
         let identity = crate::platform::BinaryIdentity::inspect(&target, false).unwrap();
-        assert_eq!(identity.digest, crate::digest::bytes_digest(&expected));
+        assert_eq!(identity.digest, kegari_digest::bytes_digest(&expected));
         target
     }
 }
@@ -144,7 +144,6 @@ mod process_probe {
 }
 use crate::{
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
-    digest::canonical_digest,
     evidence::{AttestationKey, Publication},
     evidence::{ReviewAttestation, ReviewKind, RevisionBinding, Verdict, no_change_digest},
     git::{Git, RepositoryId},
@@ -155,6 +154,8 @@ use crate::{
 };
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_digest::canonical_digest;
+use kegari_providers::*;
 use kegari_types::error::{Error, Result};
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
@@ -436,7 +437,7 @@ impl HttpTransport for Wire {
                         json!({"total_count":1,"artifacts":[{"id":80,"name":f.artifact_name}]})
                     }
                     "/repos/fixture/repo/actions/artifacts/80" => {
-                        json!({"id":80,"workflow_run":{"id":50,"repository_id":42,"head_sha":"1".repeat(40)},"expired":false,"size_in_bytes":f.archive.len(),"digest":crate::digest::bytes_digest(&f.archive)})
+                        json!({"id":80,"workflow_run":{"id":50,"repository_id":42,"head_sha":"1".repeat(40)},"expired":false,"size_in_bytes":f.archive.len(),"digest":kegari_digest::bytes_digest(&f.archive)})
                     }
                     "/repos/fixture/repo/actions/artifacts/80/zip" => {
                         let mut headers = HeaderMap::new();
@@ -1841,7 +1842,7 @@ fn child_ci_artifact(f: &DeliveryFixture, source: &str) {
         .records
         .read(&format!(
             "delivery-effect-{}.json",
-            &crate::digest::bytes_digest(
+            &kegari_digest::bytes_digest(
                 format!("{}:{action}", f.admission.operation_id()).as_bytes()
             )[7..]
         ))
@@ -2884,7 +2885,7 @@ async fn actual_isolated_objects_publish_one_owned_production_pr_with_derived_ch
     let mut predecessor = retry.clone();
     predecessor.plan.operation_id = Uuid::new_v4();
     predecessor.plan.generation.correction =
-        crate::digest::canonical_digest(1, &"prior corrective generation").unwrap();
+        kegari_digest::canonical_digest(1, &"prior corrective generation").unwrap();
     let baseline = crate::release::ReconciledBaseline {
         provider_reads_complete: true,
         coherent: true,

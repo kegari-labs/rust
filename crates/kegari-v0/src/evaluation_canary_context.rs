@@ -226,7 +226,7 @@ impl OwnedCanaryPathOperand {
         profile: &Profile,
         phase: &str,
         revision: Option<&str>,
-        pr: Option<&crate::providers::PullRequest>,
+        pr: Option<&kegari_providers::PullRequest>,
     ) -> Result<()> {
         if workspace != self.binding.identity.workspace
             || operation != self.binding.identity.operation

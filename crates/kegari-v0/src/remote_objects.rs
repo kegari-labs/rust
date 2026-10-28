@@ -3,14 +3,14 @@
 use crate::{
     control::{Actor, ControlHost, MutationRequest, Permit, ReceiptPhase},
     delivery::{DeliveryAdmission, RepositoryContract},
-    digest::{bytes_digest, canonical_digest},
     evidence::{AttestationKey, Signed},
     git::{Git, GitLimits, RepositoryId, Revision},
     process_records::ProcessJournal,
-    providers::GithubClient,
     storage::PrivateDir,
     worker::{ExecutionRegistry, WorkerAuthority},
 };
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::GithubClient;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -35,7 +35,7 @@ enum Origin {
         reference: String,
     },
     PullRequest {
-        expected: crate::providers::PullRequest,
+        expected: kegari_providers::PullRequest,
     },
     Merge {
         number: u64,
@@ -64,7 +64,7 @@ enum Origin {
         integrations: Vec<crate::git::ProductionIntegration>,
     },
     StagingMerge {
-        expected: crate::providers::PullRequest,
+        expected: kegari_providers::PullRequest,
         parent: String,
         receipt: Uuid,
         receipt_digest: String,
@@ -1341,8 +1341,8 @@ fn filesystem_digest(root: &Path) -> Result<String> {
 }
 
 fn verify_review_source(
-    expected: &crate::providers::PullRequest,
-    current: &crate::providers::PullRequest,
+    expected: &kegari_providers::PullRequest,
+    current: &kegari_providers::PullRequest,
 ) -> Result<()> {
     if current.state != "open"
         || current.draft

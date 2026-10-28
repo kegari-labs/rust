@@ -25,6 +25,7 @@ url = { version = "=2.5.8", features = ["serde"] }
 uuid = { version = "=1.18.1", features = ["v4", "serde"] }
 
 [dev-dependencies]
+kegari-digest = { path = "../kegari-digest" }
 rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "=2.2.0"
 tempfile = "=3.23.0"

@@ -4,7 +4,6 @@ use super::*;
 use crate::{
     control::{Lease, Permit, RunReference},
     delivery::*,
-    digest::canonical_digest,
     evidence::RevisionBinding,
     git::{GitExecutionScope, SourceCommitMetadata},
     runtime::VerifiedAuthorizedOutcome,
@@ -12,6 +11,7 @@ use crate::{
     worker::{WorkerAuthority, WorkerHost},
     worker_run::RunCompletion,
 };
+use kegari_digest::canonical_digest;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -3032,7 +3032,7 @@ mod retention_tests {
     use super::*;
     #[test]
     fn absent_repair_fields_preserve_legacy_signed_pipeline_payload() {
-        let digest = crate::digest::bytes_digest(b"legacy pipeline");
+        let digest = kegari_digest::bytes_digest(b"legacy pipeline");
         let value = json!({"schema_version":1,"runtime":Uuid::from_u128(1),"operation":Uuid::from_u128(7),"proposal":Uuid::from_u128(8),"claim_digest":digest,
             "work":{"linear_endpoint":"https://linear.invalid/graphql","linear_workspace":Uuid::from_u128(2),"parent":Uuid::from_u128(10),"child":Uuid::from_u128(11),"generation":{"authorization":digest,"definition":digest,"correction":digest,"scope":digest}},
             "stage":"blocked","phase_operation":null,"validation":null,"review":null,"observed_at":"2026-01-04T00:00:00Z","error":null});

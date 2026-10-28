@@ -30,7 +30,7 @@ pub(crate) struct AcceptedParentOrigin {
     records: Arc<PrivateDir>,
     control: Arc<ControlHost>,
     key: Arc<AttestationKey>,
-    linear: crate::providers::LinearClient,
+    linear: kegari_providers::LinearClient,
     workspace: Uuid,
     configuration_revision: String,
     digest: String,
@@ -65,7 +65,7 @@ impl AcceptedParentOrigin {
             .comments(self.parent().manifest().work.parent)
             .await?;
         let (parent_id, acceptance_id) = self.publication_ids();
-        let select = |id| -> Result<&crate::providers::Comment> {
+        let select = |id| -> Result<&kegari_providers::Comment> {
             let found = comments.iter().filter(|c| c.id == id).collect::<Vec<_>>();
             let [comment] = found.as_slice() else {
                 return Err(Error::new(

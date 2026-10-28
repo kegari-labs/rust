@@ -1,10 +1,10 @@
 //! Host-enrolled validation obligations. Serialized records describe history;
 //! only an actual worker's observed reads and current admission enroll a plan.
-use crate::digest::canonical_digest;
 use crate::evidence::{CheckKind, validate_digest};
 use crate::execution::{CorrectionExecutionProvenance, ExecutionBinding};
 use crate::workflow::{CheckCommand, CheckService};
 use chrono::{DateTime, Utc};
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -508,9 +508,9 @@ fn text(value: &str, maximum: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::digest::bytes_digest;
     use crate::evidence::{Generation, WorkIdentity};
     use crate::git::{RepositoryId, Revision};
+    use kegari_digest::bytes_digest;
 
     // Deliberate data fixtures for enrollment invariants, not observed reads or
     // native execution evidence. The worker tests exercise the actual producer.

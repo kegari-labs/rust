@@ -1,15 +1,15 @@
 //! Host-only connection construction and verified credential imports. No worker
 //! receives this registry, Keychain access, an arbitrary endpoint or a raw token.
 use crate::{
-    digest::canonical_digest,
-    providers::{
-        AccountIdentity, GithubClient, HttpPolicy, HttpTransport, LinearClient,
-        verify_connection_identity,
-    },
     reconcile::WorkspaceClients,
     secrets::{Secret, SecretStore, resolve_reference},
 };
 use kegari_config::{Config, Connection, ProviderKind};
+use kegari_digest::canonical_digest;
+use kegari_providers::HttpTransport;
+use kegari_providers::{
+    AccountIdentity, GithubClient, HttpPolicy, LinearClient, verify_connection_identity,
+};
 use kegari_types::error::{Error, Result};
 use std::{
     collections::{BTreeMap, BTreeSet},

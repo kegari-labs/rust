@@ -3,13 +3,14 @@ use super::fixture_api as kegari_v0;
 pub(crate) use base64::Engine as _;
 pub(crate) use chrono::{Duration, Utc};
 pub(crate) use kegari_config::{GithubSelection, Profile, ReleaseMode, Speed};
+pub(crate) use kegari_digest::bytes_digest;
+pub(crate) use kegari_providers::*;
 pub(crate) use kegari_types::error::{Error, Result};
 pub(crate) use kegari_v0::{
     authority::{Corrections, IssueKey},
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest, Permit},
     delivery::{DeliveryAdmission, DeliveryPhase, DeliveryScope, RepositoryContract},
     deployment::*,
-    digest::bytes_digest,
     evidence::{AttestationKey, Generation, RevisionBinding, WorkIdentity},
     git::{RepositoryId, Revision},
     providers::*,

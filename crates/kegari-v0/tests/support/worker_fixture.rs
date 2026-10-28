@@ -4,23 +4,7 @@ mod worker_bundle;
 use chrono::{Duration, Utc};
 use kegari_config::{Profile, ReleaseMode, Speed};
 use kegari_types::error::{Error, Result};
-use kegari_v0::{
-    authority::*,
-    codex::*,
-    control::*,
-    digest::*,
-    evaluation::TrialHost,
-    evidence::{Generation, WorkIdentity},
-    execution::*,
-    git::{Git, RepositoryId},
-    instructions::*,
-    isolation::*,
-    providers::ProviderBroker,
-    reconcile::*,
-    storage::PrivateDir,
-    worker::*,
-    workflow::Workflow,
-};
+use kegari_v0::{authority::*, codex::*, control::*, evaluation::TrialHost, evidence::{Generation, WorkIdentity}, execution::*, git::{Git, RepositoryId}, instructions::*, isolation::*, providers::ProviderBroker, reconcile::*, storage::PrivateDir, worker::*, workflow::Workflow};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -203,10 +187,10 @@ impl Fixture {
             parent: id(10),
             child: child.then_some(id(11)),
             generation: Generation {
-                authorization: bytes_digest(b"a"),
-                definition: bytes_digest(b"d"),
-                correction: bytes_digest(b"c"),
-                scope: bytes_digest(b"s"),
+                authorization: kegari_digest::bytes_digest(b"a"),
+                definition: kegari_digest::bytes_digest(b"d"),
+                correction: kegari_digest::bytes_digest(b"c"),
+                scope: kegari_digest::bytes_digest(b"s"),
             },
         };
         let scope = ChildScope {
@@ -262,12 +246,12 @@ impl Fixture {
             work: Some(work.clone()),
             blockers: vec![],
             prerequisites: BTreeSet::new(),
-            source_digest: bytes_digest(b"sources"),
+            source_digest: kegari_digest::bytes_digest(b"sources"),
             config_revision: configured_workspace.as_ref().map_or_else(
-                || bytes_digest(b"config"),
+                || kegari_digest::bytes_digest(b"config"),
                 |config| kegari_v0::config::config_revision(config).unwrap(),
             ),
-            drain_config_revision: bytes_digest(b"config-drain"),
+            drain_config_revision: kegari_digest::bytes_digest(b"config-drain"),
             workflow_digest: workflow.digest.clone(),
             coordination_profile: profile(),
             release_mode: ReleaseMode::Manual,
@@ -289,7 +273,7 @@ impl Fixture {
         );
         let mut review = None;
         if role == AgentRole::IndependentReview {
-            use kegari_v0::providers::{PullRequest, Repository, RepositoryIdentity};
+            use kegari_providers::{PullRequest, Repository, RepositoryIdentity};
             let repository = RepositoryIdentity {
                 id: 42,
                 owner: "fixture".into(),
@@ -315,7 +299,7 @@ impl Fixture {
             };
             let projection = RuntimeProjection {
                 runtime_id: id(1),
-                config_revision: bytes_digest(b"config"),
+                config_revision: kegari_digest::bytes_digest(b"config"),
                 observed_at: Utc::now(),
                 workspaces: BTreeMap::from([(
                     id(3),
@@ -341,15 +325,15 @@ impl Fixture {
                             workspace_id: id(3),
                             repository_id: 42,
                             pull_request: pr,
-                            pull_request_text: Some(kegari_v0::providers::PullRequestText {
+                            pull_request_text: Some(kegari_providers::PullRequestText {
                                 title: "Fixture independent review".into(),
                                 body: None,
                             }),
-                            review_identity: bytes_digest(b"independent-review"),
+                            review_identity: kegari_digest::bytes_digest(b"independent-review"),
                             phase: "review".into(),
                         }],
                         error: None,
-                        config_revision: bytes_digest(b"config"),
+                        config_revision: kegari_digest::bytes_digest(b"config"),
                         workflow_digest: workflow.digest.clone(),
                         independent_review_profile: Some(profile()),
                     },

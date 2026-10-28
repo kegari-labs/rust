@@ -643,7 +643,7 @@ impl RuntimeLineageWire {
             panic!()
         };
         let step = &steps[0];
-        let artifact = crate::digest::bytes_digest(b"fixture initial serving artifact");
+        let artifact = kegari_digest::bytes_digest(b"fixture initial serving artifact");
         let expectation = HostedProofExpectation {
             context_digest: Some(
                 deployment_context_digest(42, &step.target_id, 88, deployment, &source, &artifact)
@@ -775,7 +775,7 @@ impl HttpTransport for RuntimeLineageWire {
                     if path == format!("{base}/actions/artifacts/{}", run + 30) {
                         let wire = self.base.lock().unwrap();
                         return Ok(response(
-                            json!({"id":run+30,"workflow_run":{"id":run,"repository_id":42,"head_sha":"1".repeat(40)},"expired":false,"size_in_bytes":wire.archive.len(),"digest":crate::digest::bytes_digest(&wire.archive)}),
+                            json!({"id":run+30,"workflow_run":{"id":run,"repository_id":42,"head_sha":"1".repeat(40)},"expired":false,"size_in_bytes":wire.archive.len(),"digest":kegari_digest::bytes_digest(&wire.archive)}),
                         ));
                     }
                     if path == format!("{base}/actions/artifacts/{}/zip", run + 30) {

@@ -447,7 +447,7 @@ fn canary_json_capture_charges_before_retention_and_preserves_original_budget() 
     let value = json!({"z":["actual value",23], "a":{"b":true}});
     assert_eq!(
         case.owner.captured_json(&value).unwrap(),
-        crate::digest::canonical_bytes(&value).unwrap()
+        kegari_digest::canonical_bytes(&value).unwrap()
     );
     while case.owner.budget.reserve(128 * 1024).is_ok() {}
     while case.owner.budget.reserve(1).is_ok() {}

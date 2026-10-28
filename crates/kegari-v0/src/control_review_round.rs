@@ -4,7 +4,8 @@
 use super::{
     PreparationReference, Receipt, RunContinuationReference, RunReference, SourceAdvancedReference,
 };
-use crate::{digest::canonical_digest, evidence::validate_digest, scheduler::PhaseKey};
+use crate::{evidence::validate_digest, scheduler::PhaseKey};
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 

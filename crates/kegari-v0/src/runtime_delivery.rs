@@ -728,7 +728,7 @@ impl PendingReleaseRequest {
     }
 }
 fn delivery_id(runtime: Uuid, source: Uuid, phase: &str) -> Result<Uuid> {
-    let digest = crate::digest::canonical_digest(
+    let digest = kegari_digest::canonical_digest(
         1,
         &json!({"runtime":runtime,"source":source,"phase":phase}),
     )?;
@@ -924,7 +924,7 @@ fn release_intent_request(
 }
 
 fn mutation_digest(request: &crate::control::MutationRequest) -> Result<String> {
-    crate::digest::canonical_digest(
+    kegari_digest::canonical_digest(
         1,
         &json!({"kind":request.kind,"targets":request.canonical_targets,"expected":request.expected,"payload":request.payload,"principal":request.actor.principal}),
     )

@@ -6,7 +6,6 @@ use crate::{
         SessionBinding, SessionState,
     },
     control::{Actor, ControlHost, InFlightEffect, MutationRequest, Permit},
-    digest::canonical_digest,
     evaluation::TrialHost,
     execution::{CommandCancellation, VerifiedCheckExecution},
     instructions::{
@@ -22,6 +21,7 @@ use crate::{
     workflow::Workflow,
 };
 use kegari_config::{Config, ProviderKind, Speed};
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -393,7 +393,7 @@ impl RunCompletion {
             .iter()
             .flat_map(|attempt| &attempt.artifacts)
         {
-            let digest = crate::digest::canonical_digest(1, proof)?;
+            let digest = kegari_digest::canonical_digest(1, proof)?;
             let original = retained
                 .get(&digest)
                 .filter(|artifact| artifact.matches_reference(proof))
@@ -424,7 +424,7 @@ pub(crate) struct ValidationArtifactReader<'a> {
 }
 impl ValidationArtifactReader<'_> {
     pub(crate) fn read(&self, expected: &crate::execution::ArtifactProof) -> Result<Vec<u8>> {
-        let digest = crate::digest::canonical_digest(1, expected)?;
+        let digest = kegari_digest::canonical_digest(1, expected)?;
         let (proof, original) = self
             .artifacts
             .get(&digest)
@@ -2378,7 +2378,7 @@ mod trial_lifecycle_tests {
                 &lease,
                 Uuid::new_v4(),
                 "component-work".into(),
-                crate::digest::bytes_digest(b"scope"),
+                kegari_digest::bytes_digest(b"scope"),
                 || Ok(()),
             )
             .unwrap();
@@ -2404,9 +2404,9 @@ mod trial_lifecycle_tests {
                 account_id: "account".into(),
                 work_identity: permit.work_key.clone(),
                 operation_id: Uuid::new_v4().to_string(),
-                generation: crate::digest::bytes_digest(b"generation"),
-                instruction_digest: crate::digest::bytes_digest(b"instructions"),
-                isolation_digest: crate::digest::bytes_digest(b"isolation"),
+                generation: kegari_digest::bytes_digest(b"generation"),
+                instruction_digest: kegari_digest::bytes_digest(b"instructions"),
+                isolation_digest: kegari_digest::bytes_digest(b"isolation"),
                 profile: CodexProfile {
                     model: "model".into(),
                     reasoning: "high".into(),

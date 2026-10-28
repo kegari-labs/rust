@@ -1,7 +1,7 @@
 //! Historical integrations are recovered from an authenticated finite chain.
 //! A signed UUID reference alone never authorizes omitting a contribution.
 use super::*;
-use crate::digest::canonical_digest;
+use kegari_digest::canonical_digest;
 
 const MAX_RELEASE_LINKS: usize = 64;
 

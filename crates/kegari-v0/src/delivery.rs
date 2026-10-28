@@ -1,7 +1,6 @@
 //! Explicit host delivery phases. Model output remains a claim until actual
 //! execution/provider observations have established the corresponding gate.
 use crate::control::{Actor, ControlHost, MutationRequest, Permit, Receipt};
-use crate::digest::{bytes_digest, canonical_digest};
 use crate::evidence::{
     self, ArtifactReference, AttestationKey, CheckKind, CheckRequirement, CheckRun, CheckSnapshot,
     Conclusion, Publication, RevisionBinding, Runner, Signed, WorkIdentity,
@@ -9,14 +8,15 @@ use crate::evidence::{
 use crate::execution::VerifiedCheckExecution;
 use crate::git::{Git, RepositoryId};
 use crate::providers::{
-    GithubClient, HostedProofExpectation, HostedProofVerifier, ProviderBroker, ProviderMutation,
-    RepositoryIdentity,
+    HostedProofExpectation, HostedProofVerifier, ProviderBroker, ProviderMutation,
 };
 use crate::reconcile::FreshGate;
 use crate::storage::PrivateDir;
 use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
 use kegari_config::{CiSuite, Repository as RepositoryConfig};
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::{GithubClient, RepositoryIdentity};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1070,10 +1070,10 @@ impl PublishedReview {
 pub struct ChildPullRequest {
     work: WorkIdentity,
     revision: RevisionBinding,
-    value: crate::providers::PullRequest,
+    value: kegari_providers::PullRequest,
 }
 impl ChildPullRequest {
-    pub(crate) fn provider(&self) -> &crate::providers::PullRequest {
+    pub(crate) fn provider(&self) -> &kegari_providers::PullRequest {
         &self.value
     }
     pub fn number(&self) -> u64 {
@@ -1315,12 +1315,12 @@ impl DeliveryCoordinator {
             .entries()
             .iter()
             .map(|entry| {
-                Ok(crate::providers::TreeEntry {
+                Ok(kegari_providers::TreeEntry {
                     path: entry.path.clone(),
                     mode: match entry.mode.as_str() {
-                        "100644" => crate::providers::TreeMode::File,
-                        "100755" => crate::providers::TreeMode::Executable,
-                        "120000" => crate::providers::TreeMode::Symlink,
+                        "100644" => kegari_providers::TreeMode::File,
+                        "100755" => kegari_providers::TreeMode::Executable,
+                        "120000" => kegari_providers::TreeMode::Symlink,
                         _ => {
                             return Err(Error::new(
                                 "unsupported_repository",
@@ -1350,7 +1350,7 @@ impl DeliveryCoordinator {
             ));
         }
         let metadata = committed.metadata();
-        let identity = crate::providers::CommitIdentity {
+        let identity = kegari_providers::CommitIdentity {
             name: metadata.identity.name.clone(),
             email: metadata.identity.email.clone(),
             date: metadata
@@ -1829,9 +1829,9 @@ impl DeliveryCoordinator {
                         repository: contract.provider.clone(),
                         head: a.revision.head.clone(),
                         state: if passed {
-                            crate::providers::StatusState::Success
+                            kegari_providers::StatusState::Success
                         } else {
-                            crate::providers::StatusState::Failure
+                            kegari_providers::StatusState::Failure
                         },
                         description: if passed
                             && matches!(a.review, evidence::ReviewKind::Derived { .. })
@@ -3659,7 +3659,7 @@ impl DeliveryCoordinator {
 /// Read-only target preparation and live integration share one policy parser.
 pub fn validate_repository_prerequisites(
     identity: &RepositoryId,
-    repository: &crate::providers::Repository,
+    repository: &kegari_providers::Repository,
     branch: &str,
     base: &str,
     protection: &Value,

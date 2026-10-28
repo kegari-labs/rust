@@ -77,13 +77,13 @@ async fn evaluation_route_requires_unix_peer_and_evaluate_role_before_dispatch()
         "command": "evaluation_run",
         "args": {
             "workspace": Uuid::new_v4(),
-            "suite_digest": kegari_v0::digest::bytes_digest(b"declared suite"),
+            "suite_digest": kegari_digest::bytes_digest(b"declared suite"),
             "case": "V0-E05",
             "variant": "independent_malicious",
             "profile": "operator_evaluated",
             "repetition": 2
         },
-        "expected_config_revision": kegari_v0::digest::bytes_digest(b"observed config"),
+        "expected_config_revision": kegari_digest::bytes_digest(b"observed config"),
         "expected_control_generation": 7
     });
     let local = Peer::Unix { uid: 501 };

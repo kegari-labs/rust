@@ -1,6 +1,7 @@
 //! Execution-host secrets. Persistent values use macOS Keychain exclusively;
 //! no command arguments, serialized secrets or plaintext fallback exist here.
-use crate::{evidence::AttestationKey, providers::Credential};
+use crate::evidence::AttestationKey;
+use kegari_providers::Credential;
 use kegari_types::error::{Error, Result};
 use std::fmt;
 use uuid::Uuid;

@@ -289,7 +289,7 @@ impl DeliveryCoordinator {
             .account_id
             .parse()
             .map_err(|_| origin_error("accepted origin writer is not canonical"))?;
-        let issue = linear.issue_key(manifest.work.parent)?;
+        let issue = crate::providers::linear_issue_key(linear, manifest.work.parent)?;
         if issue.endpoint != manifest.work.linear_endpoint
             || issue.workspace != manifest.work.linear_workspace
             || accepted.provider_writer != writer.to_string()
@@ -299,7 +299,7 @@ impl DeliveryCoordinator {
             ));
         }
         let comments = linear.comments(manifest.work.parent).await?;
-        let select = |id| -> Result<&crate::providers::Comment> {
+        let select = |id| -> Result<&kegari_providers::Comment> {
             let matching: Vec<_> = comments.iter().filter(|c| c.id == id).collect();
             let [comment] = matching.as_slice() else {
                 return Err(origin_error(
@@ -345,7 +345,7 @@ impl DeliveryCoordinator {
         }
         let receipts = self.host.operations()?;
         let retain =
-            |comment: &crate::providers::Comment, parent: bool| -> Result<PublicationReference> {
+            |comment: &kegari_providers::Comment, parent: bool| -> Result<PublicationReference> {
                 let matching: Vec<&Receipt> = receipts
                     .iter()
                     .filter(|receipt| {

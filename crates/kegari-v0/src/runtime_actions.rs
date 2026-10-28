@@ -2,7 +2,6 @@
 use crate::{
     authority::IssueKey,
     decisions::VerifiedRetryGrant,
-    digest::canonical_digest,
     reconcile::{
         AuthorizationGate, DependencyOutcomes, GatePurpose, ParentDelivery, RuntimeProjection,
     },
@@ -12,6 +11,7 @@ use crate::{
 };
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -241,7 +241,7 @@ struct WorkerOrder {
     created_at: Option<chrono::DateTime<Utc>>,
 }
 impl WorkerOrder {
-    fn issue(kind: WorkKind, issue: &crate::providers::Issue) -> Self {
+    fn issue(kind: WorkKind, issue: &kegari_providers::Issue) -> Self {
         Self {
             kind,
             state: issue.state_name.trim().to_lowercase(),
@@ -325,12 +325,12 @@ mod tests {
     use super::*;
     use crate::{
         authority::{ChildScope, CommentRevision, Corrections, Responsibility},
-        digest::bytes_digest,
         evidence::{Generation, WorkIdentity},
-        providers::Issue,
         reconcile::{ChildProjection, ParentProjection, WorkspaceProjection},
     };
     use kegari_config::{Profile, ReleaseMode, Speed};
+    use kegari_digest::bytes_digest;
+    use kegari_providers::Issue;
     use serde_json::json;
     fn id(n: u128) -> Uuid {
         Uuid::from_u128(n)

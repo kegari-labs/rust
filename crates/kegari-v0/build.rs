@@ -29,6 +29,8 @@ fn main() {
         "examples",
         "../kegari-cli/src",
         "../kegari-config/src",
+        "../kegari-digest/src",
+        "../kegari-providers/src",
         "../kegari-types/src",
     ] {
         println!("cargo:rerun-if-changed={name}");
@@ -39,6 +41,8 @@ fn main() {
         "Cargo.toml",
         "../kegari-cli/Cargo.toml",
         "../kegari-config/Cargo.toml",
+        "../kegari-digest/Cargo.toml",
+        "../kegari-providers/Cargo.toml",
         "../kegari-types/Cargo.toml",
         "../../Cargo.toml",
         "../../Cargo.lock",

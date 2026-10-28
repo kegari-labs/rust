@@ -4,9 +4,8 @@ use super::*;
 use crate::control::{
     Actor, Lifecycle, MutationRequest, RemoteReservation, RunAdmission, RunReference,
 };
-use crate::providers::{
-    Credential, GithubClient, HttpPolicy, HttpRequest, HttpResponse, HttpTransport,
-};
+use kegari_providers::HttpTransport;
+use kegari_providers::{Credential, GithubClient, HttpPolicy, HttpRequest, HttpResponse};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn journal(root: &PrivateDir) -> Journal {

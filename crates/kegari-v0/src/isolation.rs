@@ -1,5 +1,5 @@
 //! Execution boundaries for owned runs. No unconfined fallback is provided.
-use crate::digest::{bytes_digest, canonical_digest};
+use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

@@ -4,6 +4,8 @@
 | --- | --- |
 | [`kegari-types`](crates/kegari-types/README.md) | Shared command, response, error and snapshot data types. |
 | [`kegari-config`](crates/kegari-config/README.md) | Configuration models, TOML parsing, validation and path resolution. |
+| [`kegari-digest`](crates/kegari-digest/README.md) | Shared byte hashing and canonical JSON identities. |
+| [`kegari-providers`](crates/kegari-providers/README.md) | Typed GitHub/Linear network adapters and records. |
 | [`kegari-cli`](crates/kegari-cli/README.md) | Public CLI, control client and the `kegari-v0` executable. |
 | [`kegari-v0`](crates/kegari-v0/README.md) | Remaining backend library and the `kegari-v0-evaluation` inspection executable. |
 
@@ -12,13 +14,15 @@ Both CLI and backend depend directly on `kegari-config` and `kegari-types`;
 backend; the backend does not depend on the CLI. Shared types and configuration
 models are imported directly from their owning crates, without backend
 compatibility reexports. Configuration transactions, workflow integration,
-canonical hashing, command validation, authorization, exit-code mapping and
-snapshot operations remain in the backend.
+command validation, authorization, exit-code mapping and
+snapshot operations remain in the backend. Shared hashing belongs to `kegari-digest`.
+Provider adapters depend on config/types/digest; the backend retains the mutation
+broker, receipts and evidence admission. Neither new crate depends on the backend.
 All packages use workspace version `0.2.0-alpha.10`; the executable name, process
 roles and serialized schemas remain unchanged. This extraction creates no new
 prerelease or qualification claim.
 
-From the workspace root, using the pinned toolchain; `--workspace` checks all four
+From the workspace root, using the pinned toolchain; `--workspace` checks all six
 packages:
 
 ```sh

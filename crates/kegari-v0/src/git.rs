@@ -4,8 +4,8 @@
 //! existing checkout, or deletes a failed candidate. Callers must hold the host
 //! admission permit and the repository integration/release lock before effects.
 
-use crate::digest::{bytes_digest, canonical_digest};
 use crate::evidence::VerifiedAcceptedCandidate;
+use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

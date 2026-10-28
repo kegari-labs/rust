@@ -2,11 +2,12 @@
 //! supersede authorization, native wire, object import and assembly are exercised.
 use super::*;
 use crate::app::ConfigurationControl;
+use crate::control::Receipt;
 use crate::decisions::{
     AuthorizedDecision, AuthorizedOperationRecovery, DecisionEvidence, RetryTarget,
     VerifiedExplicitCorrection, VerifiedRetryGrant,
 };
-use crate::{control::Receipt, digest::canonical_digest};
+use kegari_digest::canonical_digest;
 
 pub(super) struct ChainFixture<'a> {
     pub delivery: &'a Arc<RuntimeDelivery>,
@@ -445,7 +446,7 @@ pub(super) async fn publish_origin_with_slices(
             .unwrap_or_else(|error| panic!("origin {kind} mutation failed for {id}: {error:?}"));
         refs.push(PublicationRef {
             id: r.remote_ids["comment_id"].parse().unwrap(),
-            body_digest: crate::digest::bytes_digest(body.as_bytes()),
+            body_digest: kegari_digest::bytes_digest(body.as_bytes()),
             writer: wire::id(5),
         });
     }

@@ -1,9 +1,9 @@
 //! Actual disposable Git objects/commands and Control metadata admission;
 //! the boot probe is synthetic and no native sandbox/worker completion is claimed.
 use super::*;
+use kegari_digest::bytes_digest;
 use kegari_v0::{
     authority::IssueKey,
-    digest::bytes_digest,
     evidence::{Generation, WorkIdentity},
     execution::{DirectoryIdentity, ExecutionBinding, OwnedDirectory},
     isolation::{ExecutionRole, IsolationPlan, ValidatedIsolation},

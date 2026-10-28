@@ -9,7 +9,6 @@ use crate::{
         DecisionManager, RetryTarget, VerifiedExplicitCorrection, VerifiedRetryGrant,
     },
     delivery::RuntimeDeliveryDecisions,
-    digest::canonical_digest,
     evidence::{
         AttestationKey, Publication, VerifiedAcceptance, WorkIdentity, decode_signed_publication,
     },
@@ -17,6 +16,7 @@ use crate::{
     runtime::RuntimeCoordinator,
     scheduler::PhaseKey,
 };
+use kegari_digest::canonical_digest;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
@@ -122,7 +122,7 @@ pub(crate) fn recover_retry_comment(
     workspace: Uuid,
     writer: &str,
     work: &WorkIdentity,
-    comment: &crate::providers::Comment,
+    comment: &kegari_providers::Comment,
     receipts: &[Receipt],
     key: &AttestationKey,
 ) -> Result<VerifiedRetryGrant> {
@@ -135,7 +135,7 @@ pub(crate) fn recover_retry_comment(
         || comment.delegated
         || comment.issue_id != work.child.unwrap_or(work.parent)
         || comment.user_id.map(|id| id.to_string()).as_deref() != Some(writer)
-        || comment.body_digest != crate::digest::bytes_digest(comment.body.as_bytes())
+        || comment.body_digest != kegari_digest::bytes_digest(comment.body.as_bytes())
         || signed.payload.workspace_id != workspace
         || signed.payload.provider_writer != writer
     {
@@ -354,7 +354,7 @@ fn recover_retry_comments(
     workspace: Uuid,
     writer: &str,
     work: &WorkIdentity,
-    comments: &[crate::providers::Comment],
+    comments: &[kegari_providers::Comment],
     receipts: &[Receipt],
     key: &AttestationKey,
 ) -> Result<Vec<VerifiedRetryGrant>> {
@@ -864,10 +864,10 @@ mod tests {
         };
         let signed = key.sign("operator_retry", &grant).unwrap();
         let body = encode_signed_publication("operator_retry", &signed).unwrap();
-        let comment = crate::providers::Comment {
+        let comment = kegari_providers::Comment {
             id: Uuid::from_u128(30),
             issue_id: work().child.unwrap(),
-            body_digest: crate::digest::bytes_digest(body.as_bytes()),
+            body_digest: kegari_digest::bytes_digest(body.as_bytes()),
             body,
             user_id: Some(writer),
             delegated: false,
@@ -954,7 +954,7 @@ mod tests {
                 "writer" => changed.user_id = Some(Uuid::from_u128(99)),
                 "body" => {
                     changed.body.push(' ');
-                    changed.body_digest = crate::digest::bytes_digest(changed.body.as_bytes());
+                    changed.body_digest = kegari_digest::bytes_digest(changed.body.as_bytes());
                 }
                 "target" => changed.issue_id = Uuid::from_u128(99),
                 "receipt" => {

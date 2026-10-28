@@ -7,7 +7,6 @@ use crate::{
     authority::IssueKey,
     control::{ControlSnapshot, Intent, Lease, Permit, ReceiptPhase},
     delivery::*,
-    digest::canonical_digest,
     evidence::{
         self, Signed, VerifiedAcceptance, VerifiedParent, VerifiedProduction, WorkIdentity,
     },
@@ -17,6 +16,7 @@ use crate::{
     },
 };
 use kegari_config::ReleaseMode;
+use kegari_digest::canonical_digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeSet, sync::Mutex};
@@ -3205,8 +3205,8 @@ fn current_parent_publication(
 fn reject_superseding_parent(
     key: &evidence::AttestationKey,
     runtime: Uuid,
-    comments: &[crate::providers::Comment],
-    selected: &crate::providers::Comment,
+    comments: &[kegari_providers::Comment],
+    selected: &kegari_providers::Comment,
 ) -> Result<()> {
     DeliveryCoordinator::reject_superseding_parent_publication(key, runtime, comments, selected)
 }
@@ -3214,7 +3214,7 @@ fn reject_superseding_parent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::digest::canonical_digest;
+    use kegari_digest::canonical_digest;
 
     pub(super) fn record(plan: ReleasePlan, work: WorkIdentity) -> AttemptRecord {
         let reference = PublicationRef {

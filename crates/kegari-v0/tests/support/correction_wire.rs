@@ -1,7 +1,7 @@
 //! Synthetic provider facts only; shared with production-path correction tests.
-use crate::providers::*;
 use chrono::Utc;
 use kegari_config::Config;
+use kegari_providers::*;
 use kegari_types::error::Result;
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};

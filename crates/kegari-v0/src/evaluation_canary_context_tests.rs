@@ -2,7 +2,7 @@
 //! request, native authority, permit, WorkerContract or joined run is fabricated.
 use super::*;
 
-fn declared() -> (NativeContextBinding, Value, crate::providers::PullRequest) {
+fn declared() -> (NativeContextBinding, Value, kegari_providers::PullRequest) {
     let recipe: Value = serde_json::from_slice(
         &std::fs::read(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("evaluations/native/pr_attack-v1.json"),
@@ -22,7 +22,7 @@ fn declared() -> (NativeContextBinding, Value, crate::providers::PullRequest) {
     pr["head_sha"] = json!("4a9fd6935fd53fcf16156aed23bb274d78b66e96");
     (binding, input, serde_json::from_value(pr).unwrap())
 }
-fn binding(case: &Case, pr: &crate::providers::PullRequest) -> CanaryOperandBinding {
+fn binding(case: &Case, pr: &kegari_providers::PullRequest) -> CanaryOperandBinding {
     let component = bytes_digest(b"explicit context component, no native authority");
     CanaryOperandBinding {
         identity: case.owner.identity.clone(),
@@ -47,7 +47,7 @@ fn binding(case: &Case, pr: &crate::providers::PullRequest) -> CanaryOperandBind
 }
 fn host<'a>(
     case: &'a Case,
-    pr: &'a crate::providers::PullRequest,
+    pr: &'a kegari_providers::PullRequest,
     operand: Option<&'a OwnedCanaryPathOperand>,
 ) -> HostContext<'a> {
     HostContext {

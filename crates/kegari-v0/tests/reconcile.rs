@@ -1,11 +1,12 @@
 //! Reconciliation through production provider parsers; all HTTP is injected.
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_digest::canonical_digest;
+use kegari_providers::*;
 use kegari_types::error::Result;
 use kegari_v0::{
     authority::CommentClass,
     control::{ControlSnapshot, Intent, IntentRecord},
-    digest::canonical_digest,
     evidence::{self, AttestationKey, Publication},
     providers::*,
     reconcile::*,
@@ -2430,7 +2431,7 @@ async fn coordination_preservation_binds_actual_opaque_authority_and_directory_i
             &lease,
             Uuid::new_v4(),
             authority.work_key().unwrap(),
-            kegari_v0::digest::canonical_digest(1, &"fixture-preparation").unwrap(),
+            kegari_digest::canonical_digest(1, &"fixture-preparation").unwrap(),
             || Ok(()),
         )
         .unwrap();
@@ -2542,7 +2543,7 @@ async fn shared_corrective_publication_fence_blocks_cached_and_active_work_befor
                 id(2),
                 &parent,
                 operation,
-                &kegari_v0::digest::bytes_digest(b"exact future correction"),
+                &kegari_digest::bytes_digest(b"exact future correction"),
                 &id(5).to_string(),
             )
         })
@@ -2638,7 +2639,7 @@ async fn historical_gate_recovery_requires_host_signature_exact_schema_and_embed
             "profile" => value["authority"]["profile"]["model"] = json!("unbound-model"),
             "scope" => {
                 value["authority"]["child_scope_digest"] =
-                    json!(kegari_v0::digest::bytes_digest(b"unbound scope"))
+                    json!(kegari_digest::bytes_digest(b"unbound scope"))
             }
             "purpose" => value["authority"]["purpose"] = json!("release-anything"),
             "unknown" => value["authority"]["raw_permission"] = json!(true),

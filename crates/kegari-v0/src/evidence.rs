@@ -4,13 +4,13 @@
 //! reads. They must never be accepted as worker tool arguments. A worker's prose
 //! or submitted result reference cannot manufacture a `Verified*` value.
 
-use crate::digest::{bytes_digest, canonical_bytes, canonical_digest};
 use crate::git::{
     CandidateManifest, DeltaManifest, RepositoryId, Revision, VerifiedProductionIntegration,
     validate_oid,
 };
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use kegari_digest::{bytes_digest, canonical_bytes, canonical_digest};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;

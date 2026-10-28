@@ -17,9 +17,8 @@ use super::super::{
     BrokerCapture, BrokerObservationState, BrokerReceiptState, CaptureBudget, OriginalRequest,
     observe_requests, receipt_state,
 };
-use crate::providers::{
-    Credential, GithubClient, HttpPolicy, HttpRequest, HttpResponse, HttpTransport, Method,
-};
+use kegari_providers::HttpTransport;
+use kegari_providers::{Credential, GithubClient, HttpPolicy, HttpRequest, HttpResponse, Method};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::sync::atomic::AtomicUsize;
 use std::task::{Context, Poll};

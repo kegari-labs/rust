@@ -3,21 +3,21 @@
 use super::*;
 use base64::Engine;
 
-pub(crate) struct GithubObjectSession {
+pub struct GithubObjectSession {
     transport: Arc<dyn HttpTransport>,
     base: Url,
     authorization: HeaderValue,
     timeout: Duration,
 }
 impl GithubClient {
-    pub(crate) fn object_origin_identity(&self) -> (String, String) {
+    pub fn object_origin_identity(&self) -> (String, String) {
         (
             self.http.policy.endpoint.as_str().into(),
             self.http.policy.account_id.clone(),
         )
     }
 
-    pub(crate) async fn object_session(
+    pub async fn object_session(
         &self,
         repository: &RepositoryIdentity,
         hostname: &str,
@@ -82,10 +82,10 @@ impl GithubClient {
     }
 }
 impl GithubObjectSession {
-    pub(crate) async fn advertisement(&self, max: usize) -> Result<Vec<u8>> {
+    pub async fn advertisement(&self, max: usize) -> Result<Vec<u8>> {
         self.send(None, max).await
     }
-    pub(crate) async fn fetch(&self, request: Vec<u8>, max: usize) -> Result<Vec<u8>> {
+    pub async fn fetch(&self, request: Vec<u8>, max: usize) -> Result<Vec<u8>> {
         self.send(Some(request), max).await
     }
     async fn send(&self, request: Option<Vec<u8>>, max: usize) -> Result<Vec<u8>> {

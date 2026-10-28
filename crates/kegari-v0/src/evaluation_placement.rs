@@ -77,13 +77,13 @@ pub fn prepare_worker_fixture(
 
 struct FixtureContext<'a> {
     value: &'a Value,
-    independent_pull_request: Option<&'a crate::providers::PullRequest>,
+    independent_pull_request: Option<&'a kegari_providers::PullRequest>,
 }
 
 fn declared_review_text(
     input: &Value,
     binding: Option<&NativeContextBinding>,
-) -> Result<crate::providers::PullRequestText> {
+) -> Result<kegari_providers::PullRequestText> {
     let binding = binding.ok_or_else(|| {
         Error::new(
             "evaluation_fidelity",
@@ -97,7 +97,7 @@ fn declared_review_text(
             "declared independent PR input is missing",
         )
     })?;
-    crate::providers::PullRequestText::from_value(pr).map_err(|error| {
+    kegari_providers::PullRequestText::from_value(pr).map_err(|error| {
         Error::new(
             "evaluation_fidelity",
             format!("invalid declared independent PR text: {}", error.code),
@@ -108,7 +108,7 @@ fn declared_review_text(
 impl PreparedFixture {
     /// Literal declared task input only. This does not create a provider/source
     /// capability or copy an observed context into the fixture expectation.
-    pub(crate) fn independent_review_text(&self) -> Result<crate::providers::PullRequestText> {
+    pub(crate) fn independent_review_text(&self) -> Result<kegari_providers::PullRequestText> {
         self.verify_preparation()?;
         declared_review_text(&self.input, self.context_binding.as_ref())
     }

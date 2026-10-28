@@ -1,7 +1,6 @@
 //! Descriptive schema/predicate tests only. These values do not construct a
 //! ValidationPlan, VerifiedCheckExecution, worker outcome or native capability.
 use super::*;
-use crate::digest::bytes_digest;
 use crate::execution::{
     ArtifactProof, DiscoveredCheckProvenance, ExecutionBinding, SourceSnapshot,
 };
@@ -11,6 +10,7 @@ use crate::platform::BinaryIdentity;
 use crate::validation::{
     DiscoveryJournalReference, DiscoveryReadContent, DiscoveryReadReference, ValidationRequirement,
 };
+use kegari_digest::bytes_digest;
 use std::path::PathBuf;
 
 fn at(seconds: i64) -> DateTime<Utc> {

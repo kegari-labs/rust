@@ -873,7 +873,7 @@ async fn correct_parent(
         )
         .unwrap();
     let claim = json!({"kind":"correction_classification","classifications":[{
-        "source_comment":comment,"source_revision":crate::digest::bytes_digest(body.as_bytes()),"class":"corrective",
+        "source_comment":comment,"source_revision":kegari_digest::bytes_digest(body.as_bytes()),"class":"corrective",
         "rationale":"The native request changes validation expectations within existing scope",
         "routes":[{"child":Uuid::from_u128(101),"instructions":"Validate existing behavior without adding an unrelated source change.",
             "validation_expectations":["Run configured local and exact revision checks; report actual evidence"]}]}]});

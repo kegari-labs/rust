@@ -41,7 +41,7 @@ impl Targets {
                     run,
                     deployment,
                     source: source.clone(),
-                    artifact: crate::digest::bytes_digest(
+                    artifact: kegari_digest::bytes_digest(
                         format!("distinct actual fixture artifact for {target}").as_bytes(),
                     ),
                     archive: vec![],
@@ -213,7 +213,7 @@ impl Targets {
             }
             if path == format!("{prefix}/actions/artifacts/{}", run + 30) {
                 return Some(response(
-                    json!({"id":run+30,"workflow_run":{"id":run,"repository_id":42,"head_sha":"1".repeat(40)},"expired":false,"size_in_bytes":target.archive.len(),"digest":crate::digest::bytes_digest(&target.archive)}),
+                    json!({"id":run+30,"workflow_run":{"id":run,"repository_id":42,"head_sha":"1".repeat(40)},"expired":false,"size_in_bytes":target.archive.len(),"digest":kegari_digest::bytes_digest(&target.archive)}),
                 ));
             }
             if path == format!("{prefix}/actions/artifacts/{}/zip", run + 30) {

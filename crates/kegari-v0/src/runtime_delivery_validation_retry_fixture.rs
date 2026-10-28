@@ -515,7 +515,7 @@ async fn admit(
         assert_eq!(wrong.validate_binding().unwrap_err().code, "worker_binding");
         let mut wrong_generation = request.clone();
         wrong_generation.phase.generation =
-            crate::digest::bytes_digest(b"different validation generation");
+            kegari_digest::bytes_digest(b"different validation generation");
         assert_eq!(
             wrong_generation.validate_binding().unwrap_err().code,
             "worker_binding"

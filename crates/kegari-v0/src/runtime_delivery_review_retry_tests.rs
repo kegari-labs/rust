@@ -114,7 +114,7 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
         .model = original_profile;
     let original_generation = failed.state.binding.generation.clone();
     Arc::get_mut(&mut failed).unwrap().state.binding.generation =
-        crate::digest::bytes_digest(b"unadmitted correction");
+        kegari_digest::bytes_digest(b"unadmitted correction");
     assert!(
         phase
             .coordinator
@@ -294,7 +294,7 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
     wrong.phase.retry_grant = None;
     assert!(wrong.validate_binding().is_err());
     let mut wrong_generation = request.clone();
-    wrong_generation.phase.generation = crate::digest::bytes_digest(b"different correction");
+    wrong_generation.phase.generation = kegari_digest::bytes_digest(b"different correction");
     assert!(wrong_generation.validate_binding().is_err());
     let (_records, outcome, completion) = if f.findings {
         crate::runtime_delivery::worker_fixture::complete_review_retry_claim(

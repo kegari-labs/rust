@@ -14,9 +14,12 @@ operations, storage, credentials, platform operations and the runtime. The
 backend imports the same shared types and configuration models without
 reexporting them. This is not yet a lightweight standalone client.
 
+CLI hash fixtures use `kegari-digest` as a development dependency; the CLI has no
+direct provider-adapter dependency.
+
 All packages share workspace version `0.2.0-alpha.10`. CLI version output and
 internal metadata identify the same assembled application; its build identity
-must cover the application sources in all four packages.
+must cover the application sources in all six packages.
 
 From the workspace root:
 
@@ -26,7 +29,7 @@ cargo run --offline --locked -p kegari-cli -- --help
 cargo test --offline --locked -p kegari-cli
 ```
 
-Use `--workspace` for complete test and lint checks across all four packages. The
+Use `--workspace` for complete test and lint checks across all six packages. The
 evaluation-inspection binary remains in the backend package. See the [command guide](../kegari-v0/docs/cli.md),
 [backend documentation](../kegari-v0/README.md) and [progress](../kegari-v0/PROGRESS.md).
 The archived alpha.10 package is unchanged by this source refactor; no new

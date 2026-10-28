@@ -3,13 +3,13 @@
 use crate::{
     authority::{CommentClass, CommentRevision, Corrections, IssueKey},
     control::{ControlHost, Receipt, ReceiptPhase},
-    digest::{bytes_digest, canonical_digest},
     evidence::{AttestationKey, Signed, WorkIdentity, decode_signed_publication},
-    providers::Comment,
     reconcile::{ParentProjection, ReconcileRefs, RuntimeProjection},
 };
 use chrono::{DateTime, Utc};
 use kegari_config::{Config, Workspace};
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::Comment;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -753,7 +753,7 @@ impl CorrectionPublisher {
     pub fn new(services: CorrectionDependencies) -> Self {
         Self { services }
     }
-    fn client(&self, config: &Config, workspace: Uuid) -> Result<crate::providers::LinearClient> {
+    fn client(&self, config: &Config, workspace: Uuid) -> Result<kegari_providers::LinearClient> {
         let transports = config
             .connections
             .keys()
@@ -1339,7 +1339,7 @@ impl CorrectionPublisher {
         self: &std::sync::Arc<Self>,
         lease: &crate::control::Lease,
         plan: &PublicationPlan,
-        client: &crate::providers::LinearClient,
+        client: &kegari_providers::LinearClient,
         writer: &str,
         publication: PublicationSpec,
     ) -> Result<Comment> {
@@ -1419,7 +1419,7 @@ impl CorrectionPublisher {
     }
     async fn observe_stage(
         &self,
-        client: &crate::providers::LinearClient,
+        client: &kegari_providers::LinearClient,
         writer: &str,
         parent: &IssueKey,
         publication: &PublicationSpec,

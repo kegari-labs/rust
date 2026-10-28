@@ -1,10 +1,11 @@
 //! Credential transaction tests use a labeled wire and secret-store fixture;
 //! they do not contact accounts or invoke the native Keychain adapter.
 use kegari_config::Connection;
+use kegari_providers::HttpTransport;
+use kegari_providers::{HttpRequest, HttpResponse};
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     connections::verify_credential,
-    providers::{HttpRequest, HttpResponse, HttpTransport},
     secrets::{Secret, SecretStore},
 };
 use serde_json::json;

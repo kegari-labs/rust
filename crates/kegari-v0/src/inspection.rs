@@ -580,7 +580,7 @@ fn deduplicate_history(history: &mut Vec<HistoryRow>) -> Result<()> {
     let mut seen = BTreeSet::new();
     let mut unique = Vec::with_capacity(history.len());
     for row in history.drain(..) {
-        if seen.insert(crate::digest::canonical_digest(1, &row)?) {
+        if seen.insert(kegari_digest::canonical_digest(1, &row)?) {
             unique.push(row);
         }
     }

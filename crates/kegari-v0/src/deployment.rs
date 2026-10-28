@@ -3,18 +3,16 @@
 use crate::{
     control::{ControlHost, Permit, Receipt, ReceiptPhase},
     delivery::{DeliveryAdmission, DeliveryPhase, RepositoryContract},
-    digest::{bytes_digest, canonical_digest},
     evidence::{AttestationKey, ProductionBaseline, ProductionTargetBaseline, Signed},
     git::Revision,
-    providers::{
-        GithubClient, GithubRecord, HostedProofExpectation, HostedProofVerifier, ProviderMutation,
-        VerifiedHostedJob, WorkflowJob, WorkflowRun,
-    },
+    providers::{HostedProofExpectation, HostedProofVerifier, ProviderMutation, VerifiedHostedJob},
     reconcile::FreshGate,
     storage::PrivateDir,
 };
 use chrono::{DateTime, Utc};
 use kegari_config::{Deployment, DeploymentStep};
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::{GithubClient, GithubRecord, WorkflowJob, WorkflowRun};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

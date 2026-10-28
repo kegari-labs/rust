@@ -2198,8 +2198,8 @@ impl DeliveryCoordinator {
     pub(crate) fn reject_superseding_parent_publication(
         key: &evidence::AttestationKey,
         runtime: Uuid,
-        comments: &[crate::providers::Comment],
-        selected: &crate::providers::Comment,
+        comments: &[kegari_providers::Comment],
+        selected: &kegari_providers::Comment,
     ) -> Result<()> {
         let (_, expected) = DeliveryCoordinator::decode_parent_publication(&selected.body, key)?;
         let selected_time = selected.created_at.ok_or_else(|| {

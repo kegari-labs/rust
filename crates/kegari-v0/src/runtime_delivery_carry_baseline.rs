@@ -5,13 +5,13 @@
 //! tracker history, a raw artifact reference, or a partial ancestor's merge.
 use crate::delivery::RepositoryContract;
 use crate::deployment::VerifiedProductionBaseline;
-use crate::digest::canonical_digest;
 use crate::evidence::{ProductionBaseline, VerifiedParent, WorkIdentity};
 use crate::git::{ProductionIntegration, RepositoryId, Revision, VerifiedProductionIntegration};
 use crate::release::{ObservedEffect, ResourceKey, StepKind, StepState};
 use crate::runtime_delivery::VerifiedReleaseCompletion;
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};

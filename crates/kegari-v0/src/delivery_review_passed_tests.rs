@@ -3,7 +3,7 @@
 use super::*;
 use crate::control::PreparationReference;
 fn hash(text: &str) -> String {
-    crate::digest::bytes_digest(text.as_bytes())
+    kegari_digest::bytes_digest(text.as_bytes())
 }
 fn reference(id: u128) -> ReviewReceiptReference {
     ReviewReceiptReference {

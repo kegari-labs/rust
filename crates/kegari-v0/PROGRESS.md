@@ -1,5 +1,77 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Provider/digest extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. Starting from
+`d1648894ad1b59aa728bd831bc8a8e88033baf9d` on `main`, the unchanged shared hash
+implementation moved into `kegari-digest`. GitHub/Linear transport, records and
+fixed typed network operations moved into `kegari-providers`. Neither new crate
+depends on the backend. Import moved symbols directly from their owning crates;
+there are no backend compatibility reexports. The CLI has only a development
+hash dependency and retains its temporary backend dependency.
+
+The backend retains the exact `ProviderMutation` representation, command binding,
+preflight ordering, final authorization, owned dispatch and receipt lifecycle.
+Its private transmission match delegates to four Linear and eleven GitHub typed
+write methods. Credentials, HTTP core and upload grants remain private. The
+backend also retains hosted-proof verification/replay, receipt-bound Linear
+association checks and sealed asset construction. See the
+[provider boundary and function migrations](../kegari-providers/README.md) and
+[hash migration](../kegari-digest/README.md).
+
+All six packages retain `0.2.0-alpha.10`; configuration/API/persisted schemas,
+asset version `7`, provider revision pins, User-Agent and executable name remain
+unchanged. All 239 external lock entries are unchanged. Configuration revision
+calculation still calls the same `canonical_digest(1, config)` implementation.
+
+All 30 original provider tests' assertions are retained across the new crate and
+backend. Splitting redaction coverage and adding three boundary tests produces
+18 provider tests and 16 backend provider tests. The original digest regression
+moved unchanged, with two compact vector/rejection tests added. The bounded
+independent review found no material issues in wire request/acknowledgement
+compatibility, authorization/task ordering, asset/proof admission, dependency
+direction, hashing or retained assertions.
+
+Verification used the pinned Rust/Cargo 1.99.1 toolchain through the verified
+`stable` alias and `CARGO_HOME=/private/tmp/kegari-v0-cargo-cache`. Lockfile
+resolution was offline; builds/tests/lint used `--offline --locked` afterward.
+Normal concurrency and all three native ignores were preserved. One complete
+release suite ran on the final source; no failed-test reruns were needed.
+
+| Check | Result |
+| --- | --- |
+| Standalone digest and provider crates | 3 + 18 passed. |
+| Focused backend configuration/connection/provider coverage | 73 passed. |
+| Focused Git object and CLI coverage | 20 + 44 passed. |
+| Formatting and strict workspace all-target Clippy | Passed. |
+| Contract inventory and its tests | 519 blocks, 140 named requirements; 11 tests passed. |
+| Complete workspace release regression | 1,273 passed, 0 failed, 3 native ignored; 54 result groups. |
+| Optimized application build from `kegari-cli` | Passed; aarch64-apple-darwin. |
+| Minimal-environment help/version/setup-help/build/handover inspection | Passed; consistent identity, unchanged schemas/assets, no runtime state created. |
+
+Exact commands, logs, independent review and source/inspection evidence are
+indexed in `/private/tmp/kegari-providers-extraction-checks.json`. Initial
+compiler diagnostics for moved trait imports, duplicate glob imports and shared
+fixture hash imports are retained; all were resolved before final verification.
+All 766 source/test/build inputs match
+`/private/tmp/kegari-providers-extraction-source.json`, digest
+`sha256:f209cafab46efbf3ed9fb20e30133413aa21737883dfff26b37a80ea944f32a0`.
+
+Independent recomputation matches the 362-input shared application identity,
+including both new manifests and every new crate source file:
+`sha256:577f3db782de907d447b7bf3f6cd5db119b6dad2142c26430da1245454166ecb`.
+The inspected development executable is `target/release/kegari-v0`, SHA-256
+`1b7592753b53502db1c71644629da4074b2bddf77bf9d4f06a30306f74271483`.
+
+The alpha.10 archive digest and all 381 files listed in its checksum manifest
+remain unchanged. No new prerelease was packaged. This refactor closes no minor
+milestone and adds no operational qualification. No native/live qualification,
+installation, activation, commit or remote operation occurred. Existing execution
+restrictions remain. Stop at this reviewed, uncommitted checkpoint; further work
+requires a separate prompt.
+
+### Configuration extraction — historical checkpoint (committed as `d164889`)
+
 **Goal mode cancelled. `kegari-config` extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. Starting from

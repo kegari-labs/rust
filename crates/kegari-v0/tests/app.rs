@@ -339,9 +339,9 @@ fn historical_display(
     runtime: Uuid,
     workspace: Uuid,
 ) -> kegari_v0::inspection::ReleaseInspectionRow {
+    use kegari_digest::bytes_digest;
     use kegari_v0::{
         authority::IssueKey,
-        digest::bytes_digest,
         evidence::{Generation, WorkIdentity},
         inspection::{ParentDisplay, ReleaseInspectionRow},
     };
@@ -754,9 +754,9 @@ fn no_release_historical_display(
     workspace: Uuid,
     operation: Uuid,
 ) -> kegari_v0::inspection::NoReleaseInspectionRow {
+    use kegari_digest::bytes_digest;
     use kegari_v0::{
         authority::IssueKey,
-        digest::bytes_digest,
         evidence::{Generation, NoReleaseRequired, WorkIdentity},
         inspection::{NoReleaseInspectionRow, NoReleasePublicationInspection, ParentDisplay},
     };

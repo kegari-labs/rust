@@ -3,6 +3,7 @@
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
 include!("support/worker_fixture.rs");
+use kegari_digest::{bytes_digest, canonical_digest};
 
 #[test]
 fn roles_expose_no_implementation_or_execution_to_parent_or_review() {
@@ -1236,7 +1237,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
         let authority = f.contract.authority().clone();
         let generation = match &authority {
             WorkerAuthority::Authorized(gate) => {
-                kegari_v0::digest::canonical_digest(1, &gate.work().generation).unwrap()
+                kegari_digest::canonical_digest(1, &gate.work().generation).unwrap()
             }
             WorkerAuthority::Independent(gate) => gate.review_identity().into(),
         };
@@ -1293,7 +1294,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
         );
         request.phase.generation = match &request.authority {
             WorkerAuthority::Authorized(gate) => {
-                kegari_v0::digest::canonical_digest(1, &gate.work().generation).unwrap()
+                kegari_digest::canonical_digest(1, &gate.work().generation).unwrap()
             }
             WorkerAuthority::Independent(gate) => gate.review_identity().into(),
         };
@@ -1646,9 +1647,9 @@ fn driver_preparation_identity_ignores_refresh_noise_without_resetting_phase_att
 
 #[test]
 fn correction_context_contains_exact_native_text_and_rejects_stale_or_missing_revisions() {
+    use kegari_providers::{Comment, Issue};
     use kegari_v0::{
         authority::{CommentRevision, CorrectionInvalidations},
-        providers::{Comment, Issue},
         reconcile::IssueObservation,
     };
     let fixture = Fixture::new(AgentRole::Coordination);

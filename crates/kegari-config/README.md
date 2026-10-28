@@ -10,7 +10,8 @@ authority or perform configuration transactions. Missing delivery policy remains
 representable for discovery, while accessors for required downstream policy
 continue to refuse unresolved declarations. The backend owns provider preflight,
 credential handling, durable configuration updates and workflow integration.
-Canonical hashing also remains in the backend.
+Configuration revision calculation remains in the backend and uses the shared
+canonical hashing implementation from `kegari-digest`.
 
 Configuration schema `1` and workspace version `0.2.0-alpha.10` are unchanged.
 This package extraction changes Rust ownership, not the serialized configuration
@@ -46,6 +47,6 @@ cargo clippy --offline --locked --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-The workspace checks cover all four packages. See
+The workspace checks cover all six packages. See
 [current progress](../kegari-v0/PROGRESS.md) for actual validation results and
 remaining limits; these commands are instructions, not evidence of a completed run.

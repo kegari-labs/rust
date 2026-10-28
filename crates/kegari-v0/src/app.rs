@@ -609,7 +609,7 @@ impl HostDispatcher {
         };
         let mut mutation = mutation_request(&actor, &request, targets);
         mutation.kind = format!("command/{:?}", request.command);
-        mutation.payload = json!({"arguments":request.args,"secret_digest":secret.as_ref().map(|s|crate::digest::bytes_digest(s.bytes()))});
+        mutation.payload = json!({"arguments":request.args,"secret_digest":secret.as_ref().map(|s|kegari_digest::bytes_digest(s.bytes()))});
         let evaluation_trial = if request.command == CommandName::EvaluationRun {
             Some(crate::api::evaluation_trial_identity(&request)?)
         } else {

@@ -22,7 +22,6 @@ pub mod control;
 pub mod corrections;
 pub mod delivery;
 pub mod deployment;
-pub mod digest;
 pub mod error;
 pub mod evaluation;
 pub mod evaluation_reports;

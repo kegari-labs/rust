@@ -6,10 +6,10 @@ use crate::{
     control::Lease,
     delivery::*,
     deployment::VerifiedProductionBaseline,
-    digest::canonical_digest,
     evidence::{RevisionBinding, VerifiedParent},
     git::Revision,
 };
+use kegari_digest::canonical_digest;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, sync::Mutex};
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

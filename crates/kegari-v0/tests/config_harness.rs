@@ -1,8 +1,8 @@
 //! Deterministic production-path coverage for V0-T01, T33 and T34.
 //! These do not substitute for provider discovery/sandbox or actual-agent trials.
 use kegari_config::*;
+use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_v0::config::{ConfigReload, config_revision, inspect_reload, load_workflows};
-use kegari_v0::digest::{bytes_digest, canonical_digest};
 use kegari_v0::instructions::*;
 use kegari_v0::workflow::*;
 use serde_json::{Value, json};

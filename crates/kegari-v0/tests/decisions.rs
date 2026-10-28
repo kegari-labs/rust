@@ -4,8 +4,10 @@
 mod pinned_git;
 use chrono::Utc;
 use kegari_config::Config;
+use kegari_digest::canonical_digest;
+use kegari_providers::*;
 use kegari_types::error::Result;
-use kegari_v0::{digest::canonical_digest, evidence::AttestationKey, providers::*, reconcile::*};
+use kegari_v0::{evidence::AttestationKey, reconcile::*};
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
 use std::{
@@ -720,7 +722,7 @@ async fn correction_signature_binds_plaintext_principal_target_and_actual_writer
         id: serde_json::from_value(raw["id"].clone()).unwrap(),
         issue_id: id(100),
         body: raw["body"].as_str().unwrap().into(),
-        body_digest: kegari_v0::digest::bytes_digest(raw["body"].as_str().unwrap().as_bytes()),
+        body_digest: kegari_digest::bytes_digest(raw["body"].as_str().unwrap().as_bytes()),
         user_id: Some(id(5)),
         delegated: false,
         bot: false,
@@ -752,10 +754,10 @@ async fn correction_signature_binds_plaintext_principal_target_and_actual_writer
     comment.body = comment
         .body
         .replace("Bound human intent", "Changed human intent");
-    comment.body_digest = kegari_v0::digest::bytes_digest(comment.body.as_bytes());
+    comment.body_digest = kegari_digest::bytes_digest(comment.body.as_bytes());
     assert!(verify(&comment).is_err());
     comment.body = raw["body"].as_str().unwrap().into();
-    comment.body_digest = kegari_v0::digest::bytes_digest(comment.body.as_bytes());
+    comment.body_digest = kegari_digest::bytes_digest(comment.body.as_bytes());
     comment.user_id = Some(id(99));
     assert!(verify(&comment).is_err());
     comment.user_id = Some(id(5));
@@ -1037,7 +1039,7 @@ async fn acceptance_cache_rejects_another_evidence_token_in_the_same_work_genera
         provider: "linear".into(),
         record_id: id(990).to_string(),
         writer_account_id: id(5).to_string(),
-        payload_digest: kegari_v0::digest::canonical_digest(1, &signed).unwrap(),
+        payload_digest: kegari_digest::canonical_digest(1, &signed).unwrap(),
         observed_at: Utc::now(),
         url: "https://linear.invalid/comment/990".into(),
     };

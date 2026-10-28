@@ -76,8 +76,8 @@ fn evaluation_cli_preserves_declared_slot_and_requires_observed_revisions() {
     let workspace = Uuid::new_v4().to_string();
     let request_id = Uuid::new_v4();
     let request_text = request_id.to_string();
-    let suite = kegari_v0::digest::bytes_digest(b"declared suite");
-    let config = kegari_v0::digest::bytes_digest(b"observed config");
+    let suite = kegari_digest::bytes_digest(b"declared suite");
+    let config = kegari_digest::bytes_digest(b"observed config");
     let args = vec![
         "kegari-v0",
         "--target",

@@ -745,7 +745,7 @@ fn plan_inner(
             ));
         }
         if last.operation_id != continuation.predecessor()
-            || crate::digest::canonical_digest(1, *last)? != continuation.predecessor_digest()
+            || kegari_digest::canonical_digest(1, *last)? != continuation.predecessor_digest()
             || observed.get("outcome").and_then(Value::as_str) != Some("completed")
             || observed
                 .get("hook_error")
@@ -832,7 +832,7 @@ fn plan_inner(
         }
         if let PlanTrigger::SourceAdvanced(reference) = continuation {
             if failure_run.phase.phase != "implementation"
-                || crate::digest::canonical_digest(1, failure)? != reference.source_receipt_digest
+                || kegari_digest::canonical_digest(1, failure)? != reference.source_receipt_digest
                 || !completed_session(failure)
             {
                 return Err(Error::new(

@@ -817,7 +817,7 @@ pub(crate) fn evaluation_trial_identity(request: &CommandRequest) -> Result<Stri
             .ok_or_else(|| Error::invalid("evaluation workspace missing"))?,
     )
     .map_err(|_| Error::invalid("evaluation workspace invalid"))?;
-    crate::digest::canonical_digest(
+    kegari_digest::canonical_digest(
         1,
         &serde_json::json!({"runtime":request.runtime_id,"workspace":workspace,"suite":request.args["suite_digest"],"case":request.args["case"],"variant":request.args["variant"],"profile":request.args["profile"],"repetition":request.args["repetition"]}),
     )

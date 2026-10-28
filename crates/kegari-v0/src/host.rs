@@ -8,7 +8,6 @@ use crate::{
     },
     configuration::{ConfigManager, ConfigurationInputs},
     control::{Actor, ControlHost, Receipt},
-    digest::canonical_digest,
     evidence::AttestationKey,
     housekeeping::{Housekeeping, LogEvent, LogSink, Severity},
     observations::{ObservationCache, ReferenceStore},
@@ -21,6 +20,7 @@ use crate::{
     },
     transport::{self, ServerHandle, TailscaleClient, TransportAuthentication},
 };
+use kegari_digest::canonical_digest;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};

@@ -731,7 +731,7 @@ fn established_foreign_output_never_uses_unbound_projection() {
         assert!(checkpoint_notification(&mut state, &mut broker, method, &params).is_err());
     }
     let mut changed = state.clone();
-    changed.binding.instruction_digest = crate::digest::bytes_digest(b"different binding");
+    changed.binding.instruction_digest = kegari_digest::bytes_digest(b"different binding");
     broker.observe_protocol(ProtocolObservation::ThreadEstablished { state: &changed });
     // A failed rebind must not reopen the initial unbound-prefix path.
     let _ = checkpoint_notification(

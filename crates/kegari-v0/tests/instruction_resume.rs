@@ -154,9 +154,9 @@ fn rewritten_visible_manifests_and_legacy_records_do_not_mint_resume_proof() {
     let original = f.assemble(operation, &f.context(operation, 1));
     let mut forged = original.clone();
     forged.prompt.push_str(" Changed instructions.");
-    forged.manifest.prompt_digest = kegari_v0::digest::bytes_digest(forged.prompt.as_bytes());
+    forged.manifest.prompt_digest = kegari_digest::bytes_digest(forged.prompt.as_bytes());
     forged.manifest_digest =
-        kegari_v0::digest::canonical_digest(ASSEMBLY_SCHEMA, &forged.manifest).unwrap();
+        kegari_digest::canonical_digest(ASSEMBLY_SCHEMA, &forged.manifest).unwrap();
     assert_eq!(
         original.verify_resume(&forged).unwrap_err().code,
         "resume_incompatible"
@@ -180,8 +180,7 @@ fn rewritten_visible_manifests_and_legacy_records_do_not_mint_resume_proof() {
         let mut changed_assembly = original.clone();
         changed_assembly.manifest = changed;
         changed_assembly.manifest_digest =
-            kegari_v0::digest::canonical_digest(ASSEMBLY_SCHEMA, &changed_assembly.manifest)
-                .unwrap();
+            kegari_digest::canonical_digest(ASSEMBLY_SCHEMA, &changed_assembly.manifest).unwrap();
         assert!(original.verify_resume(&changed_assembly).is_err());
     }
 }

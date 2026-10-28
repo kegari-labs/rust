@@ -1,7 +1,8 @@
 //! Explicit synthetic upstream PR assignment; real scoped changed source is
 //! verified separately and the qualified local-check barrier remains asserted.
 use super::*;
-use crate::providers::{HttpRequest, HttpResponse, HttpTransport};
+use kegari_providers::HttpTransport;
+use kegari_providers::{HttpRequest, HttpResponse};
 use std::sync::Mutex;
 pub(super) struct ReviewWire {
     revision: RevisionBinding,
@@ -23,7 +24,7 @@ impl HttpTransport for ReviewWire {
     {
         Box::pin(async move {
             let path = request.url.path();
-            let post = request.method == crate::providers::Method::Post;
+            let post = request.method == kegari_providers::Method::Post;
             let body: Value = if request.body.is_empty() {
                 Value::Null
             } else {

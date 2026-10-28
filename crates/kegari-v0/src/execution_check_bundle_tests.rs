@@ -10,26 +10,26 @@ fn plan() -> CheckBundlePlan {
         Uuid::new_v4(),
         Uuid::new_v4(),
         Uuid::new_v4(),
-        crate::digest::bytes_digest(b"component binding"),
-        crate::digest::bytes_digest(b"component isolation"),
+        kegari_digest::bytes_digest(b"component binding"),
+        kegari_digest::bytes_digest(b"component isolation"),
         vec![
             CheckBundleStepSpec {
                 process_id: Uuid::new_v4(),
                 kind: CheckMemberKind::Service,
                 service: Some("fixture".into()),
-                launch_digest: crate::digest::bytes_digest(b"service"),
+                launch_digest: kegari_digest::bytes_digest(b"service"),
             },
             CheckBundleStepSpec {
                 process_id: Uuid::new_v4(),
                 kind: CheckMemberKind::Readiness,
                 service: Some("fixture".into()),
-                launch_digest: crate::digest::bytes_digest(b"readiness"),
+                launch_digest: kegari_digest::bytes_digest(b"readiness"),
             },
             CheckBundleStepSpec {
                 process_id: Uuid::new_v4(),
                 kind: CheckMemberKind::Check,
                 service: None,
-                launch_digest: crate::digest::bytes_digest(b"check"),
+                launch_digest: kegari_digest::bytes_digest(b"check"),
             },
         ],
     )
@@ -40,7 +40,7 @@ fn outcome(code: i32) -> CommandOutcome {
         schema_version: 1,
         argv: vec!["component".into()],
         cwd: "/component".into(),
-        isolation_digest: crate::digest::bytes_digest(b"component isolation"),
+        isolation_digest: kegari_digest::bytes_digest(b"component isolation"),
         exit_code: Some(code),
         termination_signal: None,
         timed_out: false,
@@ -202,7 +202,7 @@ fn main_check_failure_eligibility_requires_clean_service_and_readiness_records()
     let record = CheckBundleExecutionRecord {
         schema_version: 1,
         effect_id: Uuid::new_v4(),
-        plan_digest: crate::digest::bytes_digest(b"plan"),
+        plan_digest: kegari_digest::bytes_digest(b"plan"),
         services: vec![ServiceExecutionRecord {
             name: "fixture".into(),
             service_process: Uuid::new_v4(),
@@ -285,19 +285,19 @@ async fn warm_empty_bundle_uses_original_control_and_registry_owner_cold_records
                 RunAdmission {
                     request_id: Uuid::new_v4(),
                     work_key: work.clone(),
-                    scope_digest: crate::digest::bytes_digest(b"scope"),
+                    scope_digest: kegari_digest::bytes_digest(b"scope"),
                     reference: RunReference {
                         workspace: Uuid::new_v4(),
                         account: "component-account".into(),
                         normalized_state: None,
                         phase: crate::scheduler::PhaseKey {
                             work,
-                            generation: crate::digest::bytes_digest(b"generation"),
+                            generation: kegari_digest::bytes_digest(b"generation"),
                             phase: "parent_evidence_review".into(),
                             retry_grant: None,
                         },
-                        profile_digest: crate::digest::bytes_digest(b"profile"),
-                        instruction_digest: crate::digest::bytes_digest(b"instruction"),
+                        profile_digest: kegari_digest::bytes_digest(b"profile"),
+                        instruction_digest: kegari_digest::bytes_digest(b"instruction"),
                         max_attempts: 1,
                         max_turns: 1,
                         max_review_rounds: 1,
@@ -313,7 +313,7 @@ async fn warm_empty_bundle_uses_original_control_and_registry_owner_cold_records
             effect,
             permit.operation_id,
             runtime,
-            crate::digest::bytes_digest(b"component binding"),
+            kegari_digest::bytes_digest(b"component binding"),
             template.isolation_digest().into(),
             template
                 .steps()

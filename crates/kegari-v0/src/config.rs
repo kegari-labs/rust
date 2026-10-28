@@ -1,6 +1,6 @@
 //! Backend configuration identity, workflow integration and reload inspection.
-use crate::digest::canonical_digest;
 use kegari_config::{Config, Workspace};
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use std::{collections::BTreeMap, path::Path};
 use uuid::Uuid;

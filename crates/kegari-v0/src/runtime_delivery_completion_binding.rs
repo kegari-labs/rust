@@ -39,7 +39,7 @@ impl DependencyBinding {
                 .get(name)
                 .filter(|connection| connection.kind == kind)
                 .ok_or_else(|| invalid("completed release provider connection is unavailable"))?;
-            let policy = crate::providers::HttpPolicy::new(
+            let policy = kegari_providers::HttpPolicy::new(
                 connection
                     .endpoint
                     .as_deref()
@@ -96,7 +96,7 @@ impl DependencyBinding {
             ));
         }
         for provider in [&self.linear, &self.github] {
-            let observed = crate::providers::HttpPolicy::new(
+            let observed = kegari_providers::HttpPolicy::new(
                 &provider.endpoint,
                 provider.account.clone(),
                 std::time::Duration::from_secs(1),

@@ -8,14 +8,15 @@ use crate::{
         Actor, ControlHost, Lease, MetadataAdmission, MetadataReference, MutationRequest, Receipt,
         ReceiptPhase, Reconciliation,
     },
-    digest::{bytes_digest, canonical_digest},
     evidence::{AttestationKey, Publication, decode_signed_publication, encode_signed_publication},
     observations::ObservationCache,
-    providers::{LinearClient, ProviderBroker, ProviderMutation},
+    providers::{ProviderBroker, ProviderMutation},
     reconcile::{AuthorizationGate, VerifiedAuthorization},
     secrets::SecretStore,
 };
 use chrono::{Duration, Utc};
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::LinearClient;
 use kegari_types::error::{Error, Result};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};

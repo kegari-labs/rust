@@ -1,7 +1,7 @@
+use kegari_digest::canonical_digest;
 use kegari_types::error::Error;
 use kegari_v0::{
     control::*,
-    digest::canonical_digest,
     storage::{PrivateDir, WriteBoundary},
 };
 use serde_json::json;

@@ -2,10 +2,9 @@
 //! Downstream PR assignment is explicitly synthetic upstream component input.
 use super::*;
 use crate::runtime_delivery::worker_fixture::complete;
-use crate::{
-    providers::{HttpRequest, HttpResponse, HttpTransport},
-    worker_run::RunCompletion,
-};
+use crate::worker_run::RunCompletion;
+use kegari_providers::HttpTransport;
+use kegari_providers::{HttpRequest, HttpResponse};
 use std::collections::BTreeSet;
 
 fn current(f: &ReviewFixture<'_>) -> Result<Vec<crate::decisions::VerifiedRetryGrant>> {
@@ -424,7 +423,7 @@ pub(super) async fn run(
     wrong.phase.retry_grant = None;
     assert!(wrong.validate_binding().is_err());
     let mut changed_generation = launch.clone();
-    changed_generation.phase.generation = crate::digest::bytes_digest(b"other correction");
+    changed_generation.phase.generation = kegari_digest::bytes_digest(b"other correction");
     assert!(changed_generation.validate_binding().is_err());
     f.wire
         .lock()
@@ -516,7 +515,7 @@ pub(super) async fn run(
             reference[field] = match field {
                 "predecessor" | "source_operation" => json!(Uuid::new_v4()),
                 "review_rounds_consumed" => json!(1),
-                _ => json!(crate::digest::bytes_digest(b"another causal admission")),
+                _ => json!(kegari_digest::bytes_digest(b"another causal admission")),
             };
             receipt.expected.insert(
                 "source_advanced".into(),
@@ -675,7 +674,7 @@ impl HttpTransport for ReviewWire {
     {
         Box::pin(async move {
             let path = request.url.path();
-            let post = request.method == crate::providers::Method::Post;
+            let post = request.method == kegari_providers::Method::Post;
             let body: Value = if request.body.is_empty() {
                 Value::Null
             } else {

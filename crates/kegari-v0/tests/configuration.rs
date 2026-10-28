@@ -1,6 +1,8 @@
 //! Real private storage/control serialization with labeled provider/Keychain fixtures.
 //! No native Keychain, account login, provider network or agent process is invoked.
 use kegari_config::{Config, Connection};
+use kegari_providers::HttpTransport;
+use kegari_providers::{HttpRequest, HttpResponse};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use kegari_v0::config::config_revision;
@@ -12,7 +14,6 @@ use kegari_v0::{
         BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
         Registration,
     },
-    providers::{HttpRequest, HttpResponse, HttpTransport},
     secrets::{Secret, SecretStore},
     transport::TransportAuthentication,
 };
@@ -303,7 +304,7 @@ async fn verified_secret_import_commits_atomically_and_exact_replay_does_not_pro
     assert_eq!(f.store.writes.load(Ordering::SeqCst), 1);
     let persisted = serde_json::to_string(&receipt).unwrap();
     assert!(!persisted.contains("sentinel-secret"));
-    assert!(!persisted.contains(&kegari_v0::digest::bytes_digest(b"sentinel-secret")));
+    assert!(!persisted.contains(&kegari_digest::bytes_digest(b"sentinel-secret")));
 }
 
 #[tokio::test]
@@ -544,7 +545,7 @@ fn queue(f: &Fixture, request: &CommandRequest, secret: &[u8]) -> kegari_v0::con
         kegari_v0::app::mutation_request(&f.actor, request, vec![request.runtime_id.to_string()]);
     mutation.kind = format!("command/{:?}", request.command);
     mutation.payload =
-        json!({"arguments":request.args,"secret_digest":kegari_v0::digest::bytes_digest(secret)});
+        json!({"arguments":request.args,"secret_digest":kegari_digest::bytes_digest(secret)});
     let (receipt, fresh) = f
         .control
         .queue_command(mutation, "configure", || Ok(()))
@@ -714,7 +715,7 @@ impl HttpTransport for PrerequisiteWire {
         request: HttpRequest,
     ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
         Box::pin(async move {
-            assert!(matches!(request.method, kegari_v0::providers::Method::Get));
+            assert!(matches!(request.method, kegari_providers::Method::Get));
             assert!(request.body.is_empty());
             let path = request.url.path();
             self.paths.lock().unwrap().push(path.into());
@@ -761,15 +762,15 @@ async fn repository_prerequisites_read_exact_branches_workflows_and_policy_witho
         fault: "",
         paths: Mutex::new(vec![]),
     });
-    let client = kegari_v0::providers::GithubClient::with_transport(
-        kegari_v0::providers::HttpPolicy::new(
+    let client = kegari_providers::GithubClient::with_transport(
+        kegari_providers::HttpPolicy::new(
             "https://github.invalid/",
             "7".into(),
             std::time::Duration::from_secs(2),
         )
         .unwrap(),
         workspace.github.clone(),
-        kegari_v0::providers::Credential::new("fixture".into()).unwrap(),
+        kegari_providers::Credential::new("fixture".into()).unwrap(),
         Some(wire.clone()),
     )
     .unwrap();
@@ -811,15 +812,15 @@ async fn repository_prerequisites_block_missing_access_workflows_and_incompatibl
             fault,
             paths: Mutex::new(vec![]),
         });
-        let client = kegari_v0::providers::GithubClient::with_transport(
-            kegari_v0::providers::HttpPolicy::new(
+        let client = kegari_providers::GithubClient::with_transport(
+            kegari_providers::HttpPolicy::new(
                 "https://github.invalid/",
                 "7".into(),
                 std::time::Duration::from_secs(2),
             )
             .unwrap(),
             workspace.github.clone(),
-            kegari_v0::providers::Credential::new("fixture".into()).unwrap(),
+            kegari_providers::Credential::new("fixture".into()).unwrap(),
             Some(wire),
         )
         .unwrap();
@@ -856,15 +857,15 @@ async fn missing_delivery_policy_preserves_read_access_without_probing_dependent
         fault: "",
         paths: Mutex::new(vec![]),
     });
-    let client = kegari_v0::providers::GithubClient::with_transport(
-        kegari_v0::providers::HttpPolicy::new(
+    let client = kegari_providers::GithubClient::with_transport(
+        kegari_providers::HttpPolicy::new(
             "https://github.invalid/",
             "7".into(),
             std::time::Duration::from_secs(2),
         )
         .unwrap(),
         workspace.github.clone(),
-        kegari_v0::providers::Credential::new("fixture".into()).unwrap(),
+        kegari_providers::Credential::new("fixture".into()).unwrap(),
         Some(wire.clone()),
     )
     .unwrap();

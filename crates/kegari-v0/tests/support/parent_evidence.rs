@@ -2,7 +2,8 @@
 //! Actual Git candidate bytes are created only in an owned disposable repository.
 use crate::pinned_git;
 use chrono::{Duration, Utc};
-use kegari_v0::{digest::canonical_digest, evidence::*, git::*};
+use kegari_digest::canonical_digest;
+use kegari_v0::{evidence::*, git::*};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,

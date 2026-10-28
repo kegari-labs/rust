@@ -7,7 +7,6 @@ use crate::{
         Actor, Lease, MutationRequest, Permit, PreparationAdmission, PreparationReference,
         RunAdmission, RunReference,
     },
-    digest::canonical_digest,
     execution::{
         DirectoryIdentity, ExecutionBinding, ExecutionLimits, HookInvocation, HookLedger,
         HookPhase, JournaledSandboxBoundary, LocalExecutor, OwnedDirectory,
@@ -35,6 +34,7 @@ use crate::{
     workflow::Workflow,
 };
 use kegari_config::{Config, Workspace};
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -149,8 +149,8 @@ enum ProviderSource<'a> {
     Review(&'a crate::reconcile::IndependentReviewGate),
 }
 async fn provider_revision(
-    github: &crate::providers::GithubClient,
-    repository: &crate::providers::RepositoryIdentity,
+    github: &kegari_providers::GithubClient,
+    repository: &kegari_providers::RepositoryIdentity,
     target: ProviderSource<'_>,
 ) -> Result<Revision> {
     let commit = match &target {
@@ -203,7 +203,7 @@ async fn provider_revision(
 }
 
 fn require_current_review(
-    actual: &crate::providers::IndependentPullRequest,
+    actual: &kegari_providers::IndependentPullRequest,
     expected: &crate::reconcile::IndependentReviewGate,
 ) -> Result<()> {
     actual.text.validate()?;
@@ -2143,7 +2143,7 @@ pub fn native_context(
         if comment.body_digest != expected.body_digest
             || comment.user_id != expected.author
             || comment.edited_at != expected.edited_at
-            || crate::digest::bytes_digest(comment.body.as_bytes()) != comment.body_digest
+            || kegari_digest::bytes_digest(comment.body.as_bytes()) != comment.body_digest
             || !selected.contains(&comment.issue_id)
         {
             return Err(Error::new(
@@ -2361,9 +2361,9 @@ fn scoped_git_gate(
 #[cfg(test)]
 mod source_tests {
     use super::*;
-    use crate::providers::{
-        Credential, GithubClient, HttpPolicy, HttpRequest, HttpResponse, HttpTransport,
-        RepositoryIdentity,
+    use kegari_providers::HttpTransport;
+    use kegari_providers::{
+        Credential, GithubClient, HttpPolicy, HttpRequest, HttpResponse, RepositoryIdentity,
     };
     use std::{collections::VecDeque, future::Future, pin::Pin, sync::Mutex, time::Duration};
     #[tokio::test]
@@ -2651,7 +2651,7 @@ mod source_tests {
             request: HttpRequest,
         ) -> Pin<Box<dyn Future<Output = Result<HttpResponse>> + Send + '_>> {
             Box::pin(async move {
-                assert_eq!(request.method, crate::providers::Method::Get);
+                assert_eq!(request.method, kegari_providers::Method::Get);
                 self.paths.lock().unwrap().push(request.url.path().into());
                 let value = self
                     .responses

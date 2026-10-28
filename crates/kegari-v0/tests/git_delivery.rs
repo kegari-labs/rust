@@ -5,8 +5,8 @@ mod process_probe;
 // Deterministic fixtures use real disposable Git repositories. Provider facts
 // below are explicitly simulated complete snapshots, not live qualification.
 use chrono::{Duration, Utc};
+use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_types::error::{Error, Result};
-use kegari_v0::digest::{bytes_digest, canonical_digest};
 use kegari_v0::evidence::*;
 use kegari_v0::git::*;
 use kegari_v0::release::*;

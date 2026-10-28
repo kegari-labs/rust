@@ -2,7 +2,7 @@
 //! actual source or opaque candidate is constructed by these tests.
 use super::*;
 fn digest(label: &str) -> String {
-    crate::digest::bytes_digest(label.as_bytes())
+    kegari_digest::bytes_digest(label.as_bytes())
 }
 fn first() -> ReviewRoundRecoveryReference {
     let origin = Uuid::from_u128(10);

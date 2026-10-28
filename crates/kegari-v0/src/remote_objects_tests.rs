@@ -5,9 +5,10 @@ use crate::test_process_probe as probe;
 use crate::{
     app::ConfigurationControl,
     platform::ProcessProbe,
-    providers::{Credential, HttpPolicy, HttpRequest, HttpResponse, HttpTransport},
     reconcile::{DependencyOutcomes, GatePurpose},
 };
+use kegari_providers::HttpTransport;
+use kegari_providers::{Credential, HttpPolicy, HttpRequest, HttpResponse};
 use std::{
     io::Write,
     os::unix::fs::PermissionsExt,
@@ -280,7 +281,7 @@ async fn fixture_with_delivery_policy(declared: bool) -> Fixture {
             hostname: "github.com".into(),
             id: "42".into(),
         },
-        provider: crate::providers::RepositoryIdentity {
+        provider: kegari_providers::RepositoryIdentity {
             id: 42,
             owner: "fixture".into(),
             name: "repo".into(),
@@ -678,7 +679,7 @@ fn protocol_pack(bytes: &[u8]) -> Vec<u8> {
 
 #[test]
 fn exact_review_snapshot_accepts_authorized_fork_identity_and_rejects_changed_fields() {
-    let expected = crate::providers::PullRequest {
+    let expected = kegari_providers::PullRequest {
         repository_id: 42,
         id: 900,
         number: 7,
@@ -1236,7 +1237,7 @@ async fn admitted_fork_review_acquires_exact_head_and_base_into_independent_clon
     let f = &fixture.wire.fixture;
     let git = Git::new(&f.binary).unwrap();
     let base = git.exact_revision(&f.root, &f.parent).unwrap();
-    let pr = crate::providers::PullRequest {
+    let pr = kegari_providers::PullRequest {
         repository_id: 42,
         id: 900,
         number: 4,
@@ -1278,7 +1279,7 @@ async fn admitted_fork_review_acquires_exact_head_and_base_into_independent_clon
         workspace_id: Uuid::from_u128(2),
         repository_id: 42,
         pull_request: pr.clone(),
-        pull_request_text: Some(crate::providers::PullRequestText {
+        pull_request_text: Some(kegari_providers::PullRequestText {
             title: "Fixture independent review".into(),
             body: None,
         }),

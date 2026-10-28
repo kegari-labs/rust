@@ -1,9 +1,9 @@
 use super::*;
 use crate::app::ConfigurationControl;
 use crate::corrections::wire_fixture as wire;
-use crate::digest::canonical_digest;
 use crate::platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
 use crate::reconcile::DependencyOutcomes;
+use kegari_digest::canonical_digest;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 // This deterministic process identity fixture does not qualify native ownership
 // or permit any child process launch. These tests exercise read-only composition.

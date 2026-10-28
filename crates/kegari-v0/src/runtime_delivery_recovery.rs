@@ -5,8 +5,8 @@ use crate::{
     control::Receipt,
     decisions::{AuthorizedDecision, AuthorizedOperationRecovery},
     deployment::VerifiedRecoveryBaseline,
-    digest::canonical_digest,
 };
+use kegari_digest::canonical_digest;
 use kegari_types::api::CommandName;
 
 impl RuntimeDelivery {

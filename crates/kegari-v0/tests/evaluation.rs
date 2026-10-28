@@ -1,6 +1,6 @@
 //! Deterministic replay/grader tests only. No model, account, or live provider is invoked.
 use kegari_config::{Profile, Speed};
-use kegari_v0::digest::bytes_digest;
+use kegari_digest::bytes_digest;
 use kegari_v0::evaluation::*;
 use kegari_v0::instructions::{
     AgentRole, AssemblyInput, PermissionManifest, ProviderDiscovery, RepositoryContext,
@@ -202,7 +202,7 @@ fn declared_native_context_file_uses_production_assembly_without_context_waivers
     assert!(assembled.prompt.contains("NESTED_V1"));
     assert_eq!(
         assembled.manifest.context_digest,
-        kegari_v0::digest::canonical_digest(1, &context).unwrap()
+        kegari_digest::canonical_digest(1, &context).unwrap()
     );
     assert!(!fixture.repository.join("context-binding.json").exists());
     let mut changed = context.clone();

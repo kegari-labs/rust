@@ -947,7 +947,7 @@ async fn connection_metadata_uses_only_bounded_read_protocol_without_model_work(
     );
     assert_eq!(
         observed.permission_digest,
-        kegari_v0::digest::canonical_digest(1, &permissions.settings).unwrap()
+        kegari_digest::canonical_digest(1, &permissions.settings).unwrap()
     );
     task.await.unwrap();
 }
@@ -1396,13 +1396,12 @@ async fn terminal_transient_classification_requires_full_native_failed_observati
             let retained: Value = serde_json::from_slice(&serialized).unwrap();
             for field in ["terminal_digest", "policy_free"] {
                 let mut changed = retained.clone();
-                changed["provider_history"]["turns"][0]["transient_failure"][field] = if field
-                    == "policy_free"
-                {
-                    json!(false)
-                } else {
-                    json!(kegari_v0::digest::canonical_digest(1, &"different terminal").unwrap())
-                };
+                changed["provider_history"]["turns"][0]["transient_failure"][field] =
+                    if field == "policy_free" {
+                        json!(false)
+                    } else {
+                        json!(kegari_digest::canonical_digest(1, &"different terminal").unwrap())
+                    };
                 assert!(SessionState::restore(&serde_json::to_vec(&changed).unwrap()).is_err());
             }
             let mut legacy = retained;
@@ -1504,7 +1503,7 @@ async fn late_policy_completions_checkpoint_before_protocol_rejection_on_both_re
                 assert_eq!(observed.thread_id, "thread-one");
                 assert_eq!(observed.turn_id, params["turn"]["id"].as_str().unwrap());
                 assert_eq!(observed.source_method, "turn/completed");
-                assert_eq!(observed.source_digest, kegari_v0::digest::canonical_digest(1, &json!({"threadId":"thread-one","turnId":params["turn"]["id"],"error":error})).unwrap());
+                assert_eq!(observed.source_digest, kegari_digest::canonical_digest(1, &json!({"threadId":"thread-one","turnId":params["turn"]["id"],"error":error})).unwrap());
                 assert_eq!(
                     restored.next_turn_allowed().unwrap_err().code,
                     "provider_intervention"

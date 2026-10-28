@@ -1,7 +1,7 @@
 //! Real owned Git/source seals and production contract/claim validation. The
 //! completed model protocol is synthetic; no native agent qualification claimed.
 use crate::{
-    control::Lease, delivery::*, digest::canonical_digest, git::Git, reconcile::FreshGate,
+    control::Lease, delivery::*, git::Git, reconcile::FreshGate,
     runtime::VerifiedAuthorizedOutcome, scheduler::PhaseKey, worker::WorkerAuthority,
 };
 use crate::{
@@ -18,6 +18,7 @@ use crate::{
     worker::{ContractInput, WorkerContract, WorkerExecution, operation_tool_definitions},
     worker_run::{RunCompletion, RunOutcome},
 };
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};

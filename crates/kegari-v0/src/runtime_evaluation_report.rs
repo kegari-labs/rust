@@ -32,7 +32,8 @@ pub(super) fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{digest::canonical_digest, evaluation::*};
+    use crate::evaluation::*;
+    use kegari_digest::canonical_digest;
     use serde_json::json;
     use std::path::Path;
 

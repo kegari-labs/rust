@@ -1,8 +1,9 @@
 //! Planner tests use diagnostic receipt data. Only the delivery producer can
 //! issue the opaque capability required by production continuation admission.
 use super::*;
-use crate::{control::RunContinuationReference, digest::canonical_digest};
+use crate::control::RunContinuationReference;
 use chrono::Duration;
+use kegari_digest::canonical_digest;
 use std::collections::BTreeMap;
 
 fn digest(value: &str) -> String {

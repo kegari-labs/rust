@@ -366,19 +366,19 @@ mod registry_return_tests {
                 crate::control::RunAdmission {
                     request_id: operation,
                     work_key: "fixture".into(),
-                    scope_digest: crate::digest::bytes_digest(b"scope"),
+                    scope_digest: kegari_digest::bytes_digest(b"scope"),
                     reference: RunReference {
                         workspace: Uuid::new_v4(),
                         account: "fixture".into(),
                         normalized_state: None,
                         phase: crate::scheduler::PhaseKey {
                             work: "fixture".into(),
-                            generation: crate::digest::bytes_digest(b"generation"),
+                            generation: kegari_digest::bytes_digest(b"generation"),
                             phase: "independent_review".into(),
                             retry_grant: None,
                         },
-                        profile_digest: crate::digest::bytes_digest(b"profile"),
-                        instruction_digest: crate::digest::bytes_digest(b"instructions"),
+                        profile_digest: kegari_digest::bytes_digest(b"profile"),
+                        instruction_digest: kegari_digest::bytes_digest(b"instructions"),
                         max_attempts: 1,
                         max_turns: 1,
                         max_review_rounds: 1,

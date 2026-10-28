@@ -1,10 +1,8 @@
 //! Serialized admission and durable operator intent. The host owns this object;
 //! the scheduler and workers only receive revocable operation permits.
-use crate::{
-    digest::canonical_digest,
-    storage::{ExclusiveLock, PrivateDir},
-};
+use crate::storage::{ExclusiveLock, PrivateDir};
 use chrono::{DateTime, Utc};
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn legacy_signed_integrated_history_is_readable_but_not_new_publication_authority() {
-        let digest = crate::digest::bytes_digest(b"historical descriptive identity");
+        let digest = kegari_digest::bytes_digest(b"historical descriptive identity");
         let record = IntegratedRecord {
             schema_version: 1,
             runtime_id: Uuid::from_u128(1),

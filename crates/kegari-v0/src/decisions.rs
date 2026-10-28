@@ -11,7 +11,6 @@ use crate::{
         Actor, ControlHost, ControlSnapshot, Intent, MutationRequest, Principal, Receipt,
         ReceiptPhase, RunReference,
     },
-    digest::{bytes_digest, canonical_digest},
     evidence::{
         AcceptanceActor, AcceptanceRequest, AttestationKey, Publication, Signed,
         VerifiedAcceptance, WorkIdentity, decode_signed_publication, encode_signed_publication,
@@ -19,7 +18,7 @@ use crate::{
     },
     housekeeping::Housekeeping,
     observations::ObservationCache,
-    providers::{Comment, GithubClient, ProviderBroker, ProviderMutation},
+    providers::{ProviderBroker, ProviderMutation},
     reconcile::{
         DependencyOutcomes, GatePurpose, ParentDelivery, ParentProjection, RuntimeProjection,
         WorkspaceClients,
@@ -29,6 +28,8 @@ use crate::{
 };
 use chrono::{DateTime, Duration, Utc};
 use kegari_config::Config;
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::{Comment, GithubClient};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

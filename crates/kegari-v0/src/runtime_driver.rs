@@ -2,7 +2,6 @@
 //! actual completion is joined; recovery preserves uncertain process/effect holds.
 use crate::{
     control::{ControlSnapshot, Intent, Lease, ReceiptPhase},
-    digest::canonical_digest,
     preparation::AuthorizationPublisher,
     process_records::{ProcessJournal, ProcessRecovery},
     runtime::{
@@ -17,6 +16,7 @@ use crate::{
 };
 use chrono::Utc;
 use kegari_config::Config;
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1456,10 +1456,10 @@ mod tests {
     use super::*;
     use crate::{
         control::ControlHost,
-        digest::bytes_digest,
         platform::BinaryIdentity,
         process_records::{RecoveryState, SpawnBinding},
     };
+    use kegari_digest::bytes_digest;
     fn id(value: u128) -> Uuid {
         Uuid::from_u128(value)
     }

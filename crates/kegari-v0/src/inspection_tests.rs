@@ -1,7 +1,8 @@
 //! Presentation-only records. No completion, release or admission capability is
 //! minted here; the producer's authenticated cached/cold tests cover provenance.
 use super::*;
-use crate::{digest::bytes_digest, evidence::Generation};
+use crate::evidence::Generation;
+use kegari_digest::bytes_digest;
 use serde_json::json;
 
 fn config() -> Config {

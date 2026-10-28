@@ -314,7 +314,7 @@ impl CanaryDiagnostic {
             return Err(invalid());
         }
         if let Some(binding) = &self.binding {
-            let bytes = crate::digest::canonical_bytes(binding)?;
+            let bytes = kegari_digest::canonical_bytes(binding)?;
             if binding.operation != self.identity.operation
                 || binding.workspace != self.identity.workspace
                 || self
@@ -625,7 +625,7 @@ impl CanaryMaterialization {
         self.reserve_chunks(writer.bytes.len())?;
         // Canonical serialization preserves the existing no-float identity rule.
         // Its work is charged from the same exact serialized input size first.
-        crate::digest::canonical_bytes(value)
+        kegari_digest::canonical_bytes(value)
     }
     fn write_original(&self, leaf: &str, bytes: &[u8]) -> Result<CanaryRecordReference> {
         if bytes.len() > CHUNK_BYTES {

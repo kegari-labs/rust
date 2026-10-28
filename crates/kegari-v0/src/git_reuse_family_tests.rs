@@ -10,13 +10,11 @@ use crate::{
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
     platform::{BinaryIdentity, HostIdentity, ProcessProbe, Registration},
     process_records::ProcessJournal,
-    providers::RepositoryIdentity,
     storage::PrivateDir,
     worker::ExecutionRegistry,
 };
 use crate::{
     control::{Lease, RunAdmission, RunReference, RunResumeReference},
-    digest::{bytes_digest, canonical_digest},
     evidence::{Generation, WorkIdentity},
     execution::{
         DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass, HookLedger, HookPhase,
@@ -27,6 +25,8 @@ use crate::{
     workflow::Workflow,
 };
 use kegari_config::Config;
+use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_providers::RepositoryIdentity;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
@@ -141,7 +141,7 @@ fn pinned_git(root: &Path) -> PathBuf {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).unwrap();
     }
     let identity = crate::platform::BinaryIdentity::inspect(&target, false).unwrap();
-    assert_eq!(identity.digest, crate::digest::bytes_digest(&expected));
+    assert_eq!(identity.digest, kegari_digest::bytes_digest(&expected));
     target
 }
 
@@ -696,15 +696,15 @@ fn ordinary_admission_and_changed_files_cannot_enroll_a_directory() {
 struct PublishedFixture {
     commit: String,
 }
-impl crate::providers::HttpTransport for PublishedFixture {
+impl kegari_providers::HttpTransport for PublishedFixture {
     fn send<'a>(
         &'a self,
-        request: crate::providers::HttpRequest,
+        request: kegari_providers::HttpRequest,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<crate::providers::HttpResponse>> + Send + 'a>,
+        Box<dyn std::future::Future<Output = Result<kegari_providers::HttpResponse>> + Send + 'a>,
     > {
         Box::pin(async move {
-            assert_eq!(request.method, crate::providers::Method::Get);
+            assert_eq!(request.method, kegari_providers::Method::Get);
             let path = request.url.path().to_owned();
             let body = match path.as_str() {
                 "/user" => json!({"id":7,"login":"fixture","type":"User"}),
@@ -716,7 +716,7 @@ impl crate::providers::HttpTransport for PublishedFixture {
                 }
                 _ => panic!("unexpected fixture read {path}"),
             };
-            Ok(crate::providers::HttpResponse {
+            Ok(kegari_providers::HttpResponse {
                 status: 200,
                 headers: Default::default(),
                 body: serde_json::to_vec(&body).unwrap(),
@@ -778,8 +778,8 @@ async fn enrolled_family_cleanup_preserves_copy_and_tombstones_both_operations()
             },
         )
         .unwrap();
-    let client = crate::providers::GithubClient::with_transport(
-        crate::providers::HttpPolicy::new(
+    let client = kegari_providers::GithubClient::with_transport(
+        kegari_providers::HttpPolicy::new(
             "https://github.invalid/",
             "7".into(),
             std::time::Duration::from_secs(2),
@@ -790,7 +790,7 @@ async fn enrolled_family_cleanup_preserves_copy_and_tombstones_both_operations()
             repositories: vec!["42".into()],
             pr_authors: vec![],
         },
-        crate::providers::Credential::new("fixture".into()).unwrap(),
+        kegari_providers::Credential::new("fixture".into()).unwrap(),
         Some(Arc::new(PublishedFixture {
             commit: f.source.binding.revision.commit.clone(),
         })),

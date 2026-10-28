@@ -2,6 +2,9 @@
 //! transactions. Provider wire, Codex metadata and process identity are injected;
 //! no native probe, model, Keychain write, service or network action is performed.
 use kegari_config::{Config, Connection};
+use kegari_digest::canonical_digest;
+use kegari_providers::HttpTransport;
+use kegari_providers::{HttpRequest, HttpResponse, Method};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use kegari_v0::config::{config_revision, load_workflows};
@@ -9,12 +12,10 @@ use kegari_v0::{
     codex::{CodexConnectionMetadata, PROTOCOL_PROFILE, SUPPORTED_CODEX_VERSION},
     configuration::{ConfigManager, ConfigurationInputs, prepare_initial},
     control::{Actor, Principal, ReceiptPhase},
-    digest::canonical_digest,
     platform::{
         BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
         Registration,
     },
-    providers::{HttpRequest, HttpResponse, HttpTransport, Method},
     secrets::{Secret, SecretStore},
     transport::TransportAuthentication,
 };

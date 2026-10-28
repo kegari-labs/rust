@@ -2,7 +2,7 @@
 //! baseline. This capability grants neither release eligibility nor a permit.
 use super::*;
 use crate::deployment::VerifiedRecoveryBaseline;
-use crate::digest::canonical_digest;
+use kegari_digest::canonical_digest;
 
 #[derive(Clone)]
 pub struct KnownPredecessorBaseline {

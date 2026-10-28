@@ -13,7 +13,7 @@ pub(crate) struct VerifiedEvaluationSource {
     operation: Uuid,
     namespace_digest: String,
     subject: subject::TrialSubject,
-    review_text: crate::providers::PullRequestText,
+    review_text: kegari_providers::PullRequestText,
     digest: String,
     root: VerifiedHostReadRoot,
     base: Revision,
@@ -31,7 +31,7 @@ impl VerifiedEvaluationSource {
     pub(crate) fn namespace_digest(&self) -> &str {
         &self.namespace_digest
     }
-    pub(crate) fn review_text(&self) -> &crate::providers::PullRequestText {
+    pub(crate) fn review_text(&self) -> &kegari_providers::PullRequestText {
         &self.review_text
     }
     pub(crate) fn pull_request(&self) -> u64 {
@@ -131,7 +131,7 @@ pub(super) async fn observe(
             hostname: repository.hostname.clone(),
             id: request.binding.repository_id.to_string(),
         },
-        provider: crate::providers::RepositoryIdentity {
+        provider: kegari_providers::RepositoryIdentity {
             id: request.binding.repository_id,
             owner: "evaluation".into(),
             name: "fixture".into(),
@@ -313,7 +313,7 @@ mod retirement_observation_tests {
             actor: "observed-host".into(),
             kind: "host_metadata".into(),
             canonical_targets: vec!["observed-scope".into()],
-            payload_digest: crate::digest::bytes_digest(b"payload"),
+            payload_digest: kegari_digest::bytes_digest(b"payload"),
             expected: BTreeMap::new(),
             phase: ReceiptPhase::Acknowledged,
             remote_ids: BTreeMap::new(),

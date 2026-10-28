@@ -1,6 +1,6 @@
 //! One bounded capture supplies both fixture provenance and reset contents.
 use super::{FileSnapshot, MAX_EVIDENCE_BYTES, MAX_FILES, file_mode, relative};
-use crate::digest::bytes_digest;
+use kegari_digest::bytes_digest;
 use kegari_types::error::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -373,9 +373,9 @@ impl CapturedTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::digest::canonical_digest;
     use crate::evaluation::{Bounds, Seed, Variant, prepare_captured_fixture, tree_digest};
     use crate::instructions::AgentRole;
+    use kegari_digest::canonical_digest;
     use serde_json::json;
 
     fn variant(capture: &CapturedTree) -> Variant {

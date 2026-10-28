@@ -4,10 +4,11 @@
 mod pinned_git;
 #[path = "support/process_probe.rs"]
 mod process_probe;
+use kegari_digest::bytes_digest;
+use kegari_providers::*;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     control::*,
-    digest::bytes_digest,
     evidence::{Generation, WorkIdentity},
     execution::{
         DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass, HookLedger, HookPhase,
@@ -17,7 +18,6 @@ use kegari_v0::{
     housekeeping::*,
     isolation::{ExecutionRole, IsolationPlan},
     platform::{ProcessIdentity, ProcessObservation, ProcessProbe},
-    providers::*,
     storage::PrivateDir,
     workflow::Workflow,
 };
@@ -1372,7 +1372,7 @@ impl HandoverFixture {
             runtime_id: id(2),
             binary_digest: replacement.digest.clone(),
             runtime_build: info.runtime_build.clone(),
-            instruction_digest: kegari_v0::digest::canonical_digest(1, &info).unwrap(),
+            instruction_digest: kegari_digest::canonical_digest(1, &info).unwrap(),
             reviewed_by: "fixture-human".into(),
             reviewed_at: chrono::Utc::now(),
             deterministic: artifact("deterministic"),

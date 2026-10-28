@@ -12,8 +12,8 @@ fn active() -> SessionState {
             work_identity: "component-work".into(),
             operation_id: Uuid::from_u128(1).to_string(),
             generation: "component-generation".into(),
-            instruction_digest: crate::digest::bytes_digest(b"component instructions"),
-            isolation_digest: crate::digest::bytes_digest(b"component isolation"),
+            instruction_digest: kegari_digest::bytes_digest(b"component instructions"),
+            isolation_digest: kegari_digest::bytes_digest(b"component isolation"),
             profile: CodexProfile {
                 model: "component".into(),
                 reasoning: "high".into(),
@@ -36,11 +36,11 @@ fn capture() -> ProtocolCapture {
             runtime: Uuid::from_u128(2),
             workspace: Uuid::from_u128(3),
         },
-        crate::digest::bytes_digest(b"scope"),
-        crate::digest::bytes_digest(b"component instructions"),
-        Some(crate::digest::bytes_digest(b"component trial")),
-        crate::digest::bytes_digest(b"component suite"),
-        crate::digest::bytes_digest(b"component fixture"),
+        kegari_digest::bytes_digest(b"scope"),
+        kegari_digest::bytes_digest(b"component instructions"),
+        Some(kegari_digest::bytes_digest(b"component trial")),
+        kegari_digest::bytes_digest(b"component suite"),
+        kegari_digest::bytes_digest(b"component fixture"),
     )
 }
 #[derive(Default)]

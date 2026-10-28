@@ -6,7 +6,6 @@ use crate::{
     app::{ConfigurationControl, RuntimeInspection},
     authority::IssueKey,
     control::{ControlHost, Lease, Permit, RunReference},
-    digest::{bytes_digest, canonical_digest},
     host::RuntimeDependencies,
     observations::ObservationCache,
     platform::Registration,
@@ -19,6 +18,7 @@ use crate::{
     worker_run::{OwnedWorkerRun, RunCompletion},
 };
 use chrono::{Duration, Utc};
+use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
@@ -4124,11 +4124,11 @@ mod tests {
     ) {
         use crate::{
             authority::Corrections,
-            digest::bytes_digest,
             evidence::{Generation, WorkIdentity},
             reconcile::{ParentProjection, RuntimeProjection, WorkspaceProjection},
         };
         use kegari_config::{Profile, ReleaseMode, Speed};
+        use kegari_digest::bytes_digest;
         let runtime = Uuid::from_u128(1);
         let workspace = Uuid::from_u128(2);
         let parent_id = Uuid::from_u128(3);
@@ -4273,7 +4273,7 @@ mod tests {
                 "incomplete" => workspace.complete = false,
                 "stale_parent" => parent.observed_at = now - Duration::seconds(31),
                 "source_changed" => {
-                    parent.source_digest = crate::digest::bytes_digest(b"edited native record")
+                    parent.source_digest = kegari_digest::bytes_digest(b"edited native record")
                 }
                 "authorization_removed" => parent.authorization_published = false,
                 "pending_correction" => {
@@ -4284,7 +4284,7 @@ mod tests {
                             crate::authority::CommentRevision {
                                 id: Uuid::from_u128(7),
                                 author: Some(actor),
-                                body_digest: crate::digest::bytes_digest(
+                                body_digest: kegari_digest::bytes_digest(
                                     b"pending native feedback",
                                 ),
                                 edited_at: None,
@@ -4299,7 +4299,7 @@ mod tests {
                 "inventory_changed" => {
                     parent.required_children.insert(Uuid::from_u128(8));
                 }
-                "config_changed" => revision = crate::digest::bytes_digest(b"new configuration"),
+                "config_changed" => revision = kegari_digest::bytes_digest(b"new configuration"),
                 _ => unreachable!(),
             }
             assert!(

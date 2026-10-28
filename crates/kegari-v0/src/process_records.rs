@@ -2,12 +2,12 @@
 //! an owned handle or permission to signal/adopt a process after host recovery.
 use crate::{
     control::Lease,
-    digest::canonical_digest,
     platform::{
         BinaryIdentity, NativeProcessProbe, ProcessIdentity, ProcessObservation, ProcessProbe,
     },
     storage::PrivateDir,
 };
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{

@@ -1,7 +1,7 @@
 //! Provider-derived authorization and correction reconciliation. Names and agent
 //! statements never confer mutation authority.
-use crate::digest::canonical_digest;
 use chrono::{DateTime, Utc};
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

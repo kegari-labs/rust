@@ -92,7 +92,7 @@ fn terminal_history(
         c.attempt.steps.insert(
             "deploy".into(),
             StepState::SentUnknown {
-                payload_digest: crate::digest::bytes_digest(
+                payload_digest: kegari_digest::bytes_digest(
                     b"synthetic accepted dispatch preparation",
                 ),
             },
@@ -154,7 +154,7 @@ fn terminal_history(
                         .insert(
                             "deploy".into(),
                             StepState::SentUnknown {
-                                payload_digest: crate::digest::bytes_digest(
+                                payload_digest: kegari_digest::bytes_digest(
                                     b"synthetic accepted resumed step",
                                 ),
                             },
@@ -196,7 +196,7 @@ fn terminal_history(
                 record.attempt.steps.insert(
                     "verify".into(),
                     StepState::SentUnknown {
-                        payload_digest: crate::digest::bytes_digest(
+                        payload_digest: kegari_digest::bytes_digest(
                             b"synthetic accepted verify preparation",
                         ),
                     },
@@ -510,7 +510,7 @@ fn terminal_history(
                 {
                     let mut r = actual.clone();
                     r.observed_result.as_mut().unwrap()["attempt_digest"] =
-                        json!(crate::digest::bytes_digest(b"changed-history"));
+                        json!(kegari_digest::bytes_digest(b"changed-history"));
                     r
                 },
                 {

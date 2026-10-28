@@ -988,7 +988,7 @@ mod tests {
         fs::write(tree.root.join("source"), b"observed").unwrap();
         symlink("source", tree.root.join("alias")).unwrap();
         let resource = tree.capture();
-        let digest = crate::digest::bytes_digest(b"observed");
+        let digest = kegari_digest::bytes_digest(b"observed");
         resource
             .verify_file(&tree.root.join("source"), &digest, 8)
             .unwrap();
@@ -1009,7 +1009,7 @@ mod tests {
             resource
                 .verify_file(
                     &tree.root.join("source"),
-                    &crate::digest::bytes_digest(b"changed"),
+                    &kegari_digest::bytes_digest(b"changed"),
                     8
                 )
                 .is_err()

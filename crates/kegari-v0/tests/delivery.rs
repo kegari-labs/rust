@@ -9,11 +9,12 @@ mod process_probe;
 use base64::Engine as _;
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_digest::canonical_digest;
+use kegari_providers::*;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
     delivery::*,
-    digest::canonical_digest,
     evidence::{AttestationKey, Publication},
     evidence::{ReviewAttestation, ReviewKind, RevisionBinding, Verdict, no_change_digest},
     git::{Git, RepositoryId},
@@ -172,7 +173,7 @@ impl HttpTransport for Wire {
                         json!({"total_count":1,"artifacts":[{"id":80,"name":f.artifact_name}]})
                     }
                     "/repos/fixture/repo/actions/artifacts/80" => {
-                        json!({"id":80,"workflow_run":{"id":50,"repository_id":42,"head_sha":"1".repeat(40)},"expired":false,"size_in_bytes":f.archive.len(),"digest":kegari_v0::digest::bytes_digest(&f.archive)})
+                        json!({"id":80,"workflow_run":{"id":50,"repository_id":42,"head_sha":"1".repeat(40)},"expired":false,"size_in_bytes":f.archive.len(),"digest":kegari_digest::bytes_digest(&f.archive)})
                     }
                     "/repos/fixture/repo/actions/artifacts/80/zip" => {
                         let mut headers = HeaderMap::new();

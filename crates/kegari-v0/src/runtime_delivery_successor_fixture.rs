@@ -97,7 +97,7 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
     data.lock().unwrap().github_transport = Some(
         native
             .as_ref()
-            .map(|wire| wire.clone() as Arc<dyn crate::providers::HttpTransport>)
+            .map(|wire| wire.clone() as Arc<dyn kegari_providers::HttpTransport>)
             .unwrap_or_else(|| github.transport()),
     );
     let processes = Arc::new(
@@ -349,7 +349,7 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
                 &lease,
                 seed.parent.manifest().publication_operation,
                 gate.work_key().unwrap(),
-                crate::digest::canonical_digest(1, &"fixture prior publication").unwrap(),
+                kegari_digest::canonical_digest(1, &"fixture prior publication").unwrap(),
                 || (delivery.current_gate())(&gate),
             )
             .unwrap();
@@ -416,7 +416,7 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
                 .unwrap();
             references.push(PublicationRef {
                 id: receipt.remote_ids["comment_id"].parse().unwrap(),
-                body_digest: crate::digest::bytes_digest(body.as_bytes()),
+                body_digest: kegari_digest::bytes_digest(body.as_bytes()),
                 writer: wire::id(5),
             });
         }
@@ -1010,7 +1010,7 @@ async fn correct_parent(
         )
         .unwrap();
     let claim = json!({"kind":"correction_classification","classifications":[{
-        "source_comment":comment,"source_revision":crate::digest::bytes_digest(body.as_bytes()),"class":"corrective",
+        "source_comment":comment,"source_revision":kegari_digest::bytes_digest(body.as_bytes()),"class":"corrective",
         "rationale":"The native request changes validation expectations within existing scope",
         "routes":[{"child":wire::id(101),"instructions":"Validate existing behavior without adding an unrelated source change.",
             "validation_expectations":["Run configured local and exact revision checks; report actual evidence"]}]}]});

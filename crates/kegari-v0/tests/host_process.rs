@@ -8,6 +8,7 @@ mod pinned_git;
 #[path = "support/process_probe.rs"]
 mod process_probe;
 use kegari_config::Config;
+use kegari_providers::RepositoryIdentity;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
@@ -18,7 +19,6 @@ use kegari_v0::{
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
     platform::{BinaryIdentity, HostIdentity, ProcessProbe, Registration},
     process_records::{ProcessJournal, RecoveryState},
-    providers::RepositoryIdentity,
     storage::PrivateDir,
     worker::ExecutionRegistry,
 };
@@ -222,7 +222,7 @@ fn stopped_metadata_uses_actual_owned_git_guards_and_refuses_force_and_root_chan
         pull_request: 1,
         head: revision.clone(),
         base: revision.clone(),
-        review_identity: kegari_v0::digest::bytes_digest(b"fixture-review"),
+        review_identity: kegari_digest::bytes_digest(b"fixture-review"),
         repository_path: destination.join("repo"),
         operator_checkout: source.path().to_owned(),
     };

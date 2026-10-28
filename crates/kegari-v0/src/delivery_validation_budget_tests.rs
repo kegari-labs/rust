@@ -2,7 +2,7 @@
 //! capabilities, runtime joined entries, native grants, or actual admissions.
 use super::*;
 fn hash(value: &str) -> String {
-    crate::digest::bytes_digest(value.as_bytes())
+    kegari_digest::bytes_digest(value.as_bytes())
 }
 fn run() -> RunReference {
     RunReference {

@@ -22,13 +22,21 @@ The backend's `config` module retains `config_revision(&Config)`,
 `load_workflow(&Workspace)`, `load_workflows(&Config)`, `ConfigReload` and
 `inspect_reload`; it does not reexport configuration types. Configuration
 transactions and provider verification remain in `configuration`, while shared
-canonical hashing remains in `digest`. See the configuration crate's
+canonical hashing now belongs to `kegari-digest`. See the configuration crate's
 [Rust migration notes](../kegari-config/README.md#rust-consumer-migration).
+
+GitHub/Linear transport, records and fixed typed network operations belong to
+[`kegari-providers`](../kegari-providers/README.md). This backend retains
+`providers::ProviderBroker`, `ProviderMutation`, hosted-proof verification/replay
+and receipt-bound Linear asset admission. Typed writes are called only through
+the existing durable reservation and final authorization sequence. Import moved
+adapter types directly from `kegari_providers`; import hash functions directly
+from [`kegari-digest`](../kegari-digest/README.md), without compatibility reexports.
 
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all four packages:
+test and lint commands cover all six packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
@@ -56,7 +64,8 @@ extraction. Its final release suite passed 1,260 tests, with
 three native qualification tests ignored. See the artifact links, checksums and
 retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md). The Cargo-specific
 execution design has been removed. The source now separates `kegari-cli`,
-`kegari-types` and `kegari-config` from the remaining backend while retaining the
+`kegari-types`, `kegari-config`, `kegari-digest` and `kegari-providers`
+from the remaining backend while retaining the
 same workspace version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a
 new prerelease, and native execution remains blocked.

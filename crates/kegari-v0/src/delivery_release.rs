@@ -2827,12 +2827,12 @@ impl DeliveryCoordinator {
             .entries()
             .iter()
             .map(|e| {
-                Ok(crate::providers::TreeEntry {
+                Ok(kegari_providers::TreeEntry {
                     path: e.path.clone(),
                     mode: match e.mode.as_str() {
-                        "100644" => crate::providers::TreeMode::File,
-                        "100755" => crate::providers::TreeMode::Executable,
-                        "120000" => crate::providers::TreeMode::Symlink,
+                        "100644" => kegari_providers::TreeMode::File,
+                        "100755" => kegari_providers::TreeMode::Executable,
+                        "120000" => kegari_providers::TreeMode::Symlink,
                         _ => return Err(production_error("unsupported candidate object mode")),
                     },
                     sha: e.object.clone(),
@@ -2855,7 +2855,7 @@ impl DeliveryCoordinator {
                 "published tree differs from tested isolated candidate",
             ));
         }
-        let identity = |i: &crate::git::GitCommitIdentity| crate::providers::CommitIdentity {
+        let identity = |i: &crate::git::GitCommitIdentity| kegari_providers::CommitIdentity {
             name: i.name.clone(),
             email: i.email.clone(),
             date: i.date.clone(),
