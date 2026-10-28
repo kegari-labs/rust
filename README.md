@@ -8,6 +8,7 @@
 | [`kegari-providers`](crates/kegari-providers/README.md) | Typed GitHub/Linear network adapters and records. |
 | [`kegari-storage`](crates/kegari-storage/README.md) | Protected filesystem access, durable records and lock primitives. |
 | [`kegari-process`](crates/kegari-process/README.md) | Guarded process spawning, owned process groups and exit evidence. |
+| [`kegari-platform`](crates/kegari-platform/README.md) | OS identity, executable inspection and native host helpers. |
 | [`kegari-cli`](crates/kegari-cli/README.md) | Public CLI, control client and the `kegari-v0` executable. |
 | [`kegari-v0`](crates/kegari-v0/README.md) | Remaining backend library and the `kegari-v0-evaluation` inspection executable. |
 
@@ -27,11 +28,14 @@ spawn/retirement interlock and owned process-group handling. It depends on
 storage/types without a backend dependency; the CLI has no direct process
 dependency. Process journals, authorization and application supervision remain
 in the backend.
+CLI and backend import native host helpers directly from `kegari-platform`, which
+depends on process/digest/types without a backend dependency. Registration,
+runtime ownership, services and application build metadata remain in the backend.
 All packages use workspace version `0.2.0-alpha.10`; the executable name, process
 roles and serialized schemas remain unchanged. This extraction creates no new
 prerelease or qualification claim.
 
-From the workspace root, using the pinned toolchain; `--workspace` checks all eight
+From the workspace root, using the pinned toolchain; `--workspace` checks all nine
 packages:
 
 ```sh

@@ -5,10 +5,11 @@ use crate::{
     client::{ControlClient, Endpoint, Target, TargetStore},
 };
 use kegari_config::{Config, Connection, ControlRole, Workspace};
+use kegari_platform::{AccountHome, HostIdentity};
 use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
-use kegari_v0::platform::{self, AccountHome, HostIdentity, OwnerRecord, ServiceStartState};
+use kegari_v0::platform::{self, OwnerRecord, ServiceStartState};
 use serde_json::json;
 use std::{
     collections::BTreeSet,
@@ -570,7 +571,7 @@ pub async fn run_cli(arguments: Vec<std::ffi::OsString>) -> i32 {
     };
     let id = invocation.request_id;
     let output = async {
-        let account = platform::account_home()?;
+        let account = kegari_platform::account_home()?;
         let targets = target_store(&account)?;
         if invocation.target.is_none()
             && matches!(invocation.action, Action::Server(_) | Action::Setup { .. })

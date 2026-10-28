@@ -843,9 +843,9 @@ struct FixtureProviderProbe {
     marker: PathBuf,
     boot: Uuid,
 }
-impl kegari_v0::platform::ProcessProbe for FixtureProviderProbe {
-    fn current(&self) -> Result<kegari_v0::platform::ProcessIdentity> {
-        Ok(kegari_v0::platform::ProcessIdentity {
+impl kegari_platform::ProcessProbe for FixtureProviderProbe {
+    fn current(&self) -> Result<kegari_platform::ProcessIdentity> {
+        Ok(kegari_platform::ProcessIdentity {
             pid: std::process::id(),
             parent_pid: 1,
             process_group: std::process::id(),
@@ -858,21 +858,18 @@ impl kegari_v0::platform::ProcessProbe for FixtureProviderProbe {
     }
     fn observe(
         &self,
-        _: &kegari_v0::platform::ProcessIdentity,
-    ) -> Result<kegari_v0::platform::ProcessObservation> {
-        Ok(kegari_v0::platform::ProcessObservation::Gone)
+        _: &kegari_platform::ProcessIdentity,
+    ) -> Result<kegari_platform::ProcessObservation> {
+        Ok(kegari_platform::ProcessObservation::Gone)
     }
-    fn matching_executable(
-        &self,
-        path: &Path,
-    ) -> Result<Vec<kegari_v0::platform::ProcessIdentity>> {
+    fn matching_executable(&self, path: &Path) -> Result<Vec<kegari_platform::ProcessIdentity>> {
         let deadline = std::time::Instant::now() + StdDuration::from_millis(100);
         loop {
             if let Some(pid) = std::fs::read_to_string(&self.marker)
                 .ok()
                 .and_then(|value| value.parse::<u32>().ok())
             {
-                return Ok(vec![kegari_v0::platform::ProcessIdentity {
+                return Ok(vec![kegari_platform::ProcessIdentity {
                     pid,
                     parent_pid: std::process::id(),
                     process_group: pid,

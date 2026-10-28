@@ -28,6 +28,15 @@ registry. This backend retains process journals, control permits, recovery and
 isolation policy, platform registration, service management and application-level
 supervision. The CLI has no direct process dependency.
 
+OS account/host identity, executable inspection, process identity/probes,
+`OwnedChild`, free-space queries and browser launch now belong to
+[`kegari-platform`](../kegari-platform/README.md), imported directly from
+`kegari_platform` by CLI and backend. The existing backend `platform` module
+retains registration, owner records, runtime locks, service planning/lifecycle,
+handover, `BuildInfo` and installed-build verification. It does not reexport the
+moved interfaces. Private native probing remains with the platform helpers;
+application authorization and build identity remain here.
+
 Configuration models, TOML parsing, validation and path resolution now belong to
 [`kegari-config`](../kegari-config/README.md), imported directly as `kegari_config`.
 The backend's `config` module retains `config_revision(&Config)`,
@@ -48,7 +57,7 @@ from [`kegari-digest`](../kegari-digest/README.md), without compatibility reexpo
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all eight packages:
+test and lint commands cover all nine packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
@@ -77,7 +86,7 @@ three native qualification tests ignored. See the artifact links, checksums and
 retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md). The Cargo-specific
 execution design has been removed. The source now separates `kegari-cli`,
 `kegari-types`, `kegari-config`, `kegari-digest`, `kegari-providers`,
-`kegari-storage` and `kegari-process`
+`kegari-storage`, `kegari-process` and `kegari-platform`
 from the remaining backend while retaining the
 same workspace version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a

@@ -4,9 +4,9 @@ use super::*;
 use crate::test_process_probe as probe;
 use crate::{
     app::ConfigurationControl,
-    platform::ProcessProbe,
     reconcile::{DependencyOutcomes, GatePurpose},
 };
+use kegari_platform::ProcessProbe;
 use kegari_providers::HttpTransport;
 use kegari_providers::{Credential, HttpPolicy, HttpRequest, HttpResponse};
 use std::{

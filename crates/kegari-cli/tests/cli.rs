@@ -913,7 +913,7 @@ impl LocalActions for LocalFixture {
 async fn guided_initial_setup_uses_local_identity_only_for_absent_local_registration() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().canonicalize().unwrap();
-    let host = kegari_v0::platform::HostIdentity {
+    let host = kegari_platform::HostIdentity {
         host_id: "explicit-fixture-host".into(),
         boot_id: Uuid::new_v4(),
         uid: 501,
@@ -1009,7 +1009,7 @@ async fn initial_setup_registration_race_never_submits_generated_config_to_exist
     .await;
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().canonicalize().unwrap();
-    let host = kegari_v0::platform::HostIdentity {
+    let host = kegari_platform::HostIdentity {
         host_id: "initial-setup-race-fixture".into(),
         boot_id: Uuid::new_v4(),
         uid: 501,
@@ -1071,7 +1071,7 @@ async fn initial_setup_registration_race_never_submits_generated_config_to_exist
 #[tokio::test]
 async fn no_argument_first_launch_explains_setup_without_registering_or_starting() {
     let temp = TempDir::new().unwrap();
-    let account = kegari_v0::platform::AccountHome {
+    let account = kegari_platform::AccountHome {
         uid: 501,
         user: "first-launch-fixture".into(),
         home: temp.path().canonicalize().unwrap(),

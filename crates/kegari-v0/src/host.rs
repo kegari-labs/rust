@@ -11,7 +11,7 @@ use crate::{
     evidence::AttestationKey,
     housekeeping::{Housekeeping, LogEvent, LogSink, Severity},
     observations::{ObservationCache, ReferenceStore},
-    platform::{BinaryIdentity, HostIdentity, NativeProcessProbe, Registration},
+    platform::Registration,
     secrets::{Keychain, SecretStore},
     supervisor::{
         DrainState, NativeSupervisor, Supervisor, SupervisorDriver, SupervisorFuture,
@@ -20,6 +20,7 @@ use crate::{
     transport::{self, ServerHandle, TailscaleClient, TransportAuthentication},
 };
 use kegari_digest::canonical_digest;
+use kegari_platform::{BinaryIdentity, HostIdentity, NativeProcessProbe};
 use kegari_storage::PrivateDir;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};

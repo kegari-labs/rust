@@ -400,7 +400,7 @@ impl RuntimeDelivery {
                 request_id: Uuid::new_v4(),
                 work_key: gate.work_key()?,
                 roots: roots.into_values().collect(),
-                git_binary: crate::platform::BinaryIdentity::inspect(
+                git_binary: kegari_platform::BinaryIdentity::inspect(
                     workspace.git.executable(),
                     true,
                 )?,

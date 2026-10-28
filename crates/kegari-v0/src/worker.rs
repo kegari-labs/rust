@@ -1412,7 +1412,7 @@ impl ScopedWorker {
                 control: self.control.clone(),
                 permit: self.permit.clone(),
                 processes,
-                executable: crate::platform::BinaryIdentity::inspect(executable, false)?,
+                executable: kegari_platform::BinaryIdentity::inspect(executable, false)?,
                 auth_home: auth_home.to_owned(),
                 permissions: permissions.clone(),
                 isolation: self.contract.isolation().clone(),

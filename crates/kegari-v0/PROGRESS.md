@@ -1,5 +1,38 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Platform extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. The completed extraction moves OS
+account/host identity, executable inspection, process identity and native probes,
+`OwnedChild`, free-space queries and browser launch into `kegari-platform`.
+CLI and backend import these interfaces directly from the crate root, without
+backend compatibility reexports. The new crate depends on process/digest/types;
+it has no direct backend, configuration or storage dependency.
+
+The backend `platform` module retains registration, owner records, runtime locks,
+services, handover, `BuildInfo` and installed-build verification. Account-home
+lookup stays separate from host discovery. Native probing helpers and child
+ownership fields remain private, and browser URL validation remains CLI-owned.
+The shared process interlock, existing native behaviour and managed-workload
+limitations are unchanged.
+
+All nine packages retain `0.2.0-alpha.10`; persisted/API schemas, instruction assets,
+all 239 external lockfile entries and the archived alpha.10 remain unchanged.
+Verification: 1,279 workspace release tests passed, zero failed, three native
+tests ignored. All 123 focused platform/backend/CLI checks passed. Formatting,
+strict workspace all-target Clippy, contract inventory and its 11 tests passed.
+One bounded independent review found no material issues. The optimized arm64
+executable passed all five minimal-environment inspections with consistent
+identity/schemas/assets and no runtime state created. The two native platform
+qualification tests moved with their implementation and remain ignored; the
+third native test remains ignored in backend isolation. See the
+[platform boundary](../kegari-platform/README.md) and
+[verification report](validation/PLATFORM-EXTRACTION.md). No native/live
+qualification, service activation, packaging, commit or remote operation is
+included in this refactor.
+
+## Previous process extraction checkpoint
+
 **Goal mode cancelled. Process extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. The completed extraction moves guarded

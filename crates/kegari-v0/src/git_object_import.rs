@@ -3,7 +3,7 @@ use super::*;
 use kegari_storage::PrivateDir;
 
 impl Git {
-    pub(crate) fn object_import_binary(&self) -> &crate::platform::BinaryIdentity {
+    pub(crate) fn object_import_binary(&self) -> &kegari_platform::BinaryIdentity {
         &self.binary
     }
     pub(crate) fn import_verified_object_pack(

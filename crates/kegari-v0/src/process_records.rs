@@ -1,12 +1,10 @@
 //! Durable process identity references. A retained PID is observation data, never
 //! an owned handle or permission to signal/adopt a process after host recovery.
-use crate::{
-    control::Lease,
-    platform::{
-        BinaryIdentity, NativeProcessProbe, ProcessIdentity, ProcessObservation, ProcessProbe,
-    },
-};
+use crate::control::Lease;
 use kegari_digest::canonical_digest;
+use kegari_platform::{
+    BinaryIdentity, NativeProcessProbe, ProcessIdentity, ProcessObservation, ProcessProbe,
+};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

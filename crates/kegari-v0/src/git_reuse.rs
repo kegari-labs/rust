@@ -48,7 +48,7 @@ pub struct VerifiedReusableSource {
     marker: PathBuf,
     marker_digest: String,
     clone_marker: PathBuf,
-    binary: crate::platform::BinaryIdentity,
+    binary: kegari_platform::BinaryIdentity,
     snapshot: Snapshot,
     digest: String,
 }
@@ -64,7 +64,7 @@ impl VerifiedReusableSource {
         self.binding.validate(&self.boundary)?;
         OwnedDirectory::reopen(&self.marker, &self.marker_digest, &self.boundary)?
             .verify(&self.binding, &self.boundary)?;
-        if crate::platform::BinaryIdentity::inspect(&self.binary.path, true)? != self.binary
+        if kegari_platform::BinaryIdentity::inspect(&self.binary.path, true)? != self.binary
             || Snapshot::capture(&self.boundary, &self.marker, &self.clone_marker)? != self.snapshot
         {
             return Err(changed(

@@ -7,13 +7,13 @@ use crate::execution::{
 };
 use crate::git::{RepositoryId, Revision};
 use crate::isolation::{CommandObservation, CommandOutcome};
-use crate::platform::BinaryIdentity;
 use crate::validation::{
     DiscoveryJournalReference, DiscoveryReadContent, DiscoveryReadReference, ValidationPlanRecord,
     ValidationRequirement,
 };
 use chrono::{DateTime, Utc};
 use kegari_digest::canonical_digest;
+use kegari_platform::BinaryIdentity;
 use std::path::PathBuf;
 
 fn at(seconds: i64) -> DateTime<Utc> {

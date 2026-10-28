@@ -645,7 +645,7 @@ fn raw_source_file(path: &Path, metadata: &fs::Metadata) -> Result<(String, Vec<
 pub struct Git {
     executable: PathBuf,
     version: std::sync::Arc<std::sync::OnceLock<String>>,
-    binary: crate::platform::BinaryIdentity,
+    binary: kegari_platform::BinaryIdentity,
     operation: Option<std::sync::Arc<GitOperationState>>,
     scope: Option<std::sync::Arc<GitExecutionScope>>,
     host_scope: Option<std::sync::Arc<HostGitExecutionScope>>,
@@ -1506,7 +1506,7 @@ impl Git {
     pub fn from_pinned_executable(executable: impl AsRef<Path>) -> Result<Self> {
         let executable =
             fs::canonicalize(executable).map_err(|e| Error::io("resolve Git executable", e))?;
-        let binary = crate::platform::BinaryIdentity::inspect(&executable, false)?;
+        let binary = kegari_platform::BinaryIdentity::inspect(&executable, false)?;
         Ok(Self {
             executable,
             binary,
@@ -3272,7 +3272,7 @@ impl GitOperationState {
                 .as_ref()
                 .map(|(journal, permit)| {
                     use std::os::unix::ffi::OsStrExt;
-                    let executable = crate::platform::BinaryIdentity::inspect(
+                    let executable = kegari_platform::BinaryIdentity::inspect(
                         Path::new(command.get_program()),
                         false,
                     )?;

@@ -1,10 +1,10 @@
 use kegari_digest::bytes_digest;
+use kegari_platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_process::group::{OwnedGroup, Termination};
 use kegari_storage::PrivateDir;
 use kegari_types::error::Result;
 use kegari_v0::{
     control::Lease,
-    platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe},
     process_records::{
         CheckBundleMember, CheckMemberKind, ProcessJournal, ProcessRecord, RecoveryState,
         SpawnBinding,

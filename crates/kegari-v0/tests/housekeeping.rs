@@ -5,6 +5,7 @@ mod pinned_git;
 #[path = "support/process_probe.rs"]
 mod process_probe;
 use kegari_digest::bytes_digest;
+use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_providers::*;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
@@ -18,7 +19,6 @@ use kegari_v0::{
     git::{Git, RepositoryId},
     housekeeping::*,
     isolation::{ExecutionRole, IsolationPlan},
-    platform::{ProcessIdentity, ProcessObservation, ProcessProbe},
     workflow::Workflow,
 };
 use serde_json::{Value, json};
@@ -242,7 +242,7 @@ impl Fixture {
         let native = if native {
             let probe = Arc::new(process_probe::FixtureBootProbe::new());
             let process = probe.current().unwrap();
-            let host = kegari_v0::platform::HostIdentity {
+            let host = kegari_platform::HostIdentity {
                 host_id: "fixture".into(),
                 boot_id: process.boot_id,
                 uid: process.uid,
@@ -252,11 +252,8 @@ impl Fixture {
             let (registration, control) = kegari_v0::platform::Registration::bootstrap_with_probe(
                 &host,
                 id(2),
-                kegari_v0::platform::BinaryIdentity::inspect(
-                    &std::env::current_exe().unwrap(),
-                    false,
-                )
-                .unwrap(),
+                kegari_platform::BinaryIdentity::inspect(&std::env::current_exe().unwrap(), false)
+                    .unwrap(),
                 Uuid::new_v4(),
                 probe.clone(),
             )
@@ -1261,19 +1258,16 @@ fn diagnostic_rotation_redacts_secrets_and_failure_remains_visible() {
 
 struct HandoverFixture {
     _tmp: tempfile::TempDir,
-    host: kegari_v0::platform::HostIdentity,
+    host: kegari_platform::HostIdentity,
     root: PrivateDir,
     probe: Probe,
-    replacement: kegari_v0::platform::BinaryIdentity,
+    replacement: kegari_platform::BinaryIdentity,
     qualification: VerifiedRuntimeQualification,
     info: HandoverInfo,
     qualification_record: RuntimeQualification,
     key: kegari_v0::evidence::AttestationKey,
 }
-fn metadata_binary(
-    path: &Path,
-    info: &impl serde::Serialize,
-) -> kegari_v0::platform::BinaryIdentity {
+fn metadata_binary(path: &Path, info: &impl serde::Serialize) -> kegari_platform::BinaryIdentity {
     let document = serde_json::to_string(info).unwrap();
     std::fs::write(
         path,
@@ -1283,7 +1277,7 @@ fn metadata_binary(
     )
     .unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o555)).unwrap();
-    kegari_v0::platform::BinaryIdentity::inspect(path, true).unwrap()
+    kegari_platform::BinaryIdentity::inspect(path, true).unwrap()
 }
 impl HandoverFixture {
     fn new() -> Self {
@@ -1291,7 +1285,7 @@ impl HandoverFixture {
         let home = tmp.path().canonicalize().unwrap();
         let root = PrivateDir::create(&home.join(".kegari")).unwrap();
         let uid = unsafe { libc::geteuid() };
-        let host = kegari_v0::platform::HostIdentity {
+        let host = kegari_platform::HostIdentity {
             host_id: "fixture-host".into(),
             boot_id: id(1),
             uid,

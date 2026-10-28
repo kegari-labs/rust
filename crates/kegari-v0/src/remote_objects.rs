@@ -535,7 +535,7 @@ struct SourceRecord {
     directory_inode: u64,
     filesystem_digest: String,
     git_version: String,
-    git_binary: crate::platform::BinaryIdentity,
+    git_binary: kegari_platform::BinaryIdentity,
 }
 pub struct VerifiedObjectSource {
     directory: Arc<PrivateDir>,

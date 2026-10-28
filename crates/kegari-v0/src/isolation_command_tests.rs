@@ -4,9 +4,9 @@
 use super::*;
 use crate::{
     control::Lease,
-    platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe},
     process_records::{ProcessJournal, RecoveryState, SpawnBinding},
 };
+use kegari_platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_storage::PrivateDir;
 use std::{
     pin::Pin,

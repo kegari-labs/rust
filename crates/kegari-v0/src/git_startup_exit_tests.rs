@@ -2,9 +2,9 @@
 use super::*;
 use crate::{
     control::Lease,
-    platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe},
     process_records::{ProcessJournal, RecoveryState, SpawnBinding, SpawnGuard},
 };
+use kegari_platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_process::group::{OwnedGroup, Termination};
 use kegari_storage::PrivateDir;
 use std::{

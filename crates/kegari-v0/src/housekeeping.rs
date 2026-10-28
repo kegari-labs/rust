@@ -10,14 +10,14 @@ use crate::{
     },
     git::Git,
     isolation::IsolationPlan,
-    platform::{
-        BinaryIdentity, HostIdentity, OwnerRecord, ProcessIdentity, ProcessObservation,
-        ProcessProbe, ServiceShutdown,
-    },
+    platform::{OwnerRecord, ServiceShutdown},
     workflow::Workflow,
 };
 use chrono::{DateTime, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_platform::{
+    BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
+};
 use kegari_providers::{GithubClient, RepositoryIdentity};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};

@@ -5,12 +5,13 @@ use crate::{
     connections::{VerifiedCredential, verify_credential},
     control::{Actor, ControlHost, Intent, MutationRequest, Principal, Receipt},
     isolation::{ExecutionRole, IsolationPlan},
-    platform::{HostIdentity, Registration},
+    platform::Registration,
     secrets::{Secret, SecretStore, resolve_reference},
     transport::TransportAuthentication,
 };
 use kegari_config::{Config, Connection, ControlRole, Deployment, ProviderKind, Speed, Workspace};
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_platform::HostIdentity;
 use kegari_providers::HttpTransport;
 use kegari_providers::{AccountIdentity, GithubClient, HttpPolicy};
 use kegari_storage::PrivateDir;
@@ -134,7 +135,7 @@ fn resolve_executable(value: &str) -> Result<PathBuf> {
             "configured Codex executable is not installed at an explicit path or host PATH",
         )
     })?;
-    crate::platform::BinaryIdentity::inspect(&selected, false).map(|binary| binary.path)
+    kegari_platform::BinaryIdentity::inspect(&selected, false).map(|binary| binary.path)
 }
 
 #[derive(Clone, Debug, Serialize)]

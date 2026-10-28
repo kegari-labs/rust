@@ -8,7 +8,7 @@ use crate::{
     delivery::RepositoryContract,
     git::{Git, GitLimits, HostGitExecutionScope, RepositoryId, configured_host_read_root},
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
-    platform::{BinaryIdentity, HostIdentity, ProcessProbe, Registration},
+    platform::Registration,
     process_records::ProcessJournal,
     worker::ExecutionRegistry,
 };
@@ -25,6 +25,7 @@ use crate::{
 };
 use kegari_config::Config;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_platform::{BinaryIdentity, HostIdentity, ProcessProbe};
 use kegari_providers::RepositoryIdentity;
 use kegari_storage::PrivateDir;
 use kegari_types::api::CommandRequest;
@@ -140,7 +141,7 @@ fn pinned_git(root: &Path) -> PathBuf {
         output.sync_all().unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).unwrap();
     }
-    let identity = crate::platform::BinaryIdentity::inspect(&target, false).unwrap();
+    let identity = kegari_platform::BinaryIdentity::inspect(&target, false).unwrap();
     assert_eq!(identity.digest, kegari_digest::bytes_digest(&expected));
     target
 }

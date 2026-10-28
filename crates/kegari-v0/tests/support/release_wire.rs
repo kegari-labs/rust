@@ -41,7 +41,7 @@ mod pinned_git {
             output.sync_all().unwrap();
             fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).unwrap();
         }
-        let identity = crate::platform::BinaryIdentity::inspect(&target, false).unwrap();
+        let identity = kegari_platform::BinaryIdentity::inspect(&target, false).unwrap();
         assert_eq!(identity.digest, kegari_digest::bytes_digest(&expected));
         target
     }
@@ -49,7 +49,7 @@ mod pinned_git {
 mod process_probe {
     // Deterministic boot identity for owned process fixtures. This deliberately
     // does not qualify native host boot identity or detached-process containment.
-    use crate::platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
+    use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
     use kegari_types::error::{Error, Result};
     use std::path::{Path, PathBuf};
     use uuid::Uuid;

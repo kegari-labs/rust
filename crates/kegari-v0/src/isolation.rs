@@ -826,8 +826,8 @@ async fn bounded_output<R: tokio::io::AsyncRead + Unpin>(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandLaunchIdentity {
     pub cwd: PathBuf,
-    pub launcher: crate::platform::BinaryIdentity,
-    pub target: crate::platform::BinaryIdentity,
+    pub launcher: kegari_platform::BinaryIdentity,
+    pub target: kegari_platform::BinaryIdentity,
     pub argv_digest: String,
 }
 
@@ -842,8 +842,8 @@ pub struct CommandObservation {
     pub schema_version: u32,
     pub requested_argv: Vec<String>,
     pub selected_executable: PathBuf,
-    pub canonical_executable: crate::platform::BinaryIdentity,
-    pub launcher: crate::platform::BinaryIdentity,
+    pub canonical_executable: kegari_platform::BinaryIdentity,
+    pub launcher: kegari_platform::BinaryIdentity,
     pub cwd: PathBuf,
     pub environment: BTreeMap<String, String>,
     pub original_isolation_digest: String,
@@ -1125,11 +1125,11 @@ fn observe_rendered_command(
         requested_argv: rendered.argv.clone(),
         selected_executable: rendered.executable.clone(),
         cwd: isolation.plan.cwd.clone(),
-        launcher: crate::platform::BinaryIdentity::inspect(
+        launcher: kegari_platform::BinaryIdentity::inspect(
             Path::new("/usr/bin/sandbox-exec"),
             false,
         )?,
-        canonical_executable: crate::platform::BinaryIdentity::inspect(
+        canonical_executable: kegari_platform::BinaryIdentity::inspect(
             &rendered
                 .executable
                 .canonicalize()

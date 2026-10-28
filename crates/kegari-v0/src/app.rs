@@ -32,11 +32,10 @@ pub type HostFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>
 /// leaves durable STOPPED without starting a listener, scheduler or model turn.
 pub async fn bootstrap(configuration: &str, request_id: Uuid) -> Result<DispatchResult> {
     use crate::{
-        configuration::ConfigManager,
-        platform::{BinaryIdentity, HostIdentity, Registration},
-        secrets::Keychain,
+        configuration::ConfigManager, platform::Registration, secrets::Keychain,
         transport::TransportAuthentication,
     };
+    use kegari_platform::{BinaryIdentity, HostIdentity};
     let host = HostIdentity::discover()?;
     let mut config = Config::parse(configuration)?;
     config.resolve_paths(&host.home, |name| std::env::var(name).ok())?;

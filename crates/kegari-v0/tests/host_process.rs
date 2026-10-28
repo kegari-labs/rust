@@ -8,6 +8,7 @@ mod pinned_git;
 #[path = "support/process_probe.rs"]
 mod process_probe;
 use kegari_config::Config;
+use kegari_platform::{BinaryIdentity, HostIdentity, ProcessProbe};
 use kegari_providers::RepositoryIdentity;
 use kegari_storage::PrivateDir;
 use kegari_types::api::CommandRequest;
@@ -18,7 +19,7 @@ use kegari_v0::{
     delivery::RepositoryContract,
     git::{Git, GitLimits, HostGitExecutionScope, RepositoryId, configured_host_read_root},
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
-    platform::{BinaryIdentity, HostIdentity, ProcessProbe, Registration},
+    platform::Registration,
     process_records::{ProcessJournal, RecoveryState},
     worker::ExecutionRegistry,
 };

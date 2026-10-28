@@ -10,6 +10,7 @@ name = "kegari-v0"
 path = "src/main.rs"
 
 [dependencies]
+kegari-platform = { path = "../kegari-platform" }
 kegari-storage = { path = "../kegari-storage" }
 kegari-config = { path = "../kegari-config" }
 kegari-types = { path = "../kegari-types" }

@@ -1290,7 +1290,7 @@ pub fn validate_linear_url(text: &str) -> Result<()> {
 /// Native client browser operation; no shell, and never requested on the remote host.
 pub async fn open_client_browser(url: &str) -> Result<()> {
     validate_linear_url(url)?;
-    kegari_v0::platform::launch_client_browser(url).await
+    kegari_platform::launch_client_browser(url).await
 }
 /// Emits exactly one JSON envelope on stdout. Callers send parser diagnostics only
 /// to stderr; never print input TOML, correction bodies or credential values there.

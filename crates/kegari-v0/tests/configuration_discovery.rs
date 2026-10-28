@@ -3,6 +3,9 @@
 //! no native probe, model, Keychain write, service or network action is performed.
 use kegari_config::{Config, Connection};
 use kegari_digest::canonical_digest;
+use kegari_platform::{
+    BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
+};
 use kegari_providers::HttpTransport;
 use kegari_providers::{HttpRequest, HttpResponse, Method};
 use kegari_types::api::{CommandName, CommandRequest};
@@ -12,10 +15,7 @@ use kegari_v0::{
     codex::{CodexConnectionMetadata, PROTOCOL_PROFILE, SUPPORTED_CODEX_VERSION},
     configuration::{ConfigManager, ConfigurationInputs, prepare_initial},
     control::{Actor, Principal, ReceiptPhase},
-    platform::{
-        BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
-        Registration,
-    },
+    platform::Registration,
     secrets::{Secret, SecretStore},
     transport::TransportAuthentication,
 };

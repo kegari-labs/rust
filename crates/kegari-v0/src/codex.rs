@@ -39,7 +39,7 @@ pub const SUPPORTED_CODEX_VERSION: &str = "codex-cli 0.164.0-alpha.11.1";
 pub const PROTOCOL_PROFILE: &str = "kegari-codex-0.164.0-alpha.11.1-v1";
 /// The installed binary that actually returned the pinned version. Construction
 /// is read-only metadata probing; native session launch still needs a host gate.
-pub struct VerifiedCodexExecutable(crate::platform::BinaryIdentity);
+pub struct VerifiedCodexExecutable(kegari_platform::BinaryIdentity);
 pub const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PENDING_EVENTS: usize = 4096;
 
@@ -1313,7 +1313,7 @@ impl RpcClient {
     }
 
     pub async fn verify_version(executable: &Path, deadline: Duration) -> Result<()> {
-        let identity = crate::platform::BinaryIdentity::inspect(executable, false)?;
+        let identity = kegari_platform::BinaryIdentity::inspect(executable, false)?;
         Self::start_version_probe(&identity, None)?
             .verify(deadline)
             .await
@@ -1321,7 +1321,7 @@ impl RpcClient {
     }
     /// Split metadata probe: spawn/register while serialized, wait outside the gate.
     pub fn start_version_probe(
-        executable: &crate::platform::BinaryIdentity,
+        executable: &kegari_platform::BinaryIdentity,
         mut guard: Option<crate::process_records::SpawnGuard>,
     ) -> Result<VersionProbe> {
         executable.revalidate(false)?;
@@ -1379,7 +1379,7 @@ impl RpcClient {
         executable: &Path,
         deadline: Duration,
     ) -> Result<VerifiedCodexExecutable> {
-        let identity = crate::platform::BinaryIdentity::inspect(executable, false)?;
+        let identity = kegari_platform::BinaryIdentity::inspect(executable, false)?;
         Self::verify_version(&identity.path, deadline).await?;
         identity.revalidate(false)?;
         Ok(VerifiedCodexExecutable(identity))
@@ -2759,7 +2759,7 @@ impl RpcClient {
 
 /// Owns only the pinned binary's finite metadata query, never a model turn.
 pub struct VersionProbe {
-    identity: crate::platform::BinaryIdentity,
+    identity: kegari_platform::BinaryIdentity,
     stdout: Option<tokio::process::ChildStdout>,
     child: std::sync::Arc<OwnedProviderProcess>,
 }

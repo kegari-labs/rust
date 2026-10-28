@@ -4,6 +4,7 @@ use kegari_cli::{
     local_cli::*,
 };
 use kegari_config::{Config, ProviderKind};
+use kegari_platform::*;
 use kegari_storage::PrivateDir;
 use kegari_types::error::Result;
 use kegari_v0::platform::*;

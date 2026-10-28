@@ -1,6 +1,9 @@
 //! Real private storage/control serialization with labeled provider/Keychain fixtures.
 //! No native Keychain, account login, provider network or agent process is invoked.
 use kegari_config::{Config, Connection};
+use kegari_platform::{
+    BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
+};
 use kegari_providers::HttpTransport;
 use kegari_providers::{HttpRequest, HttpResponse};
 use kegari_types::api::{CommandName, CommandRequest};
@@ -10,10 +13,7 @@ use kegari_v0::{
     codex::CodexConnectionMetadata,
     configuration::{ConfigManager, ConfigurationInputs},
     control::{Actor, ControlHost, Intent, Lifecycle, MutationRequest, Principal, ReceiptPhase},
-    platform::{
-        BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
-        Registration,
-    },
+    platform::Registration,
     secrets::{Secret, SecretStore},
     transport::TransportAuthentication,
 };

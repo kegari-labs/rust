@@ -628,7 +628,7 @@ impl RuntimeCoordinator {
                     contract.workflow(),
                 )?;
                 let binary =
-                    crate::platform::BinaryIdentity::inspect(&execution.git_executable, true)?;
+                    kegari_platform::BinaryIdentity::inspect(&execution.git_executable, true)?;
                 let scope = LocalProcessPermit::metadata_observed(
                     HostProcessServices {
                         control: self.control.clone(),

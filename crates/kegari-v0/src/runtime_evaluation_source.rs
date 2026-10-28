@@ -5,9 +5,9 @@ use crate::{
     delivery::RepositoryContract,
     git::{Git, GitLimits, HostGitExecutionScope, RepositoryId, Revision, VerifiedHostReadRoot},
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
-    platform::BinaryIdentity,
     process_records::ProcessJournal,
 };
+use kegari_platform::BinaryIdentity;
 pub(crate) struct VerifiedEvaluationSource {
     workspace: Uuid,
     operation: Uuid,

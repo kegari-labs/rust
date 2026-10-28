@@ -3,9 +3,10 @@
 use crate::{
     control::{ControlHost, ControlSnapshot, Intent, Lease},
     orchestration::RunningOrchestration,
-    platform::{BinaryIdentity, HostIdentity, Registration},
+    platform::Registration,
 };
 use chrono::{DateTime, Utc};
+use kegari_platform::{BinaryIdentity, HostIdentity};
 use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use std::{

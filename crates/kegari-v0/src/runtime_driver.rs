@@ -1456,10 +1456,10 @@ mod tests {
     use super::*;
     use crate::{
         control::ControlHost,
-        platform::BinaryIdentity,
         process_records::{RecoveryState, SpawnBinding},
     };
     use kegari_digest::bytes_digest;
+    use kegari_platform::BinaryIdentity;
     fn id(value: u128) -> Uuid {
         Uuid::from_u128(value)
     }

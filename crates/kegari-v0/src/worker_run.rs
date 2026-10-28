@@ -13,7 +13,6 @@ use crate::{
         WorkerNetwork,
     },
     isolation::{IsolationPlan, ValidatedIsolation},
-    platform::BinaryIdentity,
     worker::{
         ContractInput, ExecutionRegistry, ReadResource, ReviewTarget, ScopedWorker,
         WorkerAuthority, WorkerContract, WorkerExecution, WorkerHost, WorkerServices,
@@ -22,6 +21,7 @@ use crate::{
 };
 use kegari_config::{Config, ProviderKind, Speed};
 use kegari_digest::canonical_digest;
+use kegari_platform::BinaryIdentity;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

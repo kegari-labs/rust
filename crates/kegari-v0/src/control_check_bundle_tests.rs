@@ -707,7 +707,7 @@ fn inventory_refuses_absent_directory_rows_removed_membership_duplicates_and_wro
         .unwrap(),
     );
     let executable =
-        crate::platform::BinaryIdentity::inspect(&std::env::current_exe().unwrap(), false).unwrap();
+        kegari_platform::BinaryIdentity::inspect(&std::env::current_exe().unwrap(), false).unwrap();
     let original = crate::process_records::SpawnBinding {
         operation_id: f.permit.operation_id,
         effect_id: bundle.plan.steps()[0].process_id(),

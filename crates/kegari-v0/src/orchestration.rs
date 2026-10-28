@@ -3,10 +3,9 @@
 //! No user-controlled socket/header can construct this process handshake.
 use crate::{
     control::{ControlHost, Intent, Lease},
-    platform::{
-        BinaryIdentity, HostIdentity, OwnedChild, ProcessIdentity, Registration, RuntimeLock,
-    },
+    platform::{Registration, RuntimeLock},
 };
+use kegari_platform::{BinaryIdentity, HostIdentity, OwnedChild, ProcessIdentity};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};

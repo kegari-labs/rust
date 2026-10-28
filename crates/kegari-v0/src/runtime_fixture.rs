@@ -9,11 +9,12 @@ use crate::{
     host::RuntimeDependencies,
     housekeeping::{Housekeeping, LogSink},
     observations::ObservationCache,
-    platform::{BinaryIdentity, HostIdentity, ProcessProbe, Registration},
+    platform::Registration,
     process_records::ProcessJournal,
     runtime::RuntimeCoordinator,
     secrets::SecretStore,
 };
+use kegari_platform::{BinaryIdentity, HostIdentity, ProcessProbe};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde_json::Value;

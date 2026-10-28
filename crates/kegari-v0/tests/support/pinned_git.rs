@@ -33,7 +33,7 @@ pub fn prepare(root: &Path) -> PathBuf {
         output.sync_all().unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).unwrap();
     }
-    let identity = kegari_v0::platform::BinaryIdentity::inspect(&target, false).unwrap();
+    let identity = kegari_platform::BinaryIdentity::inspect(&target, false).unwrap();
     assert_eq!(identity.digest, kegari_digest::bytes_digest(&expected));
     target
 }

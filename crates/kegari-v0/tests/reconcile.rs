@@ -2360,8 +2360,8 @@ async fn active_independent_review_drains_intake_filter_changes_but_never_a_chan
 }
 
 struct PreservedProbe;
-impl kegari_v0::platform::ProcessProbe for PreservedProbe {
-    fn current(&self) -> Result<kegari_v0::platform::ProcessIdentity> {
+impl kegari_platform::ProcessProbe for PreservedProbe {
+    fn current(&self) -> Result<kegari_platform::ProcessIdentity> {
         Err(kegari_types::error::Error::new(
             "fixture",
             "no live process in this preservation fixture",
@@ -2369,14 +2369,14 @@ impl kegari_v0::platform::ProcessProbe for PreservedProbe {
     }
     fn observe(
         &self,
-        _: &kegari_v0::platform::ProcessIdentity,
-    ) -> Result<kegari_v0::platform::ProcessObservation> {
-        Ok(kegari_v0::platform::ProcessObservation::Gone)
+        _: &kegari_platform::ProcessIdentity,
+    ) -> Result<kegari_platform::ProcessObservation> {
+        Ok(kegari_platform::ProcessObservation::Gone)
     }
     fn matching_executable(
         &self,
         _: &std::path::Path,
-    ) -> Result<Vec<kegari_v0::platform::ProcessIdentity>> {
+    ) -> Result<Vec<kegari_platform::ProcessIdentity>> {
         Ok(vec![])
     }
 }
