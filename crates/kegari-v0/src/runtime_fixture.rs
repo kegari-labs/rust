@@ -5,16 +5,15 @@ use crate::{
     app::{ConfigurationControl, HostFuture},
     configuration::{AuthorityFences, ConfigurationInputs},
     control::{Actor, Receipt},
-    evidence::AttestationKey,
     host::RuntimeDependencies,
     housekeeping::{Housekeeping, LogSink},
     observations::ObservationCache,
     platform::Registration,
     process_records::ProcessJournal,
     runtime::RuntimeCoordinator,
-    secrets::SecretStore,
 };
 use kegari_platform::{BinaryIdentity, HostIdentity, ProcessProbe};
+use kegari_secrets::{AttestationKey, SecretStore};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde_json::Value;
@@ -39,7 +38,7 @@ impl ConfigurationControl for FixtureConfiguration {
         &self,
         _: Actor,
         _: kegari_types::api::CommandRequest,
-        _: Option<crate::secrets::Secret>,
+        _: Option<kegari_secrets::Secret>,
         _: Receipt,
     ) -> HostFuture<'_, Receipt> {
         Box::pin(async {

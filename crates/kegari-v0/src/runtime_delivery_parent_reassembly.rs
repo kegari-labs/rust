@@ -221,7 +221,7 @@ impl RuntimeDelivery {
             let archive = format!("parent-reassembly-prior-{}.json", &previous.digest()?[7..]);
             match self
                 .records
-                .read::<crate::evidence::Signed<ParentReference>>(&archive)
+                .read::<kegari_secrets::Signed<ParentReference>>(&archive)
             {
                 Ok(prior) => {
                     self.runtime

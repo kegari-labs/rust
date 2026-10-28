@@ -1,10 +1,10 @@
 //! Component evidence: real Git/Control/provider wire, synthetic model protocol.
 //! No runtime joined-cache or native confinement capability is manufactured.
 use super::*;
-use crate::evidence::Signed;
 use crate::runtime_delivery::worker_fixture::{
     WorkerFixture, complete_review_retry, failed_review, failed_review_retry,
 };
+use kegari_secrets::Signed;
 use std::{path::Path, sync::Mutex};
 pub(super) struct ReviewFixture<'a> {
     pub findings: bool,

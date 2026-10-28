@@ -302,7 +302,7 @@ impl RuntimeDelivery {
             if !name.starts_with("parent-pipeline-") || !name.ends_with(".json") {
                 continue;
             }
-            let signed: crate::evidence::Signed<ParentReference> = self.records.read(&name)?;
+            let signed: kegari_secrets::Signed<ParentReference> = self.records.read(&name)?;
             self.runtime
                 .services
                 .key
@@ -1827,10 +1827,10 @@ mod reassembly_serialization_tests {
                 "generation":{"authorization":digest,"definition":digest,"correction":digest,"scope":digest}},
             "contract_digest":digest,"stage":"complete","phase_operation":null,"slices":[],"vector":null,"integrated":null,"review":null,"publication":null,"error":null,
         });
-        let key = crate::evidence::AttestationKey::new("legacy component key".into(), vec![91; 32])
+        let key = kegari_secrets::AttestationKey::new("legacy component key".into(), vec![91; 32])
             .unwrap();
         let signed = key.sign("runtime_parent_pipeline", &raw).unwrap();
-        let typed: crate::evidence::Signed<ParentReference> =
+        let typed: kegari_secrets::Signed<ParentReference> =
             serde_json::from_value(serde_json::to_value(&signed).unwrap()).unwrap();
         assert!(typed.payload.reassembly.is_none());
         key.verify("runtime_parent_pipeline", &typed).unwrap();

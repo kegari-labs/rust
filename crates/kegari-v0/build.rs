@@ -35,6 +35,7 @@ fn main() {
         "../kegari-storage/src",
         "../kegari-process/src",
         "../kegari-platform/src",
+        "../kegari-secrets/src",
     ] {
         println!("cargo:rerun-if-changed={name}");
         collect(&root.join(name), &mut files);
@@ -50,6 +51,7 @@ fn main() {
         "../kegari-storage/Cargo.toml",
         "../kegari-process/Cargo.toml",
         "../kegari-platform/Cargo.toml",
+        "../kegari-secrets/Cargo.toml",
         "../../Cargo.toml",
         "../../Cargo.lock",
         "../../rust-toolchain.toml",

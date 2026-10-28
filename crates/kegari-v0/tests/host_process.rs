@@ -62,7 +62,7 @@ impl ConfigurationControl for ReadConfiguration {
         &self,
         _: Actor,
         _: CommandRequest,
-        _: Option<kegari_v0::secrets::Secret>,
+        _: Option<kegari_secrets::Secret>,
         _: Receipt,
     ) -> HostFuture<'_, Receipt> {
         Box::pin(async { Err(Error::new("fixture", "unexpected configuration mutation")) })

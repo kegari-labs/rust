@@ -4,9 +4,10 @@
 //! Producers supply original retained artifact bytes; current scratch paths are
 //! deliberately not read. A reference becomes usable only after full readback.
 use crate::evidence::validation::MAX_VALIDATION_EVIDENCE_BYTES;
-use crate::evidence::{AttestationKey, CheckKind, RevisionBinding, Signed, ValidationEvidence};
+use crate::evidence::{CheckKind, RevisionBinding, ValidationEvidence};
 use crate::execution::{ArtifactProof, ExecutionBinding};
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

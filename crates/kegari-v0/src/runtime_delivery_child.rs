@@ -311,8 +311,7 @@ impl RuntimeDelivery {
                 }
                 let leaf = format!("child-pipeline-{}.json", receipt.operation_id);
                 if self.records.path().join(&leaf).exists() {
-                    let prior: crate::evidence::Signed<ChildReference> =
-                        self.records.read(&leaf)?;
+                    let prior: kegari_secrets::Signed<ChildReference> = self.records.read(&leaf)?;
                     self.runtime
                         .services
                         .key
@@ -3036,9 +3035,9 @@ mod retention_tests {
         let value = json!({"schema_version":1,"runtime":Uuid::from_u128(1),"operation":Uuid::from_u128(7),"proposal":Uuid::from_u128(8),"claim_digest":digest,
             "work":{"linear_endpoint":"https://linear.invalid/graphql","linear_workspace":Uuid::from_u128(2),"parent":Uuid::from_u128(10),"child":Uuid::from_u128(11),"generation":{"authorization":digest,"definition":digest,"correction":digest,"scope":digest}},
             "stage":"blocked","phase_operation":null,"validation":null,"review":null,"observed_at":"2026-01-04T00:00:00Z","error":null});
-        let key = crate::evidence::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap();
+        let key = kegari_secrets::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap();
         let signed = key.sign("runtime_child_pipeline", &value).unwrap();
-        let typed: crate::evidence::Signed<ChildReference> =
+        let typed: kegari_secrets::Signed<ChildReference> =
             serde_json::from_value(serde_json::to_value(signed).unwrap()).unwrap();
         key.verify("runtime_child_pipeline", &typed).unwrap();
         assert_eq!(

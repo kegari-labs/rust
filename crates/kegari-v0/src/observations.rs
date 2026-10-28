@@ -6,18 +6,18 @@ use crate::{
     configuration::{ConfigurationInputs, NativeConfigurationInputs},
     connections::ConnectionRegistry,
     control::{ControlHost, Receipt, ReceiptPhase},
-    evidence::{AttestationKey, Publication, decode_signed_publication},
+    evidence::{Publication, decode_signed_publication},
     reconcile::{
         AuthorizationSnapshot, Blocker, DefinitionCorrection, ParentProjection, ParentRefs,
         ReconcileRefs, Reconciler, RuntimeProjection, VerifiedAuthorization,
         VerifiedDefinitionCorrection,
     },
-    secrets::SecretStore,
     workflow::Workflow,
 };
 use chrono::{DateTime, Utc};
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
+use kegari_secrets::{AttestationKey, SecretStore};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

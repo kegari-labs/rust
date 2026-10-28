@@ -6,8 +6,9 @@ use chrono::Utc;
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
 use kegari_providers::*;
+use kegari_secrets::AttestationKey;
 use kegari_types::error::Result;
-use kegari_v0::{evidence::AttestationKey, reconcile::*};
+use kegari_v0::reconcile::*;
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
 use std::{
@@ -290,6 +291,7 @@ impl HttpTransport for Wire {
     }
 }
 use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
+use kegari_secrets::{Secret, SecretStore};
 use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::Error;
@@ -303,7 +305,6 @@ use kegari_v0::{
     evidence::{VerifiedAcceptance, WorkIdentity, encode_signed_publication},
     housekeeping::Housekeeping,
     observations::ObservationCache,
-    secrets::{Secret, SecretStore},
 };
 use std::{
     path::{Path, PathBuf},

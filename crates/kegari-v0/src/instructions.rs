@@ -969,7 +969,7 @@ mod validation_review_assembly_tests {
         }
         let records = kegari_storage::PrivateDir::create(&base.join("records")).unwrap();
         let key =
-            crate::evidence::AttestationKey::new("assembly-fixture".into(), vec![9; 32]).unwrap();
+            kegari_secrets::AttestationKey::new("assembly-fixture".into(), vec![9; 32]).unwrap();
         let (namespace, evidence, artifacts) =
             crate::validation_archive::tests::descriptive_fixture();
         let archive = crate::validation_archive::retain(

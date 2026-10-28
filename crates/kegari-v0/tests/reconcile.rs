@@ -3,11 +3,12 @@ use chrono::{Duration, Utc};
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
 use kegari_providers::*;
+use kegari_secrets::AttestationKey;
 use kegari_types::error::Result;
 use kegari_v0::{
     authority::CommentClass,
     control::{ControlSnapshot, Intent, IntentRecord},
-    evidence::{self, AttestationKey, Publication},
+    evidence::{self, Publication},
     providers::*,
     reconcile::*,
     workflow::Workflow,
@@ -1383,7 +1384,7 @@ impl kegari_v0::app::ConfigurationControl for CacheConfiguration {
         &self,
         _: kegari_v0::control::Actor,
         _: kegari_types::api::CommandRequest,
-        _: Option<kegari_v0::secrets::Secret>,
+        _: Option<kegari_secrets::Secret>,
         _: kegari_v0::control::Receipt,
     ) -> kegari_v0::app::HostFuture<'_, kegari_v0::control::Receipt> {
         Box::pin(async { panic!("observation must not mutate configuration") })
@@ -1393,11 +1394,11 @@ impl kegari_v0::app::ConfigurationControl for CacheConfiguration {
     }
 }
 struct CacheSecrets;
-impl kegari_v0::secrets::SecretStore for CacheSecrets {
-    fn read(&self, _: &str) -> Result<kegari_v0::secrets::Secret> {
-        kegari_v0::secrets::Secret::new(b"fixture".to_vec())
+impl kegari_secrets::SecretStore for CacheSecrets {
+    fn read(&self, _: &str) -> Result<kegari_secrets::Secret> {
+        kegari_secrets::Secret::new(b"fixture".to_vec())
     }
-    fn save(&self, _: &str, _: &kegari_v0::secrets::Secret) -> Result<()> {
+    fn save(&self, _: &str, _: &kegari_secrets::Secret) -> Result<()> {
         panic!("read-only observation must not save credentials")
     }
 }
@@ -1973,7 +1974,7 @@ impl kegari_v0::app::ConfigurationControl for MutableConfiguration {
         &self,
         _: kegari_v0::control::Actor,
         _: kegari_types::api::CommandRequest,
-        _: Option<kegari_v0::secrets::Secret>,
+        _: Option<kegari_secrets::Secret>,
         _: kegari_v0::control::Receipt,
     ) -> kegari_v0::app::HostFuture<'_, kegari_v0::control::Receipt> {
         Box::pin(async { panic!("read-only fixture") })

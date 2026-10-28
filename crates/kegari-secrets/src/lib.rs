@@ -1,7 +1,7 @@
 //! Execution-host secrets. Persistent values use macOS Keychain exclusively;
 //! no command arguments, serialized secrets or plaintext fallback exist here.
-use crate::evidence::AttestationKey;
-use kegari_providers::Credential;
+mod attestation;
+pub use attestation::{AttestationKey, Signed};
 use kegari_types::error::{Error, Result};
 use std::fmt;
 use uuid::Uuid;
@@ -19,11 +19,6 @@ impl Secret {
     }
     pub fn bytes(&self) -> &[u8] {
         &self.0
-    }
-    pub fn credential(&self) -> Result<Credential> {
-        let text = std::str::from_utf8(&self.0)
-            .map_err(|_| Error::new("missing_secret", "provider credential must be UTF-8"))?;
-        Credential::new(text.to_owned())
     }
 }
 impl fmt::Debug for Secret {
@@ -349,5 +344,36 @@ mod native {
     }
     pub fn save(service: &str, account: &str, value: &Secret) -> Result<()> {
         create(service, account, value)
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    #[test]
+    fn keychain_names_preserve_runtime_and_connection_namespaces() {
+        let runtime = Uuid::from_u128(1);
+        let store = Keychain::new(runtime).unwrap();
+        assert_eq!(
+            store.service(),
+            "com.kegari.v0/00000000-0000-0000-0000-000000000001"
+        );
+        assert_eq!(account("provider").unwrap(), "connection/provider");
+        assert_eq!(
+            account(" nested/name ").unwrap(),
+            "connection/ nested/name "
+        );
+        assert!(account(&"a".repeat(512)).is_ok());
+        for name in [
+            "".to_owned(),
+            " ".to_owned(),
+            "token\n".to_owned(),
+            "a".repeat(513),
+        ] {
+            let error = account(&name).unwrap_err();
+            assert_eq!(error.code, "invalid_config");
+            assert_eq!(error.message, "invalid Keychain secret reference");
+        }
     }
 }

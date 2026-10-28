@@ -109,7 +109,7 @@ impl LogSink {
         sink.limit = maximum;
         Ok(sink)
     }
-    pub fn register_secret(&self, secret: &crate::secrets::Secret) -> Result<()> {
+    pub fn register_secret(&self, secret: &kegari_secrets::Secret) -> Result<()> {
         self.redactions
             .lock()
             .map_err(|_| Error::new("log_unavailable", "redaction state unavailable"))?
@@ -2257,8 +2257,8 @@ pub struct VerifiedRuntimeQualification {
     key_id: String,
 }
 pub fn verify_runtime_qualification(
-    signed: &crate::evidence::Signed<RuntimeQualification>,
-    key: &crate::evidence::AttestationKey,
+    signed: &kegari_secrets::Signed<RuntimeQualification>,
+    key: &kegari_secrets::AttestationKey,
 ) -> Result<VerifiedRuntimeQualification> {
     key.verify("runtime_qualification", signed)?;
     let record = &signed.payload;

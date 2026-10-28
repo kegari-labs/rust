@@ -1,12 +1,12 @@
 //! Protected worker proposals are provenance, never passed workflow gates.
 use crate::{
     control::{Receipt, RunReference},
-    evidence::{AttestationKey, Signed},
     instructions::AgentRole,
     reconcile::{FreshGate, GatePurpose},
     worker::{WorkerOutcome, recover_session},
 };
 use kegari_digest::canonical_digest;
+use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde_json::Value;

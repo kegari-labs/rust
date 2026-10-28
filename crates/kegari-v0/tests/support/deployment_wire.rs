@@ -5,6 +5,7 @@ pub(crate) use chrono::{Duration, Utc};
 pub(crate) use kegari_config::{GithubSelection, Profile, ReleaseMode, Speed};
 pub(crate) use kegari_digest::bytes_digest;
 pub(crate) use kegari_providers::*;
+pub(crate) use kegari_secrets::AttestationKey;
 pub(crate) use kegari_storage::PrivateDir;
 pub(crate) use kegari_types::error::{Error, Result};
 pub(crate) use kegari_v0::{
@@ -12,7 +13,7 @@ pub(crate) use kegari_v0::{
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest, Permit},
     delivery::{DeliveryAdmission, DeliveryPhase, DeliveryScope, RepositoryContract},
     deployment::*,
-    evidence::{AttestationKey, Generation, RevisionBinding, WorkIdentity},
+    evidence::{Generation, RevisionBinding, WorkIdentity},
     git::{RepositoryId, Revision},
     providers::*,
     reconcile::{DependencyOutcomes, GatePurpose, ParentProjection},

@@ -6,11 +6,12 @@ use crate::{
     control::{ControlHost, MetadataReference, ReceiptPhase},
     delivery::{AcceptedOriginIdentity, AcceptedOriginRef, RepositoryContract},
     deployment::{OwnedTargetObservationRef, ProductionObserver, VerifiedProductionBaseline},
-    evidence::{AttestationKey, VerifiedNoReleaseRequired, WorkIdentity},
+    evidence::{VerifiedNoReleaseRequired, WorkIdentity},
     git::{RepositoryId, Revision},
     runtime_delivery::completion_binding::DependencyBinding,
 };
 use chrono::{DateTime, Duration, Utc};
+use kegari_secrets::AttestationKey;
 use kegari_storage::PrivateDir;
 use std::{
     collections::{BTreeMap, BTreeSet},

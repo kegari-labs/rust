@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
+kegari-secrets = { path = "../kegari-secrets" }
 kegari-platform = { path = "../kegari-platform" }
 kegari-process = { path = "../kegari-process" }
 kegari-storage = { path = "../kegari-storage" }
@@ -18,7 +19,6 @@ chrono = { version = "=0.4.45", features = ["serde"] }
 clap = { version = "=4.6.7", features = ["derive"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["zlib-rs"] }
 hex = "=0.4.3"
-hmac = "=0.12.1"
 hyper = { version = "=1.12.0", features = ["server", "http1"] }
 hyper-util = { version = "=0.1.21", features = ["server", "tokio", "service"] }
 libc = "=0.2.189"

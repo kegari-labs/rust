@@ -2196,7 +2196,7 @@ pub(crate) use carried_acceptance::{
 
 impl DeliveryCoordinator {
     pub(crate) fn reject_superseding_parent_publication(
-        key: &evidence::AttestationKey,
+        key: &kegari_secrets::AttestationKey,
         runtime: Uuid,
         comments: &[kegari_providers::Comment],
         selected: &kegari_providers::Comment,

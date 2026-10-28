@@ -415,7 +415,7 @@ mod tests {
             test_resources: BTreeSet::new(),
         };
         let key =
-            crate::evidence::AttestationKey::new("historical-test".into(), vec![9; 32]).unwrap();
+            kegari_secrets::AttestationKey::new("historical-test".into(), vec![9; 32]).unwrap();
         let signed = key.sign("parent_integrated_execution", &record).unwrap();
         let bytes = serde_json::to_vec(&signed).unwrap();
         let restored: Signed<IntegratedRecord> = serde_json::from_slice(&bytes).unwrap();

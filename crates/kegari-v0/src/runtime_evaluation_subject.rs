@@ -1,7 +1,7 @@
 //! Signed, deny-only reservation of native-shaped evaluation subjects. A saved
 //! plan never grants execution or reconstructs a request/source capability.
 use super::*;
-use crate::evidence::{AttestationKey, Signed};
+use kegari_secrets::{AttestationKey, Signed};
 use serde::{Deserialize, Serialize};
 
 const PURPOSE: &str = "evaluation_subject_plan";

@@ -196,7 +196,7 @@ pub(super) async fn fixture_authorization_with_provider_fixture(
         configuration,
         inputs: Arc::new(wire::CacheInputs(data.clone())),
         secrets: Arc::new(wire::CacheSecrets),
-        key: Arc::new(crate::evidence::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap()),
+        key: Arc::new(kegari_secrets::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap()),
         probe: Arc::new(IdentityFixture {
             current: identity,
             observed,

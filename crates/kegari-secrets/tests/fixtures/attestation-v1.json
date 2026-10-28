@@ -1,0 +1,6 @@
+{
+  "baseline_build": "sha256:64815b98f0fa6d0ca6c42e28c0f4d87ed61443e1fe00ec270d9124243673fd99",
+  "digest": "sha256:v1:a8ebbfae75921b081e54508cc4b2ba34eb807fbc62fd006acccd9a698af0b7cc",
+  "serialized": "{\"schema_version\":1,\"key_id\":\"synthetic-extraction-key\",\"purpose\":\"extraction_fixture\",\"payload\":{\"a\":{\"first\":\"nested\",\"second\":[true,7,\"fixture\"]},\"z\":null},\"signature\":\"9318c1f96052c6959a7b904ec8c6726c9d22504573882e1aa332dafd07060197\"}",
+  "signature": "9318c1f96052c6959a7b904ec8c6726c9d22504573882e1aa332dafd07060197"
+}

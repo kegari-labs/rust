@@ -278,7 +278,7 @@ impl crate::app::ConfigurationControl for CacheConfiguration {
         &self,
         _: crate::control::Actor,
         _: kegari_types::api::CommandRequest,
-        _: Option<crate::secrets::Secret>,
+        _: Option<kegari_secrets::Secret>,
         _: crate::control::Receipt,
     ) -> crate::app::HostFuture<'_, crate::control::Receipt> {
         Box::pin(async { panic!("observation must not mutate configuration") })
@@ -288,11 +288,11 @@ impl crate::app::ConfigurationControl for CacheConfiguration {
     }
 }
 pub(crate) struct CacheSecrets;
-impl crate::secrets::SecretStore for CacheSecrets {
-    fn read(&self, _: &str) -> Result<crate::secrets::Secret> {
-        crate::secrets::Secret::new(b"fixture".to_vec())
+impl kegari_secrets::SecretStore for CacheSecrets {
+    fn read(&self, _: &str) -> Result<kegari_secrets::Secret> {
+        kegari_secrets::Secret::new(b"fixture".to_vec())
     }
-    fn save(&self, _: &str, _: &crate::secrets::Secret) -> Result<()> {
+    fn save(&self, _: &str, _: &kegari_secrets::Secret) -> Result<()> {
         panic!("read-only observation must not save credentials")
     }
 }

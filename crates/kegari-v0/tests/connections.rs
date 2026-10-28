@@ -3,11 +3,9 @@
 use kegari_config::Connection;
 use kegari_providers::HttpTransport;
 use kegari_providers::{HttpRequest, HttpResponse};
+use kegari_secrets::{Secret, SecretStore};
 use kegari_types::error::{Error, Result};
-use kegari_v0::{
-    connections::verify_credential,
-    secrets::{Secret, SecretStore},
-};
+use kegari_v0::connections::verify_credential;
 use serde_json::json;
 use std::{
     future::Future,

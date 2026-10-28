@@ -86,7 +86,7 @@ impl VerifiedReleaseLineage {
         &self,
         records: &kegari_storage::PrivateDir,
         control: &crate::control::ControlHost,
-        key: &evidence::AttestationKey,
+        key: &kegari_secrets::AttestationKey,
     ) -> Result<()> {
         for (index, link) in self.links.iter().enumerate() {
             let stored: Signed<AttemptRecord> =

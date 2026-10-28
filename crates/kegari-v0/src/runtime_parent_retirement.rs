@@ -5,7 +5,7 @@ use crate::control::{
     ParentEffectHistoryBinding, ParentEffectHistoryObservation, Receipt, ReceiptPhase,
 };
 use crate::delivery::PreparedParentRunOrigin;
-use crate::evidence::Signed;
+use kegari_secrets::Signed;
 use serde::{Deserialize, Serialize};
 const PURPOSE: &str = "parent_run_retirement";
 const LIMIT: u64 = 8 * 1024 * 1024;

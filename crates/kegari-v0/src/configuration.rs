@@ -6,7 +6,6 @@ use crate::{
     control::{Actor, ControlHost, Intent, MutationRequest, Principal, Receipt},
     isolation::{ExecutionRole, IsolationPlan},
     platform::Registration,
-    secrets::{Secret, SecretStore, resolve_reference},
     transport::TransportAuthentication,
 };
 use kegari_config::{Config, Connection, ControlRole, Deployment, ProviderKind, Speed, Workspace};
@@ -14,6 +13,7 @@ use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_platform::HostIdentity;
 use kegari_providers::HttpTransport;
 use kegari_providers::{AccountIdentity, GithubClient, HttpPolicy};
+use kegari_secrets::{Secret, SecretStore, resolve_reference};
 use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
@@ -915,7 +915,7 @@ async fn verification_report(
                     Duration::from_millis(config.runtime.request_timeout_ms),
                 )?,
                 workspace.github.clone(),
-                secret.credential()?,
+                crate::connections::provider_credential(&secret)?,
                 inputs.transport(&workspace.github_connection),
             )?;
             repository_prerequisites(&client, workspace).await

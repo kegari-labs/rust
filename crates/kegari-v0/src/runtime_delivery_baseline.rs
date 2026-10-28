@@ -15,7 +15,7 @@ pub struct KnownPredecessorBaseline {
     lineage: super::lineage::VerifiedReleaseLineage,
     pub(super) records: Arc<kegari_storage::PrivateDir>,
     pub(super) control: Arc<crate::control::ControlHost>,
-    pub(super) key: Arc<evidence::AttestationKey>,
+    pub(super) key: Arc<kegari_secrets::AttestationKey>,
     observed_at: chrono::DateTime<Utc>,
 }
 impl KnownPredecessorBaseline {

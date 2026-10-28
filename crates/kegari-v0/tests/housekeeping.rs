@@ -175,7 +175,7 @@ impl kegari_v0::app::ConfigurationControl for NativeReadConfiguration {
         &self,
         _: Actor,
         _: kegari_types::api::CommandRequest,
-        _: Option<kegari_v0::secrets::Secret>,
+        _: Option<kegari_secrets::Secret>,
         _: Receipt,
     ) -> kegari_v0::app::HostFuture<'_, Receipt> {
         Box::pin(async { Err(Error::new("fixture", "configuration mutation unexpected")) })
@@ -1196,7 +1196,7 @@ fn diagnostic_rotation_redacts_secrets_and_failure_remains_visible() {
     let tmp = tempfile::tempdir().unwrap();
     let root = PrivateDir::create(&tmp.path().canonicalize().unwrap().join("logs")).unwrap();
     let sink = LogSink::with_limit(PrivateDir::open(root.path()).unwrap(), 2048).unwrap();
-    sink.register_secret(&kegari_v0::secrets::Secret::new(b"sentinel-secret".to_vec()).unwrap())
+    sink.register_secret(&kegari_secrets::Secret::new(b"sentinel-secret".to_vec()).unwrap())
         .unwrap();
     let mut event = LogEvent {
         severity: Severity::Info,
@@ -1265,7 +1265,7 @@ struct HandoverFixture {
     qualification: VerifiedRuntimeQualification,
     info: HandoverInfo,
     qualification_record: RuntimeQualification,
-    key: kegari_v0::evidence::AttestationKey,
+    key: kegari_secrets::AttestationKey,
 }
 fn metadata_binary(path: &Path, info: &impl serde::Serialize) -> kegari_platform::BinaryIdentity {
     let document = serde_json::to_string(info).unwrap();
@@ -1374,7 +1374,7 @@ impl HandoverFixture {
             integration: artifact("integration"),
             human_calibration: artifact("human"),
         };
-        let key = kegari_v0::evidence::AttestationKey::new(
+        let key = kegari_secrets::AttestationKey::new(
             format!("keychain:{}:attestation-v1", id(2)),
             vec![7; 32],
         )

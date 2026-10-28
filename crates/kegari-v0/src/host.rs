@@ -8,11 +8,9 @@ use crate::{
     },
     configuration::{ConfigManager, ConfigurationInputs},
     control::{Actor, ControlHost, Receipt},
-    evidence::AttestationKey,
     housekeeping::{Housekeeping, LogEvent, LogSink, Severity},
     observations::{ObservationCache, ReferenceStore},
     platform::Registration,
-    secrets::{Keychain, SecretStore},
     supervisor::{
         DrainState, NativeSupervisor, Supervisor, SupervisorDriver, SupervisorFuture,
         SupervisorLimits,
@@ -21,6 +19,7 @@ use crate::{
 };
 use kegari_digest::canonical_digest;
 use kegari_platform::{BinaryIdentity, HostIdentity, NativeProcessProbe};
+use kegari_secrets::{AttestationKey, Keychain, SecretStore};
 use kegari_storage::PrivateDir;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
@@ -698,7 +697,7 @@ mod tests {
             &self,
             _: Actor,
             _: CommandRequest,
-            _: Option<crate::secrets::Secret>,
+            _: Option<kegari_secrets::Secret>,
             _: Receipt,
         ) -> HostFuture<'_, Receipt> {
             Box::pin(async { Err(Error::new("fixture", "unexpected configuration mutation")) })

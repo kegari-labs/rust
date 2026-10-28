@@ -1,5 +1,42 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Secrets extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. The completed extraction moves secret
+values, Keychain access, explicit reference resolution and generic attestation
+signing into `kegari-secrets`. CLI and backend import its root interfaces directly,
+without backend compatibility reexports. The new crate depends on types/digest;
+it has no backend, provider, configuration, storage, process or networking
+dependency, including in tests.
+
+`Secret::credential()` is replaced by the backend-only
+`connections::provider_credential(&Secret)` helper, preserving UTF-8 validation,
+provider credential validation and call ordering. Publication framing, evidence
+validation, delivery gates, credential-import authorization and configuration
+transactions remain in the backend. Native helpers, key material and signing-byte
+construction stay private. Keychain names, native behavior, cleanup, reference
+precedence and signed-record formats remain unchanged.
+
+All ten packages retain `0.2.0-alpha.10`; persisted/API schemas, instruction assets,
+all 239 external lockfile entries and the archived alpha.10 remain unchanged.
+All 179 focused checks passed. The first full suite exposed two existing Git
+fixture races; deterministic test-only preconditions preserve their assertions
+and production behavior. All 13 focused startup checks then passed. The final
+workspace release suite passed 1,286 tests, with zero failures and exactly three
+native ignores. Both full-run results are retained in the verification report.
+Formatting, strict workspace all-target Clippy, contract inventory and its 11
+tests passed. One bounded independent review, including the fixture corrections,
+found no material issues. The optimized arm64 executable passed all five
+minimal-environment inspections with consistent identity/schemas/assets and no
+runtime state created. Tests use synthetic keys and in-memory stores; they do not
+read, write, initialize, unlock or delete real Keychain items. See the
+[secrets boundary](../kegari-secrets/README.md) and
+[verification report](validation/SECRETS-EXTRACTION.md). No native/live
+qualification, service activation, packaging, commit or remote operation is
+included in this refactor.
+
+## Previous platform extraction checkpoint
+
 **Goal mode cancelled. Platform extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. The completed extraction moves OS

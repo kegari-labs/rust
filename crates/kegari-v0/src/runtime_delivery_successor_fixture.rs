@@ -842,7 +842,7 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
     // protected bytes blocks assignment creation; restoring the exact bytes
     // permits the existing path without minting a new upstream effect.
     let delta_digest = &corrected_slice.manifest().ordered_delta_digests[0];
-    let delta: crate::evidence::Signed<Value> = current_workspace
+    let delta: kegari_secrets::Signed<Value> = current_workspace
         .records
         .read(&format!("delta-{}.json", &delta_digest[7..]))
         .unwrap();

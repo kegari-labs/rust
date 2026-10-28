@@ -6,6 +6,7 @@ mod process_probe;
 // below are explicitly simulated complete snapshots, not live qualification.
 use chrono::{Duration, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_secrets::{AttestationKey, Signed};
 use kegari_types::error::{Error, Result};
 use kegari_v0::evidence::*;
 use kegari_v0::git::*;
@@ -3543,13 +3544,6 @@ fn canonical_publications_reject_quotes_trailing_data_duplicates_and_wrong_domai
     assert!(
         decode_signed_publication::<serde_json::Value>(&body, "fixture_record", &other).is_err()
     );
-}
-
-#[test]
-fn attestation_rejects_unserializable_payload_without_panicking() {
-    let key = AttestationKey::new("fixture-invalid-json".into(), vec![7; 32]).unwrap();
-    let payload = BTreeMap::from([(("structured", "key"), "unsupported JSON key")]);
-    assert!(key.sign("fixture_payload", &payload).is_err());
 }
 
 #[test]

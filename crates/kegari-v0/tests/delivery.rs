@@ -11,12 +11,13 @@ use chrono::{Duration, Utc};
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
 use kegari_providers::*;
+use kegari_secrets::AttestationKey;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
     delivery::*,
-    evidence::{AttestationKey, Publication},
+    evidence::Publication,
     evidence::{ReviewAttestation, ReviewKind, RevisionBinding, Verdict, no_change_digest},
     git::{Git, RepositoryId},
     providers::*,
@@ -721,7 +722,7 @@ impl DeliveryFixture {
             repository_contract,
         }
     }
-    fn review(&self) -> kegari_v0::evidence::Signed<ReviewAttestation> {
+    fn review(&self) -> kegari_secrets::Signed<ReviewAttestation> {
         let scope = self.admission.scope();
         let delta = no_change_digest(
             &scope.work,

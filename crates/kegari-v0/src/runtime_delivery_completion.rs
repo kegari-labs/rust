@@ -55,7 +55,7 @@ pub(crate) struct VerifiedReleaseCompletion {
     holds: BTreeMap<Uuid, domain::ResourceHold>,
     records: Arc<kegari_storage::PrivateDir>,
     control: Arc<crate::control::ControlHost>,
-    key: Arc<evidence::AttestationKey>,
+    key: Arc<kegari_secrets::AttestationKey>,
 }
 impl std::fmt::Debug for VerifiedReleaseCompletion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -230,7 +230,7 @@ fn closed_owner_references(
 
 fn validate_completion_envelope(
     records: &kegari_storage::PrivateDir,
-    key: &evidence::AttestationKey,
+    key: &kegari_secrets::AttestationKey,
     expected: &CompletionRecord,
 ) -> Result<()> {
     let signed: Signed<CompletionRecord> = match records.read(&leaf(expected.terminal)) {
@@ -328,7 +328,7 @@ pub(crate) struct ReleaseCompletionAnchor {
     work: WorkIdentity,
     resources: BTreeSet<domain::ResourceKey>,
     records: Arc<kegari_storage::PrivateDir>,
-    key: Arc<evidence::AttestationKey>,
+    key: Arc<kegari_secrets::AttestationKey>,
 }
 impl std::fmt::Debug for ReleaseCompletionAnchor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1982,7 +1982,7 @@ mod reference_tests {
             &root.path().canonicalize().unwrap().join("workspace"),
         )
         .unwrap();
-        let key = evidence::AttestationKey::new("fixture-key".into(), vec![17; 32]).unwrap();
+        let key = kegari_secrets::AttestationKey::new("fixture-key".into(), vec![17; 32]).unwrap();
         let name = "target-proof-fixture.json";
         let expected = key
             .sign(

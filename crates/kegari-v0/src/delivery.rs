@@ -2,8 +2,8 @@
 //! execution/provider observations have established the corresponding gate.
 use crate::control::{Actor, ControlHost, MutationRequest, Permit, Receipt};
 use crate::evidence::{
-    self, ArtifactReference, AttestationKey, CheckKind, CheckRequirement, CheckRun, CheckSnapshot,
-    Conclusion, Publication, RevisionBinding, Runner, Signed, WorkIdentity,
+    self, ArtifactReference, CheckKind, CheckRequirement, CheckRun, CheckSnapshot, Conclusion,
+    Publication, RevisionBinding, Runner, WorkIdentity,
 };
 use crate::execution::VerifiedCheckExecution;
 use crate::git::{Git, RepositoryId};
@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 use kegari_config::{CiSuite, Repository as RepositoryConfig};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::{GithubClient, RepositoryIdentity};
+use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

@@ -3,7 +3,7 @@
 use crate::{
     control::{ControlHost, Permit, Receipt, ReceiptPhase},
     delivery::{DeliveryAdmission, DeliveryPhase, RepositoryContract},
-    evidence::{AttestationKey, ProductionBaseline, ProductionTargetBaseline, Signed},
+    evidence::{ProductionBaseline, ProductionTargetBaseline},
     git::Revision,
     providers::{HostedProofExpectation, HostedProofVerifier, ProviderMutation, VerifiedHostedJob},
     reconcile::FreshGate,
@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use kegari_config::{Deployment, DeploymentStep};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::{GithubClient, GithubRecord, WorkflowJob, WorkflowRun};
+use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

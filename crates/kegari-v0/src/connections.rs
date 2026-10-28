@@ -1,15 +1,13 @@
 //! Host-only connection construction and verified credential imports. No worker
 //! receives this registry, Keychain access, an arbitrary endpoint or a raw token.
-use crate::{
-    reconcile::WorkspaceClients,
-    secrets::{Secret, SecretStore, resolve_reference},
-};
+use crate::reconcile::WorkspaceClients;
 use kegari_config::{Config, Connection, ProviderKind};
 use kegari_digest::canonical_digest;
 use kegari_providers::HttpTransport;
 use kegari_providers::{
     AccountIdentity, GithubClient, HttpPolicy, LinearClient, verify_connection_identity,
 };
+use kegari_secrets::{Secret, SecretStore, resolve_reference};
 use kegari_types::error::{Error, Result};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -17,6 +15,15 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
+
+/// Convert a resolved secret at the provider boundary without performing I/O.
+pub(crate) fn provider_credential(
+    secret: &kegari_secrets::Secret,
+) -> Result<kegari_providers::Credential> {
+    let text = std::str::from_utf8(secret.bytes())
+        .map_err(|_| Error::new("missing_secret", "provider credential must be UTF-8"))?;
+    kegari_providers::Credential::new(text.to_owned())
+}
 
 fn policy(connection: &Connection, timeout: Duration) -> Result<HttpPolicy> {
     HttpPolicy::new(
@@ -77,7 +84,7 @@ pub async fn verify_credential(
     }
     let identity = verify_connection_identity(
         policy(connection, timeout)?,
-        secret.credential()?,
+        provider_credential(&secret)?,
         connection.kind,
         transport,
     )
@@ -162,13 +169,13 @@ impl ConnectionRegistry {
                         policy(linear, timeout)?,
                         workspace.linear_workspace_id,
                         workspace.linear.clone(),
-                        linear_secret.credential()?,
+                        provider_credential(linear_secret)?,
                         transports.get(&workspace.linear_connection).cloned(),
                     )?,
                     github: GithubClient::with_transport(
                         policy(github, timeout)?,
                         workspace.github.clone(),
-                        github_secret.credential()?,
+                        provider_credential(github_secret)?,
                         transports.get(&workspace.github_connection).cloned(),
                     )?,
                 })
@@ -203,5 +210,30 @@ impl ConnectionRegistry {
     }
     pub fn secret_environment(&self) -> &BTreeSet<String> {
         &self.secret_environment
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn provider_conversion_preserves_redaction_and_validation_errors() {
+        let secret = Secret::new(b"sentinel-token".to_vec()).unwrap();
+        assert!(!format!("{:?}", provider_credential(&secret).unwrap()).contains("sentinel"));
+        let invalid_utf8 = Secret::new(vec![0xff]).unwrap();
+        let error = provider_credential(&invalid_utf8).unwrap_err();
+        assert_eq!(error.code, "missing_secret");
+        assert_eq!(error.message, "provider credential must be UTF-8");
+        for bytes in [
+            b"token\r".to_vec(),
+            b"token\n".to_vec(),
+            b"token\0".to_vec(),
+        ] {
+            let secret = Secret::new(bytes).unwrap();
+            let error = provider_credential(&secret).unwrap_err();
+            assert_eq!(error.code, "missing_secret");
+            assert_eq!(error.message, "provider credential is absent or malformed");
+        }
     }
 }

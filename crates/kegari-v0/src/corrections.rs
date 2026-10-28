@@ -3,13 +3,14 @@
 use crate::{
     authority::{CommentClass, CommentRevision, Corrections, IssueKey},
     control::{ControlHost, Receipt, ReceiptPhase},
-    evidence::{AttestationKey, Signed, WorkIdentity, decode_signed_publication},
+    evidence::{WorkIdentity, decode_signed_publication},
     reconcile::{ParentProjection, ReconcileRefs, RuntimeProjection},
 };
 use chrono::{DateTime, Utc};
 use kegari_config::{Config, Workspace};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::Comment;
+use kegari_secrets::{AttestationKey, Signed};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -726,7 +727,7 @@ pub struct CorrectionDependencies {
     pub configuration: std::sync::Arc<dyn crate::app::ConfigurationControl>,
     pub control: std::sync::Arc<ControlHost>,
     pub observations: std::sync::Arc<crate::observations::ObservationCache>,
-    pub secrets: std::sync::Arc<dyn crate::secrets::SecretStore>,
+    pub secrets: std::sync::Arc<dyn kegari_secrets::SecretStore>,
     pub key: std::sync::Arc<AttestationKey>,
     pub inputs: std::sync::Arc<dyn crate::configuration::ConfigurationInputs>,
     pub owner_check: crate::preparation::OwnerCheck,

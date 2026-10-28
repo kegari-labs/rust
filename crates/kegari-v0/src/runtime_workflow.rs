@@ -9,14 +9,13 @@ use crate::{
         DecisionManager, RetryTarget, VerifiedExplicitCorrection, VerifiedRetryGrant,
     },
     delivery::RuntimeDeliveryDecisions,
-    evidence::{
-        AttestationKey, Publication, VerifiedAcceptance, WorkIdentity, decode_signed_publication,
-    },
+    evidence::{Publication, VerifiedAcceptance, WorkIdentity, decode_signed_publication},
     reconcile::{DependencyOutcomes, ParentDelivery},
     runtime::RuntimeCoordinator,
     scheduler::PhaseKey,
 };
 use kegari_digest::canonical_digest;
+use kegari_secrets::AttestationKey;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};

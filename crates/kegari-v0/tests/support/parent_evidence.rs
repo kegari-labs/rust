@@ -3,6 +3,7 @@
 use crate::pinned_git;
 use chrono::{Duration, Utc};
 use kegari_digest::canonical_digest;
+use kegari_secrets::{AttestationKey, Signed};
 use kegari_v0::{evidence::*, git::*};
 use std::{
     collections::{BTreeMap, BTreeSet},

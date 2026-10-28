@@ -7,9 +7,7 @@ use crate::{
     authority::IssueKey,
     control::{ControlSnapshot, Intent, Lease, Permit, ReceiptPhase},
     delivery::*,
-    evidence::{
-        self, Signed, VerifiedAcceptance, VerifiedParent, VerifiedProduction, WorkIdentity,
-    },
+    evidence::{self, VerifiedAcceptance, VerifiedParent, VerifiedProduction, WorkIdentity},
     release::{
         self as domain, AdmissionFacts, DeliveryEvidence, FreshReleaseFacts, ReleaseAttempt,
         ReleasePlan, ReleaseQueue, StepState,
@@ -17,6 +15,7 @@ use crate::{
 };
 use kegari_config::ReleaseMode;
 use kegari_digest::canonical_digest;
+use kegari_secrets::Signed;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeSet, sync::Mutex};
@@ -3166,7 +3165,7 @@ fn order_candidates(candidates: &mut [ReleaseCandidate]) {
     });
 }
 fn current_parent_publication(
-    key: &evidence::AttestationKey,
+    key: &kegari_secrets::AttestationKey,
     runtime: Uuid,
     writer: Uuid,
     projection: &ParentProjection,
@@ -3203,7 +3202,7 @@ fn current_parent_publication(
     reject_superseding_parent(key, runtime, comments, selected)
 }
 fn reject_superseding_parent(
-    key: &evidence::AttestationKey,
+    key: &kegari_secrets::AttestationKey,
     runtime: Uuid,
     comments: &[kegari_providers::Comment],
     selected: &kegari_providers::Comment,
@@ -3312,7 +3311,7 @@ mod tests {
             &root.path().canonicalize().unwrap().join("records"),
         )
         .unwrap();
-        let key = evidence::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap();
+        let key = kegari_secrets::AttestationKey::new("fixture".into(), vec![7; 32]).unwrap();
         let signed = key.sign("runtime_release_attempt", &attempt).unwrap();
         directory.write("attempt.json", &signed).unwrap();
         let restored: Signed<AttemptRecord> = directory.read("attempt.json").unwrap();

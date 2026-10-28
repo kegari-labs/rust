@@ -6,6 +6,7 @@ use kegari_platform::{
 };
 use kegari_providers::HttpTransport;
 use kegari_providers::{HttpRequest, HttpResponse};
+use kegari_secrets::{Secret, SecretStore};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use kegari_v0::config::config_revision;
@@ -14,7 +15,6 @@ use kegari_v0::{
     configuration::{ConfigManager, ConfigurationInputs},
     control::{Actor, ControlHost, Intent, Lifecycle, MutationRequest, Principal, ReceiptPhase},
     platform::Registration,
-    secrets::{Secret, SecretStore},
     transport::TransportAuthentication,
 };
 use serde_json::{Value, json};

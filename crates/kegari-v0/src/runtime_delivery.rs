@@ -707,7 +707,7 @@ struct ReleaseIntent {
 /// An authenticated pending command reference. It grants no dispatch authority;
 /// the orchestration driver must acquire a fresh actual lease admission.
 pub struct PendingReleaseRequest {
-    record: crate::evidence::Signed<ReleaseIntent>,
+    record: kegari_secrets::Signed<ReleaseIntent>,
     receipt: crate::control::Receipt,
 }
 impl PendingReleaseRequest {
@@ -831,7 +831,7 @@ impl RuntimeDelivery {
         }, |_| {
             let leaf=format!("release-intent-{}.json",intent.request_id);
             let _lock=self.records.section_lock("release-intents.lock")?;
-            match self.records.read::<crate::evidence::Signed<ReleaseIntent>>(&leaf) {
+            match self.records.read::<kegari_secrets::Signed<ReleaseIntent>>(&leaf) {
                 Ok(existing)=> {self.runtime.services.key.verify("manual_release_intent",&existing)?;if existing.digest()?!=signed.digest()? {return Err(Error::new("request_conflict","release request already names another immutable intent"));}},
                 Err(error) if error.code=="record_missing"=>self.records.write(&leaf,&signed)?,
                 Err(error)=>return Err(error),
@@ -852,7 +852,7 @@ impl RuntimeDelivery {
             else {
                 continue;
             };
-            let signed: crate::evidence::Signed<ReleaseIntent> = self.records.read(&leaf)?;
+            let signed: kegari_secrets::Signed<ReleaseIntent> = self.records.read(&leaf)?;
             self.runtime
                 .services
                 .key
@@ -901,7 +901,7 @@ impl RuntimeDelivery {
     }
 }
 fn release_intent_request(
-    record: &crate::evidence::Signed<ReleaseIntent>,
+    record: &kegari_secrets::Signed<ReleaseIntent>,
 ) -> Result<crate::control::MutationRequest> {
     let intent = &record.payload;
     Ok(crate::control::MutationRequest {

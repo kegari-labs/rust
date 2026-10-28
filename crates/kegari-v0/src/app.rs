@@ -8,11 +8,11 @@ use crate::{
         Receipt, ReceiptPhase,
     },
     reconcile::{Activity, DependencyOutcomes, HistoryRow, ParentDelivery, RuntimeProjection},
-    secrets::Secret,
     snapshot::Snapshots,
 };
 use chrono::{Duration, Utc};
 use kegari_config::{Config, ControlRole, Operator};
+use kegari_secrets::Secret;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
@@ -32,10 +32,10 @@ pub type HostFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>
 /// leaves durable STOPPED without starting a listener, scheduler or model turn.
 pub async fn bootstrap(configuration: &str, request_id: Uuid) -> Result<DispatchResult> {
     use crate::{
-        configuration::ConfigManager, platform::Registration, secrets::Keychain,
-        transport::TransportAuthentication,
+        configuration::ConfigManager, platform::Registration, transport::TransportAuthentication,
     };
     use kegari_platform::{BinaryIdentity, HostIdentity};
+    use kegari_secrets::Keychain;
     let host = HostIdentity::discover()?;
     let mut config = Config::parse(configuration)?;
     config.resolve_paths(&host.home, |name| std::env::var(name).ok())?;

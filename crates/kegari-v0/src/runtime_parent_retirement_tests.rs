@@ -151,8 +151,7 @@ fn indexed_binding_data() -> ParentEffectHistoryBinding {
 fn schema_one_provenance_stays_byte_identical_even_with_new_index_comparison_data() {
     let binding = indexed_binding_data();
     let legacy = ParentEffectHistory::RetainedReceiptScanWithoutEmittedIndex;
-    let key =
-        crate::evidence::AttestationKey::new("schema-component".into(), vec![37; 32]).unwrap();
+    let key = kegari_secrets::AttestationKey::new("schema-component".into(), vec![37; 32]).unwrap();
     let before = key
         .sign("parent-history-schema-component", &(1u32, &legacy))
         .unwrap();

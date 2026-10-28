@@ -1,10 +1,10 @@
 use clap::Parser;
 use kegari_cli::cli::*;
 use kegari_cli::client::*;
+use kegari_secrets::Secret;
 use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
-use kegari_v0::secrets::Secret;
 use kegari_v0::snapshot::Snapshots;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

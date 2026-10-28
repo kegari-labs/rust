@@ -12,9 +12,9 @@ use crate::{
         ReceiptPhase, RunReference,
     },
     evidence::{
-        AcceptanceActor, AcceptanceRequest, AttestationKey, Publication, Signed,
-        VerifiedAcceptance, WorkIdentity, decode_signed_publication, encode_signed_publication,
-        prepare_acceptance, verify_acceptance,
+        AcceptanceActor, AcceptanceRequest, Publication, VerifiedAcceptance, WorkIdentity,
+        decode_signed_publication, encode_signed_publication, prepare_acceptance,
+        verify_acceptance,
     },
     housekeeping::Housekeeping,
     observations::ObservationCache,
@@ -24,12 +24,12 @@ use crate::{
         WorkspaceClients,
     },
     scheduler::PhaseKey,
-    secrets::SecretStore,
 };
 use chrono::{DateTime, Duration, Utc};
 use kegari_config::Config;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::{Comment, GithubClient};
+use kegari_secrets::{AttestationKey, SecretStore, Signed};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

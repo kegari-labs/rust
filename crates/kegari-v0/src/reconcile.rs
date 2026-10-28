@@ -6,8 +6,7 @@ use crate::{
         ScopeSnapshot,
     },
     evidence::{
-        AttestationKey, Generation, Publication, Signed, VerifiedAcceptance, VerifiedChild,
-        VerifiedParent, WorkIdentity,
+        Generation, Publication, VerifiedAcceptance, VerifiedChild, VerifiedParent, WorkIdentity,
     },
     workflow::Workflow,
 };
@@ -17,6 +16,7 @@ use kegari_digest::canonical_digest;
 use kegari_providers::{
     Comment, Dependency, GithubClient, HistoryEntry, Issue, LinearClient, PullRequest, Repository,
 };
+use kegari_secrets::{AttestationKey, Signed};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

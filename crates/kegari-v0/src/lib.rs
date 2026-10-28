@@ -54,7 +54,6 @@ pub mod runtime_schedule;
 pub mod runtime_workers;
 pub mod runtime_workflow;
 pub mod scheduler;
-pub mod secrets;
 pub mod snapshot;
 pub mod supervisor;
 pub mod transport;

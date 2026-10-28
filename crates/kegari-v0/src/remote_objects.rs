@@ -3,13 +3,13 @@
 use crate::{
     control::{Actor, ControlHost, MutationRequest, Permit, ReceiptPhase},
     delivery::{DeliveryAdmission, RepositoryContract},
-    evidence::{AttestationKey, Signed},
     git::{Git, GitLimits, RepositoryId, Revision},
     process_records::ProcessJournal,
     worker::{ExecutionRegistry, WorkerAuthority},
 };
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::GithubClient;
+use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

@@ -38,7 +38,7 @@ pub trait Dispatcher: Send + Sync {
         &self,
         actor: Actor,
         request: CommandRequest,
-        secret: Option<crate::secrets::Secret>,
+        secret: Option<kegari_secrets::Secret>,
     ) -> Pin<Box<dyn Future<Output = Result<DispatchResult>> + Send + '_>>;
 }
 pub fn command_mutates(command: &CommandName, args: &Value) -> bool {
@@ -555,7 +555,7 @@ async fn dispatch(
     state: ApiState,
     verified: VerifiedRequest,
     command: CommandRequest,
-    secret: Option<crate::secrets::Secret>,
+    secret: Option<kegari_secrets::Secret>,
 ) -> Response {
     let id = command.request_id;
     if matches!(
@@ -651,7 +651,7 @@ async fn commands(State(state): State<ApiState>, request: Request) -> Response {
             match value
                 .as_str()
                 .ok_or_else(|| Error::new("invalid_input", "secret input must be UTF-8 text"))
-                .and_then(|text| crate::secrets::Secret::new(text.as_bytes().to_vec()))
+                .and_then(|text| kegari_secrets::Secret::new(text.as_bytes().to_vec()))
             {
                 Ok(secret) => Some(secret),
                 Err(error) => {

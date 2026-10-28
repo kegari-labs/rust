@@ -860,6 +860,7 @@ dependencies = [
  "kegari-config",
  "kegari-digest",
  "kegari-platform",
+ "kegari-secrets",
  "kegari-storage",
  "kegari-types",
  "kegari-v0",
@@ -946,6 +947,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kegari-secrets"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "hex",
+ "hmac",
+ "kegari-digest",
+ "kegari-types",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "uuid",
+]
+
+[[package]]
 name = "kegari-storage"
 version = "0.2.0-alpha.10"
 dependencies = [
@@ -979,7 +995,6 @@ dependencies = [
  "clap",
  "flate2",
  "hex",
- "hmac",
  "hyper",
  "hyper-util",
  "kegari-config",
@@ -987,6 +1002,7 @@ dependencies = [
  "kegari-platform",
  "kegari-process",
  "kegari-providers",
+ "kegari-secrets",
  "kegari-storage",
  "kegari-types",
  "libc",

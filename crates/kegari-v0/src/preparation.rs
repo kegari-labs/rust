@@ -8,15 +8,15 @@ use crate::{
         Actor, ControlHost, Lease, MetadataAdmission, MetadataReference, MutationRequest, Receipt,
         ReceiptPhase, Reconciliation,
     },
-    evidence::{AttestationKey, Publication, decode_signed_publication, encode_signed_publication},
+    evidence::{Publication, decode_signed_publication, encode_signed_publication},
     observations::ObservationCache,
     providers::{ProviderBroker, ProviderMutation},
     reconcile::{AuthorizationGate, VerifiedAuthorization},
-    secrets::SecretStore,
 };
 use chrono::{Duration, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::LinearClient;
+use kegari_secrets::{AttestationKey, SecretStore};
 use kegari_types::error::{Error, Result};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
@@ -423,7 +423,7 @@ impl AuthorizationPublisher {
         writer: &str,
         gate: &AuthorizationGate,
         body: &str,
-        signed: &crate::evidence::Signed<crate::reconcile::AuthorizationSnapshot>,
+        signed: &kegari_secrets::Signed<crate::reconcile::AuthorizationSnapshot>,
         receipt: Receipt,
     ) -> Result<VerifiedAuthorization> {
         if let Some(error) = receipt

@@ -300,17 +300,18 @@ fn expired_git_command_refuses_before_start_gate_or_spawn() {
     let fixture = JournalFixture::new();
     let gate_calls = Arc::new(AtomicUsize::new(0));
     let observed_calls = gate_calls.clone();
-    let state = GitOperationState::new(
-        GitLimits {
-            command_timeout: Duration::from_nanos(1),
-            ..GitLimits::default()
-        },
+    let mut state = GitOperationState::new(
+        GitLimits::default(),
         Some(Arc::new(move |start| {
             observed_calls.fetch_add(1, Ordering::SeqCst);
             start()
         })),
     )
     .unwrap();
+    // Model an exhausted command budget after normal limit validation. A 1 ns
+    // budget can survive the first check when the clock tick has not advanced.
+    // Only this private fixture state accepts zero; production validation does not.
+    state.limits.command_timeout = Duration::ZERO;
     *state.provided_guard.lock().unwrap() =
         Some(fixture.journal.begin(fixture.binding.clone()).unwrap());
     let marker = fixture.binding.cwd.join("forbidden-spawn");
@@ -319,7 +320,9 @@ fn expired_git_command_refuses_before_start_gate_or_spawn() {
         .args(["-c", "printf spawned > forbidden-spawn"])
         .env_clear()
         .current_dir(&fixture.binding.cwd);
-    assert_eq!(state.run(command, None).unwrap_err().code, "timeout");
+    let error = state.run(command, None).unwrap_err();
+    assert_eq!(error.code, "timeout");
+    assert_eq!(error.message, "Git command exceeded finite timeout");
     assert_eq!(gate_calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.probe.snapshots.load(Ordering::SeqCst), 0);
     assert!(!marker.exists());
@@ -424,6 +427,9 @@ fn failed_git_output_is_drained_before_owned_cleanup_completes() {
 #[test]
 fn failed_git_stream_uncertainty_survives_local_thread_close() {
     let state = Arc::new(GitOperationState::new(GitLimits::default(), None).unwrap());
+    // Keep concurrent fork/pre-exec fixtures from retaining this writer until
+    // their exec closes CLOEXEC descriptors. This fixture never spawns a child.
+    let _spawn_boundary = kegari_process::spawn::retirement().unwrap();
     let (mut reader, mut writer) = UnixStream::pair().unwrap();
     reader.set_nonblocking(true).unwrap();
     writer.write_all(b"retained output").unwrap();

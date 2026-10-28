@@ -175,7 +175,7 @@ impl Dispatcher for Echo {
         &self,
         _: Actor,
         request: CommandRequest,
-        _: Option<kegari_v0::secrets::Secret>,
+        _: Option<kegari_secrets::Secret>,
     ) -> Pin<Box<dyn Future<Output = Result<DispatchResult>> + Send + '_>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -420,7 +420,7 @@ impl Dispatcher for Paged {
         &self,
         actor: Actor,
         mut request: CommandRequest,
-        _: Option<kegari_v0::secrets::Secret>,
+        _: Option<kegari_secrets::Secret>,
     ) -> Pin<Box<dyn Future<Output = Result<DispatchResult>> + Send + '_>> {
         Box::pin(async move {
             let snapshot = request.args.as_object_mut().unwrap().remove("snapshot_id");

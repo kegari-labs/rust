@@ -9,6 +9,7 @@
 | [`kegari-storage`](crates/kegari-storage/README.md) | Protected filesystem access, durable records and lock primitives. |
 | [`kegari-process`](crates/kegari-process/README.md) | Guarded process spawning, owned process groups and exit evidence. |
 | [`kegari-platform`](crates/kegari-platform/README.md) | OS identity, executable inspection and native host helpers. |
+| [`kegari-secrets`](crates/kegari-secrets/README.md) | Secret values, Keychain storage and generic signed-record primitives. |
 | [`kegari-cli`](crates/kegari-cli/README.md) | Public CLI, control client and the `kegari-v0` executable. |
 | [`kegari-v0`](crates/kegari-v0/README.md) | Remaining backend library and the `kegari-v0-evaluation` inspection executable. |
 
@@ -31,11 +32,16 @@ in the backend.
 CLI and backend import native host helpers directly from `kegari-platform`, which
 depends on process/digest/types without a backend dependency. Registration,
 runtime ownership, services and application build metadata remain in the backend.
+CLI and backend import secret values directly from `kegari-secrets`, which also
+owns Keychain access, explicit reference resolution and generic attestation
+signing. It depends on types/digest without a backend or provider dependency.
+Provider credential conversion, authorized imports, publication framing and
+delivery-evidence policy remain in the backend.
 All packages use workspace version `0.2.0-alpha.10`; the executable name, process
 roles and serialized schemas remain unchanged. This extraction creates no new
 prerelease or qualification claim.
 
-From the workspace root, using the pinned toolchain; `--workspace` checks all nine
+From the workspace root, using the pinned toolchain; `--workspace` checks all ten
 packages:
 
 ```sh

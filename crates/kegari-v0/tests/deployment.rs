@@ -265,7 +265,7 @@ async fn missing_current_pointer_rejects_ambiguous_mismatched_or_malformed_proof
             } else {
                 // A second genuinely signed record with the same current native
                 // identity is ambiguous, even if only its observation time differs.
-                let signed: fixture_api::evidence::Signed<Value> = records.read(proof).unwrap();
+                let signed: kegari_secrets::Signed<Value> = records.read(proof).unwrap();
                 let mut payload = signed.payload;
                 payload["target"]["observed_at"] = json!("2026-01-01T00:00:00Z");
                 let duplicate = AttestationKey::new("fixture".into(), vec![7; 32])
