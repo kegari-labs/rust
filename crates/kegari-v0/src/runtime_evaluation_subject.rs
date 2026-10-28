@@ -153,9 +153,9 @@ impl TrialSubject {
         };
         let (ordinal, number) = plan.slot(trial)?;
         let identity = plan.trial_identity(trial)?;
-        if identity != crate::api::evaluation_trial_identity(request)?
+        if identity != kegari_control_api::api::evaluation_trial_identity(request)?
             || command.expected.get("evaluation_trial") != Some(&identity)
-            || request.request_id != crate::app::command_effect_id(command.operation_id)
+            || request.request_id != crate::control_command::command_effect_id(command.operation_id)
             || plan.suite != binding.suite_digest
         {
             return Err(Error::new(
@@ -238,7 +238,7 @@ fn verify_reference(plan: &SubjectPlan, reference: &SubjectReference) -> Result<
         || reference.runtime != plan.scope.runtime
         || reference.workspace != plan.scope.workspace
         || reference.command.is_nil()
-        || reference.operation != crate::app::command_effect_id(reference.command)
+        || reference.operation != crate::control_command::command_effect_id(reference.command)
         || reference.plan != plan.digest()?
         || reference.trial != plan.trial_identity(trial)?
         || Some(reference.number) != plan.first.checked_add(u64::from(reference.ordinal))
@@ -465,7 +465,7 @@ mod tests {
             runtime: plan.scope.runtime,
             workspace: plan.scope.workspace,
             command,
-            operation: crate::app::command_effect_id(command),
+            operation: crate::control_command::command_effect_id(command),
             trial: plan.trial_identity(&plan.trials[ordinal as usize]).unwrap(),
             ordinal,
             number,

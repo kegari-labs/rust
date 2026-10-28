@@ -41,10 +41,11 @@ async fn main() {
             }
         },
         Some("__orchestrate") => {
-            internal_result(kegari_v0::orchestration::run_child().await, false)
+            internal_result(kegari_controller::orchestration::run_child().await, false)
         }
         Some("__control-host") => internal_result(
-            kegari_v0::host::run_native(&kegari_v0::runtime_native::NativeRuntimeFactory).await,
+            kegari_controller::host::run_native(&kegari_v0::runtime_native::NativeRuntimeFactory)
+                .await,
             true,
         ),
         _ => local_cli::run_cli(arguments).await,

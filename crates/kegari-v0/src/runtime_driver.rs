@@ -1,18 +1,25 @@
 //! Native scheduler driver. Owned launch tasks survive pause/force until their
 //! actual completion is joined; recovery preserves uncertain process/effect holds.
-use crate::{
-    control::{ControlSnapshot, Intent, Lease, ReceiptPhase},
-    preparation::AuthorizationPublisher,
-    process_records::{ProcessJournal, ProcessRecovery},
-    runtime::{
-        RuntimeAction, RuntimeCoordinator, SessionRecoveryAction, SessionRecoveryStage,
-        WorkerAction,
-    },
-    runtime_workers::{self, LaunchRequest},
-    scheduler::{Limits, Scheduler},
-    supervisor::{DrainState, SupervisorDriver, SupervisorFuture},
-    worker::WorkerHost,
-};
+use crate::control::ControlSnapshot;
+use crate::control::Intent;
+use crate::control::Lease;
+use crate::control::ReceiptPhase;
+use crate::preparation::AuthorizationPublisher;
+use crate::process_records::ProcessJournal;
+use crate::process_records::ProcessRecovery;
+use crate::runtime::RuntimeAction;
+use crate::runtime::RuntimeCoordinator;
+use crate::runtime::SessionRecoveryAction;
+use crate::runtime::SessionRecoveryStage;
+use crate::runtime::WorkerAction;
+use crate::runtime_host::DrainState;
+use crate::runtime_host::SupervisorDriver;
+use crate::runtime_host::SupervisorFuture;
+use crate::runtime_workers;
+use crate::runtime_workers::LaunchRequest;
+use crate::scheduler::Limits;
+use crate::scheduler::Scheduler;
+use crate::worker::WorkerHost;
 use chrono::Utc;
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
@@ -1644,7 +1651,7 @@ mod tests {
                     crate::control::MutationRequest {
                         request_id: record.operation,
                         runtime_id: id(1),
-                        actor: crate::control::Actor {
+                        actor: kegari_control_api::identity::Actor {
                             identity: "component-host-owner".into(),
                             principal: None,
                             roles: Default::default(),

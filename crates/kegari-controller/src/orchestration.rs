@@ -1,13 +1,13 @@
 //! Separate orchestration process with an inherited, bounded control channel.
 //! The child owns runtime.lock; the host owns admission and all provider effects.
 //! No user-controlled socket/header can construct this process handshake.
-use crate::{
-    control::{ControlHost, Intent, Lease},
-    platform::{Registration, RuntimeLock},
-};
 use kegari_platform::{BinaryIdentity, HostIdentity, OwnedChild, ProcessIdentity};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
+use kegari_v0::{
+    control::{ControlHost, Intent, Lease},
+    platform::{Registration, RuntimeLock},
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::{
@@ -229,7 +229,7 @@ impl RunningOrchestration {
                 runtime_build,
                 lease: observed,
                 process,
-            } if runtime_build == crate::BUILD_ID
+            } if runtime_build == kegari_v0::BUILD_ID
                 && observed == lease
                 && &process == child.identity() =>
             {
@@ -431,7 +431,7 @@ pub async fn run_child() -> Result<()> {
         &mut writer,
         &ChildFrame::Ready {
             api_version: 1,
-            runtime_build: crate::BUILD_ID.into(),
+            runtime_build: kegari_v0::BUILD_ID.into(),
             lease: lease.clone(),
             process: ProcessIdentity::current()?,
         },

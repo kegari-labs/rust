@@ -1008,13 +1008,15 @@ fn reconciled_baseline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        app::HostFuture,
-        control::{Actor, Lifecycle, MutationRequest, Principal},
-        decisions::*,
-        evidence::VerifiedAcceptance,
-        reconcile::{DependencyOutcomes, ParentDelivery},
-    };
+    use crate::control::Lifecycle;
+    use crate::control::MutationRequest;
+    use crate::decisions::*;
+    use crate::evidence::VerifiedAcceptance;
+    use crate::reconcile::DependencyOutcomes;
+    use crate::reconcile::ParentDelivery;
+    use crate::runtime_host::HostFuture;
+    use kegari_control_api::identity::Actor;
+    use kegari_control_api::identity::Principal;
     struct Evidence {
         delivery: Arc<RuntimeDelivery>,
     }
@@ -1166,7 +1168,7 @@ mod tests {
                 runtime.control.snapshot().unwrap().intent.generation,
             ),
         };
-        let mut mutation = crate::app::mutation_request(
+        let mut mutation = crate::control_command::mutation_request(
             &actor,
             &request,
             manager.command_targets(&request).unwrap(),
@@ -1178,7 +1180,7 @@ mod tests {
             .queue_command(mutation, "recover", || Ok(()))
             .unwrap();
         assert!(fresh);
-        request.request_id = crate::app::command_effect_id(command.operation_id);
+        request.request_id = crate::control_command::command_effect_id(command.operation_id);
         let result = manager.execute(actor, request, command).await.unwrap();
         assert!(matches!(
             result.phase,
@@ -1265,15 +1267,18 @@ mod tests {
             )?),
             expected_control_generation: Some(runtime.control.snapshot()?.intent.generation),
         };
-        let mut mutation =
-            crate::app::mutation_request(&actor, &request, manager.command_targets(&request)?);
+        let mut mutation = crate::control_command::mutation_request(
+            &actor,
+            &request,
+            manager.command_targets(&request)?,
+        );
         mutation.kind = format!("command/{:?}", request.command);
         mutation.payload = json!({"arguments":request.args,"secret_digest":null});
         let (parent, fresh) = runtime
             .control
             .queue_command(mutation, "recover", || Ok(()))?;
         assert!(fresh);
-        request.request_id = crate::app::command_effect_id(parent.operation_id);
+        request.request_id = crate::control_command::command_effect_id(parent.operation_id);
         manager.execute(actor, request, parent).await
     }
 
@@ -1440,10 +1445,16 @@ impl crate::delivery::RuntimeDeliveryDecisions for RuntimeDelivery {
     fn release_inspection(&self) -> Result<Vec<crate::inspection::ReleaseInspectionRow>> {
         self.release_inspection_rows()
     }
-    fn release(&self, decision: AuthorizedDecision) -> crate::app::HostFuture<'_, Receipt> {
+    fn release(
+        &self,
+        decision: AuthorizedDecision,
+    ) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(self.queue_release(decision))
     }
-    fn recover_release(&self, decision: AuthorizedDecision) -> crate::app::HostFuture<'_, Receipt> {
+    fn recover_release(
+        &self,
+        decision: AuthorizedDecision,
+    ) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(async move {
             match decision.request().args["action"].as_str() {
                 Some("resume") => self.resume_release(decision).await,
@@ -1457,7 +1468,7 @@ impl crate::delivery::RuntimeDeliveryDecisions for RuntimeDelivery {
     fn reconcile(
         &self,
         decision: AuthorizedOperationRecovery,
-    ) -> crate::app::HostFuture<'_, Receipt> {
+    ) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(self.reconcile_operation(decision))
     }
 }

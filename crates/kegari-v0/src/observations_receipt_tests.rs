@@ -1,7 +1,10 @@
 //! Actual Control/storage components only. No provider, process, model or
 //! joined-worker capability is manufactured by these receipt-read regressions.
 use super::*;
-use crate::control::{Actor, Lease, Lifecycle, MutationRequest};
+use crate::control::Lease;
+use crate::control::Lifecycle;
+use crate::control::MutationRequest;
+use kegari_control_api::identity::Actor;
 use std::sync::mpsc;
 use std::time::Duration as Wait;
 

@@ -1,6 +1,6 @@
 # Local and direct TLS control transport
 
-`src/transport.rs` supplies actual Unix-socket and direct TLS Axum listeners with
+`kegari_control_api::transport` supplies actual Unix-socket and direct TLS Axum listeners with
 per-connection identity, bounded identity subprocesses, certificate validation and
 reload. The executable host must hold its control ownership lock before starting
 these listeners. `start_unix` and `start_direct_tls` return independent `ServerHandle`s

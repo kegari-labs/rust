@@ -1,17 +1,19 @@
 //! Test-only runtime composition with actual protected registration and journals.
 //! Callers supply clearly labeled provider/process fixtures; no synthetic
 //! completion, acceptance or delivery capability is installed by this builder.
-use crate::{
-    app::{ConfigurationControl, HostFuture},
-    configuration::{AuthorityFences, ConfigurationInputs},
-    control::{Actor, Receipt},
-    host::RuntimeDependencies,
-    housekeeping::{Housekeeping, LogSink},
-    observations::ObservationCache,
-    platform::Registration,
-    process_records::ProcessJournal,
-    runtime::RuntimeCoordinator,
-};
+use crate::configuration::AuthorityFences;
+use crate::configuration::ConfigurationInputs;
+use crate::control::Receipt;
+use crate::housekeeping::Housekeeping;
+use crate::housekeeping::LogSink;
+use crate::observations::ObservationCache;
+use crate::platform::Registration;
+use crate::process_records::ProcessJournal;
+use crate::runtime::RuntimeCoordinator;
+use crate::runtime_host::ConfigurationControl;
+use crate::runtime_host::HostFuture;
+use crate::runtime_host::RuntimeDependencies;
+use kegari_control_api::identity::Actor;
 use kegari_platform::{BinaryIdentity, HostIdentity, ProcessProbe};
 use kegari_secrets::{AttestationKey, SecretStore};
 use kegari_storage::PrivateDir;

@@ -1,19 +1,30 @@
 //! Shared control-host decision facade. Provider publication and release work
 //! remain concrete services; cache insertion accepts only sealed evidence.
-use crate::{
-    app::{HostFuture, RuntimeInspection, WorkflowControl},
-    authority::IssueKey,
-    control::{Actor, Receipt, ReceiptPhase, RunReference},
-    decisions::{
-        AuthorizedDecision, AuthorizedOperationRecovery, DecisionDependencies, DecisionEvidence,
-        DecisionManager, RetryTarget, VerifiedExplicitCorrection, VerifiedRetryGrant,
-    },
-    delivery::RuntimeDeliveryDecisions,
-    evidence::{Publication, VerifiedAcceptance, WorkIdentity, decode_signed_publication},
-    reconcile::{DependencyOutcomes, ParentDelivery},
-    runtime::RuntimeCoordinator,
-    scheduler::PhaseKey,
-};
+use crate::authority::IssueKey;
+use crate::control::Receipt;
+use crate::control::ReceiptPhase;
+use crate::control::RunReference;
+use crate::decisions::AuthorizedDecision;
+use crate::decisions::AuthorizedOperationRecovery;
+use crate::decisions::DecisionDependencies;
+use crate::decisions::DecisionEvidence;
+use crate::decisions::DecisionManager;
+use crate::decisions::RetryTarget;
+use crate::decisions::VerifiedExplicitCorrection;
+use crate::decisions::VerifiedRetryGrant;
+use crate::delivery::RuntimeDeliveryDecisions;
+use crate::evidence::Publication;
+use crate::evidence::VerifiedAcceptance;
+use crate::evidence::WorkIdentity;
+use crate::evidence::decode_signed_publication;
+use crate::reconcile::DependencyOutcomes;
+use crate::reconcile::ParentDelivery;
+use crate::runtime::RuntimeCoordinator;
+use crate::runtime_host::HostFuture;
+use crate::runtime_host::RuntimeInspection;
+use crate::runtime_host::WorkflowControl;
+use crate::scheduler::PhaseKey;
+use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_secrets::AttestationKey;
 use kegari_types::api::CommandRequest;
@@ -833,7 +844,7 @@ mod tests {
         let key = AttestationKey::new("retry-recovery-fixture".into(), vec![31; 32]).unwrap();
         let prior = receipt("implementation", 1, "failed");
         let command = Uuid::from_u128(10);
-        let effect = crate::app::command_effect_id(command);
+        let effect = crate::control_command::command_effect_id(command);
         let bytes = Sha256::digest(format!("kegari:v0:decision-stage:{effect}:retry").as_bytes());
         let mut id = [0; 16];
         id.copy_from_slice(&bytes[..16]);
@@ -855,7 +866,7 @@ mod tests {
                 max_review_rounds: 3,
             },
             control_actor: "operator".into(),
-            principal: crate::control::Principal::Unix { uid: 501 },
+            principal: kegari_control_api::identity::Principal::Unix { uid: 501 },
             linear_actor: writer,
             provider_writer: writer.to_string(),
             reason: "Resolved the recorded blocker".into(),

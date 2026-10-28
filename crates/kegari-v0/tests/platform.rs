@@ -1,9 +1,10 @@
 #![cfg(target_os = "macos")]
 use kegari_config::Config;
+use kegari_control_api::identity::Actor;
 use kegari_platform::*;
 use kegari_storage::PrivateDir;
 use kegari_v0::{
-    control::{Actor, Lifecycle, MutationRequest},
+    control::{Lifecycle, MutationRequest},
     platform::*,
 };
 use serde_json::json;
@@ -119,57 +120,6 @@ fn setup_stays_stopped_and_registration_is_exclusive_and_revision_bound() {
         .write_bytes("config.toml", b"invalid = true")
         .unwrap();
     assert!(recover(&host, &binary).is_err());
-}
-
-#[tokio::test]
-async fn control_socket_recovery_requires_owned_dead_socket_and_preserves_other_entries() {
-    use std::os::unix::fs::PermissionsExt;
-    let (_temporary, host) = host_fixture();
-    let (registration, _control) =
-        bootstrap(&host, Uuid::new_v4(), binary(), Uuid::new_v4()).unwrap();
-    let socket = registration.root().path().join("control.sock");
-    kegari_v0::host::reconcile_control_socket(&registration)
-        .await
-        .unwrap();
-    std::fs::write(&socket, b"operator data").unwrap();
-    assert_eq!(
-        kegari_v0::host::reconcile_control_socket(&registration)
-            .await
-            .unwrap_err()
-            .code,
-        "unsafe_storage"
-    );
-    assert_eq!(std::fs::read(&socket).unwrap(), b"operator data");
-    std::fs::remove_file(&socket).unwrap();
-    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
-    assert_eq!(
-        kegari_v0::host::reconcile_control_socket(&registration)
-            .await
-            .unwrap_err()
-            .code,
-        "ownership_conflict"
-    );
-    assert!(socket.exists());
-    drop(listener);
-    kegari_v0::host::reconcile_control_socket(&registration)
-        .await
-        .unwrap();
-    assert!(!socket.exists());
-    std::os::unix::fs::symlink(registration.root().path().join("owner.json"), &socket).unwrap();
-    assert_eq!(
-        kegari_v0::host::reconcile_control_socket(&registration)
-            .await
-            .unwrap_err()
-            .code,
-        "unsafe_storage"
-    );
-    assert!(
-        std::fs::symlink_metadata(&socket)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
 }
 
 #[test]

@@ -12,9 +12,22 @@ client and `kegari-v0` executable. This package retains the backend library and
 `kegari-v0-evaluation` inspection tool. Both CLI and backend import shared command,
 response, error and snapshot data directly from
 [`kegari-types`](../kegari-types/README.md); there are no backend compatibility
-reexports. The backend retains command validation and classification, role and
-exit-code decisions, and snapshot operations. The temporary CLI-to-backend
-dependency remains; application arguments and hidden process modes are unchanged.
+reexports. The backend retains current-operator authorization, exit-code policy and domain
+state. Authenticated transport, command validation/classification, operator
+identity and snapshot operations now belong to
+[`kegari-control-api`](../kegari-control-api/README.md). Control-host composition,
+dispatch, supervision and the child control channel belong to
+[`kegari-controller`](../kegari-controller/README.md).
+
+Import shared runtime traits/dependencies from `kegari_v0::runtime_host`, and
+command identity/current-actor helpers from `kegari_v0::control_command`. The old
+backend `api`, `app`, `host`, `supervisor`, `orchestration`, `transport` and
+`snapshot` modules and `control::{Actor, Principal}` paths are removed without
+compatibility reexports. Identity lives at `kegari_control_api::identity`.
+Controller depends on this backend; the backend has no controller dependency.
+Registration, durable admission, configuration transactions and the runtime
+factory/engine remain here. The control-host process still executes the driver;
+the child still handles the runtime lock and lease/heartbeat/poll channel.
 
 Protected filesystem access, durable record encoding and locking now belong to
 [`kegari-storage`](../kegari-storage/README.md), imported as `kegari_storage`.
@@ -67,7 +80,7 @@ from [`kegari-digest`](../kegari-digest/README.md), without compatibility reexpo
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all ten packages:
+test and lint commands cover all twelve packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
@@ -96,7 +109,8 @@ three native qualification tests ignored. See the artifact links, checksums and
 retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md). The Cargo-specific
 execution design has been removed. The source now separates `kegari-cli`,
 `kegari-types`, `kegari-config`, `kegari-digest`, `kegari-providers`,
-`kegari-storage`, `kegari-process`, `kegari-platform` and `kegari-secrets`
+`kegari-storage`, `kegari-process`, `kegari-platform`, `kegari-secrets`,
+`kegari-control-api` and `kegari-controller`
 from the remaining backend while retaining the
 same workspace version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a

@@ -1,6 +1,11 @@
+use kegari_control_api::identity::Actor;
+use kegari_controller::supervisor::*;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
-use kegari_v0::{control::*, supervisor::*};
+use kegari_v0::{
+    control::*,
+    runtime_host::{DrainState, SupervisorDriver, SupervisorFuture},
+};
 use serde_json::json;
 use std::{
     collections::BTreeMap,

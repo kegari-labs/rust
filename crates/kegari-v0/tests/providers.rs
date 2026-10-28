@@ -2,17 +2,22 @@
 //! these tests contacts Linear, GitHub, or a live agent.
 use base64::Engine;
 use kegari_config::{GithubSelection, LinearSelection, Selector};
+use kegari_control_api::identity::Actor;
 use kegari_digest::bytes_digest;
 use kegari_providers::*;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
-use kegari_v0::{
-    control::{Actor, ControlHost, MutationRequest, ReceiptPhase},
-    providers::{
-        GITHUB_OIDC_ISSUER, GITHUB_OIDC_JWKS, HostedProofExpectation, HostedProofVerifier,
-        LinearAssetReference, ProviderBroker, ProviderMutation, download_uploaded_asset,
-    },
-};
+use kegari_v0::control::ControlHost;
+use kegari_v0::control::MutationRequest;
+use kegari_v0::control::ReceiptPhase;
+use kegari_v0::providers::GITHUB_OIDC_ISSUER;
+use kegari_v0::providers::GITHUB_OIDC_JWKS;
+use kegari_v0::providers::HostedProofExpectation;
+use kegari_v0::providers::HostedProofVerifier;
+use kegari_v0::providers::LinearAssetReference;
+use kegari_v0::providers::ProviderBroker;
+use kegari_v0::providers::ProviderMutation;
+use kegari_v0::providers::download_uploaded_asset;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use std::{

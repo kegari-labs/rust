@@ -212,21 +212,22 @@ async fn new_runtime_evidence(h: &Harness) -> Arc<RuntimeDelivery> {
         )
         .unwrap(),
     );
-    let runtime = crate::runtime::RuntimeCoordinator::new(crate::host::RuntimeDependencies {
-        configuration,
-        control: previous.control.clone(),
-        registration: previous.registration.clone(),
-        observations,
-        secrets: previous.services.secrets.clone(),
-        key: previous.services.key.clone(),
-        housekeeping,
-        logs: Arc::new(crate::housekeeping::LogSink::new(
-            previous.registration.root().child("logs").unwrap(),
-        )),
-        inputs: previous.services.inputs.clone(),
-        wake: Arc::new(tokio::sync::Notify::new()),
-    })
-    .unwrap();
+    let runtime =
+        crate::runtime::RuntimeCoordinator::new(crate::runtime_host::RuntimeDependencies {
+            configuration,
+            control: previous.control.clone(),
+            registration: previous.registration.clone(),
+            observations,
+            secrets: previous.services.secrets.clone(),
+            key: previous.services.key.clone(),
+            housekeeping,
+            logs: Arc::new(crate::housekeeping::LogSink::new(
+                previous.registration.root().child("logs").unwrap(),
+            )),
+            inputs: previous.services.inputs.clone(),
+            wake: Arc::new(tokio::sync::Notify::new()),
+        })
+        .unwrap();
     assert!(!Arc::ptr_eq(&runtime, previous));
     assert!(!Arc::ptr_eq(&runtime.observations, &previous.observations));
     assert!(!Arc::ptr_eq(&runtime.executions, &previous.executions));

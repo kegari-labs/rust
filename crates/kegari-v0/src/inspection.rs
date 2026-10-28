@@ -1,12 +1,12 @@
 //! Authenticated historical display is separate from current work resolution.
 //! These rows never supply scheduling, acceptance, release or dependency proof.
 use crate::{
-    app::RuntimeInspection,
     authority::IssueKey,
     control::ControlSnapshot,
     evidence::WorkIdentity,
     reconcile::{HistoryRow, Overview, OverviewInputs, RuntimeProjection},
     release::ReleaseAttempt,
+    runtime_host::RuntimeInspection,
 };
 use chrono::{DateTime, Duration, Utc};
 use kegari_config::Config;
@@ -92,7 +92,7 @@ impl NoReleaseInspectionRow {
     }
 }
 
-pub(crate) fn validate_history(
+pub fn validate_history(
     runtime: Uuid,
     releases: &[ReleaseInspectionRow],
     no_release: &[NoReleaseInspectionRow],
@@ -226,7 +226,7 @@ pub(crate) fn resolve_workspace(
     resolve_history_workspace(config, rows, &[], reference)
 }
 
-pub(crate) fn resolve_history_workspace(
+pub fn resolve_history_workspace(
     config: &Config,
     releases: &[ReleaseInspectionRow],
     no_release: &[NoReleaseInspectionRow],
@@ -262,7 +262,7 @@ pub(crate) fn resolve_history_workspace(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct InspectionParent {
+pub struct InspectionParent {
     pub workspace: Uuid,
     pub key: IssueKey,
 }
@@ -283,7 +283,7 @@ pub(crate) fn resolve_parent(
     resolve_history_parent(config, projection, rows, &[], reference, workspace)
 }
 
-pub(crate) fn resolve_history_parent(
+pub fn resolve_history_parent(
     config: &Config,
     projection: &RuntimeProjection,
     releases: &[ReleaseInspectionRow],
@@ -351,7 +351,7 @@ pub(crate) fn resolve_history_parent(
     }
 }
 
-pub(crate) fn no_release_parent_rows<'a>(
+pub fn no_release_parent_rows<'a>(
     rows: &'a [NoReleaseInspectionRow],
     parent: &InspectionParent,
 ) -> Vec<&'a NoReleaseInspectionRow> {
@@ -360,7 +360,7 @@ pub(crate) fn no_release_parent_rows<'a>(
         .collect()
 }
 
-pub(crate) fn parent_rows<'a>(
+pub fn parent_rows<'a>(
     rows: &'a [ReleaseInspectionRow],
     parent: &InspectionParent,
 ) -> Vec<&'a ReleaseInspectionRow> {
@@ -369,7 +369,7 @@ pub(crate) fn parent_rows<'a>(
         .collect()
 }
 
-pub(crate) fn history_for_parent<'a>(
+pub fn history_for_parent<'a>(
     history: &'a [HistoryRow],
     workspace: Uuid,
     parent: &IssueKey,
@@ -389,7 +389,7 @@ pub(crate) fn observed_url(
     observed_history_url(current, rows, &[])
 }
 
-pub(crate) fn observed_history_url(
+pub fn observed_history_url(
     current: Option<&crate::reconcile::ParentProjection>,
     releases: &[&ReleaseInspectionRow],
     no_release: &[&NoReleaseInspectionRow],
@@ -439,14 +439,14 @@ fn safe_observed_url(url: &str) -> Result<()> {
 }
 
 #[derive(Serialize)]
-pub(crate) struct InspectionOverview {
+pub struct InspectionOverview {
     #[serde(flatten)]
     current: Overview,
     release_history: Vec<ReleaseInspectionRow>,
     no_release_history: Vec<NoReleaseInspectionRow>,
 }
 
-pub(crate) fn overview(
+pub fn overview(
     view: &RuntimeInspection,
     workspace: Option<Uuid>,
     control: &ControlSnapshot,

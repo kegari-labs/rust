@@ -3,21 +3,33 @@ use super::fixture_api as kegari_v0;
 pub(crate) use base64::Engine as _;
 pub(crate) use chrono::{Duration, Utc};
 pub(crate) use kegari_config::{GithubSelection, Profile, ReleaseMode, Speed};
+pub(crate) use kegari_control_api::identity::Actor;
 pub(crate) use kegari_digest::bytes_digest;
 pub(crate) use kegari_providers::*;
 pub(crate) use kegari_secrets::AttestationKey;
 pub(crate) use kegari_storage::PrivateDir;
 pub(crate) use kegari_types::error::{Error, Result};
-pub(crate) use kegari_v0::{
-    authority::{Corrections, IssueKey},
-    control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest, Permit},
-    delivery::{DeliveryAdmission, DeliveryPhase, DeliveryScope, RepositoryContract},
-    deployment::*,
-    evidence::{Generation, RevisionBinding, WorkIdentity},
-    git::{RepositoryId, Revision},
-    providers::*,
-    reconcile::{DependencyOutcomes, GatePurpose, ParentProjection},
-};
+pub(crate) use kegari_v0::authority::Corrections;
+pub(crate) use kegari_v0::authority::IssueKey;
+pub(crate) use kegari_v0::control::ControlHost;
+pub(crate) use kegari_v0::control::Lease;
+pub(crate) use kegari_v0::control::Lifecycle;
+pub(crate) use kegari_v0::control::MutationRequest;
+pub(crate) use kegari_v0::control::Permit;
+pub(crate) use kegari_v0::delivery::DeliveryAdmission;
+pub(crate) use kegari_v0::delivery::DeliveryPhase;
+pub(crate) use kegari_v0::delivery::DeliveryScope;
+pub(crate) use kegari_v0::delivery::RepositoryContract;
+pub(crate) use kegari_v0::deployment::*;
+pub(crate) use kegari_v0::evidence::Generation;
+pub(crate) use kegari_v0::evidence::RevisionBinding;
+pub(crate) use kegari_v0::evidence::WorkIdentity;
+pub(crate) use kegari_v0::git::RepositoryId;
+pub(crate) use kegari_v0::git::Revision;
+pub(crate) use kegari_v0::providers::*;
+pub(crate) use kegari_v0::reconcile::DependencyOutcomes;
+pub(crate) use kegari_v0::reconcile::GatePurpose;
+pub(crate) use kegari_v0::reconcile::ParentProjection;
 pub(crate) use reqwest::header::{HeaderMap, HeaderValue};
 pub(crate) use serde_json::{Value, json};
 pub(crate) use std::{

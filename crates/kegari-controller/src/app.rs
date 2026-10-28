@@ -1,41 +1,40 @@
 //! One authenticated command dispatcher for both transports. Inspection consumes
 //! a coherent provider projection and sealed evidence, never an agent summary.
-use crate::{
+use chrono::{Duration, Utc};
+use kegari_config::{Config, ControlRole};
+use kegari_control_api::{
     api::{DispatchResult, Dispatcher},
-    authority::IssueKey,
-    control::{
-        Actor, ControlHost, ControlSnapshot, Intent, Lifecycle, MutationRequest, Principal,
-        Receipt, ReceiptPhase,
-    },
-    reconcile::{Activity, DependencyOutcomes, HistoryRow, ParentDelivery, RuntimeProjection},
+    identity::{Actor, Principal},
     snapshot::Snapshots,
 };
-use chrono::{Duration, Utc};
-use kegari_config::{Config, ControlRole, Operator};
 use kegari_secrets::Secret;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
+use kegari_v0::{
+    control::{ControlHost, ControlSnapshot, Intent, Lifecycle, Receipt, ReceiptPhase},
+    control_command::{
+        command_effect_id, mutation_request, parse_id, resolve_workspace, text,
+        verify_current_actor,
+    },
+    reconcile::ParentDelivery,
+    runtime_host::{ConfigurationControl, HostFuture, LocalControlOwner, WorkflowControl},
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    future::Future,
-    pin::Pin,
     sync::{Arc, Mutex},
 };
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-pub type HostFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
-
 /// Explicit local-only bootstrap. Acquires registration/control.lock before any
 /// credential writes, validates through the same configuration transaction, and
 /// leaves durable STOPPED without starting a listener, scheduler or model turn.
 pub async fn bootstrap(configuration: &str, request_id: Uuid) -> Result<DispatchResult> {
-    use crate::{
-        configuration::ConfigManager, platform::Registration, transport::TransportAuthentication,
-    };
+    use kegari_control_api::transport::TransportAuthentication;
     use kegari_platform::{BinaryIdentity, HostIdentity};
     use kegari_secrets::Keychain;
+    use kegari_v0::{configuration::ConfigManager, platform::Registration};
     let host = HostIdentity::discover()?;
     let mut config = Config::parse(configuration)?;
     config.resolve_paths(&host.home, |name| std::env::var(name).ok())?;
@@ -98,65 +97,11 @@ pub async fn bootstrap(configuration: &str, request_id: Uuid) -> Result<Dispatch
     let receipt = manager.execute(actor, request, None).await?;
     let current = manager.snapshot()?;
     Ok(DispatchResult {
-        config_revision: Some(crate::config::config_revision(&current)?),
+        config_revision: Some(kegari_v0::config::config_revision(&current)?),
         operation_id: Some(receipt.operation_id),
         state: Some("stopped".into()),
         data: json!({"runtime_id":current.runtime.id,"receipt":receipt,"desired":"STOPPED","next_action":"Explicitly install/start the registered control service, inspect prerequisites, then start orchestration when qualified"}),
     })
-}
-pub trait ConfigurationControl: Send + Sync {
-    fn authority_fences(&self) -> Result<crate::configuration::AuthorityFences>;
-    fn snapshot(&self) -> Result<Config>;
-    fn execute(
-        &self,
-        actor: Actor,
-        request: CommandRequest,
-        secret: Option<Secret>,
-        parent: Receipt,
-    ) -> HostFuture<'_, Receipt>;
-    fn check(&self, workspace: Option<Uuid>) -> HostFuture<'_, Value>;
-}
-
-/// A single revision of observed providers and verified delivery state. This is
-/// transient memory; provider records and immutable artifacts remain authoritative.
-#[derive(Clone)]
-pub struct RuntimeInspection {
-    pub projection: RuntimeProjection,
-    pub delivery: BTreeMap<IssueKey, ParentDelivery>,
-    pub outcomes: DependencyOutcomes,
-    pub activities: Vec<Activity>,
-    pub history: Vec<HistoryRow>,
-    pub release_details: BTreeMap<(Uuid, IssueKey), Value>,
-    pub release_history: Vec<crate::inspection::ReleaseInspectionRow>,
-    pub no_release_history: Vec<crate::inspection::NoReleaseInspectionRow>,
-}
-pub trait WorkflowControl: Send + Sync {
-    /// Read-only refresh. May run while STOPPED; must never admit or publish work.
-    fn inspect(&self) -> HostFuture<'_, RuntimeInspection>;
-    fn health(&self) -> Result<Value>;
-    fn command_targets(&self, request: &CommandRequest) -> Result<Vec<String>>;
-    fn execute(
-        &self,
-        actor: Actor,
-        request: CommandRequest,
-        parent: Receipt,
-    ) -> HostFuture<'_, Receipt>;
-    fn cleanup_plan(&self, operation: Uuid) -> HostFuture<'_, Value>;
-}
-pub trait LocalControlOwner: Send + Sync {
-    fn status(&self) -> Result<Value>;
-    /// Called inside ControlHost's serialized STOPPED/no-permit shutdown gate.
-    /// Must verify OS process/lock ownership and durably prevent service restart.
-    fn reserve_shutdown(&self) -> Result<()>;
-}
-impl LocalControlOwner for crate::platform::Registration {
-    fn status(&self) -> Result<Value> {
-        serde_json::to_value(self.snapshot()?)
-            .map_err(|_| Error::new("ownership_conflict", "cannot encode registered owner state"))
-    }
-    fn reserve_shutdown(&self) -> Result<()> {
-        self.reserve_service_shutdown()
-    }
 }
 pub struct HostServices {
     pub control: Arc<ControlHost>,
@@ -218,7 +163,7 @@ impl HostDispatcher {
             metadata.retain(|_, m| m.expires_at > Utc::now());
             let recorded = if page.cursor.is_none() {
                 let record = SnapshotMetadata {
-                    config_revision: crate::config::config_revision(config)?,
+                    config_revision: kegari_v0::config::config_revision(config)?,
                     state: state.into(),
                     operation,
                     expires_at: page.expires_at,
@@ -241,7 +186,7 @@ impl HostDispatcher {
             });
         }
         Ok(DispatchResult {
-            config_revision: Some(crate::config::config_revision(config)?),
+            config_revision: Some(kegari_v0::config::config_revision(config)?),
             operation_id: operation,
             state: Some(state.into()),
             data,
@@ -304,19 +249,19 @@ impl HostDispatcher {
         request: CommandRequest,
         secret: Option<Secret>,
     ) -> Result<DispatchResult> {
-        crate::api::validate_command_request(&request, self.runtime)?;
+        kegari_control_api::api::validate_command_request(&request, self.runtime)?;
         let config = self.services.configuration.snapshot()?;
         self.services
             .configuration
             .authority_fences()?
             .check_actor(
                 &actor,
-                crate::api::command_role(&request.command, &request.args),
+                kegari_control_api::api::command_role(&request.command, &request.args),
             )?;
         verify_current_actor(
             &config,
             &actor,
-            crate::api::command_role(&request.command, &request.args),
+            kegari_control_api::api::command_role(&request.command, &request.args),
         )?;
         if secret.is_some() && request.command != CommandName::ConnectionAdd {
             return Err(Error::new(
@@ -348,7 +293,7 @@ impl HostDispatcher {
                     runtime_state(&control),
                     None,
                     json!({
-                        "runtime_version":env!("CARGO_PKG_VERSION"),"runtime_build":crate::BUILD_ID,
+                        "runtime_version":env!("CARGO_PKG_VERSION"),"runtime_build":kegari_v0::BUILD_ID,
                         "control":control,"owner":self.services.owner.status()?,
                         "health":self.services.workflow.health()?,"observed_at":Utc::now()
                     }),
@@ -357,19 +302,20 @@ impl HostDispatcher {
             Overview | Show | Open => {
                 let view = self.services.workflow.inspect().await?;
                 if view.projection.runtime_id != self.runtime
-                    || view.projection.config_revision != crate::config::config_revision(&config)?
+                    || view.projection.config_revision
+                        != kegari_v0::config::config_revision(&config)?
                 {
                     return Err(Error::new(
                         "stale_config",
                         "provider view belongs to another configuration revision",
                     ));
                 }
-                crate::inspection::validate_history(
+                kegari_v0::inspection::validate_history(
                     self.runtime,
                     &view.release_history,
                     &view.no_release_history,
                 )?;
-                let workspace = crate::inspection::resolve_history_workspace(
+                let workspace = kegari_v0::inspection::resolve_history_workspace(
                     &config,
                     &view.release_history,
                     &view.no_release_history,
@@ -377,7 +323,7 @@ impl HostDispatcher {
                 )?;
                 let control = self.control().await?;
                 let data = if request.command == Overview {
-                    serde_json::to_value(crate::inspection::overview(
+                    serde_json::to_value(kegari_v0::inspection::overview(
                         &view,
                         workspace,
                         &control,
@@ -392,7 +338,7 @@ impl HostDispatcher {
                     )?)
                     .map_err(|_| Error::invalid("overview encoding failed"))?
                 } else {
-                    let selected = crate::inspection::resolve_history_parent(
+                    let selected = kegari_v0::inspection::resolve_history_parent(
                         &config,
                         &view.projection,
                         &view.release_history,
@@ -406,8 +352,9 @@ impl HostDispatcher {
                         .parent(selected.workspace, key.issue)
                         .ok()
                         .filter(|parent| parent.key == *key);
-                    let releases = crate::inspection::parent_rows(&view.release_history, &selected);
-                    let no_release = crate::inspection::no_release_parent_rows(
+                    let releases =
+                        kegari_v0::inspection::parent_rows(&view.release_history, &selected);
+                    let no_release = kegari_v0::inspection::no_release_parent_rows(
                         &view.no_release_history,
                         &selected,
                     );
@@ -420,7 +367,7 @@ impl HostDispatcher {
                                     == parent.and_then(|parent| parent.work.as_ref())
                             });
                     if request.command == Open {
-                        let url = crate::inspection::observed_history_url(
+                        let url = kegari_v0::inspection::observed_history_url(
                             parent,
                             &releases,
                             &no_release,
@@ -437,7 +384,7 @@ impl HostDispatcher {
                         .unwrap_or_default();
                     json!({"parent":parent,"inspection_identity":{"workspace":selected.workspace,"parent":key,"parent_reference":selected.reference()},"children_evidence":children,"evidence_manifest":evidence.map(|p|p.manifest()),
                         "evidence_token":evidence.map(|p|p.token()),"acceptance":proof.and_then(ParentDelivery::verified_acceptance).map(|a|a.acceptance()),"carried_acceptance":proof.and_then(ParentDelivery::carried_acceptance_record),
-                        "release":view.release_details.get(&(selected.workspace,key.clone())),"release_history":releases,"no_release_history":no_release,"history":crate::inspection::history_for_parent(&view.history,selected.workspace,key)})
+                        "release":view.release_details.get(&(selected.workspace,key.clone())),"release_history":releases,"no_release_history":no_release,"history":kegari_v0::inspection::history_for_parent(&view.history,selected.workspace,key)})
                 };
                 self.result(
                     &config,
@@ -466,7 +413,7 @@ impl HostDispatcher {
                     if let Some(workspace) = workspace {
                         effective.workspaces.retain(|_, w| w.id == workspace);
                     }
-                    json!({"configuration":effective,"revision":crate::config::config_revision(&config)?,"provenance":"registered execution-host configuration","runtime_build":crate::BUILD_ID})
+                    json!({"configuration":effective,"revision":kegari_v0::config::config_revision(&config)?,"provenance":"registered execution-host configuration","runtime_build":kegari_v0::BUILD_ID})
                 };
                 self.result(
                     &config,
@@ -592,7 +539,8 @@ impl HostDispatcher {
         config: &Config,
         configuration_command: bool,
     ) -> Result<DispatchResult> {
-        let role = crate::api::command_role(&request.command, &request.args).to_owned();
+        let role =
+            kegari_control_api::api::command_role(&request.command, &request.args).to_owned();
         let existing = self
             .services
             .control
@@ -610,7 +558,9 @@ impl HostDispatcher {
         mutation.kind = format!("command/{:?}", request.command);
         mutation.payload = json!({"arguments":request.args,"secret_digest":secret.as_ref().map(|s|kegari_digest::bytes_digest(s.bytes()))});
         let evaluation_trial = if request.command == CommandName::EvaluationRun {
-            Some(crate::api::evaluation_trial_identity(&request)?)
+            Some(kegari_control_api::api::evaluation_trial_identity(
+                &request,
+            )?)
         } else {
             None
         };
@@ -686,18 +636,6 @@ impl HostDispatcher {
     }
 }
 
-pub fn command_effect_id(command: Uuid) -> Uuid {
-    use sha2::{Digest, Sha256};
-    let mut hash = Sha256::new();
-    hash.update(b"kegari-v0/control-command-effect/v1\0");
-    hash.update(command.as_bytes());
-    let hash = hash.finalize();
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&hash[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x80;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    Uuid::from_bytes(bytes)
-}
 impl Dispatcher for HostDispatcher {
     fn dispatch(
         &self,
@@ -706,105 +644,6 @@ impl Dispatcher for HostDispatcher {
         secret: Option<Secret>,
     ) -> HostFuture<'_, DispatchResult> {
         Box::pin(self.dispatch_command(actor, request, secret))
-    }
-}
-pub fn text<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
-    args.get(key)
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| Error::new("invalid_input", format!("command requires {key}")))
-}
-pub fn parse_id(value: &str) -> Result<Uuid> {
-    Uuid::parse_str(value).map_err(|_| Error::new("invalid_input", "expected canonical UUID"))
-}
-pub fn resolve_workspace(config: &Config, reference: Option<&str>) -> Result<Option<Uuid>> {
-    let Some(reference) = reference else {
-        return Ok(None);
-    };
-    let found: Vec<_> = config
-        .workspaces
-        .iter()
-        .filter(|(name, w)| reference == name.as_str() || reference == w.id.to_string())
-        .map(|(_, w)| w.id)
-        .collect();
-    match found.as_slice() {
-        [id] => Ok(Some(*id)),
-        [] => Err(Error::new(
-            "unknown_resource",
-            "workspace is not configured in this runtime",
-        )),
-        _ => Err(Error::new(
-            "ambiguous_reference",
-            "workspace reference is ambiguous",
-        )),
-    }
-}
-pub fn verified_operator<'a>(config: &'a Config, actor: &Actor) -> Result<&'a Operator> {
-    let operator = match &actor.principal {
-        Some(Principal::Unix { uid }) => config.control.local_users.get(&uid.to_string()),
-        Some(Principal::Tailscale { user_id, .. }) => {
-            if config.control.https.is_none() {
-                return Err(Error::new(
-                    "access_denied",
-                    "remote control was disabled after authentication",
-                ));
-            }
-            config.control.tailscale_users.get(&user_id.to_string())
-        }
-        None => None,
-    }
-    .ok_or_else(|| {
-        Error::new(
-            "access_denied",
-            "authenticated principal no longer has an operator mapping",
-        )
-    })?;
-    if operator.id != actor.identity {
-        return Err(Error::new(
-            "access_denied",
-            "authenticated principal mapping changed",
-        ));
-    }
-    Ok(operator)
-}
-pub fn verify_current_actor(config: &Config, actor: &Actor, role: &str) -> Result<()> {
-    actor.require(role)?;
-    let expected = match role {
-        "inspect" => ControlRole::Inspect,
-        "configure" => ControlRole::Configure,
-        "lifecycle" => ControlRole::Lifecycle,
-        "correct" => ControlRole::Correct,
-        "accept" => ControlRole::Accept,
-        "release" => ControlRole::Release,
-        "recover" => ControlRole::Recover,
-        "evaluate" => ControlRole::Evaluate,
-        _ => return Err(Error::new("access_denied", "unknown operator role")),
-    };
-    if !verified_operator(config, actor)?.roles.contains(&expected) {
-        return Err(Error::new("access_denied", "operator role was revoked"));
-    }
-    Ok(())
-}
-pub fn mutation_request(
-    actor: &Actor,
-    request: &CommandRequest,
-    targets: Vec<String>,
-) -> MutationRequest {
-    let mut expected = BTreeMap::new();
-    if let Some(revision) = &request.expected_config_revision {
-        expected.insert("config_revision".into(), revision.clone());
-    }
-    if let Some(generation) = request.expected_control_generation {
-        expected.insert("control_generation".into(), generation.to_string());
-    }
-    MutationRequest {
-        request_id: request.request_id,
-        runtime_id: request.runtime_id,
-        actor: actor.clone(),
-        kind: format!("{:?}", request.command),
-        canonical_targets: targets,
-        expected,
-        payload: request.args.clone(),
     }
 }
 fn runtime_state(control: &ControlSnapshot) -> &'static str {

@@ -724,7 +724,7 @@ pub(crate) fn restore_classifications(
 }
 
 pub struct CorrectionDependencies {
-    pub configuration: std::sync::Arc<dyn crate::app::ConfigurationControl>,
+    pub configuration: std::sync::Arc<dyn crate::runtime_host::ConfigurationControl>,
     pub control: std::sync::Arc<ControlHost>,
     pub observations: std::sync::Arc<crate::observations::ObservationCache>,
     pub secrets: std::sync::Arc<dyn kegari_secrets::SecretStore>,
@@ -1380,7 +1380,7 @@ impl CorrectionPublisher {
             let request = crate::control::MutationRequest {
                 request_id: operation,
                 runtime_id: lease.runtime_id,
-                actor: crate::control::Actor {
+                actor: kegari_control_api::identity::Actor {
                     identity: format!("owner:{}", lease.owner_id),
                     principal: None,
                     roles: BTreeSet::new(),

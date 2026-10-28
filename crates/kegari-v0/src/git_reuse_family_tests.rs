@@ -1,17 +1,24 @@
 //! Actual scoped Git and family APIs; terminal metadata is explicitly synthetic.
 //! No provider session, ConfinedExecution or runtime joined cache is created.
+use crate::authority::IssueKey;
+use crate::control::Lifecycle;
+use crate::control::MutationRequest;
+use crate::control::Receipt;
+use crate::delivery::RepositoryContract;
+use crate::git::Git;
+use crate::git::GitLimits;
+use crate::git::HostGitExecutionScope;
+use crate::git::RepositoryId;
+use crate::git::configured_host_read_root;
+use crate::host_process::HostProcessServices;
+use crate::host_process::LocalProcessPermit;
+use crate::host_process::MetadataRequest;
+use crate::platform::Registration;
+use crate::process_records::ProcessJournal;
+use crate::runtime_host::ConfigurationControl;
+use crate::runtime_host::HostFuture;
 use crate::test_process_probe as process_probe;
-use crate::{
-    app::{ConfigurationControl, HostFuture},
-    authority::IssueKey,
-    control::{Actor, Lifecycle, MutationRequest, Receipt},
-    delivery::RepositoryContract,
-    git::{Git, GitLimits, HostGitExecutionScope, RepositoryId, configured_host_read_root},
-    host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
-    platform::Registration,
-    process_records::ProcessJournal,
-    worker::ExecutionRegistry,
-};
+use crate::worker::ExecutionRegistry;
 use crate::{
     control::{Lease, RunAdmission, RunReference, RunResumeReference},
     evidence::{Generation, WorkIdentity},
@@ -24,6 +31,7 @@ use crate::{
     workflow::Workflow,
 };
 use kegari_config::Config;
+use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_platform::{BinaryIdentity, HostIdentity, ProcessProbe};
 use kegari_providers::RepositoryIdentity;
@@ -934,7 +942,7 @@ fn cleanup_request(request_id: Uuid, operation: Uuid) -> MutationRequest {
         actor: Actor {
             identity: "fixture-human".into(),
             roles: ["recover".into()].into(),
-            principal: Some(crate::control::Principal::Unix {
+            principal: Some(kegari_control_api::identity::Principal::Unix {
                 uid: unsafe { libc::geteuid() },
             }),
         },

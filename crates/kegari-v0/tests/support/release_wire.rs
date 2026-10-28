@@ -142,17 +142,24 @@ mod process_probe {
         }
     }
 }
-use crate::{
-    control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
-    evidence::Publication,
-    evidence::{ReviewAttestation, ReviewKind, RevisionBinding, Verdict, no_change_digest},
-    git::{Git, RepositoryId},
-    providers::*,
-    reconcile::*,
-    workflow::Workflow,
-};
+use crate::control::ControlHost;
+use crate::control::Lease;
+use crate::control::Lifecycle;
+use crate::control::MutationRequest;
+use crate::evidence::Publication;
+use crate::evidence::ReviewAttestation;
+use crate::evidence::ReviewKind;
+use crate::evidence::RevisionBinding;
+use crate::evidence::Verdict;
+use crate::evidence::no_change_digest;
+use crate::git::Git;
+use crate::git::RepositoryId;
+use crate::providers::*;
+use crate::reconcile::*;
+use crate::workflow::Workflow;
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_providers::*;
 use kegari_secrets::AttestationKey;

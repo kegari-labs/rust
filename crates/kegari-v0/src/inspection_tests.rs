@@ -112,7 +112,9 @@ fn historical_resolution_requires_exact_workspace_and_never_changes_current_reso
         resolve_workspace(&config, &rows, Some(&selected.to_string())).unwrap(),
         Some(selected)
     );
-    assert!(crate::app::resolve_workspace(&config, Some(&selected.to_string())).is_err());
+    assert!(
+        crate::control_command::resolve_workspace(&config, Some(&selected.to_string())).is_err()
+    );
     assert!(projection.resolve_parent("OLD-3").is_err());
     assert_eq!(
         resolve_parent(&config, &projection, &rows, "OLD-3", None)
@@ -424,7 +426,9 @@ fn combined_history_resolution_keeps_no_release_workspace_and_native_identity_ex
     assert!(
         resolve_history_workspace(&config, &release, &rows, Some("removed-display-name")).is_err()
     );
-    assert!(crate::app::resolve_workspace(&config, Some(&selected.to_string())).is_err());
+    assert!(
+        crate::control_command::resolve_workspace(&config, Some(&selected.to_string())).is_err()
+    );
     assert!(projection.resolve_parent("OLD-3").is_err());
     assert_eq!(
         resolve_history_parent(&config, &projection, &release, &rows, "OLD-3", None)

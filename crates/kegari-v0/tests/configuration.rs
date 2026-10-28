@@ -1,6 +1,9 @@
 //! Real private storage/control serialization with labeled provider/Keychain fixtures.
 //! No native Keychain, account login, provider network or agent process is invoked.
 use kegari_config::{Config, Connection};
+use kegari_control_api::identity::Actor;
+use kegari_control_api::identity::Principal;
+use kegari_control_api::transport::TransportAuthentication;
 use kegari_platform::{
     BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
 };
@@ -9,14 +12,16 @@ use kegari_providers::{HttpRequest, HttpResponse};
 use kegari_secrets::{Secret, SecretStore};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
+use kegari_v0::codex::CodexConnectionMetadata;
 use kegari_v0::config::config_revision;
-use kegari_v0::{
-    codex::CodexConnectionMetadata,
-    configuration::{ConfigManager, ConfigurationInputs},
-    control::{Actor, ControlHost, Intent, Lifecycle, MutationRequest, Principal, ReceiptPhase},
-    platform::Registration,
-    transport::TransportAuthentication,
-};
+use kegari_v0::configuration::ConfigManager;
+use kegari_v0::configuration::ConfigurationInputs;
+use kegari_v0::control::ControlHost;
+use kegari_v0::control::Intent;
+use kegari_v0::control::Lifecycle;
+use kegari_v0::control::MutationRequest;
+use kegari_v0::control::ReceiptPhase;
+use kegari_v0::platform::Registration;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -541,8 +546,11 @@ async fn unbound_or_different_os_principal_cannot_configure_even_with_claimed_ro
 }
 
 fn queue(f: &Fixture, request: &CommandRequest, secret: &[u8]) -> kegari_v0::control::Receipt {
-    let mut mutation =
-        kegari_v0::app::mutation_request(&f.actor, request, vec![request.runtime_id.to_string()]);
+    let mut mutation = kegari_v0::control_command::mutation_request(
+        &f.actor,
+        request,
+        vec![request.runtime_id.to_string()],
+    );
     mutation.kind = format!("command/{:?}", request.command);
     mutation.payload =
         json!({"arguments":request.args,"secret_digest":kegari_digest::bytes_digest(secret)});
@@ -559,7 +567,7 @@ async fn background_effect_requires_exact_durable_command_lineage() {
     let f = Fixture::new();
     let mut request = f.add();
     let parent = queue(&f, &request, b"secret");
-    request.request_id = kegari_v0::app::command_effect_id(parent.request_id);
+    request.request_id = kegari_v0::control_command::command_effect_id(parent.request_id);
     let mut changed = request.clone();
     changed.args["name"] = json!("changed");
     assert_eq!(
@@ -649,7 +657,7 @@ async fn completed_command_cannot_later_start_an_effect() {
             )),
         )
         .unwrap();
-    request.request_id = kegari_v0::app::command_effect_id(parent.request_id);
+    request.request_id = kegari_v0::control_command::command_effect_id(parent.request_id);
     assert_eq!(
         f.manager
             .execute_for_command(

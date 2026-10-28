@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
+kegari-control-api = { path = "../kegari-control-api" }
 kegari-secrets = { path = "../kegari-secrets" }
 kegari-platform = { path = "../kegari-platform" }
 kegari-process = { path = "../kegari-process" }
@@ -13,33 +14,24 @@ kegari-digest = { path = "../kegari-digest" }
 kegari-providers = { path = "../kegari-providers" }
 kegari-config = { path = "../kegari-config" }
 kegari-types = { path = "../kegari-types" }
-axum = { version = "=0.8.6", features = ["json", "http1", "tokio"] }
 base64 = "=0.22.1"
 chrono = { version = "=0.4.45", features = ["serde"] }
 clap = { version = "=4.6.7", features = ["derive"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["zlib-rs"] }
 hex = "=0.4.3"
-hyper = { version = "=1.12.0", features = ["server", "http1"] }
-hyper-util = { version = "=0.1.21", features = ["server", "tokio", "service"] }
 libc = "=0.2.189"
 reqwest = { version = "=0.12.24", default-features = false, features = ["rustls-tls", "json", "stream"] }
 ring = "=0.17.14"
-rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
-rustls-pemfile = "=2.2.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 serde_yaml = "=0.9.34"
 sha2 = "=0.10.9"
 sha1 = "=0.10.6"
 tokio = { version = "=1.53.1", features = ["full"] }
-tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring", "tls12"] }
-tower = { version = "=0.5.3", features = ["util"] }
 toml = "=0.9.8"
 url = { version = "=2.5.8", features = ["serde"] }
 uuid = { version = "=1.18.1", features = ["v4", "serde"] }
 zip = { version = "=9.1.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-webpki-roots = "=1.0.11"
-x509-parser = { version = "=0.18.1", default-features = false }
 
 [dev-dependencies]
 tempfile = "=3.23.0"

@@ -1,6 +1,6 @@
 //! Versioned Axum CLI protocol, shared by authenticated Unix and direct TLS
 //! listeners. Connection identity must come from the accepting transport.
-use crate::control::Actor;
+use crate::identity::Actor;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -182,7 +182,7 @@ pub fn validate_command_request(request: &CommandRequest, runtime: Uuid) -> Resu
                 "evaluation workspace must be canonical UUID",
             )
         })?;
-        crate::evidence::validate_digest(text("suite_digest")?)?;
+        validate_digest(text("suite_digest")?)?;
         if args
             .get("repetition")
             .and_then(Value::as_u64)
@@ -804,9 +804,27 @@ pub fn connection_router(state: ApiState, peer: Peer) -> Router {
     router(state).layer(axum::Extension(peer))
 }
 
+// Syntax only: retain the evidence-reference wire format without depending on
+// backend evidence policy. Backend compatibility coverage checks parity.
+fn validate_digest(value: &str) -> Result<()> {
+    let suffix = value
+        .strip_prefix("sha256:v1:")
+        .or_else(|| value.strip_prefix("sha256:"));
+    if !suffix.is_some_and(|s| {
+        s.len() == 64
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return Err(Error::invalid(
+            "evidence reference requires an explicit SHA-256 digest/schema",
+        ));
+    }
+    Ok(())
+}
+
 /// Identity only: a declared repetition is a finite trial slot, not authority.
 /// The actual command receipt retains this before any evaluator task starts.
-pub(crate) fn evaluation_trial_identity(request: &CommandRequest) -> Result<String> {
+pub fn evaluation_trial_identity(request: &CommandRequest) -> Result<String> {
     validate_command_request(request, request.runtime_id)?;
     if request.command != CommandName::EvaluationRun {
         return Err(Error::invalid("not an evaluation command"));

@@ -2,11 +2,10 @@
 //! The retired worker observation is synthetic component data. This test does
 //! not create ParentReassemblyWork, a joined completion, acceptance, or checks.
 use super::*;
-use crate::{
-    app::WorkflowControl,
-    control::{Actor, RunAdmission},
-    reconcile::GatePurpose,
-};
+use crate::control::RunAdmission;
+use crate::reconcile::GatePurpose;
+use crate::runtime_host::WorkflowControl;
+use kegari_control_api::identity::Actor;
 
 #[tokio::test]
 async fn parent_grant_capture_uses_actual_retry_command_and_current_native_publication() {
@@ -85,7 +84,7 @@ async fn parent_grant_capture_uses_actual_retry_command_and_current_native_publi
     );
     let actor = Actor {
         identity: "operator".into(),
-        principal: Some(crate::control::Principal::Unix { uid: 501 }),
+        principal: Some(kegari_control_api::identity::Principal::Unix { uid: 501 }),
         roles: ["recover".into(), "inspect".into(), "lifecycle".into()].into(),
     };
     let mut request = kegari_types::api::CommandRequest {
@@ -99,7 +98,7 @@ async fn parent_grant_capture_uses_actual_retry_command_and_current_native_publi
             built.runtime.control.snapshot().unwrap().intent.generation,
         ),
     };
-    let mut mutation = crate::app::mutation_request(
+    let mut mutation = crate::control_command::mutation_request(
         &actor,
         &request,
         workflow.command_targets(&request).unwrap(),
@@ -112,7 +111,7 @@ async fn parent_grant_capture_uses_actual_retry_command_and_current_native_publi
         .queue_command(mutation, "recover", || Ok(()))
         .unwrap();
     assert!(new);
-    request.request_id = crate::app::command_effect_id(command.operation_id);
+    request.request_id = crate::control_command::command_effect_id(command.operation_id);
     workflow.execute(actor, request, command).await.unwrap();
     built.runtime.observations.refresh().await.unwrap();
     let current = || {

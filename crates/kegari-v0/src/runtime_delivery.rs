@@ -700,7 +700,7 @@ struct ReleaseIntent {
     work: crate::evidence::WorkIdentity,
     parent: crate::authority::IssueKey,
     evidence_token: String,
-    actor: crate::control::Actor,
+    actor: kegari_control_api::identity::Actor,
     config_revision: String,
     queued_at: chrono::DateTime<Utc>,
 }
@@ -938,7 +938,7 @@ pub(crate) mod tests;
 mod child;
 
 impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
-    fn reconcile(&self) -> crate::supervisor::SupervisorFuture<'_, ()> {
+    fn reconcile(&self) -> crate::runtime_host::SupervisorFuture<'_, ()> {
         Box::pin(async move {
             let projection = self.runtime.observations.refresh().await?;
             self.runtime.refresh_retry_references(&projection)?;
@@ -946,7 +946,7 @@ impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
             self.refresh(&projection).await
         })
     }
-    fn reconcile_for_inspection(&self) -> crate::supervisor::SupervisorFuture<'_, ()> {
+    fn reconcile_for_inspection(&self) -> crate::runtime_host::SupervisorFuture<'_, ()> {
         Box::pin(async move {
             let projection = self.runtime.observations.refresh().await?;
             self.runtime.refresh_retry_references(&projection)?;
@@ -957,7 +957,7 @@ impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
     fn advance<'a>(
         &'a self,
         lease: &'a crate::control::Lease,
-    ) -> crate::supervisor::SupervisorFuture<'a, ()> {
+    ) -> crate::runtime_host::SupervisorFuture<'a, ()> {
         Box::pin(async move {
             self.runtime.registration.verify_active_owner(lease)?;
             let projection = self.runtime.observations.snapshot()?;
@@ -975,7 +975,7 @@ impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
             children.and(parents).and(releases)
         })
     }
-    fn maintain(&self) -> crate::supervisor::SupervisorFuture<'_, ()> {
+    fn maintain(&self) -> crate::runtime_host::SupervisorFuture<'_, ()> {
         Box::pin(async move {
             self.runtime.observe_local_exits()?;
             self.maintain_phase_setups()?;
@@ -998,7 +998,7 @@ impl crate::runtime_driver::RuntimeProgression for RuntimeDelivery {
     fn cancel_fenced<'a>(
         &'a self,
         operations: &'a [Uuid],
-    ) -> crate::supervisor::SupervisorFuture<'a, ()> {
+    ) -> crate::runtime_host::SupervisorFuture<'a, ()> {
         Box::pin(async move {
             for operation in operations {
                 self.runtime

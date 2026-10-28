@@ -1,19 +1,27 @@
 //! Bounded host publication of human-authorized parent scope. This is separate
 //! from agent execution and cannot grant authorization from an agent's output.
-use crate::{
-    app::ConfigurationControl,
-    configuration::{ConfigurationInputs, NativeConfigurationInputs},
-    connections::ConnectionRegistry,
-    control::{
-        Actor, ControlHost, Lease, MetadataAdmission, MetadataReference, MutationRequest, Receipt,
-        ReceiptPhase, Reconciliation,
-    },
-    evidence::{Publication, decode_signed_publication, encode_signed_publication},
-    observations::ObservationCache,
-    providers::{ProviderBroker, ProviderMutation},
-    reconcile::{AuthorizationGate, VerifiedAuthorization},
-};
+use crate::configuration::ConfigurationInputs;
+use crate::configuration::NativeConfigurationInputs;
+use crate::connections::ConnectionRegistry;
+use crate::control::ControlHost;
+use crate::control::Lease;
+use crate::control::MetadataAdmission;
+use crate::control::MetadataReference;
+use crate::control::MutationRequest;
+use crate::control::Receipt;
+use crate::control::ReceiptPhase;
+use crate::control::Reconciliation;
+use crate::evidence::Publication;
+use crate::evidence::decode_signed_publication;
+use crate::evidence::encode_signed_publication;
+use crate::observations::ObservationCache;
+use crate::providers::ProviderBroker;
+use crate::providers::ProviderMutation;
+use crate::reconcile::AuthorizationGate;
+use crate::reconcile::VerifiedAuthorization;
+use crate::runtime_host::ConfigurationControl;
 use chrono::{Duration, Utc};
+use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::LinearClient;
 use kegari_secrets::{AttestationKey, SecretStore};

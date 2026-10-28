@@ -1,18 +1,17 @@
 //! Native orchestration ownership and finite scheduling opportunities. The driver
 //! is mandatory: no successful empty recovery or permissive scheduler is supplied.
-use crate::{
-    control::{ControlHost, ControlSnapshot, Intent, Lease},
-    orchestration::RunningOrchestration,
-    platform::Registration,
-};
+use crate::orchestration::RunningOrchestration;
 use chrono::{DateTime, Utc};
 use kegari_platform::{BinaryIdentity, HostIdentity};
 use kegari_types::error::{Error, Result};
+use kegari_v0::{
+    control::{ControlHost, Intent, Lease},
+    platform::Registration,
+    runtime_host::{DrainState, SupervisorDriver, SupervisorFuture},
+};
 use serde::Serialize;
 use std::{
     collections::BTreeSet,
-    future::Future,
-    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -25,29 +24,6 @@ use tokio::{
 };
 use uuid::Uuid;
 
-pub type SupervisorFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DrainState {
-    pub local_clear: bool,
-    pub remote_reconciled: bool,
-}
-/// Methods operate outside the control mutex and must use actual owned workers,
-/// provider facts and receipt recovery. poll schedules bounded operations; it
-/// never waits for the lifetime of a model turn or repository command.
-pub trait SupervisorDriver: Send + Sync {
-    fn reconcile_before_start(&self) -> SupervisorFuture<'_, ()>;
-    fn recover<'a>(&'a self, lease: &'a Lease) -> SupervisorFuture<'a, ()>;
-    fn poll<'a>(&'a self, lease: &'a Lease, sequence: u64) -> SupervisorFuture<'a, ()>;
-    fn maintain<'a>(
-        &'a self,
-        lease: &'a Lease,
-        snapshot: &'a ControlSnapshot,
-    ) -> SupervisorFuture<'a, DrainState>;
-    /// Called once per generation/operation after durable fencing. Cancellation
-    /// results must remain pending/unknown until actually observed.
-    fn cancel_fenced<'a>(&'a self, operations: &'a [Uuid]) -> SupervisorFuture<'a, ()>;
-    fn exited<'a>(&'a self, lease: &'a Lease) -> SupervisorFuture<'a, DrainState>;
-}
 #[derive(Clone, Copy, Debug)]
 pub struct SupervisorLimits {
     pub heartbeat: Duration,

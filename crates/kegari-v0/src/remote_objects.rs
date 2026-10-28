@@ -1,12 +1,19 @@
 //! Exact Git objects acquired into an owned private substrate. HTTP only reads
 //! the selected provider; actual Git import is an admitted, journaled local effect.
-use crate::{
-    control::{Actor, ControlHost, MutationRequest, Permit, ReceiptPhase},
-    delivery::{DeliveryAdmission, RepositoryContract},
-    git::{Git, GitLimits, RepositoryId, Revision},
-    process_records::ProcessJournal,
-    worker::{ExecutionRegistry, WorkerAuthority},
-};
+use crate::control::ControlHost;
+use crate::control::MutationRequest;
+use crate::control::Permit;
+use crate::control::ReceiptPhase;
+use crate::delivery::DeliveryAdmission;
+use crate::delivery::RepositoryContract;
+use crate::git::Git;
+use crate::git::GitLimits;
+use crate::git::RepositoryId;
+use crate::git::Revision;
+use crate::process_records::ProcessJournal;
+use crate::worker::ExecutionRegistry;
+use crate::worker::WorkerAuthority;
+use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::GithubClient;
 use kegari_secrets::{AttestationKey, Signed};

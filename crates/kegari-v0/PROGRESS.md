@@ -1,5 +1,41 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Control API/controller extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. `kegari-control-api` owns request
+handling, authenticated transport, operator identity and snapshot operations.
+`kegari-controller` owns bootstrap/dispatch, host composition, supervision and
+the inherited orchestration channel. Shared runtime interfaces and command-policy
+helpers remain in backend `runtime_host` and `control_command`; callers use the
+owning paths without compatibility reexports or reverse dependencies.
+
+Controller retains a temporary backend dependency. Durable admission,
+registration, configuration administration and the execution/delivery engine
+remain backend-owned. The control-host process still executes the runtime
+driver; its child retains the existing lock/lease/heartbeat/poll role.
+
+All twelve packages remain `0.2.0-alpha.10`; schemas, instruction assets, all 239
+external lock entries and the alpha.10 archive are unchanged. All 173 focused
+checks passed. The final workspace release suite passed 1,290 tests, with zero
+failures and exactly three native ignores, using normal concurrency. Formatting,
+strict workspace all-target Clippy, contract inventory and its 11 tests passed.
+One bounded independent review found no material issues. Two initial compile
+integration errors were corrected with import-only changes; original logs remain
+recorded. No test failed and the complete suite ran once on the final candidate.
+
+The optimized arm64 executable passed all five minimal-environment inspections,
+with consistent identity/schemas/assets and no runtime-state creation. Independent
+hash reconstruction covers both new crates and matches all reviewed source
+inputs. See the [control API boundary](../kegari-control-api/README.md),
+[controller boundary](../kegari-controller/README.md) and
+[verification report](validation/CONTROL-EXTRACTION.md).
+
+Native/live restrictions and milestone requirements remain in force. No real
+Keychain access, native qualification, service activation, release packaging,
+goal resumption, commit or remote operation was included.
+
+## Previous secrets extraction checkpoint
+
 **Goal mode cancelled. Secrets extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. The completed extraction moves secret

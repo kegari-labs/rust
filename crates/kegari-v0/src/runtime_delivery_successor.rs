@@ -15,14 +15,16 @@ pub(in crate::runtime_delivery::release) struct SuccessorIntent {
     acceptance_digest: String,
     accepted_at: DateTime<Utc>,
     config_revision: String,
-    actor: crate::control::Actor,
+    actor: kegari_control_api::identity::Actor,
     transition_id: Uuid,
     transition_digest: String,
     parent_command: Uuid,
     parent_command_digest: String,
 }
 impl SuccessorIntent {
-    pub(in crate::runtime_delivery::release) fn actor(&self) -> &crate::control::Actor {
+    pub(in crate::runtime_delivery::release) fn actor(
+        &self,
+    ) -> &kegari_control_api::identity::Actor {
         &self.actor
     }
     pub(in crate::runtime_delivery::release) fn command(&self) -> Uuid {
@@ -513,7 +515,7 @@ impl RuntimeDelivery {
                 "successor lacks exact acknowledged corrected-plan authorization",
             ));
         }
-        crate::app::verify_current_actor(&config, &intent.actor, "recover")?;
+        crate::control_command::verify_current_actor(&config, &intent.actor, "recover")?;
         self.runtime
             .configuration
             .authority_fences()?

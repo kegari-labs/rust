@@ -720,6 +720,7 @@ impl ControlHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kegari_control_api::identity::Principal;
     fn actor() -> Actor {
         Actor {
             identity: "fixture-operator".into(),

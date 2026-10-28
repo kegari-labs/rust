@@ -289,10 +289,12 @@ fn observation_changes_on_actual_target_bytes_arguments_or_cwd_without_claiming_
 
 #[test]
 fn expired_original_deadline_refuses_before_probe_journal_or_unqualified_start() {
-    use crate::{
-        control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
-        process_records::ProcessJournal,
-    };
+    use crate::control::ControlHost;
+    use crate::control::Lease;
+    use crate::control::Lifecycle;
+    use crate::control::MutationRequest;
+    use crate::process_records::ProcessJournal;
+    use kegari_control_api::identity::Actor;
     use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
     use kegari_storage::PrivateDir;
     use std::{

@@ -1,14 +1,18 @@
 //! Sealed control-host process authority for bounded read-only recovery. This
 //! authority never grants model work, repository mutation or an orchestration lease.
-use crate::{
-    app::ConfigurationControl,
-    control::{Actor, ControlHost, HostProcessToken, MutationRequest, Receipt},
-    execution::CommandCancellation,
-    git::VerifiedHostReadRoot,
-    platform::Registration,
-    process_records::{ProcessJournal, SpawnBinding, SpawnGuard},
-    worker::ExecutionRegistry,
-};
+use crate::control::ControlHost;
+use crate::control::HostProcessToken;
+use crate::control::MutationRequest;
+use crate::control::Receipt;
+use crate::execution::CommandCancellation;
+use crate::git::VerifiedHostReadRoot;
+use crate::platform::Registration;
+use crate::process_records::ProcessJournal;
+use crate::process_records::SpawnBinding;
+use crate::process_records::SpawnGuard;
+use crate::runtime_host::ConfigurationControl;
+use crate::worker::ExecutionRegistry;
+use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_platform::{BinaryIdentity, ProcessIdentity};
 use kegari_types::error::{Error, Result};

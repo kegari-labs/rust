@@ -1,21 +1,30 @@
 //! Host composition state. All worker callbacks consume current provider proofs
 //! and actual process registration; worker summaries never establish delivery.
+use crate::authority::IssueKey;
+use crate::control::ControlHost;
+use crate::control::Lease;
+use crate::control::Permit;
+use crate::control::RunReference;
+use crate::observations::ObservationCache;
+use crate::platform::Registration;
+use crate::reconcile::DependencyOutcomes;
+use crate::reconcile::GatePurpose;
+use crate::reconcile::HistoryRow;
+use crate::reconcile::ParentDelivery;
 pub use crate::runtime_actions::{RuntimeAction, WorkerAction};
 pub use crate::runtime_claims::{VerifiedAuthorizedOutcome, VerifiedCoordinationOutcome};
-use crate::{
-    app::{ConfigurationControl, RuntimeInspection},
-    authority::IssueKey,
-    control::{ControlHost, Lease, Permit, RunReference},
-    host::RuntimeDependencies,
-    observations::ObservationCache,
-    platform::Registration,
-    reconcile::{DependencyOutcomes, GatePurpose, HistoryRow, ParentDelivery},
-    scheduler::Quota,
-    worker::{
-        ExecutionRegistry, OutcomeSink, WorkerAuthority, WorkerContract, WorkerHost, WorkerOutcome,
-    },
-    worker_run::{OwnedWorkerRun, RunCompletion},
-};
+use crate::runtime_host::ConfigurationControl;
+use crate::runtime_host::RuntimeDependencies;
+use crate::runtime_host::RuntimeInspection;
+use crate::scheduler::Quota;
+use crate::worker::ExecutionRegistry;
+use crate::worker::OutcomeSink;
+use crate::worker::WorkerAuthority;
+use crate::worker::WorkerContract;
+use crate::worker::WorkerHost;
+use crate::worker::WorkerOutcome;
+use crate::worker_run::OwnedWorkerRun;
+use crate::worker_run::RunCompletion;
 use chrono::{Duration, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_storage::PrivateDir;
@@ -3734,7 +3743,7 @@ mod tests {
             crate::control::MutationRequest {
                 request_id: Uuid::new_v4(),
                 runtime_id: runtime,
-                actor: crate::control::Actor {
+                actor: kegari_control_api::identity::Actor {
                     identity: "fixture".into(),
                     principal: None,
                     roles: ["lifecycle".into()].into(),

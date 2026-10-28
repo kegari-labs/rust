@@ -69,8 +69,9 @@ explicit disposable subprocess fixtures. Those fixtures never execute the
 installed Codex model or contact provider accounts:
 
 ```sh
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test -p kegari-v0 --test worker --test codex_protocol --test supervisor
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy -p kegari-v0 --lib --test worker --test codex_protocol --test supervisor -- -D warnings
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-v0 --test worker --test codex_protocol
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-controller --test supervisor
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy --offline --locked --workspace --all-targets -- -D warnings
 ```
 
 Native sandbox enforcement, live account/model behavior and required human

@@ -1039,7 +1039,10 @@ fn metadata_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::{Actor, Lifecycle, MutationRequest, RunAdmission};
+    use crate::control::Lifecycle;
+    use crate::control::MutationRequest;
+    use crate::control::RunAdmission;
+    use kegari_control_api::identity::Actor;
 
     #[test]
     fn metadata_selection_preserves_model_caps_latest_receipt_and_generic_retry_denial() {

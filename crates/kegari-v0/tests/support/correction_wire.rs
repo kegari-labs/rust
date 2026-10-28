@@ -267,7 +267,7 @@ impl HttpTransport for Wire {
     }
 }
 pub(crate) struct CacheConfiguration(pub(crate) Config);
-impl crate::app::ConfigurationControl for CacheConfiguration {
+impl crate::runtime_host::ConfigurationControl for CacheConfiguration {
     fn authority_fences(&self) -> Result<crate::configuration::AuthorityFences> {
         Ok(Default::default())
     }
@@ -276,14 +276,14 @@ impl crate::app::ConfigurationControl for CacheConfiguration {
     }
     fn execute(
         &self,
-        _: crate::control::Actor,
+        _: kegari_control_api::identity::Actor,
         _: kegari_types::api::CommandRequest,
         _: Option<kegari_secrets::Secret>,
         _: crate::control::Receipt,
-    ) -> crate::app::HostFuture<'_, crate::control::Receipt> {
+    ) -> crate::runtime_host::HostFuture<'_, crate::control::Receipt> {
         Box::pin(async { panic!("observation must not mutate configuration") })
     }
-    fn check(&self, _: Option<Uuid>) -> crate::app::HostFuture<'_, Value> {
+    fn check(&self, _: Option<Uuid>) -> crate::runtime_host::HostFuture<'_, Value> {
         Box::pin(async { panic!("observation must not launch configuration checks") })
     }
 }

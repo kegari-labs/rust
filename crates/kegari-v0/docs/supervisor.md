@@ -1,6 +1,6 @@
 # Native orchestration supervision
 
-`supervisor::Supervisor::native` owns the actual registered `RunningOrchestration`
+`kegari_controller::supervisor::Supervisor::native` owns the actual registered `RunningOrchestration`
 process and its inherited bounded channel. It requires concrete driver methods
 for pre-start reconciliation, recovery, scheduling, worker maintenance, fenced
 cancellation and exit reconciliation. No empty production driver, optimistic
@@ -52,7 +52,7 @@ qualification. Native ownership tests remain explicitly blocked by the observed
 outer sandbox boot-identity denial; no unconfined retry was attempted.
 
 ```sh
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test -p kegari-v0 --test supervisor --test orchestration
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-controller --test supervisor --test orchestration
 ```
 
 A control-host interrupt uses a separate shutdown signal: it preserves saved

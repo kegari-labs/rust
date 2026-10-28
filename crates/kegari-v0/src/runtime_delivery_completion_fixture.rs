@@ -951,7 +951,7 @@ async fn assert_diagnostic_inspection(
         delivery.clone(),
         delivery.clone(),
     );
-    let view = crate::app::WorkflowControl::inspect(&workflow)
+    let view = crate::runtime_host::WorkflowControl::inspect(&workflow)
         .await
         .unwrap_or_else(|error| panic!("{stage}: actual diagnostic inspection failed: {error:?}"));
     assert!(
@@ -1000,14 +1000,14 @@ async fn inspect_history(delivery: &Arc<RuntimeDelivery>, parent: &IssueKey) -> 
         delivery.clone(),
         delivery.clone(),
     );
-    let view = crate::app::WorkflowControl::inspect(&workflow)
+    let view = crate::runtime_host::WorkflowControl::inspect(&workflow)
         .await
         .unwrap();
     inspection_rows(&view, wire::id(2), parent)
 }
 
 fn inspection_rows(
-    view: &crate::app::RuntimeInspection,
+    view: &crate::runtime_host::RuntimeInspection,
     workspace: Uuid,
     parent: &IssueKey,
 ) -> Vec<Value> {
@@ -1048,13 +1048,19 @@ impl DecisionEvidence for ResumeEvidence {
     fn retry_committed(&self, _: VerifiedRetryGrant) -> Result<()> {
         Err(Error::invalid("resume-only fixture"))
     }
-    fn release(&self, _: AuthorizedDecision) -> crate::app::HostFuture<'_, Receipt> {
+    fn release(&self, _: AuthorizedDecision) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(async { Err(Error::invalid("resume-only fixture")) })
     }
-    fn reconcile(&self, _: AuthorizedOperationRecovery) -> crate::app::HostFuture<'_, Receipt> {
+    fn reconcile(
+        &self,
+        _: AuthorizedOperationRecovery,
+    ) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(async { Err(Error::invalid("resume-only fixture")) })
     }
-    fn recover_release(&self, decision: AuthorizedDecision) -> crate::app::HostFuture<'_, Receipt> {
+    fn recover_release(
+        &self,
+        decision: AuthorizedDecision,
+    ) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(async move {
             if !self.fixture_resume {
                 return crate::delivery::RuntimeDeliveryDecisions::recover_release(
@@ -1117,10 +1123,10 @@ async fn execute_recovery(
     action: &str,
     fixture_resume: bool,
 ) -> Result<Option<Permit>> {
-    use crate::{
-        control::{Actor, Principal},
-        decisions::{DecisionDependencies, DecisionManager},
-    };
+    use crate::decisions::DecisionDependencies;
+    use crate::decisions::DecisionManager;
+    use kegari_control_api::identity::Actor;
+    use kegari_control_api::identity::Principal;
     use kegari_types::api::{CommandName, CommandRequest};
     let runtime = &delivery.runtime;
     runtime.observations.refresh().await.unwrap();
@@ -1167,8 +1173,11 @@ async fn execute_recovery(
                 .evidence_token
         );
     }
-    let mut mutation =
-        crate::app::mutation_request(&actor, &request, manager.command_targets(&request).unwrap());
+    let mut mutation = crate::control_command::mutation_request(
+        &actor,
+        &request,
+        manager.command_targets(&request).unwrap(),
+    );
     mutation.kind = "command/ReleaseRecover".into();
     mutation.payload = json!({"arguments":request.args,"secret_digest":null});
     let (parent, fresh) = runtime
@@ -1176,7 +1185,7 @@ async fn execute_recovery(
         .queue_command(mutation, "recover", || Ok(()))
         .unwrap();
     assert!(fresh);
-    request.request_id = crate::app::command_effect_id(parent.operation_id);
+    request.request_id = crate::control_command::command_effect_id(parent.operation_id);
     // Match the real command queue's task boundary; the upstream fixture is
     // deliberately much deeper than an API command task.
     let command_parent = parent.clone();

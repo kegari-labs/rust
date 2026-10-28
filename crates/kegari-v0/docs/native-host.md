@@ -1,6 +1,7 @@
 # Native control host composition
 
-`host::run_native` accepts a mandatory `HostRuntimeFactory`. Its returned
+`kegari_controller::host::run_native` accepts the backend
+`kegari_v0::runtime_host::HostRuntimeFactory` contract. Its returned
 `RuntimeBackend` supplies the actual workflow controller and supervisor driver;
 the host does not install an empty or permissive scheduler. The executable now installs `NativeRuntimeFactory`, which composes the concrete
 runtime coordinator, delivery/decision backend, correction publisher and driver.
@@ -54,8 +55,9 @@ ownership probes, installed launchd services, real Keychain credentials, tailnet
 identity, TLS provisioning or an actual model.
 
 ```sh
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test -p kegari-v0 --lib --test supervisor --test platform
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy -p kegari-v0 --lib --test supervisor --test platform -- -D warnings
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-controller --lib --test supervisor --test host
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-v0 --test platform
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy --offline --locked --workspace --all-targets -- -D warnings
 ```
 
 The private Unix listener starts before deferred prerequisite construction.

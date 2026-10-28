@@ -479,7 +479,10 @@ impl Drop for EvaluationWorkerTransfer {
 #[cfg(test)]
 mod retirement_tests {
     use super::*;
-    use crate::control::{Actor, ControlHost, Lifecycle, MutationRequest};
+    use crate::control::ControlHost;
+    use crate::control::Lifecycle;
+    use crate::control::MutationRequest;
+    use kegari_control_api::identity::Actor;
     use kegari_digest::bytes_digest;
     use std::collections::BTreeSet;
 

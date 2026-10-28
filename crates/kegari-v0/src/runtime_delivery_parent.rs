@@ -1151,7 +1151,7 @@ fn complete_inventory(required: &BTreeSet<Uuid>, observed: &BTreeSet<Uuid>, coun
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
-    use crate::app::ConfigurationControl;
+    use crate::runtime_host::ConfigurationControl;
     fn reference(workspace: Uuid, work: crate::evidence::WorkIdentity) -> ParentReference {
         ParentReference {
             schema_version: 1,
@@ -1629,7 +1629,7 @@ mod lifecycle_tests {
                     crate::control::MutationRequest {
                         request_id: Uuid::new_v4(),
                         runtime_id: lease.runtime_id,
-                        actor: crate::control::Actor {
+                        actor: kegari_control_api::identity::Actor {
                             identity: "fixture-operator".into(),
                             principal: None,
                             roles: BTreeSet::from(["lifecycle".into()]),
@@ -1751,7 +1751,7 @@ mod lifecycle_tests {
                 crate::control::MutationRequest {
                     request_id: effect,
                     runtime_id: lease.runtime_id,
-                    actor: crate::control::Actor {
+                    actor: kegari_control_api::identity::Actor {
                         identity: "fixture-owned-phase".into(),
                         principal: None,
                         roles: BTreeSet::new(),

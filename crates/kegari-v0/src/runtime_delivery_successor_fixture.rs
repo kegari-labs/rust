@@ -394,7 +394,7 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
                     crate::control::MutationRequest {
                         request_id: request,
                         runtime_id: lease.runtime_id,
-                        actor: crate::control::Actor {
+                        actor: kegari_control_api::identity::Actor {
                             identity: actor.clone(),
                             principal: None,
                             roles: BTreeSet::new(),

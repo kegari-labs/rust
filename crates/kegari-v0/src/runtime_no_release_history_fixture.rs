@@ -704,7 +704,7 @@ async fn assert_diagnostic_facade(
         delivery.clone(),
         delivery.clone(),
     );
-    let view = crate::app::WorkflowControl::inspect(&workflow)
+    let view = crate::runtime_host::WorkflowControl::inspect(&workflow)
         .await
         .unwrap();
     let config = delivery.runtime.configuration.snapshot().unwrap();
@@ -799,7 +799,7 @@ async fn assert_removed_workspace_facade(
         delivery.clone(),
         delivery.clone(),
     );
-    let view = crate::app::WorkflowControl::inspect(&workflow)
+    let view = crate::runtime_host::WorkflowControl::inspect(&workflow)
         .await
         .unwrap();
     assert!(view.projection.workspaces.is_empty());

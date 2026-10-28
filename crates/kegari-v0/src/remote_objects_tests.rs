@@ -1,11 +1,10 @@
 //! Actual disposable Git protocol/import fixtures; injected provider wire and
 //! boot identity do not constitute native enforcement or live qualification.
 use super::*;
+use crate::reconcile::DependencyOutcomes;
+use crate::reconcile::GatePurpose;
+use crate::runtime_host::ConfigurationControl;
 use crate::test_process_probe as probe;
-use crate::{
-    app::ConfigurationControl,
-    reconcile::{DependencyOutcomes, GatePurpose},
-};
 use kegari_platform::ProcessProbe;
 use kegari_providers::HttpTransport;
 use kegari_providers::{Credential, HttpPolicy, HttpRequest, HttpResponse};

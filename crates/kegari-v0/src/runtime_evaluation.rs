@@ -1,11 +1,16 @@
 //! Explicit local one-trial execution on the existing runtime. Neither a report
 //! nor configuration can manufacture this in-memory command authorization.
 use super::*;
-use crate::{
-    control::{Actor, Principal, Receipt, ReceiptPhase},
-    evaluation::{LiveAuthority, LiveLease, LiveRequest, TrialKey},
-    runtime_workers::{self, LaunchRequest},
-};
+use crate::control::Receipt;
+use crate::control::ReceiptPhase;
+use crate::evaluation::LiveAuthority;
+use crate::evaluation::LiveLease;
+use crate::evaluation::LiveRequest;
+use crate::evaluation::TrialKey;
+use crate::runtime_workers;
+use crate::runtime_workers::LaunchRequest;
+use kegari_control_api::identity::Actor;
+use kegari_control_api::identity::Principal;
 use kegari_types::api::{CommandName, CommandRequest};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,7 +81,7 @@ impl VerifiedEvaluationRequest {
         self.deadline.remaining()?;
         runtime.registration.verify_active_owner(&self.lease)?;
         let config = runtime.configuration.snapshot()?;
-        crate::app::verify_current_actor(&config, &self.actor, "evaluate")?;
+        crate::control_command::verify_current_actor(&config, &self.actor, "evaluate")?;
         runtime
             .configuration
             .authority_fences()?
@@ -117,7 +122,7 @@ impl VerifiedEvaluationRequest {
         self.deadline.remaining()?;
         runtime.registration.verify_active_owner(&self.lease)?;
         let config = runtime.configuration.snapshot()?;
-        crate::app::verify_current_actor(&config, &self.actor, "evaluate")?;
+        crate::control_command::verify_current_actor(&config, &self.actor, "evaluate")?;
         let fences = runtime.configuration.authority_fences()?;
         fences.check_actor(&self.actor, "evaluate")?;
         fences.check_workspace(self.workspace)?;
@@ -274,10 +279,10 @@ impl RuntimeCoordinator {
         request: CommandRequest,
         parent: Receipt,
     ) -> Result<Arc<VerifiedEvaluationRequest>> {
-        crate::api::validate_command_request(&request, self.runtime_id)?;
+        kegari_control_api::api::validate_command_request(&request, self.runtime_id)?;
         if request.command != CommandName::EvaluationRun
             || !matches!(actor.principal, Some(Principal::Unix { .. }))
-            || request.request_id != crate::app::command_effect_id(parent.operation_id)
+            || request.request_id != crate::control_command::command_effect_id(parent.operation_id)
             || parent.runtime_id != self.runtime_id
             || parent.actor != actor.identity
             || parent.kind != "command/EvaluationRun"
@@ -289,12 +294,15 @@ impl RuntimeCoordinator {
         }
         let mut original = request.clone();
         original.request_id = parent.request_id;
-        let mut mutation =
-            crate::app::mutation_request(&actor, &original, self.evaluation_targets(&request)?);
+        let mut mutation = crate::control_command::mutation_request(
+            &actor,
+            &original,
+            self.evaluation_targets(&request)?,
+        );
         mutation.kind = "command/EvaluationRun".into();
         mutation.expected.insert(
             "evaluation_trial".into(),
-            crate::api::evaluation_trial_identity(&request)?,
+            kegari_control_api::api::evaluation_trial_identity(&request)?,
         );
         mutation.payload = json!({"arguments":request.args,"secret_digest":Value::Null});
         let expected = canonical_digest(
@@ -1389,7 +1397,7 @@ mod command_tests {
     #[test]
     fn trial_command_cannot_supply_authority_or_omit_observed_revisions() {
         let original = request();
-        crate::api::validate_command_request(&original, original.runtime_id).unwrap();
+        kegari_control_api::api::validate_command_request(&original, original.runtime_id).unwrap();
         for field in [
             "actor",
             "lease",
@@ -1402,7 +1410,7 @@ mod command_tests {
             let mut changed = original.clone();
             changed.args[field] = json!({"pretend":"authority"});
             assert_eq!(
-                crate::api::validate_command_request(&changed, changed.runtime_id)
+                kegari_control_api::api::validate_command_request(&changed, changed.runtime_id)
                     .unwrap_err()
                     .code,
                 "invalid_input"
@@ -1410,13 +1418,22 @@ mod command_tests {
         }
         let mut changed = original.clone();
         changed.expected_config_revision = None;
-        assert!(crate::api::validate_command_request(&changed, changed.runtime_id).is_err());
+        assert!(
+            kegari_control_api::api::validate_command_request(&changed, changed.runtime_id)
+                .is_err()
+        );
         let mut changed = original.clone();
         changed.expected_control_generation = None;
-        assert!(crate::api::validate_command_request(&changed, changed.runtime_id).is_err());
+        assert!(
+            kegari_control_api::api::validate_command_request(&changed, changed.runtime_id)
+                .is_err()
+        );
         let mut changed = original;
         changed.args["repetition"] = json!(0);
-        assert!(crate::api::validate_command_request(&changed, changed.runtime_id).is_err());
+        assert!(
+            kegari_control_api::api::validate_command_request(&changed, changed.runtime_id)
+                .is_err()
+        );
     }
 }
 

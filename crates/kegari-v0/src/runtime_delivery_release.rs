@@ -63,7 +63,7 @@ struct AttemptRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     carry_publication: Option<PublicationRef>,
     manual_intent: Option<Uuid>,
-    manual_actor: Option<crate::control::Actor>,
+    manual_actor: Option<kegari_control_api::identity::Actor>,
     manual_role: Option<ManualRole>,
     acceptance_actor: Uuid,
     #[serde(with = "repository_operations")]
@@ -1216,7 +1216,7 @@ impl RuntimeDelivery {
         }
         if let Some(actor) = &record.manual_actor {
             let role = record.manual_role.unwrap().as_str();
-            crate::app::verify_current_actor(&config, actor, role)?;
+            crate::control_command::verify_current_actor(&config, actor, role)?;
             runtime
                 .configuration
                 .authority_fences()?
@@ -2137,7 +2137,7 @@ impl RuntimeDelivery {
         };
 
         if let Some(manual) = &manual {
-            crate::app::verify_current_actor(
+            crate::control_command::verify_current_actor(
                 &workspace.configuration,
                 &manual.record.payload.actor,
                 "release",
@@ -2232,7 +2232,7 @@ impl RuntimeDelivery {
                     ));
                 }
                 if let Some(manual) = &manual {
-                    crate::app::verify_current_actor(
+                    crate::control_command::verify_current_actor(
                         &current_config,
                         &manual.record.payload.actor,
                         "release",

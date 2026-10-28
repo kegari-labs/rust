@@ -747,7 +747,7 @@ async fn assert_historical_facade(
         delivery.clone(),
         delivery.clone(),
     );
-    let view = crate::app::WorkflowControl::inspect(&workflow)
+    let view = crate::runtime_host::WorkflowControl::inspect(&workflow)
         .await
         .unwrap();
     if !removed_workspace {

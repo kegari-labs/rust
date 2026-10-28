@@ -858,6 +858,8 @@ dependencies = [
  "chrono",
  "clap",
  "kegari-config",
+ "kegari-control-api",
+ "kegari-controller",
  "kegari-digest",
  "kegari-platform",
  "kegari-secrets",
@@ -887,6 +889,59 @@ dependencies = [
  "serde_json",
  "toml",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "kegari-control-api"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "axum",
+ "chrono",
+ "hyper",
+ "hyper-util",
+ "kegari-config",
+ "kegari-digest",
+ "kegari-process",
+ "kegari-secrets",
+ "kegari-storage",
+ "kegari-types",
+ "libc",
+ "reqwest",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "uuid",
+ "webpki-roots",
+ "x509-parser",
+]
+
+[[package]]
+name = "kegari-controller"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "axum",
+ "chrono",
+ "kegari-config",
+ "kegari-control-api",
+ "kegari-digest",
+ "kegari-platform",
+ "kegari-secrets",
+ "kegari-storage",
+ "kegari-types",
+ "kegari-v0",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tower",
  "uuid",
 ]
 
@@ -989,15 +1044,13 @@ dependencies = [
 name = "kegari-v0"
 version = "0.2.0-alpha.10"
 dependencies = [
- "axum",
  "base64 0.22.1",
  "chrono",
  "clap",
  "flate2",
  "hex",
- "hyper",
- "hyper-util",
  "kegari-config",
+ "kegari-control-api",
  "kegari-digest",
  "kegari-platform",
  "kegari-process",
@@ -1008,8 +1061,6 @@ dependencies = [
  "libc",
  "reqwest",
  "ring",
- "rustls",
- "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1017,13 +1068,9 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
- "tokio-rustls",
  "toml",
- "tower",
  "url",
  "uuid",
- "webpki-roots",
- "x509-parser",
  "zip",
 ]
 

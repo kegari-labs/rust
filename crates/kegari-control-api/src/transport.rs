@@ -2,7 +2,7 @@
 //! issuance, proxy, plaintext remote listener or host configuration mutation.
 use crate::{
     api::{ApiState, Authentication, MAX_HEADERS, Peer, REQUEST_DEADLINE, connection_router},
-    control::{Actor, Principal},
+    identity::{Actor, Principal},
 };
 use chrono::{DateTime, Utc};
 use hyper::server::conn::http1;

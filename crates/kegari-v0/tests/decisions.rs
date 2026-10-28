@@ -290,22 +290,28 @@ impl HttpTransport for Wire {
         })
     }
 }
+use kegari_control_api::identity::Actor;
+use kegari_control_api::identity::Principal;
 use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_secrets::{Secret, SecretStore};
 use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::Error;
-use kegari_v0::{
-    app::{ConfigurationControl, HostFuture, mutation_request},
-    control::{
-        Actor, ControlHost, MutationRequest, Principal, Receipt, ReceiptPhase, ReceiptStore,
-        RunReference,
-    },
-    decisions::*,
-    evidence::{VerifiedAcceptance, WorkIdentity, encode_signed_publication},
-    housekeeping::Housekeeping,
-    observations::ObservationCache,
-};
+use kegari_v0::control::ControlHost;
+use kegari_v0::control::MutationRequest;
+use kegari_v0::control::Receipt;
+use kegari_v0::control::ReceiptPhase;
+use kegari_v0::control::ReceiptStore;
+use kegari_v0::control::RunReference;
+use kegari_v0::control_command::mutation_request;
+use kegari_v0::decisions::*;
+use kegari_v0::evidence::VerifiedAcceptance;
+use kegari_v0::evidence::WorkIdentity;
+use kegari_v0::evidence::encode_signed_publication;
+use kegari_v0::housekeeping::Housekeeping;
+use kegari_v0::observations::ObservationCache;
+use kegari_v0::runtime_host::ConfigurationControl;
+use kegari_v0::runtime_host::HostFuture;
 use std::{
     path::{Path, PathBuf},
     sync::RwLock,
@@ -566,12 +572,12 @@ impl DecisionFixture {
             .control
             .queue_command(
                 mutation,
-                kegari_v0::api::command_role(&command, &request.args),
+                kegari_control_api::api::command_role(&command, &request.args),
                 || Ok(()),
             )
             .unwrap();
         assert!(fresh);
-        request.request_id = kegari_v0::app::command_effect_id(receipt.request_id);
+        request.request_id = kegari_v0::control_command::command_effect_id(receipt.request_id);
         (request, receipt)
     }
     fn writes(&self) -> usize {

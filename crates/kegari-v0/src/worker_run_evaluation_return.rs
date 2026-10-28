@@ -299,7 +299,9 @@ pub(crate) fn returned_admission_digest(receipt: &Receipt) -> Result<String> {
 #[cfg(test)]
 mod registry_return_tests {
     use super::*;
-    use crate::control::{Actor, Lifecycle, MutationRequest};
+    use crate::control::Lifecycle;
+    use crate::control::MutationRequest;
+    use kegari_control_api::identity::Actor;
     use std::sync::atomic::AtomicUsize;
     struct OwnedHandle {
         state: AtomicUsize,

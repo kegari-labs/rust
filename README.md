@@ -10,6 +10,8 @@
 | [`kegari-process`](crates/kegari-process/README.md) | Guarded process spawning, owned process groups and exit evidence. |
 | [`kegari-platform`](crates/kegari-platform/README.md) | OS identity, executable inspection and native host helpers. |
 | [`kegari-secrets`](crates/kegari-secrets/README.md) | Secret values, Keychain storage and generic signed-record primitives. |
+| [`kegari-control-api`](crates/kegari-control-api/README.md) | Authenticated transport, request rules, operator identities and snapshot operations. |
+| [`kegari-controller`](crates/kegari-controller/README.md) | Control-host composition, dispatch, supervision and orchestration channel. |
 | [`kegari-cli`](crates/kegari-cli/README.md) | Public CLI, control client and the `kegari-v0` executable. |
 | [`kegari-v0`](crates/kegari-v0/README.md) | Remaining backend library and the `kegari-v0-evaluation` inspection executable. |
 
@@ -18,8 +20,8 @@ Both CLI and backend depend directly on `kegari-config` and `kegari-types`;
 backend; the backend does not depend on the CLI. Shared types and configuration
 models are imported directly from their owning crates, without backend
 compatibility reexports. Configuration transactions, workflow integration,
-command validation, authorization, exit-code mapping and
-snapshot operations remain in the backend. Shared hashing belongs to `kegari-digest`.
+current-operator authorization and exit-code mapping remain in the backend.
+Command validation and snapshot operations now belong to `kegari-control-api`. Shared hashing belongs to `kegari-digest`.
 Provider adapters depend on config/types/digest; the backend retains the mutation
 broker, receipts and evidence admission. Neither new crate depends on the backend.
 CLI and backend also depend directly on `kegari-storage`, which depends on
@@ -37,11 +39,17 @@ owns Keychain access, explicit reference resolution and generic attestation
 signing. It depends on types/digest without a backend or provider dependency.
 Provider credential conversion, authorized imports, publication framing and
 delivery-evidence policy remain in the backend.
+The controller temporarily depends on the backend and control API. The backend
+depends on control API, with no reverse dependency on controller, including in
+tests. Shared runtime contracts and command-policy helpers remain below the
+controller in `kegari_v0::{runtime_host, control_command}`. Registration, durable
+admission, configuration transactions and the execution/delivery engine remain
+backend-owned. Control-host and child process responsibilities are unchanged.
 All packages use workspace version `0.2.0-alpha.10`; the executable name, process
 roles and serialized schemas remain unchanged. This extraction creates no new
 prerelease or qualification claim.
 
-From the workspace root, using the pinned toolchain; `--workspace` checks all ten
+From the workspace root, using the pinned toolchain; `--workspace` checks all twelve
 packages:
 
 ```sh

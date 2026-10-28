@@ -1,9 +1,12 @@
 //! Actual protected-I/O and Control components only. No registered native
 //! worker, joined completion, declared trial or accepted claim is manufactured.
 use super::*;
-use crate::control::{
-    Actor, Lifecycle, MutationRequest, RemoteReservation, RunAdmission, RunReference,
-};
+use crate::control::Lifecycle;
+use crate::control::MutationRequest;
+use crate::control::RemoteReservation;
+use crate::control::RunAdmission;
+use crate::control::RunReference;
+use kegari_control_api::identity::Actor;
 use kegari_providers::HttpTransport;
 use kegari_providers::{Credential, GithubClient, HttpPolicy, HttpRequest, HttpResponse};
 use std::sync::atomic::{AtomicUsize, Ordering};

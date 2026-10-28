@@ -1,7 +1,10 @@
 //! Component tasks and real Control journals. These tests do not launch native
 //! workers or manufacture completed model/process capabilities.
 use super::*;
-use crate::control::{Actor, ControlHost, Lifecycle, MutationRequest};
+use crate::control::ControlHost;
+use crate::control::Lifecycle;
+use crate::control::MutationRequest;
+use kegari_control_api::identity::Actor;
 use tokio::sync::oneshot;
 
 fn command(host: &ControlHost) -> MutationRequest {

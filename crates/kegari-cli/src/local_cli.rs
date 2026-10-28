@@ -115,7 +115,7 @@ impl LocalActions for NativeLocalActions {
     ) -> LocalFuture<'a, OutputEnvelope> {
         Box::pin(async move {
             let runtime = Config::parse(configuration)?.runtime.id;
-            let result = kegari_v0::app::bootstrap(configuration, request_id).await?;
+            let result = kegari_controller::app::bootstrap(configuration, request_id).await?;
             if result
                 .data
                 .get("runtime_id")

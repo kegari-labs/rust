@@ -1,11 +1,14 @@
 //! Already-production completion requires an admitted publication and exact
 //! native readback. A signed local intent alone never satisfies a dependency.
 use super::*;
-use crate::{
-    control::{Actor, MutationRequest, Receipt},
-    evidence::{NoReleaseRequired, NoReleaseRequirements, ProductionTargetBaseline, Publication},
-    providers::ProviderMutation,
-};
+use crate::control::MutationRequest;
+use crate::control::Receipt;
+use crate::evidence::NoReleaseRequired;
+use crate::evidence::NoReleaseRequirements;
+use crate::evidence::ProductionTargetBaseline;
+use crate::evidence::Publication;
+use crate::providers::ProviderMutation;
+use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::Comment;
 

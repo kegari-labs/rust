@@ -5,16 +5,23 @@ use axum::{
     http::Request,
 };
 use kegari_config::Config;
+use kegari_control_api::{
+    api::{self, Dispatcher, Peer},
+    identity::{Actor, Principal},
+    transport::TransportAuthentication,
+};
+use kegari_controller::app::{HostDispatcher, HostServices};
 use kegari_secrets::Secret;
 use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest, Envelope};
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    api::{self, Dispatcher, Peer},
-    app::*,
     control::*,
+    control_command::{command_effect_id, resolve_workspace, verify_current_actor},
     reconcile::RuntimeProjection,
-    transport::TransportAuthentication,
+    runtime_host::{
+        ConfigurationControl, HostFuture, LocalControlOwner, RuntimeInspection, WorkflowControl,
+    },
 };
 use serde_json::{Value, json};
 use std::{
@@ -317,7 +324,7 @@ async fn stopped_inspection_uses_shared_dispatcher_and_creates_no_receipts_or_wo
         let response = f.api(request).await;
         assert!(response.ok, "{:?}", response.error);
         let page: kegari_types::snapshot::Page = serde_json::from_value(response.data).unwrap();
-        let data = kegari_v0::snapshot::assemble(&[page]).unwrap();
+        let data = kegari_control_api::snapshot::assemble(&[page]).unwrap();
         assert!(data.is_object());
         assert_eq!(f.control.operation(id).unwrap_err().code, "record_missing");
     }
@@ -393,7 +400,7 @@ fn historical_display(
 fn page_data(response: Envelope) -> Value {
     assert!(response.ok, "{:?}", response.error);
     let page = serde_json::from_value(response.data).unwrap();
-    kegari_v0::snapshot::assemble(&[page]).unwrap()
+    kegari_control_api::snapshot::assemble(&[page]).unwrap()
 }
 
 #[tokio::test]
@@ -618,7 +625,7 @@ async fn paged_read_retains_original_revision_and_never_refetches_after_config_c
         assert_eq!(next.state.as_deref(), Some("observed"));
         pages.push(serde_json::from_value(next.data).unwrap());
     }
-    let complete = kegari_v0::snapshot::assemble(&pages).unwrap();
+    let complete = kegari_control_api::snapshot::assemble(&pages).unwrap();
     assert_eq!(complete["configuration"]["runtime"]["max_agents"], 1);
     assert_eq!(
         complete["configuration"]["connections"]

@@ -238,11 +238,16 @@ fn main_check_failure_eligibility_requires_clean_service_and_readiness_records()
 #[tokio::test]
 async fn warm_empty_bundle_uses_original_control_and_registry_owner_cold_records_do_not() {
     for attempt_missing in [false, true] {
-        use crate::control::{
-            Actor, ControlHost, Lease, Lifecycle, MutationRequest, ReceiptPhase, ReceiptStore,
-            RunAdmission, RunReference,
-        };
+        use crate::control::ControlHost;
+        use crate::control::Lease;
+        use crate::control::Lifecycle;
+        use crate::control::MutationRequest;
+        use crate::control::ReceiptPhase;
+        use crate::control::ReceiptStore;
+        use crate::control::RunAdmission;
+        use crate::control::RunReference;
         use crate::worker::ExecutionRegistry;
+        use kegari_control_api::identity::Actor;
         use kegari_storage::PrivateDir;
         use serde_json::json;
         let temp = tempfile::tempdir().unwrap();

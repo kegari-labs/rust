@@ -1,38 +1,61 @@
 //! Production worker preparation and launch. Preparation owns a distinct durable
 //! permit; only a fully assembled contract consumes a model-attempt admission.
-use crate::{
-    authority::{ChildScope, Responsibility},
-    connections::ConnectionRegistry,
-    control::{
-        Actor, Lease, MutationRequest, Permit, PreparationAdmission, PreparationReference,
-        RunAdmission, RunReference,
-    },
-    execution::{
-        DirectoryIdentity, ExecutionBinding, ExecutionLimits, HookInvocation, HookLedger,
-        HookPhase, JournaledSandboxBoundary, LocalExecutor, OwnedDirectory,
-    },
-    git::{
-        Git, GitExecutionScope, GitLimits, GitStartGate, IndependentCloneIdentity, RepositoryId,
-        Revision,
-    },
-    housekeeping::{ReadOnlyIdentity, ReadOnlyPreparation},
-    instructions::{AgentRole, ProviderDiscovery, RepositoryContext},
-    isolation::{
-        BoundManagedExecution, ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation,
-    },
-    providers::ProviderBroker,
-    runtime::RuntimeCoordinator,
-    scheduler::PhaseKey,
-    worker::{
-        ReadResource, ReviewTarget, WorkerAuthority, WorkerExecution, WorkerHost, WorkerServices,
-    },
-    worker_run::{
-        self, ExecutorHookServices, ExecutorRunHooks, NonExecutingRunHooks, Preparation, RunHooks,
-        RunOptions, RunServices,
-    },
-    workflow::Workflow,
-};
+use crate::authority::ChildScope;
+use crate::authority::Responsibility;
+use crate::connections::ConnectionRegistry;
+use crate::control::Lease;
+use crate::control::MutationRequest;
+use crate::control::Permit;
+use crate::control::PreparationAdmission;
+use crate::control::PreparationReference;
+use crate::control::RunAdmission;
+use crate::control::RunReference;
+use crate::execution::DirectoryIdentity;
+use crate::execution::ExecutionBinding;
+use crate::execution::ExecutionLimits;
+use crate::execution::HookInvocation;
+use crate::execution::HookLedger;
+use crate::execution::HookPhase;
+use crate::execution::JournaledSandboxBoundary;
+use crate::execution::LocalExecutor;
+use crate::execution::OwnedDirectory;
+use crate::git::Git;
+use crate::git::GitExecutionScope;
+use crate::git::GitLimits;
+use crate::git::GitStartGate;
+use crate::git::IndependentCloneIdentity;
+use crate::git::RepositoryId;
+use crate::git::Revision;
+use crate::housekeeping::ReadOnlyIdentity;
+use crate::housekeeping::ReadOnlyPreparation;
+use crate::instructions::AgentRole;
+use crate::instructions::ProviderDiscovery;
+use crate::instructions::RepositoryContext;
+use crate::isolation::BoundManagedExecution;
+use crate::isolation::ExecutionRole;
+use crate::isolation::IsolationPlan;
+use crate::isolation::PathGrant;
+use crate::isolation::ValidatedIsolation;
+use crate::providers::ProviderBroker;
+use crate::runtime::RuntimeCoordinator;
+use crate::scheduler::PhaseKey;
+use crate::worker::ReadResource;
+use crate::worker::ReviewTarget;
+use crate::worker::WorkerAuthority;
+use crate::worker::WorkerExecution;
+use crate::worker::WorkerHost;
+use crate::worker::WorkerServices;
+use crate::worker_run;
+use crate::worker_run::ExecutorHookServices;
+use crate::worker_run::ExecutorRunHooks;
+use crate::worker_run::NonExecutingRunHooks;
+use crate::worker_run::Preparation;
+use crate::worker_run::RunHooks;
+use crate::worker_run::RunOptions;
+use crate::worker_run::RunServices;
+use crate::workflow::Workflow;
 use kegari_config::{Config, Workspace};
+use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
@@ -2368,8 +2391,8 @@ mod source_tests {
     use std::{collections::VecDeque, future::Future, pin::Pin, sync::Mutex, time::Duration};
     #[tokio::test]
     async fn unresolved_delivery_policy_reaches_current_scoped_worker_plan_without_effects() {
-        use crate::app::ConfigurationControl;
         use crate::reconcile::{DependencyOutcomes, GatePurpose};
+        use crate::runtime_host::ConfigurationControl;
         let (_temp, fixture, _delivery, wire, owner) =
             crate::runtime_delivery::tests::fixture_authorization_with_configuration(
                 true,

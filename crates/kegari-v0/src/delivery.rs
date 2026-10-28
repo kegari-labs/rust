@@ -1,6 +1,9 @@
 //! Explicit host delivery phases. Model output remains a claim until actual
 //! execution/provider observations have established the corresponding gate.
-use crate::control::{Actor, ControlHost, MutationRequest, Permit, Receipt};
+use crate::control::ControlHost;
+use crate::control::MutationRequest;
+use crate::control::Permit;
+use crate::control::Receipt;
 use crate::evidence::{
     self, ArtifactReference, CheckKind, CheckRequirement, CheckRun, CheckSnapshot, Conclusion,
     Publication, RevisionBinding, Runner, WorkIdentity,
@@ -14,6 +17,7 @@ use crate::reconcile::FreshGate;
 use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
 use kegari_config::{CiSuite, Repository as RepositoryConfig};
+use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::{GithubClient, RepositoryIdentity};
 use kegari_secrets::{AttestationKey, Signed};
@@ -37,15 +41,15 @@ pub trait RuntimeDeliveryDecisions: Send + Sync {
     fn release(
         &self,
         decision: crate::decisions::AuthorizedDecision,
-    ) -> crate::app::HostFuture<'_, Receipt>;
+    ) -> crate::runtime_host::HostFuture<'_, Receipt>;
     fn recover_release(
         &self,
         decision: crate::decisions::AuthorizedDecision,
-    ) -> crate::app::HostFuture<'_, Receipt>;
+    ) -> crate::runtime_host::HostFuture<'_, Receipt>;
     fn reconcile(
         &self,
         decision: crate::decisions::AuthorizedOperationRecovery,
-    ) -> crate::app::HostFuture<'_, Receipt>;
+    ) -> crate::runtime_host::HostFuture<'_, Receipt>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

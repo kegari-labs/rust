@@ -1,5 +1,8 @@
 use super::*;
-use crate::control::{Actor, Lifecycle, MutationRequest, RunAdmission};
+use crate::control::Lifecycle;
+use crate::control::MutationRequest;
+use crate::control::RunAdmission;
+use kegari_control_api::identity::Actor;
 
 #[test]
 fn actual_model_request_observation_retains_pause_and_refuses_change_fence_or_missing_bytes() {

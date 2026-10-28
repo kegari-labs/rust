@@ -1,14 +1,15 @@
 //! Actual operator retry publication with synthetic provider wire. Selection is
 //! driven by the genuine retained delivery proof, never a fabricated blocker.
 use super::*;
-use crate::{
-    app::HostFuture,
-    authority::IssueKey,
-    control::{Actor, Receipt},
-    decisions::*,
-    evidence::{VerifiedAcceptance, WorkIdentity},
-    reconcile::{DependencyOutcomes, ParentDelivery},
-};
+use crate::authority::IssueKey;
+use crate::control::Receipt;
+use crate::decisions::*;
+use crate::evidence::VerifiedAcceptance;
+use crate::evidence::WorkIdentity;
+use crate::reconcile::DependencyOutcomes;
+use crate::reconcile::ParentDelivery;
+use crate::runtime_host::HostFuture;
+use kegari_control_api::identity::Actor;
 use std::sync::Mutex;
 
 /// The synthetic completed protocol cannot populate the native joined-run
@@ -197,7 +198,7 @@ async fn publish_inner(
     });
     let actor = Actor {
         identity: "operator".into(),
-        principal: Some(crate::control::Principal::Unix { uid: 501 }),
+        principal: Some(kegari_control_api::identity::Principal::Unix { uid: 501 }),
         roles: ["recover".into(), "inspect".into(), "lifecycle".into()].into(),
     };
     let mut request = kegari_types::api::CommandRequest {
@@ -211,8 +212,11 @@ async fn publish_inner(
         ),
         expected_control_generation: Some(runtime.control.snapshot().unwrap().intent.generation),
     };
-    let mut mutation =
-        crate::app::mutation_request(&actor, &request, manager.command_targets(&request).unwrap());
+    let mut mutation = crate::control_command::mutation_request(
+        &actor,
+        &request,
+        manager.command_targets(&request).unwrap(),
+    );
     mutation.kind = format!("command/{:?}", request.command);
     mutation.payload = json!({"arguments":request.args,"secret_digest":null});
     let (parent, fresh) = runtime
@@ -220,7 +224,7 @@ async fn publish_inner(
         .queue_command(mutation, "recover", || Ok(()))
         .unwrap();
     assert!(fresh);
-    request.request_id = crate::app::command_effect_id(parent.operation_id);
+    request.request_id = crate::control_command::command_effect_id(parent.operation_id);
     manager.execute(actor, request, parent).await.unwrap();
     let result = evidence.grants.lock().unwrap().clone();
     assert_eq!(result.len(), 1);

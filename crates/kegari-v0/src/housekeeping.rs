@@ -1,19 +1,25 @@
 //! Explicit retention, cleanup and bounded host diagnostics. Nothing is removed
 //! because an issue closes, a worker exits, a release succeeds or disk fills.
-use crate::{
-    control::{
-        Actor, ControlHost, ControlSnapshot, MutationRequest, Receipt, ReceiptPhase, ReceiptStore,
-    },
-    execution::{
-        ExecutionBinding, ExecutionLimits, HookInvocation, HookLedger, HookPhase, LocalExecutor,
-        OwnedDirectory,
-    },
-    git::Git,
-    isolation::IsolationPlan,
-    platform::{OwnerRecord, ServiceShutdown},
-    workflow::Workflow,
-};
+use crate::control::ControlHost;
+use crate::control::ControlSnapshot;
+use crate::control::MutationRequest;
+use crate::control::Receipt;
+use crate::control::ReceiptPhase;
+use crate::control::ReceiptStore;
+use crate::execution::ExecutionBinding;
+use crate::execution::ExecutionLimits;
+use crate::execution::HookInvocation;
+use crate::execution::HookLedger;
+use crate::execution::HookPhase;
+use crate::execution::LocalExecutor;
+use crate::execution::OwnedDirectory;
+use crate::git::Git;
+use crate::isolation::IsolationPlan;
+use crate::platform::OwnerRecord;
+use crate::platform::ServiceShutdown;
+use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
+use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_platform::{
     BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
@@ -1120,7 +1126,8 @@ impl Housekeeping {
                 || recorded.actor != request.actor.identity
                 || recorded.payload_digest != digest
                 || parent.payload_digest != digest
-                || request.request_id != crate::app::command_effect_id(parent.request_id)
+                || request.request_id
+                    != crate::control_command::command_effect_id(parent.request_id)
             {
                 return Err(Error::new(
                     "request_conflict",
@@ -2562,7 +2569,8 @@ pub async fn apply_handover(
 ) -> Result<Receipt> {
     actor.require("configure")?;
     actor.require("recover")?;
-    if !matches!(actor.principal,Some(crate::control::Principal::Unix{uid}) if uid==host.uid) {
+    if !matches!(actor.principal,Some(kegari_control_api::identity::Principal::Unix{uid}) if uid==host.uid)
+    {
         return Err(Error::new(
             "access_denied",
             "handover requires this execution host's local OS principal",
@@ -2585,8 +2593,8 @@ pub async fn apply_handover(
             std::str::from_utf8(&config_bytes)
                 .map_err(|_| Error::invalid("persisted config is not UTF-8"))?,
         )?;
-        crate::app::verify_current_actor(&config, &actor, "configure")?;
-        crate::app::verify_current_actor(&config, &actor, "recover")?;
+        crate::control_command::verify_current_actor(&config, &actor, "configure")?;
+        crate::control_command::verify_current_actor(&config, &actor, "recover")?;
         let store = ReceiptStore::new(root.child("receipts")?);
         match store.get(request_id) {
             Ok(_) => return Ok(store.prepare(&mutation, 0)?.0),
@@ -2605,8 +2613,8 @@ pub async fn apply_handover(
     let _control = root.lock("control.lock")?;
     let _runtime = root.lock("runtime.lock")?;
     let state = handover_state(host, &root, probe)?;
-    crate::app::verify_current_actor(&state.config, &actor, "configure")?;
-    crate::app::verify_current_actor(&state.config, &actor, "recover")?;
+    crate::control_command::verify_current_actor(&state.config, &actor, "configure")?;
+    crate::control_command::verify_current_actor(&state.config, &actor, "recover")?;
     if canonical_digest(1, &state.owner)? != plan.owner_digest
         || crate::config::config_revision(&state.config)? != plan.config_digest
         || canonical_digest(1, &state.intent)? != plan.intent_digest

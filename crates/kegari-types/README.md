@@ -7,13 +7,13 @@ This package owns the shared serialized data used by the CLI and backend:
 - `snapshot`: `Segment`, `Node` and `Page`.
 
 Consumers import these types directly from `kegari_types`; the backend does not
-reexport them. Both `kegari-cli` and `kegari-v0` depend on this package. The CLI
+reexport them. CLI, controller, control API and backend depend directly on this package. The CLI
 also retains its temporary backend dependency.
 
 These data types do not grant authority or perform provider, filesystem or
-process operations. Command validation and classification, role decisions,
-and exit-code mapping remain backend free functions; snapshot capture and
-reassembly also remain in the backend.
+process operations. Command validation/classification and snapshot capture/reassembly belong to
+`kegari-control-api`. Current-operator authorization and exit-code mapping remain
+backend free functions.
 Moving the types does not change their serialized schemas or turn deserialized
 data into verified execution or delivery evidence.
 

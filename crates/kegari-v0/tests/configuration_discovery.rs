@@ -2,6 +2,9 @@
 //! transactions. Provider wire, Codex metadata and process identity are injected;
 //! no native probe, model, Keychain write, service or network action is performed.
 use kegari_config::{Config, Connection};
+use kegari_control_api::identity::Actor;
+use kegari_control_api::identity::Principal;
+use kegari_control_api::transport::TransportAuthentication;
 use kegari_digest::canonical_digest;
 use kegari_platform::{
     BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
@@ -11,14 +14,15 @@ use kegari_providers::{HttpRequest, HttpResponse, Method};
 use kegari_secrets::{Secret, SecretStore};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
+use kegari_v0::codex::CodexConnectionMetadata;
+use kegari_v0::codex::PROTOCOL_PROFILE;
+use kegari_v0::codex::SUPPORTED_CODEX_VERSION;
 use kegari_v0::config::{config_revision, load_workflows};
-use kegari_v0::{
-    codex::{CodexConnectionMetadata, PROTOCOL_PROFILE, SUPPORTED_CODEX_VERSION},
-    configuration::{ConfigManager, ConfigurationInputs, prepare_initial},
-    control::{Actor, Principal, ReceiptPhase},
-    platform::Registration,
-    transport::TransportAuthentication,
-};
+use kegari_v0::configuration::ConfigManager;
+use kegari_v0::configuration::ConfigurationInputs;
+use kegari_v0::configuration::prepare_initial;
+use kegari_v0::control::ReceiptPhase;
+use kegari_v0::platform::Registration;
 use serde_json::{Value, json};
 use std::{
     future::Future,

@@ -1,32 +1,44 @@
 //! Authenticated human decisions. Provider publications, fresh scope observations
 //! and durable command lineage are required independently of orchestration intent.
-use crate::{
-    app::{
-        ConfigurationControl, HostFuture, mutation_request, verified_operator, verify_current_actor,
-    },
-    authority::IssueKey,
-    configuration::ConfigurationInputs,
-    connections::ConnectionRegistry,
-    control::{
-        Actor, ControlHost, ControlSnapshot, Intent, MutationRequest, Principal, Receipt,
-        ReceiptPhase, RunReference,
-    },
-    evidence::{
-        AcceptanceActor, AcceptanceRequest, Publication, VerifiedAcceptance, WorkIdentity,
-        decode_signed_publication, encode_signed_publication, prepare_acceptance,
-        verify_acceptance,
-    },
-    housekeeping::Housekeeping,
-    observations::ObservationCache,
-    providers::{ProviderBroker, ProviderMutation},
-    reconcile::{
-        DependencyOutcomes, GatePurpose, ParentDelivery, ParentProjection, RuntimeProjection,
-        WorkspaceClients,
-    },
-    scheduler::PhaseKey,
-};
+use crate::authority::IssueKey;
+use crate::configuration::ConfigurationInputs;
+use crate::connections::ConnectionRegistry;
+use crate::control::ControlHost;
+use crate::control::ControlSnapshot;
+use crate::control::Intent;
+use crate::control::MutationRequest;
+use crate::control::Receipt;
+use crate::control::ReceiptPhase;
+use crate::control::RunReference;
+use crate::control_command::mutation_request;
+use crate::control_command::verified_operator;
+use crate::control_command::verify_current_actor;
+use crate::evidence::AcceptanceActor;
+use crate::evidence::AcceptanceRequest;
+use crate::evidence::Publication;
+use crate::evidence::VerifiedAcceptance;
+use crate::evidence::WorkIdentity;
+use crate::evidence::decode_signed_publication;
+use crate::evidence::encode_signed_publication;
+use crate::evidence::prepare_acceptance;
+use crate::evidence::verify_acceptance;
+use crate::housekeeping::Housekeeping;
+use crate::observations::ObservationCache;
+use crate::providers::ProviderBroker;
+use crate::providers::ProviderMutation;
+use crate::reconcile::DependencyOutcomes;
+use crate::reconcile::GatePurpose;
+use crate::reconcile::ParentDelivery;
+use crate::reconcile::ParentProjection;
+use crate::reconcile::RuntimeProjection;
+use crate::reconcile::WorkspaceClients;
+use crate::runtime_host::ConfigurationControl;
+use crate::runtime_host::HostFuture;
+use crate::scheduler::PhaseKey;
 use chrono::{DateTime, Duration, Utc};
 use kegari_config::Config;
+use kegari_control_api::identity::Actor;
+use kegari_control_api::identity::Principal;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::{Comment, GithubClient};
 use kegari_secrets::{AttestationKey, SecretStore, Signed};
@@ -122,7 +134,10 @@ impl VerifiedRetryGrant {
             || record.work != *current
             || record.command_id.is_nil()
             || record.operation_id
-                != stage_id(crate::app::command_effect_id(record.command_id), "retry")
+                != stage_id(
+                    crate::control_command::command_effect_id(record.command_id),
+                    "retry",
+                )
             || record.workspace_id.is_nil()
             || record.prior_admissions.is_empty()
             || record.reason.trim().is_empty()
@@ -219,7 +234,7 @@ impl VerifiedExplicitCorrection {
             || record.command_id.is_nil()
             || record.operation_id
                 != stage_id(
-                    crate::app::command_effect_id(record.command_id),
+                    crate::control_command::command_effect_id(record.command_id),
                     "correction",
                 )
             || record.control_actor.is_empty()
@@ -330,7 +345,7 @@ impl AuthorizedDecision {
         verify_current_actor(
             config,
             &self.actor,
-            crate::api::command_role(&self.request.command, &self.request.args),
+            kegari_control_api::api::command_role(&self.request.command, &self.request.args),
         )?;
         if crate::config::config_revision(config) != Ok(self.config_revision.clone())
             || snapshot.intent.generation != self.control_generation
@@ -516,7 +531,7 @@ impl DecisionManager {
             || stored.actor != actor.identity
             || stored.runtime_id != request.runtime_id
             || stored.kind != original.kind
-            || request.request_id != crate::app::command_effect_id(parent.request_id)
+            || request.request_id != crate::control_command::command_effect_id(parent.request_id)
         {
             return Err(Error::new(
                 "request_conflict",
@@ -545,13 +560,13 @@ impl DecisionManager {
             .authority_fences()?
             .check_actor(
                 &actor,
-                crate::api::command_role(&request.command, &request.args),
+                kegari_control_api::api::command_role(&request.command, &request.args),
             )?;
-        crate::api::validate_command_request(&request, config.runtime.id)?;
+        kegari_control_api::api::validate_command_request(&request, config.runtime.id)?;
         verify_current_actor(
             &config,
             &actor,
-            crate::api::command_role(&request.command, &request.args),
+            kegari_control_api::api::command_role(&request.command, &request.args),
         )?;
         let effect = self.lineage(&actor, &request, &parent)?;
         match if request.command == CommandName::Cleanup {
@@ -566,7 +581,10 @@ impl DecisionManager {
                 return self.services.control.mutate_observed(
                     effect,
                     None,
-                    Some(crate::api::command_role(&request.command, &request.args)),
+                    Some(kegari_control_api::api::command_role(
+                        &request.command,
+                        &request.args,
+                    )),
                     |_| Err(Error::invalid("replay unexpectedly evaluated gate")),
                     |_| Err(Error::invalid("replay unexpectedly executed effect")),
                 );
@@ -711,14 +729,14 @@ impl DecisionManager {
         let fences = self.services.configuration.authority_fences()?;
         fences.check_actor(
             &ctx.actor,
-            crate::api::command_role(&ctx.request.command, &ctx.request.args),
+            kegari_control_api::api::command_role(&ctx.request.command, &ctx.request.args),
         )?;
         fences.check_workspace(ctx.workspace)?;
         let config = self.services.configuration.snapshot()?;
         verify_current_actor(
             &config,
             &ctx.actor,
-            crate::api::command_role(&ctx.request.command, &ctx.request.args),
+            kegari_control_api::api::command_role(&ctx.request.command, &ctx.request.args),
         )?;
         if crate::config::config_revision(&config)? != crate::config::config_revision(&ctx.config)?
             || snapshot.intent.generation != ctx.generation
@@ -883,7 +901,10 @@ impl DecisionManager {
             self.services.control.clone(),
             request,
             None,
-            Some(crate::api::command_role(&ctx.request.command, &ctx.request.args).into()),
+            Some(
+                kegari_control_api::api::command_role(&ctx.request.command, &ctx.request.args)
+                    .into(),
+            ),
             ProviderMutation::LinearComment {
                 issue: target,
                 body: body.clone(),
@@ -1488,7 +1509,8 @@ impl DecisionManager {
         let proof = decision.clone();
         let control = self.services.control.clone();
         let request = self.stage_request(ctx, "release_admission")?;
-        let role = crate::api::command_role(&ctx.request.command, &ctx.request.args).to_owned();
+        let role = kegari_control_api::api::command_role(&ctx.request.command, &ctx.request.args)
+            .to_owned();
         let command = ctx.request.command.clone();
         let authorization = tokio::task::spawn_blocking(move || {
             let gate = |snapshot: &ControlSnapshot| {
@@ -1572,19 +1594,22 @@ impl DecisionManager {
         self.services.control.mutate_observed(
             effect,
             None,
-            Some(crate::api::command_role(&request.command, &request.args)),
+            Some(kegari_control_api::api::command_role(
+                &request.command,
+                &request.args,
+            )),
             |snapshot| {
                 self.services
                     .configuration
                     .authority_fences()?
                     .check_actor(
                         actor,
-                        crate::api::command_role(&request.command, &request.args),
+                        kegari_control_api::api::command_role(&request.command, &request.args),
                     )?;
                 verify_current_actor(
                     &self.services.configuration.snapshot()?,
                     actor,
-                    crate::api::command_role(&request.command, &request.args),
+                    kegari_control_api::api::command_role(&request.command, &request.args),
                 )?;
                 if !snapshot.background_commands.contains(&parent.operation_id) {
                     return Err(Error::new(

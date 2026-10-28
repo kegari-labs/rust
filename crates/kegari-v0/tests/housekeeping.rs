@@ -4,23 +4,31 @@
 mod pinned_git;
 #[path = "support/process_probe.rs"]
 mod process_probe;
+use kegari_control_api::identity::Actor;
+use kegari_control_api::identity::Principal;
 use kegari_digest::bytes_digest;
 use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
 use kegari_providers::*;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
-use kegari_v0::{
-    control::*,
-    evidence::{Generation, WorkIdentity},
-    execution::{
-        DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass, HookLedger, HookPhase,
-        HookRecord, HookState, OwnedDirectory, SessionLifecycle,
-    },
-    git::{Git, RepositoryId},
-    housekeeping::*,
-    isolation::{ExecutionRole, IsolationPlan},
-    workflow::Workflow,
-};
+use kegari_v0::control::*;
+use kegari_v0::evidence::Generation;
+use kegari_v0::evidence::WorkIdentity;
+use kegari_v0::execution::DirectoryIdentity;
+use kegari_v0::execution::ExecutionBinding;
+use kegari_v0::execution::ExecutionEvidenceClass;
+use kegari_v0::execution::HookLedger;
+use kegari_v0::execution::HookPhase;
+use kegari_v0::execution::HookRecord;
+use kegari_v0::execution::HookState;
+use kegari_v0::execution::OwnedDirectory;
+use kegari_v0::execution::SessionLifecycle;
+use kegari_v0::git::Git;
+use kegari_v0::git::RepositoryId;
+use kegari_v0::housekeeping::*;
+use kegari_v0::isolation::ExecutionRole;
+use kegari_v0::isolation::IsolationPlan;
+use kegari_v0::workflow::Workflow;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -164,7 +172,7 @@ impl HttpTransport for Wire {
     }
 }
 struct NativeReadConfiguration(kegari_config::Config);
-impl kegari_v0::app::ConfigurationControl for NativeReadConfiguration {
+impl kegari_v0::runtime_host::ConfigurationControl for NativeReadConfiguration {
     fn authority_fences(&self) -> Result<kegari_v0::configuration::AuthorityFences> {
         Ok(Default::default())
     }
@@ -177,10 +185,10 @@ impl kegari_v0::app::ConfigurationControl for NativeReadConfiguration {
         _: kegari_types::api::CommandRequest,
         _: Option<kegari_secrets::Secret>,
         _: Receipt,
-    ) -> kegari_v0::app::HostFuture<'_, Receipt> {
+    ) -> kegari_v0::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(async { Err(Error::new("fixture", "configuration mutation unexpected")) })
     }
-    fn check(&self, _: Option<Uuid>) -> kegari_v0::app::HostFuture<'_, Value> {
+    fn check(&self, _: Option<Uuid>) -> kegari_v0::runtime_host::HostFuture<'_, Value> {
         Box::pin(async { Ok(json!({})) })
     }
 }
@@ -1147,7 +1155,9 @@ async fn cleanup_background_lineage_permits_only_its_own_owned_parent_command() 
         .queue_command(parent_request, "recover", || Ok(()))
         .unwrap();
     assert!(fresh);
-    let mut effect = request(kegari_v0::app::command_effect_id(parent.request_id));
+    let mut effect = request(kegari_v0::control_command::command_effect_id(
+        parent.request_id,
+    ));
     effect.payload = args;
     let mut altered = effect.clone();
     altered.payload["plan"] = json!("changed");

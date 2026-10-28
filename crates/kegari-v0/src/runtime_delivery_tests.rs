@@ -1,7 +1,7 @@
 use super::*;
-use crate::app::ConfigurationControl;
 use crate::corrections::wire_fixture as wire;
 use crate::reconcile::DependencyOutcomes;
+use crate::runtime_host::ConfigurationControl;
 use kegari_digest::canonical_digest;
 use kegari_platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
@@ -35,7 +35,7 @@ impl FixtureOwner {
                 crate::control::MutationRequest {
                     request_id: Uuid::new_v4(),
                     runtime_id: snapshot.intent.runtime_id,
-                    actor: crate::control::Actor {
+                    actor: kegari_control_api::identity::Actor {
                         identity: "fixture-operator".into(),
                         principal: None,
                         roles: ["lifecycle".into()].into(),
@@ -335,7 +335,7 @@ pub(crate) fn start_control(runtime: &RuntimeCoordinator) -> crate::control::Lea
             crate::control::MutationRequest {
                 request_id: Uuid::new_v4(),
                 runtime_id: id,
-                actor: crate::control::Actor {
+                actor: kegari_control_api::identity::Actor {
                     identity: "fixture-operator".into(),
                     principal: None,
                     roles: ["lifecycle".into()].into(),
@@ -622,7 +622,7 @@ async fn manual_release_recovery_uses_actual_queued_command_identity() {
     let projection = fixture.runtime.observations.snapshot().unwrap();
     let parent = projection.parent(wire::id(2), wire::id(100)).unwrap();
     let config = fixture.configuration.snapshot().unwrap();
-    let actor = crate::control::Actor {
+    let actor = kegari_control_api::identity::Actor {
         identity: "fixture-release-operator".into(),
         principal: None,
         roles: std::collections::BTreeSet::from(["release".into()]),

@@ -1,28 +1,32 @@
 //! Native control-host composition. Construction requires an actual runtime
 //! backend; no permissive scheduler, credential bootstrap or client fallback.
 use crate::{
+    app::{HostDispatcher, HostServices},
+    supervisor::{NativeSupervisor, Supervisor, SupervisorLimits},
+};
+use kegari_control_api::{
     api::ApiState,
-    app::{
-        ConfigurationControl, HostDispatcher, HostFuture, HostServices, RuntimeInspection,
-        WorkflowControl,
-    },
-    configuration::{ConfigManager, ConfigurationInputs},
-    control::{Actor, ControlHost, Receipt},
-    housekeeping::{Housekeeping, LogEvent, LogSink, Severity},
-    observations::{ObservationCache, ReferenceStore},
-    platform::Registration,
-    supervisor::{
-        DrainState, NativeSupervisor, Supervisor, SupervisorDriver, SupervisorFuture,
-        SupervisorLimits,
-    },
+    identity::Actor,
     transport::{self, ServerHandle, TailscaleClient, TransportAuthentication},
 };
 use kegari_digest::canonical_digest;
 use kegari_platform::{BinaryIdentity, HostIdentity, NativeProcessProbe};
-use kegari_secrets::{AttestationKey, Keychain, SecretStore};
+use kegari_secrets::{Keychain, SecretStore};
 use kegari_storage::PrivateDir;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
+use kegari_v0::{
+    configuration::{ConfigManager, ConfigurationInputs},
+    control::{ControlHost, Receipt},
+    housekeeping::{Housekeeping, LogEvent, LogSink, Severity},
+    observations::{ObservationCache, ReferenceStore},
+    platform::Registration,
+    runtime_host::{
+        ConfigurationControl, DrainState, HostFuture, HostRuntimeFactory, RuntimeBackend,
+        RuntimeDependencies, RuntimeInspection, SupervisorDriver, SupervisorFuture,
+        WorkflowControl,
+    },
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -33,27 +37,6 @@ use std::{
 };
 use tokio::sync::Notify;
 use uuid::Uuid;
-
-pub struct RuntimeDependencies {
-    pub configuration: Arc<dyn ConfigurationControl>,
-    pub control: Arc<ControlHost>,
-    pub registration: Arc<Registration>,
-    pub observations: Arc<ObservationCache>,
-    pub secrets: Arc<dyn SecretStore>,
-    pub key: Arc<AttestationKey>,
-    pub housekeeping: Arc<Housekeeping>,
-    pub logs: Arc<LogSink>,
-    pub inputs: Arc<dyn ConfigurationInputs>,
-    pub wake: Arc<Notify>,
-}
-#[derive(Clone)]
-pub struct RuntimeBackend {
-    pub workflow: Arc<dyn WorkflowControl>,
-    pub driver: Arc<dyn SupervisorDriver>,
-}
-pub trait HostRuntimeFactory: Send + Sync {
-    fn build(&self, dependencies: RuntimeDependencies) -> HostFuture<'_, RuntimeBackend>;
-}
 
 /// Called only by the explicit native control-host process entrypoint. Merely
 /// running a remote CLI command never invokes this factory or probes this host.
@@ -70,8 +53,7 @@ pub async fn run_native(factory: &dyn HostRuntimeFactory) -> Result<()> {
     let logs = Arc::new(LogSink::new(registration.root().child("logs")?));
     let keychain = Arc::new(Keychain::new(config.runtime.id)?);
     let secrets: Arc<dyn SecretStore> = keychain.clone();
-    let inputs: Arc<dyn ConfigurationInputs> =
-        Arc::new(crate::evaluation_provider::EvaluationConfigurationInputs::new());
+    let inputs: Arc<dyn ConfigurationInputs> = kegari_v0::runtime_host::configuration_inputs();
     // TLS prerequisites are independently reported by the transport monitor.
     // Its initial failure cannot remove a valid private Unix control endpoint.
     let authentication = Arc::new(TransportAuthentication::new(config.control.clone(), None));
@@ -389,7 +371,7 @@ impl WorkflowControl for SwitchableBackend {
             let retained =
                 ReferenceStore::new(PrivateDir::open(self.references.path())?, config.runtime.id)?
                     .restore(&config)?;
-            let projection = crate::reconcile::Reconciler::default()
+            let projection = kegari_v0::reconcile::Reconciler::default()
                 .refresh(&config, &BTreeMap::new(), &BTreeMap::new(), &retained)
                 .await?;
             Ok(RuntimeInspection {
@@ -436,27 +418,30 @@ impl SupervisorDriver for SwitchableBackend {
     fn reconcile_before_start(&self) -> SupervisorFuture<'_, ()> {
         Box::pin(async move { self.backend()?.driver.reconcile_before_start().await })
     }
-    fn recover<'a>(&'a self, lease: &'a crate::control::Lease) -> SupervisorFuture<'a, ()> {
+    fn recover<'a>(&'a self, lease: &'a kegari_v0::control::Lease) -> SupervisorFuture<'a, ()> {
         Box::pin(async move { self.backend()?.driver.recover(lease).await })
     }
     fn poll<'a>(
         &'a self,
-        lease: &'a crate::control::Lease,
+        lease: &'a kegari_v0::control::Lease,
         sequence: u64,
     ) -> SupervisorFuture<'a, ()> {
         Box::pin(async move { self.backend()?.driver.poll(lease, sequence).await })
     }
     fn maintain<'a>(
         &'a self,
-        lease: &'a crate::control::Lease,
-        snapshot: &'a crate::control::ControlSnapshot,
+        lease: &'a kegari_v0::control::Lease,
+        snapshot: &'a kegari_v0::control::ControlSnapshot,
     ) -> SupervisorFuture<'a, DrainState> {
         Box::pin(async move { self.backend()?.driver.maintain(lease, snapshot).await })
     }
     fn cancel_fenced<'a>(&'a self, operations: &'a [Uuid]) -> SupervisorFuture<'a, ()> {
         Box::pin(async move { self.backend()?.driver.cancel_fenced(operations).await })
     }
-    fn exited<'a>(&'a self, lease: &'a crate::control::Lease) -> SupervisorFuture<'a, DrainState> {
+    fn exited<'a>(
+        &'a self,
+        lease: &'a kegari_v0::control::Lease,
+    ) -> SupervisorFuture<'a, DrainState> {
         Box::pin(async move { self.backend()?.driver.exited(lease).await })
     }
 }
@@ -552,7 +537,7 @@ impl RemoteListener {
         state: &ApiState,
     ) -> Result<()> {
         let config = configuration.snapshot()?;
-        let revision = crate::config::config_revision(&config)?;
+        let revision = kegari_v0::config::config_revision(&config)?;
         let digest = canonical_digest(1, &config.control.https)?;
         let changed = self.contract.as_deref() != Some(&digest);
         if changed {
@@ -589,7 +574,7 @@ impl RemoteListener {
         let server = transport::start_direct_tls(remote, https, tailscale).await?;
         let mut server = Some(server);
         let install = control.serialize_observation(|_| {
-            if crate::config::config_revision(&configuration.snapshot()?)? != revision {
+            if kegari_v0::config::config_revision(&configuration.snapshot()?)? != revision {
                 return Err(Error::new(
                     "stale_config",
                     "TLS configuration changed while listener started",
@@ -618,8 +603,8 @@ fn install_current_authentication(
     tailscale: Option<TailscaleClient>,
 ) -> Result<()> {
     control.serialize_observation(|_| {
-        if crate::config::config_revision(&configuration.snapshot()?)?
-            != crate::config::config_revision(expected)?
+        if kegari_v0::config::config_revision(&configuration.snapshot()?)?
+            != kegari_v0::config::config_revision(expected)?
         {
             return Err(Error::new(
                 "stale_config",
@@ -687,7 +672,7 @@ mod tests {
     use super::*;
     struct ReadConfiguration(kegari_config::Config);
     impl ConfigurationControl for ReadConfiguration {
-        fn authority_fences(&self) -> Result<crate::configuration::AuthorityFences> {
+        fn authority_fences(&self) -> Result<kegari_v0::configuration::AuthorityFences> {
             Ok(Default::default())
         }
         fn snapshot(&self) -> Result<kegari_config::Config> {
@@ -744,7 +729,7 @@ mod tests {
     }
     #[tokio::test]
     async fn stale_listener_install_cannot_restore_removed_operator_roles() {
-        use crate::api::{Authentication, Peer};
+        use kegari_control_api::api::{Authentication, Peer};
         let temp = tempfile::tempdir().unwrap();
         let root =
             PrivateDir::create(&temp.path().canonicalize().unwrap().join("runtime")).unwrap();

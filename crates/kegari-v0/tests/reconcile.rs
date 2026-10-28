@@ -1373,7 +1373,7 @@ async fn identity_only_recovery_keeps_required_counts_without_granting_authority
 }
 
 struct CacheConfiguration(Config);
-impl kegari_v0::app::ConfigurationControl for CacheConfiguration {
+impl kegari_v0::runtime_host::ConfigurationControl for CacheConfiguration {
     fn authority_fences(&self) -> Result<kegari_v0::configuration::AuthorityFences> {
         Ok(Default::default())
     }
@@ -1382,14 +1382,14 @@ impl kegari_v0::app::ConfigurationControl for CacheConfiguration {
     }
     fn execute(
         &self,
-        _: kegari_v0::control::Actor,
+        _: kegari_control_api::identity::Actor,
         _: kegari_types::api::CommandRequest,
         _: Option<kegari_secrets::Secret>,
         _: kegari_v0::control::Receipt,
-    ) -> kegari_v0::app::HostFuture<'_, kegari_v0::control::Receipt> {
+    ) -> kegari_v0::runtime_host::HostFuture<'_, kegari_v0::control::Receipt> {
         Box::pin(async { panic!("observation must not mutate configuration") })
     }
-    fn check(&self, _: Option<Uuid>) -> kegari_v0::app::HostFuture<'_, Value> {
+    fn check(&self, _: Option<Uuid>) -> kegari_v0::runtime_host::HostFuture<'_, Value> {
         Box::pin(async { panic!("observation must not launch configuration checks") })
     }
 }
@@ -1509,7 +1509,7 @@ async fn cached_authority_is_reconstructed_after_restart_and_removed_publication
         kegari_v0::control::MutationRequest {
             request_id: Uuid::new_v4(),
             runtime_id: id(1),
-            actor: kegari_v0::control::Actor {
+            actor: kegari_control_api::identity::Actor {
                 identity: "fixture-host".into(),
                 roles: ["recover".into()].into(),
                 principal: None,
@@ -1681,12 +1681,14 @@ async fn authorization_preparation_requires_current_human_scope_and_is_not_a_wor
 
 #[tokio::test]
 async fn authorization_publication_reconciles_real_wire_records_without_retransmitting_unknowns() {
+    use kegari_control_api::identity::Actor;
     use kegari_storage::PrivateDir;
-    use kegari_v0::{
-        control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
-        observations::ObservationCache,
-        preparation::AuthorizationPublisher,
-    };
+    use kegari_v0::control::ControlHost;
+    use kegari_v0::control::Lease;
+    use kegari_v0::control::Lifecycle;
+    use kegari_v0::control::MutationRequest;
+    use kegari_v0::observations::ObservationCache;
+    use kegari_v0::preparation::AuthorizationPublisher;
     for scenario in [
         "acknowledged",
         "lost_ack",
@@ -1963,7 +1965,7 @@ struct MutableConfiguration {
     config: Mutex<Config>,
     fences: Mutex<kegari_v0::configuration::AuthorityFences>,
 }
-impl kegari_v0::app::ConfigurationControl for MutableConfiguration {
+impl kegari_v0::runtime_host::ConfigurationControl for MutableConfiguration {
     fn snapshot(&self) -> Result<Config> {
         Ok(self.config.lock().unwrap().clone())
     }
@@ -1972,14 +1974,14 @@ impl kegari_v0::app::ConfigurationControl for MutableConfiguration {
     }
     fn execute(
         &self,
-        _: kegari_v0::control::Actor,
+        _: kegari_control_api::identity::Actor,
         _: kegari_types::api::CommandRequest,
         _: Option<kegari_secrets::Secret>,
         _: kegari_v0::control::Receipt,
-    ) -> kegari_v0::app::HostFuture<'_, kegari_v0::control::Receipt> {
+    ) -> kegari_v0::runtime_host::HostFuture<'_, kegari_v0::control::Receipt> {
         Box::pin(async { panic!("read-only fixture") })
     }
-    fn check(&self, _: Option<Uuid>) -> kegari_v0::app::HostFuture<'_, Value> {
+    fn check(&self, _: Option<Uuid>) -> kegari_v0::runtime_host::HostFuture<'_, Value> {
         Box::pin(async { panic!("read-only fixture") })
     }
 }
@@ -2383,13 +2385,17 @@ impl kegari_platform::ProcessProbe for PreservedProbe {
 }
 #[tokio::test]
 async fn coordination_preservation_binds_actual_opaque_authority_and_directory_identity() {
+    use kegari_control_api::identity::Actor;
     use kegari_storage::PrivateDir;
-    use kegari_v0::{
-        control::{Actor, Lease, Lifecycle, MutationRequest},
-        housekeeping::{Housekeeping, ReadOnlyIdentity, ReadOnlyPreparation},
-        isolation::{ExecutionRole, IsolationPlan},
-        worker::WorkerAuthority,
-    };
+    use kegari_v0::control::Lease;
+    use kegari_v0::control::Lifecycle;
+    use kegari_v0::control::MutationRequest;
+    use kegari_v0::housekeeping::Housekeeping;
+    use kegari_v0::housekeeping::ReadOnlyIdentity;
+    use kegari_v0::housekeeping::ReadOnlyPreparation;
+    use kegari_v0::isolation::ExecutionRole;
+    use kegari_v0::isolation::IsolationPlan;
+    use kegari_v0::worker::WorkerAuthority;
     let f = ActiveFixture::new().await;
     let projection = f.cache.snapshot().unwrap();
     let parent = projection.parent(id(2), id(100)).unwrap();
@@ -2575,7 +2581,7 @@ async fn shared_corrective_publication_fence_blocks_cached_and_active_work_befor
         kegari_v0::control::MutationRequest {
             request_id: operation,
             runtime_id: id(1),
-            actor: kegari_v0::control::Actor {
+            actor: kegari_control_api::identity::Actor {
                 identity: "fixture".into(),
                 principal: None,
                 roles: ["correct".into()].into(),

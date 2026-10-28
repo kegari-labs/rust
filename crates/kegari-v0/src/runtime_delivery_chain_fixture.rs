@@ -1,12 +1,12 @@
 //! Historical accepted input is explicitly synthetic. Actual owner receipts,
 //! supersede authorization, native wire, object import and assembly are exercised.
 use super::*;
-use crate::app::ConfigurationControl;
 use crate::control::Receipt;
 use crate::decisions::{
     AuthorizedDecision, AuthorizedOperationRecovery, DecisionEvidence, RetryTarget,
     VerifiedExplicitCorrection, VerifiedRetryGrant,
 };
+use crate::runtime_host::ConfigurationControl;
 use kegari_digest::canonical_digest;
 
 pub(super) struct ChainFixture<'a> {
@@ -414,7 +414,7 @@ pub(super) async fn publish_origin_with_slices(
                 crate::control::MutationRequest {
                     request_id: id,
                     runtime_id: lease.runtime_id,
-                    actor: crate::control::Actor {
+                    actor: kegari_control_api::identity::Actor {
                         identity: actor.clone(),
                         principal: None,
                         roles: BTreeSet::new(),
@@ -1021,13 +1021,19 @@ impl DecisionEvidence for LinkEvidence {
     fn retry_committed(&self, _: VerifiedRetryGrant) -> Result<()> {
         Err(Error::invalid("fixture only links historical releases"))
     }
-    fn release(&self, _: AuthorizedDecision) -> crate::app::HostFuture<'_, Receipt> {
+    fn release(&self, _: AuthorizedDecision) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(async { Err(Error::invalid("fixture only links historical releases")) })
     }
-    fn reconcile(&self, _: AuthorizedOperationRecovery) -> crate::app::HostFuture<'_, Receipt> {
+    fn reconcile(
+        &self,
+        _: AuthorizedOperationRecovery,
+    ) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(async { Err(Error::invalid("fixture only links historical releases")) })
     }
-    fn recover_release(&self, decision: AuthorizedDecision) -> crate::app::HostFuture<'_, Receipt> {
+    fn recover_release(
+        &self,
+        decision: AuthorizedDecision,
+    ) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(async move {
             self.delivery.fixture_successor_transition(
                 &decision,
@@ -1044,10 +1050,10 @@ async fn authorize_link(
     child: &AttemptRecord,
     accepted_at: chrono::DateTime<Utc>,
 ) {
-    use crate::{
-        control::{Actor, Principal},
-        decisions::{DecisionDependencies, DecisionManager},
-    };
+    use crate::decisions::DecisionDependencies;
+    use crate::decisions::DecisionManager;
+    use kegari_control_api::identity::Actor;
+    use kegari_control_api::identity::Principal;
     use kegari_types::api::{CommandName, CommandRequest};
     let runtime = &delivery.runtime;
     let services = &runtime.services;
@@ -1082,8 +1088,11 @@ async fn authorize_link(
         ),
         expected_control_generation: Some(runtime.control.snapshot().unwrap().intent.generation),
     };
-    let mut mutation =
-        crate::app::mutation_request(&actor, &request, manager.command_targets(&request).unwrap());
+    let mut mutation = crate::control_command::mutation_request(
+        &actor,
+        &request,
+        manager.command_targets(&request).unwrap(),
+    );
     mutation.kind = "command/ReleaseRecover".into();
     mutation.payload = json!({"arguments":request.args,"secret_digest":null});
     let (parent, fresh) = runtime
@@ -1091,7 +1100,7 @@ async fn authorize_link(
         .queue_command(mutation, "recover", || Ok(()))
         .unwrap();
     assert!(fresh);
-    request.request_id = crate::app::command_effect_id(parent.operation_id);
+    request.request_id = crate::control_command::command_effect_id(parent.operation_id);
     // Operator commands are separate owned tasks in HostDispatcher. Preserve
     // that boundary instead of polling its provider refresh on the deep Git
     // fixture's task stack.

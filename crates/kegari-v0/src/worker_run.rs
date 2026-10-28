@@ -1,25 +1,41 @@
 //! Actual assembled worker sessions. The host chooses work and reserves the
 //! immutable contract; this module owns the bounded adapter/task lifetime.
-use crate::{
-    codex::{
-        CodexProfile, OwnedProviderCancellation, PermissionConfiguration, RequestGate, RpcClient,
-        SessionBinding, SessionState,
-    },
-    control::{Actor, ControlHost, InFlightEffect, MutationRequest, Permit},
-    evaluation::TrialHost,
-    execution::{CommandCancellation, VerifiedCheckExecution},
-    instructions::{
-        self, AgentRole, AssemblyInput, PermissionManifest, ProviderDiscovery, RepositoryContext,
-        WorkerNetwork,
-    },
-    isolation::{IsolationPlan, ValidatedIsolation},
-    worker::{
-        ContractInput, ExecutionRegistry, ReadResource, ReviewTarget, ScopedWorker,
-        WorkerAuthority, WorkerContract, WorkerExecution, WorkerHost, WorkerServices,
-    },
-    workflow::Workflow,
-};
+use crate::codex::CodexProfile;
+use crate::codex::OwnedProviderCancellation;
+use crate::codex::PermissionConfiguration;
+use crate::codex::RequestGate;
+use crate::codex::RpcClient;
+use crate::codex::SessionBinding;
+use crate::codex::SessionState;
+use crate::control::ControlHost;
+use crate::control::InFlightEffect;
+use crate::control::MutationRequest;
+use crate::control::Permit;
+use crate::evaluation::TrialHost;
+use crate::execution::CommandCancellation;
+use crate::execution::VerifiedCheckExecution;
+use crate::instructions;
+use crate::instructions::AgentRole;
+use crate::instructions::AssemblyInput;
+use crate::instructions::PermissionManifest;
+use crate::instructions::ProviderDiscovery;
+use crate::instructions::RepositoryContext;
+use crate::instructions::WorkerNetwork;
+use crate::isolation::IsolationPlan;
+use crate::isolation::ValidatedIsolation;
+use crate::worker::ContractInput;
+use crate::worker::ExecutionRegistry;
+use crate::worker::ReadResource;
+use crate::worker::ReviewTarget;
+use crate::worker::ScopedWorker;
+use crate::worker::WorkerAuthority;
+use crate::worker::WorkerContract;
+use crate::worker::WorkerExecution;
+use crate::worker::WorkerHost;
+use crate::worker::WorkerServices;
+use crate::workflow::Workflow;
 use kegari_config::{Config, ProviderKind, Speed};
+use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_platform::BinaryIdentity;
 use kegari_types::error::{Error, Result};

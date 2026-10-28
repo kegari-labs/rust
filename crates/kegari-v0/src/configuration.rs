@@ -1,14 +1,21 @@
 //! Serialized host configuration transactions. Verification is read-only;
 //! credential import and durable configuration replacement share the mutation gate.
-use crate::{
-    codex::{CodexConnectionMetadata, CodexProfile, PermissionConfiguration},
-    connections::{VerifiedCredential, verify_credential},
-    control::{Actor, ControlHost, Intent, MutationRequest, Principal, Receipt},
-    isolation::{ExecutionRole, IsolationPlan},
-    platform::Registration,
-    transport::TransportAuthentication,
-};
+use crate::codex::CodexConnectionMetadata;
+use crate::codex::CodexProfile;
+use crate::codex::PermissionConfiguration;
+use crate::connections::VerifiedCredential;
+use crate::connections::verify_credential;
+use crate::control::ControlHost;
+use crate::control::Intent;
+use crate::control::MutationRequest;
+use crate::control::Receipt;
+use crate::isolation::ExecutionRole;
+use crate::isolation::IsolationPlan;
+use crate::platform::Registration;
 use kegari_config::{Config, Connection, ControlRole, Deployment, ProviderKind, Speed, Workspace};
+use kegari_control_api::identity::Actor;
+use kegari_control_api::identity::Principal;
+use kegari_control_api::transport::TransportAuthentication;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_platform::HostIdentity;
 use kegari_providers::HttpTransport;
@@ -392,7 +399,7 @@ impl ConfigManager {
         parent: Option<Receipt>,
     ) -> Result<Receipt> {
         let current = self.snapshot()?;
-        crate::api::validate_command_request(&request, current.runtime.id)?;
+        kegari_control_api::api::validate_command_request(&request, current.runtime.id)?;
         if !matches!(
             request.command,
             CommandName::Setup
@@ -416,11 +423,11 @@ impl ConfigManager {
         let secret_digest = secret.as_ref().map(|secret| bytes_digest(secret.bytes()));
         let parent_link=parent.map(|parent|{
             let persisted=self.control.operation(parent.request_id)?;
-            let mut submitted=crate::app::mutation_request(&actor,&request,vec![request.runtime_id.to_string()]);
+            let mut submitted=crate::control_command::mutation_request(&actor,&request,vec![request.runtime_id.to_string()]);
             submitted.kind=format!("command/{:?}",request.command);
             submitted.payload=json!({"arguments":request.args,"secret_digest":secret_digest});
             let expected=canonical_digest(1,&json!({"kind":submitted.kind,"targets":submitted.canonical_targets,"expected":submitted.expected,"payload":submitted.payload,"principal":actor.principal}))?;
-            if request.request_id!=crate::app::command_effect_id(parent.request_id)||persisted.phase!=crate::control::ReceiptPhase::Prepared||persisted.actor!=actor.identity||persisted.runtime_id!=request.runtime_id||persisted.kind!=submitted.kind||persisted.payload_digest!=expected||parent.payload_digest!=persisted.payload_digest{return Err(Error::new("request_conflict","configuration effect does not match its authenticated durable command lineage"));}
+            if request.request_id!=crate::control_command::command_effect_id(parent.request_id)||persisted.phase!=crate::control::ReceiptPhase::Prepared||persisted.actor!=actor.identity||persisted.runtime_id!=request.runtime_id||persisted.kind!=submitted.kind||persisted.payload_digest!=expected||parent.payload_digest!=persisted.payload_digest{return Err(Error::new("request_conflict","configuration effect does not match its authenticated durable command lineage"));}
             Ok((parent.request_id,persisted.payload_digest))
         }).transpose()?;
         match self.control.operation(request.request_id) {
@@ -1225,7 +1232,7 @@ fn credential_environment_names(
     Ok(names)
 }
 
-impl crate::app::ConfigurationControl for ConfigManager {
+impl crate::runtime_host::ConfigurationControl for ConfigManager {
     fn authority_fences(&self) -> Result<AuthorityFences> {
         ConfigManager::authority_fences(self)
     }
@@ -1238,12 +1245,12 @@ impl crate::app::ConfigurationControl for ConfigManager {
         request: CommandRequest,
         secret: Option<Secret>,
         parent: Receipt,
-    ) -> crate::app::HostFuture<'_, Receipt> {
+    ) -> crate::runtime_host::HostFuture<'_, Receipt> {
         Box::pin(ConfigManager::execute_for_command(
             self, actor, request, secret, parent,
         ))
     }
-    fn check(&self, workspace: Option<Uuid>) -> crate::app::HostFuture<'_, Value> {
+    fn check(&self, workspace: Option<Uuid>) -> crate::runtime_host::HostFuture<'_, Value> {
         Box::pin(ConfigManager::check(self, workspace))
     }
 }

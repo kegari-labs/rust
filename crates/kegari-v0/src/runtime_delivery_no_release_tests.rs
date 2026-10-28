@@ -838,7 +838,7 @@ async fn production_movement_or_current_resource_owner_blocks_no_release() {
 }
 
 async fn reconcile(h: &Harness, target: Uuid) -> Result<Receipt> {
-    use crate::app::WorkflowControl;
+    use crate::runtime_host::WorkflowControl;
     let workflow = crate::runtime_workflow::RuntimeWorkflow::new(
         h.built.runtime.clone(),
         h.delivery.clone(),
@@ -846,7 +846,7 @@ async fn reconcile(h: &Harness, target: Uuid) -> Result<Receipt> {
     );
     let actor = Actor {
         identity: "operator".into(),
-        principal: Some(crate::control::Principal::Unix { uid: 501 }),
+        principal: Some(kegari_control_api::identity::Principal::Unix { uid: 501 }),
         roles: ["recover".into(), "inspect".into(), "lifecycle".into()].into(),
     };
     let mut request = kegari_types::api::CommandRequest {
@@ -860,8 +860,11 @@ async fn reconcile(h: &Harness, target: Uuid) -> Result<Receipt> {
         )?),
         expected_control_generation: Some(h.built.runtime.control.snapshot()?.intent.generation),
     };
-    let mut mutation =
-        crate::app::mutation_request(&actor, &request, workflow.command_targets(&request)?);
+    let mut mutation = crate::control_command::mutation_request(
+        &actor,
+        &request,
+        workflow.command_targets(&request)?,
+    );
     mutation.kind = format!("command/{:?}", request.command);
     mutation.payload = json!({"arguments":request.args,"secret_digest":null});
     let (parent, fresh) = h
@@ -870,7 +873,7 @@ async fn reconcile(h: &Harness, target: Uuid) -> Result<Receipt> {
         .control
         .queue_command(mutation, "recover", || Ok(()))?;
     assert!(fresh);
-    request.request_id = crate::app::command_effect_id(parent.operation_id);
+    request.request_id = crate::control_command::command_effect_id(parent.operation_id);
     workflow.execute(actor, request, parent).await
 }
 

@@ -1,3 +1,4 @@
+use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_storage::PrivateDir;
 use kegari_types::error::Error;

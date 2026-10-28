@@ -2,9 +2,9 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
+use kegari_control_api::{api::*, identity::Actor};
 use kegari_types::api::*;
 use kegari_types::error::{Error, Result};
-use kegari_v0::{api::*, control::Actor};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -368,12 +368,12 @@ fn correction_limits_and_recovery_actions_are_closed() {
         expected_config_revision: None,
         expected_control_generation: None,
     };
-    assert!(kegari_v0::api::validate_command_request(&command, runtime).is_err());
+    assert!(kegari_control_api::api::validate_command_request(&command, runtime).is_err());
     command.command = CommandName::ReleaseRecover;
     command.args = json!({"parent":"p","operation":Uuid::new_v4(),"reason":"inspection","action":"mark_successful"});
-    assert!(kegari_v0::api::validate_command_request(&command, runtime).is_err());
+    assert!(kegari_control_api::api::validate_command_request(&command, runtime).is_err());
     command.args["action"] = Value::String("supersede".into());
-    assert!(kegari_v0::api::validate_command_request(&command, runtime).is_err());
+    assert!(kegari_control_api::api::validate_command_request(&command, runtime).is_err());
 }
 
 #[tokio::test]
@@ -394,7 +394,9 @@ async fn optional_filters_and_get_bodies_cannot_broaden_inspection() {
             expected_config_revision: None,
             expected_control_generation: None,
         };
-        assert!(kegari_v0::api::validate_command_request(&command, state.runtime_id).is_err());
+        assert!(
+            kegari_control_api::api::validate_command_request(&command, state.runtime_id).is_err()
+        );
     }
     for (path, bytes) in [
         ("/v1/status", vec![b'x']),
@@ -412,7 +414,7 @@ async fn optional_filters_and_get_bodies_cannot_broaden_inspection() {
 }
 
 struct Paged {
-    snapshots: std::sync::Mutex<kegari_v0::snapshot::Snapshots>,
+    snapshots: std::sync::Mutex<kegari_control_api::snapshot::Snapshots>,
     projection: Value,
 }
 impl Dispatcher for Paged {
@@ -526,7 +528,10 @@ async fn collection_and_operation_snapshots_retrieve_every_page() {
             }
         }
         assert!(pages.len() > 1);
-        assert_eq!(kegari_v0::snapshot::assemble(&pages).unwrap(), projection);
+        assert_eq!(
+            kegari_control_api::snapshot::assemble(&pages).unwrap(),
+            projection
+        );
     }
 }
 
