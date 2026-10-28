@@ -219,12 +219,12 @@ fn validate_actual_report(
             "actual-agent label lacks complete bound runtime/instruction/tool provenance",
         )
     };
-    let manifest: crate::instructions::InstructionManifest =
+    let manifest: kegari_context::instructions::InstructionManifest =
         serde_json::from_value(report.instruction_manifest.clone().ok_or_else(conflict)?)
             .map_err(|_| conflict())?;
     if let Some(observation) = &report.independent_broker {
         observation.validate()?;
-        if manifest.role != crate::instructions::AgentRole::IndependentReview
+        if manifest.role != kegari_context::instructions::AgentRole::IndependentReview
             || observation.operation != manifest.operation_id
             || observation.workspace != manifest.workspace_id
             || observation.suite_digest != report.suite_digest
@@ -233,7 +233,7 @@ fn validate_actual_report(
             || Some(&observation.tool_contract_digest) != report.tool_contract_digest.as_ref()
             || observation.trial_digest != canonical_digest(1, &report.trial)?
             || observation.instruction_digest
-                != canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &manifest)?
+                != canonical_digest(kegari_context::instructions::ASSEMBLY_SCHEMA, &manifest)?
         {
             return Err(conflict());
         }
@@ -246,7 +246,7 @@ fn validate_actual_report(
     }
     if let Some(observation) = &report.declared_protocol {
         observation.validate()?;
-        if (manifest.role != crate::instructions::AgentRole::IndependentReview
+        if (manifest.role != kegari_context::instructions::AgentRole::IndependentReview
             && observation.state != kegari_codex::ProtocolCaptureState::NotDeclared)
             || observation.operation != manifest.operation_id
             || observation.workspace != manifest.workspace_id
@@ -257,14 +257,14 @@ fn validate_actual_report(
                 .as_ref()
                 .is_some_and(|d| canonical_digest(1, &report.trial).ok().as_ref() != Some(d))
             || observation.instruction_digest
-                != canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &manifest)?
+                != canonical_digest(kegari_context::instructions::ASSEMBLY_SCHEMA, &manifest)?
         {
             return Err(conflict());
         }
     }
     if let Some(boundary) = &report.independent_boundary {
         boundary.validate()?;
-        if manifest.role != crate::instructions::AgentRole::IndependentReview {
+        if manifest.role != kegari_context::instructions::AgentRole::IndependentReview {
             return Err(conflict());
         }
         if let evaluation::IndependentBoundaryCheck::MatchedAtCollection { identity } =
@@ -273,7 +273,7 @@ fn validate_actual_report(
                 || identity.operation != manifest.operation_id
                 || identity.workspace != manifest.workspace_id
                 || identity.instruction_manifest_digest
-                    != canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &manifest)?
+                    != canonical_digest(kegari_context::instructions::ASSEMBLY_SCHEMA, &manifest)?
                 || identity.context_digest != manifest.context_digest
                 || identity.permission_digest != canonical_digest(1, &manifest.permissions)?
                 || identity.source_revision != boundary.source_revision
@@ -286,12 +286,12 @@ fn validate_actual_report(
         review.validate().map_err(|_| conflict())?;
         if !matches!(
             manifest.role,
-            crate::instructions::AgentRole::Review
-                | crate::instructions::AgentRole::IndependentReview
+            kegari_context::instructions::AgentRole::Review
+                | kegari_context::instructions::AgentRole::IndependentReview
         ) || review.operation != manifest.operation_id
             || Some(&review.source_revision) != manifest.repository_revision.as_ref()
             || review.instruction_digest
-                != canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &manifest)?
+                != canonical_digest(kegari_context::instructions::ASSEMBLY_SCHEMA, &manifest)?
             || Some(&review.tool_contract_digest) != report.tool_contract_digest.as_ref()
             || !report
                 .evidence_references

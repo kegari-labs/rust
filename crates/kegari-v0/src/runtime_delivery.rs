@@ -11,10 +11,10 @@ use crate::{
     process_records::ProcessJournal,
     reconcile::{FreshGate, GatePurpose, ParentProjection, RuntimeProjection},
     runtime::RuntimeCoordinator,
-    workflow::Workflow,
 };
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_context::workflow::Workflow;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde_json::json;

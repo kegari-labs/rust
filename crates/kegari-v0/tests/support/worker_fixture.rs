@@ -15,12 +15,12 @@ use kegari_v0::evidence::WorkIdentity;
 use kegari_v0::execution::*;
 use kegari_v0::git::Git;
 use kegari_v0::git::RepositoryId;
-use kegari_v0::instructions::*;
+use kegari_context::instructions::*;
 use kegari_v0::isolation::*;
 use kegari_v0::providers::ProviderBroker;
 use kegari_v0::reconcile::*;
 use kegari_v0::worker::*;
-use kegari_v0::workflow::Workflow;
+use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use serde_json::{Value, json};
 use std::{
@@ -431,6 +431,7 @@ impl Fixture {
             WorkerAuthority::Independent(g) => g.review_identity().into(),
         };
         let assembled = assemble(AssemblyInput {
+            runtime_build: kegari_v0::BUILD_ID,
             workflow: &workflow,
             role,
             phase: "work",
@@ -442,7 +443,7 @@ impl Fixture {
             profile: &profile(),
             cwd: &repo,
             codex_home: &auth,
-            codex_version: kegari_v0::instructions::SUPPORTED_CODEX_VERSION,
+            codex_version: kegari_context::instructions::SUPPORTED_CODEX_VERSION,
             repository: Some(RepositoryContext {
                 root: repo.clone(),
                 revision: revision.commit.clone(),

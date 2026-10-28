@@ -43,7 +43,7 @@ impl WorkerContract {
             || revision != &target.head
             || manifest.context_digest != canonical_digest(1, &self.context)?
             || self.assembled.manifest_digest
-                != canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, manifest)?
+                != canonical_digest(kegari_context::instructions::ASSEMBLY_SCHEMA, manifest)?
         {
             return Err(Error::new(
                 "worker_binding",

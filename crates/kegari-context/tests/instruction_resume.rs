@@ -1,6 +1,6 @@
 //! Real assembly fixtures; no manifest JSON is promoted to resume authority.
 use kegari_config::{Profile, Speed};
-use kegari_v0::{instructions::*, workflow::Workflow};
+use kegari_context::{instructions::*, workflow::Workflow};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -46,7 +46,16 @@ impl Fixture {
             "phase":"implementation","profile":self.profile,"operation":{"id":operation}})
     }
     fn assemble(&self, operation: Uuid, context: &Value) -> AssembledInstructions {
+        self.assemble_with_build(operation, context, "sha256:context-fixture-build")
+    }
+    fn assemble_with_build(
+        &self,
+        operation: Uuid,
+        context: &Value,
+        runtime_build: &str,
+    ) -> AssembledInstructions {
         assemble(AssemblyInput {
+            runtime_build,
             workflow: &self.workflow,
             role: AgentRole::Implementation,
             phase: "implementation",
@@ -183,4 +192,35 @@ fn rewritten_visible_manifests_and_legacy_records_do_not_mint_resume_proof() {
             kegari_digest::canonical_digest(ASSEMBLY_SCHEMA, &changed_assembly.manifest).unwrap();
         assert!(original.verify_resume(&changed_assembly).is_err());
     }
+}
+
+#[test]
+fn supplied_runtime_identity_is_exact_and_part_of_sealed_resume_compatibility() {
+    let fixture = Fixture::new("Same task.");
+    let operation = Uuid::from_u128(2);
+    let context = fixture.context(operation, 1);
+    let supplied_build = "caller-provided-build-identity";
+    let original = fixture.assemble_with_build(operation, &context, supplied_build);
+    let repeated = fixture.assemble_with_build(operation, &context, supplied_build);
+    assert_eq!(original.manifest.runtime_build, supplied_build);
+    assert_eq!(original.manifest.runtime_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(original.prompt, repeated.prompt);
+    assert_eq!(
+        serde_json::to_vec(&original.manifest).unwrap(),
+        serde_json::to_vec(&repeated.manifest).unwrap()
+    );
+    assert_eq!(original.manifest_digest, repeated.manifest_digest);
+    let proof = original.verify_resume(&repeated).unwrap();
+    assert_eq!(proof.previous_manifest(), original.manifest_digest);
+    assert_eq!(proof.current_manifest(), repeated.manifest_digest);
+
+    let other = fixture.assemble_with_build(operation, &context, "different-build-identity");
+    assert_eq!(other.manifest.runtime_build, "different-build-identity");
+    assert_eq!(original.prompt, other.prompt);
+    assert_ne!(original.manifest_digest, other.manifest_digest);
+    assert!(!original.manifest.resume_compatible(&other.manifest));
+    assert_eq!(
+        original.verify_resume(&other).unwrap_err().code,
+        "resume_incompatible"
+    );
 }

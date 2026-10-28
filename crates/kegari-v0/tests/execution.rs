@@ -2,6 +2,7 @@
 //! live sandbox or media qualification; no provider/network actions occur.
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
+use kegari_context::workflow::Workflow;
 use kegari_digest::bytes_digest;
 use kegari_types::error::{Error, Result};
 use kegari_v0::evidence::{CheckKind, Generation, WorkIdentity};
@@ -11,7 +12,6 @@ use kegari_v0::isolation::{
     BoundManagedExecution, CommandOutcome, ExecutionRole, IsolationPlan, PathGrant,
     ValidatedIsolation,
 };
-use kegari_v0::workflow::Workflow;
 use serde_json::json;
 use std::collections::VecDeque;
 use std::fs;

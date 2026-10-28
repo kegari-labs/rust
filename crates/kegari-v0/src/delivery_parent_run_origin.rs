@@ -41,7 +41,7 @@ pub(crate) struct ParentOriginRecord {
     prompt_digest: String,
     workflow: Value,
     tools: Vec<Value>,
-    manifest: crate::instructions::InstructionManifest,
+    manifest: kegari_context::instructions::InstructionManifest,
     source_descriptors: Vec<Value>,
     reassembly: Option<ParentReassemblyReference>,
     workspace_records: PathBuf,

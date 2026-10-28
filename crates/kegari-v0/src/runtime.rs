@@ -2812,8 +2812,10 @@ impl OutcomeSink for RuntimeCoordinator {
                 || outcome.fresh_gate_digest != effective.digest()?
                 || outcome.instruction_digest != run.contract.instructions().manifest_digest
                 || outcome.tool_contract_digest != run.contract.tools().digest()
-                || canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &outcome.instructions)?
-                    != outcome.instruction_digest
+                || canonical_digest(
+                    kegari_context::instructions::ASSEMBLY_SCHEMA,
+                    &outcome.instructions,
+                )? != outcome.instruction_digest
                 || outcome.instructions.operation_id != run.permit.operation_id
                 || outcome.session.binding.operation_id != run.permit.operation_id.to_string()
                 || outcome.session.binding.instruction_digest != outcome.instruction_digest

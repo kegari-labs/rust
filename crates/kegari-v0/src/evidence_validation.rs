@@ -253,7 +253,11 @@ impl ValidationEvidence {
                     started_at: Some(r.started_at),
                     completed_at: Some(r.completed_at),
                     conclusion: Conclusion::Success,
-                    artifacts: r.artifacts.iter().map(|a| a.reference()).collect(),
+                    artifacts: r
+                        .artifacts
+                        .iter()
+                        .map(crate::execution::artifact_reference)
+                        .collect(),
                 })
             })
             .collect()
@@ -281,7 +285,7 @@ impl ValidationEvidence {
     pub(crate) fn verify_configured(
         &self,
         names: &[String],
-        workflow: &crate::workflow::Workflow,
+        workflow: &kegari_context::workflow::Workflow,
     ) -> Result<()> {
         let selected = self.selected()?;
         let commands = match &self.current()?.kind {

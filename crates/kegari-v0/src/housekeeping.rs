@@ -17,8 +17,8 @@ use crate::git::Git;
 use crate::isolation::IsolationPlan;
 use crate::platform::OwnerRecord;
 use crate::platform::ServiceShutdown;
-use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
+use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_platform::{
@@ -349,7 +349,7 @@ struct ExecutionRegistration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     workflow_path: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    workflow_embedded: Option<crate::workflow::EmbeddedWorkflow>,
+    workflow_embedded: Option<kegari_context::workflow::EmbeddedWorkflow>,
     workflow_digest: String,
     processes: Vec<ProcessIdentity>,
     retention: Option<RetentionLocation>,
@@ -2229,9 +2229,9 @@ pub fn handover_info() -> Result<HandoverInfo> {
         repository_policy_schema: 1,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
         runtime_build: crate::BUILD_ID.into(),
-        instruction_schema: crate::instructions::ASSEMBLY_SCHEMA,
-        asset_version: crate::instructions::ASSET_VERSION.into(),
-        assets: crate::instructions::verify_assets()?,
+        instruction_schema: kegari_context::instructions::ASSEMBLY_SCHEMA,
+        asset_version: kegari_context::instructions::ASSET_VERSION.into(),
+        assets: kegari_context::instructions::verify_assets()?,
     })
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2467,7 +2467,7 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
         || info.managed_execution_schema != 5
         || info.workflow_source_schema != 1
         || info.repository_policy_schema != 1
-        || info.instruction_schema != crate::instructions::ASSEMBLY_SCHEMA
+        || info.instruction_schema != kegari_context::instructions::ASSEMBLY_SCHEMA
         || info.runtime_build.is_empty()
         || info.runtime_version.is_empty()
         || info.asset_version.is_empty()
@@ -2482,7 +2482,7 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
         crate::evidence::validate_digest(digest)?;
     }
     if info.assets.keys().collect::<BTreeSet<_>>()
-        != crate::instructions::verify_assets()?
+        != kegari_context::instructions::verify_assets()?
             .keys()
             .collect::<BTreeSet<_>>()
     {

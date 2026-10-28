@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
+kegari-context = { path = "../kegari-context" }
 kegari-codex = { path = "../kegari-codex" }
 kegari-control-api = { path = "../kegari-control-api" }
 kegari-secrets = { path = "../kegari-secrets" }
@@ -25,7 +26,6 @@ reqwest = { version = "=0.12.24", default-features = false, features = ["rustls-
 ring = "=0.17.14"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
-serde_yaml = "=0.9.34"
 sha2 = "=0.10.9"
 sha1 = "=0.10.6"
 tokio = { version = "=1.53.1", features = ["full"] }

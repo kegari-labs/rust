@@ -9,6 +9,7 @@ mod process_probe;
 use base64::Engine as _;
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_providers::*;
@@ -30,7 +31,6 @@ use kegari_v0::git::Git;
 use kegari_v0::git::RepositoryId;
 use kegari_v0::providers::*;
 use kegari_v0::reconcile::*;
-use kegari_v0::workflow::Workflow;
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
 use std::{

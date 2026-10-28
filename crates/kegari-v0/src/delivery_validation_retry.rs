@@ -18,10 +18,10 @@ const MAX_VALIDATION_HISTORY_RECEIPTS: usize = 65_536;
 use crate::{
     control::ReceiptPhase,
     decisions::VerifiedRetryGrant,
-    instructions::AgentRole,
     worker::{WorkerAuthority, WorkerContract},
     worker_run::{RunCompletion, RunOutcome},
 };
+use kegari_context::instructions::AgentRole;
 use kegari_types::run::PhaseKey;
 use kegari_types::run::RunReference;
 

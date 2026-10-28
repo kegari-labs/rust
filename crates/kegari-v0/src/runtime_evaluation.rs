@@ -378,7 +378,7 @@ impl RuntimeCoordinator {
             })?;
         if variant.bounds.max_turns > configuration.runtime.max_turns
             || variant.phase != "independent_review"
-            || variant.role != crate::instructions::AgentRole::IndependentReview
+            || variant.role != kegari_context::instructions::AgentRole::IndependentReview
             || !matches!(variant.seed, crate::evaluation::Seed::Fresh)
             || configured.profiles.independent_review.as_ref() != Some(&profile.profile)
             || configuration.connections[&configured.codex_connection].account_id

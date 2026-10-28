@@ -8,13 +8,6 @@ use crate::control::Permit;
 use crate::evaluation::TrialHost;
 use crate::execution::CommandCancellation;
 use crate::execution::VerifiedCheckExecution;
-use crate::instructions;
-use crate::instructions::AgentRole;
-use crate::instructions::AssemblyInput;
-use crate::instructions::PermissionManifest;
-use crate::instructions::ProviderDiscovery;
-use crate::instructions::RepositoryContext;
-use crate::instructions::WorkerNetwork;
 use crate::isolation::IsolationPlan;
 use crate::isolation::ValidatedIsolation;
 use crate::worker::ContractInput;
@@ -27,7 +20,6 @@ use crate::worker::WorkerContract;
 use crate::worker::WorkerExecution;
 use crate::worker::WorkerHost;
 use crate::worker::WorkerServices;
-use crate::workflow::Workflow;
 use kegari_codex::CodexProfile;
 use kegari_codex::PermissionConfiguration;
 use kegari_codex::RequestGate;
@@ -35,6 +27,14 @@ use kegari_codex::RpcClient;
 use kegari_codex::SessionBinding;
 use kegari_codex::SessionState;
 use kegari_config::{Config, ProviderKind, Speed};
+use kegari_context::instructions;
+use kegari_context::instructions::AgentRole;
+use kegari_context::instructions::AssemblyInput;
+use kegari_context::instructions::PermissionManifest;
+use kegari_context::instructions::ProviderDiscovery;
+use kegari_context::instructions::RepositoryContext;
+use kegari_context::instructions::WorkerNetwork;
+use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_platform::BinaryIdentity;
@@ -214,6 +214,7 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
         repository_execution,
     );
     let assembled = instructions::assemble(AssemblyInput {
+        runtime_build: crate::BUILD_ID,
         workflow: &input.workflow,
         role: input.role,
         phase: &input.phase,
@@ -437,13 +438,13 @@ pub(crate) struct ValidationArtifactReader<'a> {
     artifacts: std::collections::BTreeMap<
         String,
         (
-            &'a crate::execution::ArtifactProof,
+            &'a kegari_types::artifact::ArtifactProof,
             &'a crate::execution::RetainedArtifact,
         ),
     >,
 }
 impl ValidationArtifactReader<'_> {
-    pub(crate) fn read(&self, expected: &crate::execution::ArtifactProof) -> Result<Vec<u8>> {
+    pub(crate) fn read(&self, expected: &kegari_types::artifact::ArtifactProof) -> Result<Vec<u8>> {
         let digest = kegari_digest::canonical_digest(1, expected)?;
         let (proof, original) = self
             .artifacts

@@ -9,11 +9,13 @@ mod worker_bundle;
 use kegari_codex::*;
 use kegari_codex::{CodexProfile, SessionBinding, ToolCall};
 use kegari_config::Speed;
+use kegari_context::instructions::*;
+use kegari_context::workflow::Workflow;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    control::*, execution::*, git::Git, instructions::*, isolation::*, providers::ProviderBroker,
-    reconcile::ParentProjection, worker::*, workflow::Workflow,
+    control::*, execution::*, git::Git, isolation::*, providers::ProviderBroker,
+    reconcile::ParentProjection, worker::*,
 };
 use serde_json::{Value, json};
 use std::{
@@ -108,6 +110,7 @@ pub(super) async fn exercise_assignment(
     let work_generation = assignment.authority().work().digest().unwrap();
     let profile = assignment.authority().profile();
     let assembled = assemble(AssemblyInput {
+        runtime_build: kegari_v0::BUILD_ID,
         workflow: &workflow,
         role: assignment.role(),
         phase: assignment.phase(),
@@ -119,7 +122,7 @@ pub(super) async fn exercise_assignment(
         profile,
         cwd: &repository,
         codex_home: auth.path(),
-        codex_version: kegari_v0::instructions::SUPPORTED_CODEX_VERSION,
+        codex_version: kegari_context::instructions::SUPPORTED_CODEX_VERSION,
         repository: Some(RepositoryContext {
             root: repository.clone(),
             revision: revision.commit.clone(),

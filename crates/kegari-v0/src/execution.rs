@@ -3,9 +3,10 @@
 use crate::evidence::{ArtifactReference, CheckKind, WorkIdentity, validate_digest};
 use crate::git::{Git, RepositoryId, Revision};
 use crate::isolation::{self, CommandOutcome, ExecutionRole, ValidatedIsolation};
-use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
+use kegari_context::workflow::Workflow;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_types::artifact::ArtifactProof;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -654,21 +655,10 @@ fn observed_source_snapshot_until(
     Ok(SourceSnapshot { revision, files })
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ArtifactProof {
-    pub path: PathBuf,
-    pub digest: String,
-    pub bytes: u64,
-    pub validation_operation: Uuid,
-    pub candidate_vector_digest: Option<String>,
-}
-impl ArtifactProof {
-    pub fn reference(&self) -> ArtifactReference {
-        ArtifactReference {
-            reference: self.path.to_string_lossy().into_owned(),
-            digest: self.digest.clone(),
-        }
+pub fn artifact_reference(proof: &ArtifactProof) -> ArtifactReference {
+    ArtifactReference {
+        reference: proof.path.to_string_lossy().into_owned(),
+        digest: proof.digest.clone(),
     }
 }
 
@@ -1056,7 +1046,7 @@ pub struct PreparedCheck {
     workflow_digest: String,
     check_name: String,
     kind: CheckKind,
-    resolved: crate::workflow::ResolvedCheck,
+    resolved: kegari_context::workflow::ResolvedCheck,
     outputs: BTreeSet<PathBuf>,
     prior: BTreeMap<PathBuf, Option<ArtifactStamp>>,
     before: SourceSnapshot,

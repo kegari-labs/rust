@@ -229,7 +229,7 @@ impl LocalExecutor<'_> {
             }
             prior.insert(path.clone(), observed);
         }
-        let resolved = crate::workflow::ResolvedCheck {
+        let resolved = kegari_context::workflow::ResolvedCheck {
             cwd: isolation.plan().cwd.clone(),
             argv: requirement.argv.clone(),
             artifact_roots: vec![isolation.plan().scratch.clone()],

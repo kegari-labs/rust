@@ -2,9 +2,10 @@
 //! These capabilities are never reconstructed from serialized worker summaries.
 use super::*;
 use crate::{
-    control::ReceiptPhase, execution::CheckExecutionRecord, instructions::AgentRole,
-    runtime::VerifiedAuthorizedOutcome, worker_run::RunCompletion,
+    control::ReceiptPhase, execution::CheckExecutionRecord, runtime::VerifiedAuthorizedOutcome,
+    worker_run::RunCompletion,
 };
+use kegari_context::instructions::AgentRole;
 use kegari_types::run::PhaseKey;
 use kegari_types::run::RunReference;
 

@@ -1,9 +1,11 @@
 //! Real filesystem/Workflow/assembly components; no runtime permit or native worker.
 use super::*;
-use crate::instructions::{PermissionManifest, ProviderDiscovery, WorkerNetwork};
 use crate::isolation::IsolationPlan;
-use crate::workflow::Workflow;
 use kegari_config::Speed;
+use kegari_context::instructions::PermissionManifest;
+use kegari_context::instructions::ProviderDiscovery;
+use kegari_context::instructions::WorkerNetwork;
+use kegari_context::workflow::Workflow;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -140,6 +142,7 @@ impl Case {
         let fixture = self.fixture.as_ref().unwrap();
         let plan = self.isolation.plan();
         let input = AssemblyInput {
+            runtime_build: crate::BUILD_ID,
             workflow: &self.workflow,
             role: self.variant.role,
             phase: &self.variant.phase,

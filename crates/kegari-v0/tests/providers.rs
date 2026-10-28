@@ -1212,6 +1212,6 @@ fn provider_pull_request_text_bound_stays_aligned_with_instruction_context() {
     assert_eq!(MAX_PULL_REQUEST_TEXT_BYTES, 1_048_576);
     assert_eq!(
         MAX_PULL_REQUEST_TEXT_BYTES,
-        kegari_v0::instructions::MAX_CONTEXT_BYTES
+        kegari_context::instructions::MAX_CONTEXT_BYTES
     );
 }

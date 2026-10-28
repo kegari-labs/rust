@@ -4,8 +4,9 @@
 use super::*;
 use crate::deployment::{ProductionObserver, VerifiedProductionBaseline};
 use crate::evidence::{IntegratedRun, ProductionBaseline, ProductionTargetBaseline};
-use crate::execution::{ArtifactProof, CheckExecutionRecord};
+use crate::execution::CheckExecutionRecord;
 use kegari_config::Config;
+use kegari_types::artifact::ArtifactProof;
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -1335,7 +1336,7 @@ impl DeliveryCoordinator {
             || input.outcome.original_authority().work() != contract.work()
             || input.outcome.original_authority().config_revision()
                 != contract.gate.config_revision()
-            || worker.instructions.role != crate::instructions::AgentRole::Coordination
+            || worker.instructions.role != kegari_context::instructions::AgentRole::Coordination
             || worker.instructions.workflow_digest != contract.gate.workflow_digest()
             || worker.instructions.permissions.repository_code_execution
             || !worker

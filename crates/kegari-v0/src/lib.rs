@@ -29,7 +29,6 @@ pub mod execution;
 pub mod git;
 pub mod housekeeping;
 pub mod inspection;
-pub mod instructions;
 pub mod isolation;
 pub mod observations;
 pub mod platform;
@@ -55,7 +54,6 @@ pub mod scheduler;
 pub mod validation;
 pub mod worker;
 pub mod worker_run;
-pub mod workflow;
 
 pub mod decisions;
 
@@ -67,3 +65,6 @@ pub(crate) mod test_process_probe;
 pub mod evaluation_provider;
 
 pub(crate) mod validation_archive;
+
+#[cfg(test)]
+mod context_integration_tests;

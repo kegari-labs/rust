@@ -2,8 +2,9 @@
 //! only an actual worker's observed reads and current admission enroll a plan.
 use crate::evidence::{CheckKind, validate_digest};
 use crate::execution::{CorrectionExecutionProvenance, ExecutionBinding};
-use crate::workflow::{CheckCommand, CheckService};
 use chrono::{DateTime, Utc};
+use kegari_context::workflow::CheckCommand;
+use kegari_context::workflow::CheckService;
 use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

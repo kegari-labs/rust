@@ -10,12 +10,12 @@ use crate::{
         TransientFailureCode,
     },
     decisions::VerifiedRetryGrant,
-    instructions::AgentRole,
     runtime::VerifiedAuthorizedOutcome,
     worker::{WorkerAuthority, WorkerContract},
     worker_run::{RunCompletion, RunOutcome},
 };
 use kegari_config::Config;
+use kegari_context::instructions::AgentRole;
 use kegari_types::run::PhaseKey;
 use kegari_types::run::RunReference;
 

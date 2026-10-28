@@ -1,6 +1,6 @@
 //! A declared empty fixture substrate, never a runtime admission or source proof.
 use super::*;
-use crate::workflow::Workflow;
+use kegari_context::workflow::Workflow;
 
 pub(super) const WORKFLOW_LEAF: &str = "coordination-workflow.md";
 #[derive(Deserialize)]
@@ -131,8 +131,10 @@ impl CoordinationSubstrate {
         &self.workflow_path
     }
     pub(super) fn verify(&self) -> Result<()> {
-        let file =
-            fixture_capture::read_file(&self.workflow_path, crate::workflow::MAX_WORKFLOW_BYTES)?;
+        let file = fixture_capture::read_file(
+            &self.workflow_path,
+            kegari_context::workflow::MAX_WORKFLOW_BYTES,
+        )?;
         if bytes_digest(file.bytes()) != self.workflow_digest || file.mode() != self.workflow_mode {
             return Err(Error::new(
                 "fixture_changed",

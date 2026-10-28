@@ -1,6 +1,6 @@
 //! Workflow data and filesystem-resolution components only: no process launch,
 //! service readiness, Control admission or native qualification is exercised.
-use kegari_v0::workflow::{
+use kegari_context::workflow::{
     CheckCommand, MAX_CHECK_SERVICES, MAX_SERVICE_ARGUMENT_BYTES, MAX_SERVICE_ARGV,
     MAX_SERVICE_COMMAND_BYTES, MAX_SERVICE_LIFETIME_MS, Workflow,
 };

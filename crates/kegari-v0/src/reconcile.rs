@@ -8,10 +8,10 @@ use crate::{
     evidence::{
         Generation, Publication, VerifiedAcceptance, VerifiedChild, VerifiedParent, WorkIdentity,
     },
-    workflow::Workflow,
 };
 use chrono::{DateTime, Duration, Utc};
 use kegari_config::{Config, Profile, ReleaseMode, Workspace};
+use kegari_context::workflow::Workflow;
 use kegari_digest::canonical_digest;
 use kegari_providers::{
     Comment, Dependency, GithubClient, HistoryEntry, Issue, LinearClient, PullRequest, Repository,

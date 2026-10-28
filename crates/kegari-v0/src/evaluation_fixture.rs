@@ -374,7 +374,7 @@ impl CapturedTree {
 mod tests {
     use super::*;
     use crate::evaluation::{Bounds, Seed, Variant, prepare_captured_fixture, tree_digest};
-    use crate::instructions::AgentRole;
+    use kegari_context::instructions::AgentRole;
     use kegari_digest::canonical_digest;
     use serde_json::json;
 

@@ -1,6 +1,7 @@
 //! Reconciliation through production provider parsers; all HTTP is injected.
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_context::workflow::Workflow;
 use kegari_digest::canonical_digest;
 use kegari_providers::*;
 use kegari_secrets::AttestationKey;
@@ -11,7 +12,6 @@ use kegari_v0::{
     evidence::{self, Publication},
     providers::*,
     reconcile::*,
-    workflow::Workflow,
 };
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};

@@ -3208,7 +3208,7 @@ mod retention_tests {
         let mut work = parent.work.clone().unwrap();
         work.child = Some(*parent.required_children.iter().next().unwrap());
         let (_claim_root, outcome, completion) = crate::runtime_claims::test_fixture_with_claim(
-            crate::instructions::AgentRole::Implementation,
+            kegari_context::instructions::AgentRole::Implementation,
             work.clone(),
             json!({"task":"retention fault fixture"}),
             None,

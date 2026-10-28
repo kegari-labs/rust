@@ -12,9 +12,9 @@ pub fn config_revision(config: &Config) -> Result<String> {
 
 /// Omission selects the installed generic workflow; an explicit selection
 /// always requires that exact resolved file and never falls back.
-pub fn load_workflow(workspace: &Workspace) -> Result<crate::workflow::Workflow> {
+pub fn load_workflow(workspace: &Workspace) -> Result<kegari_context::workflow::Workflow> {
     match workspace.workflow.as_deref() {
-        None => crate::workflow::Workflow::installed_default(),
+        None => kegari_context::workflow::Workflow::installed_default(),
         Some(selected) => {
             let path = Path::new(selected);
             if !path.is_absolute() {
@@ -22,14 +22,16 @@ pub fn load_workflow(workspace: &Workspace) -> Result<crate::workflow::Workflow>
                     "resolve configured workflow path on the host before preflight",
                 ));
             }
-            crate::workflow::Workflow::load(path)
+            kegari_context::workflow::Workflow::load(path)
         }
     }
 }
 
 /// Read-only cross-validation; it never runs commands, hooks or evaluations.
 /// Paths must first have been resolved on the execution host.
-pub fn load_workflows(config: &Config) -> Result<BTreeMap<Uuid, crate::workflow::Workflow>> {
+pub fn load_workflows(
+    config: &Config,
+) -> Result<BTreeMap<Uuid, kegari_context::workflow::Workflow>> {
     let mut loaded = BTreeMap::new();
     for workspace in config.workspaces.values() {
         let workflow = load_workflow(workspace)?;

@@ -206,6 +206,8 @@ pub struct RepositoryContext {
 }
 #[derive(Clone, Debug)]
 pub struct AssemblyInput<'a> {
+    /// Identity of the host application that will execute the assembled work.
+    pub runtime_build: &'a str,
     pub workflow: &'a Workflow,
     pub role: AgentRole,
     pub phase: &'a str,
@@ -571,7 +573,7 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
     let manifest = InstructionManifest {
         schema_version: ASSEMBLY_SCHEMA,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
-        runtime_build: crate::BUILD_ID.into(),
+        runtime_build: input.runtime_build.into(),
         asset_version: ASSET_VERSION.into(),
         assets: selected_assets
             .into_iter()
@@ -705,6 +707,21 @@ fn check_text(text: &str, secrets: &[String]) -> Result<()> {
     }
     Ok(())
 }
+fn validate_digest(value: &str) -> Result<()> {
+    let suffix = value
+        .strip_prefix("sha256:v1:")
+        .or_else(|| value.strip_prefix("sha256:"));
+    if !suffix.is_some_and(|s| {
+        s.len() == 64
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return Err(Error::invalid(
+            "evidence reference requires an explicit SHA-256 digest/schema",
+        ));
+    }
+    Ok(())
+}
 // These are the two host-created reviewer input fields, after assignment
 // binding. Encoded project artifacts are data, never an execution capability.
 // Do not decode arbitrary user strings or relax the ordinary credential guard.
@@ -716,7 +733,7 @@ fn validate_review_artifact_bytes(context: &Value, secrets: &[String]) -> Result
     struct InlineArtifact<'a> {
         #[serde(borrow)]
         proof_digest: &'a str,
-        proof: crate::execution::ArtifactProof,
+        proof: kegari_types::artifact::ArtifactProof,
         #[serde(borrow)]
         encoding: &'a str,
         #[serde(borrow)]
@@ -765,7 +782,7 @@ fn validate_review_artifact_bytes(context: &Value, secrets: &[String]) -> Result
                 return Err(invalid());
             }
             if let Some(vector) = &entry.proof.candidate_vector_digest {
-                crate::evidence::validate_digest(vector).map_err(|_| invalid())?;
+                validate_digest(vector).map_err(|_| invalid())?;
             }
             // Both declared and encoded lengths are bounded before allocation.
             // Binary NUL is allowed only inside the explicit base64 value.
@@ -951,123 +968,22 @@ fn check_context_strings(value: &Value, secrets: &[String]) -> Result<()> {
 }
 
 #[cfg(test)]
-mod validation_review_assembly_tests {
+mod digest_tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
-    fn complete_authenticated_history_uses_existing_public_projection_and_readonly_assembly() {
-        // Production protected archive I/O, original public context projection,
-        // and instruction assembly. Descriptive data creates no worker/exec cap.
-        let temp = tempfile::tempdir().unwrap();
-        let base = temp.path().canonicalize().unwrap();
-        let repository = base.join("repository");
-        let scratch = base.join("scratch");
-        let auth = base.join("auth");
-        for path in [&repository, &scratch, &auth] {
-            std::fs::create_dir(path).unwrap();
+    fn artifact_digest_syntax_matches_backend_compatibility_cases() {
+        let corpus: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/digest-syntax.json")).unwrap();
+        for value in corpus["accepted"].as_array().unwrap() {
+            validate_digest(value.as_str().unwrap()).unwrap();
         }
-        let records = kegari_storage::PrivateDir::create(&base.join("records")).unwrap();
-        let key =
-            kegari_secrets::AttestationKey::new("assembly-fixture".into(), vec![9; 32]).unwrap();
-        let (namespace, evidence, artifacts) =
-            crate::validation_archive::tests::descriptive_fixture();
-        let archive = crate::validation_archive::retain(
-            &records,
-            &key,
-            namespace.clone(),
-            &evidence,
-            |proof| Ok(artifacts[&canonical_digest(1, proof)?].clone()),
-        )
-        .unwrap();
-        let bodies: Vec<_> = archive.evidence().attempts.iter().flat_map(|attempt| &attempt.artifacts)
-            .map(|proof| json!({"proof_digest":canonical_digest(1,proof).unwrap(),"proof":proof,"encoding":"utf8",
-                "data":String::from_utf8(archive.read_artifact(proof).unwrap()).unwrap()})).collect();
-        let original = json!({"delivery_review":{"validation":archive.evidence(),"validation_artifacts":bodies}});
-        let public = crate::delivery::public_model_context(&original).unwrap();
-        assert!(original.pointer("/delivery_review/validation/history/0/original_binding/work/generation/authorization").is_some());
-        assert!(public.pointer("/delivery_review/validation/history/0/original_binding/work/generation/authorization").is_none());
-        assert_eq!(public.pointer("/delivery_review/validation/history/0/original_binding/work/generation/authorization_digest"),
-            original.pointer("/delivery_review/validation/history/0/original_binding/work/generation/authorization"));
-        let profile = Profile {
-            tool: "codex".into(),
-            model: "fixture-model".into(),
-            reasoning: "high".into(),
-            speed: kegari_config::Speed::Standard,
-        };
-        let operation = Uuid::new_v4();
-        let context = json!({"issue":{"description":"Assess every actual attempt"},"parent":{},"children":[],
-            "workspace":{"id":namespace.workspace_id},"scope":{},"dependencies":[],"corrections":[],
-            "evidence":{"delivery_assignment":public},"attempt":1,"phase":"child_review","profile":profile,"operation":{"id":operation}});
-        let workflow = Workflow::parse(
-            "Review the complete supplied history.",
-            base.join("WORKFLOW.md"),
-        )
-        .unwrap();
-        let input = |context| AssemblyInput {
-            workflow: &workflow,
-            role: AgentRole::Review,
-            phase: "child_review",
-            context,
-            workspace_id: namespace.workspace_id,
-            operation_id: operation,
-            work_generation: "work",
-            correction_revision: "correction",
-            profile: &profile,
-            cwd: &repository,
-            codex_home: &auth,
-            codex_version: SUPPORTED_CODEX_VERSION,
-            repository: Some(RepositoryContext {
-                root: repository.clone(),
-                revision: "a".repeat(40),
-                scope_paths: vec![".".into()],
-            }),
-            required_context: &[],
-            project_doc_max_bytes: 32768,
-            permissions: PermissionManifest {
-                read_roots: vec![repository.clone()],
-                resource_write_paths: vec![],
-                source_write_paths: vec![],
-                scratch_roots: vec![scratch.clone()],
-                repository_code_execution: false,
-                enforcement_profile: "fixture-readonly".into(),
-                network: WorkerNetwork::BrokerOnly,
-            },
-            tools: vec![ExposedTool {
-                name: "outcome_submit".into(),
-                capability: ToolCapability::OutcomeSubmit,
-            }],
-            provider_discovery: ProviderDiscovery::Unavailable {
-                reason: "no native model observation in component test".into(),
-            },
-            known_secrets: &[],
-        };
-        let assembled = assemble(input(&context)).unwrap();
-        let structured = assembled
-            .prompt
-            .split("# Admitted work context (structured task data)\n\n")
-            .nth(1)
-            .unwrap()
-            .split("\n\n# Applicable repository-owned guidance")
-            .next()
-            .unwrap();
-        assert_eq!(serde_json::from_str::<Value>(structured).unwrap(), context);
-        assert_eq!(
-            context
-                .pointer("/evidence/delivery_assignment/delivery_review/validation/attempts")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-        assert!(!assembled.manifest.permissions.repository_code_execution);
-        assert!(assembled.manifest.permissions.source_write_paths.is_empty());
-        let mut credential_context = context.clone();
-        credential_context["issue"]["authorization"] = json!("Bearer credential-shaped-value");
-        assert_eq!(
-            assemble(input(&credential_context)).unwrap_err().code,
-            "access_denied"
-        );
+        let expected: Error = serde_json::from_value(corpus["error"].clone()).unwrap();
+        for value in corpus["rejected"].as_array().unwrap() {
+            assert_eq!(
+                validate_digest(value.as_str().unwrap()).unwrap_err(),
+                expected
+            );
+        }
     }
 }

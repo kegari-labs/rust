@@ -2,13 +2,13 @@
 //! completed model protocol is synthetic; no native agent qualification claimed.
 use super::*;
 use crate::{
-    instructions::AgentRole,
     runtime_delivery::worker_fixture::{
         WorkerInput, complete, complete_capped, complete_retried, git, maintain_phase_observations,
         worker,
     },
     test_process_probe as probe,
 };
+use kegari_context::instructions::AgentRole;
 use serde_json::Value;
 use std::fs;
 

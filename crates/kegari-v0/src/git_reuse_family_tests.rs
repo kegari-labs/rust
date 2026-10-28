@@ -28,9 +28,9 @@ use crate::{
     },
     housekeeping::Housekeeping,
     isolation::{ExecutionRole, IsolationPlan, ValidatedIsolation},
-    workflow::Workflow,
 };
 use kegari_config::Config;
+use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_platform::{BinaryIdentity, HostIdentity, ProcessProbe};

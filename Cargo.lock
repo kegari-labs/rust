@@ -910,6 +910,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kegari-context"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "base64 0.22.1",
+ "kegari-config",
+ "kegari-digest",
+ "kegari-types",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "kegari-control-api"
 version = "0.2.0-alpha.10"
 dependencies = [
@@ -1068,6 +1083,7 @@ dependencies = [
  "hex",
  "kegari-codex",
  "kegari-config",
+ "kegari-context",
  "kegari-control-api",
  "kegari-digest",
  "kegari-platform",
@@ -1081,7 +1097,6 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha1",
  "sha2",
  "tempfile",

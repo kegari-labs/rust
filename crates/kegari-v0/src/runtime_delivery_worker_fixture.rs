@@ -10,14 +10,17 @@ use crate::{
         CommandBoundary, DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass,
         ExecutionLimits, OwnedDirectory, StartedCommand,
     },
-    instructions::{
-        AgentRole, AssemblyInput, PermissionManifest, ProviderDiscovery, RepositoryContext,
-        WorkerNetwork, assemble,
-    },
     isolation::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation},
     worker::{ContractInput, WorkerContract, WorkerExecution, operation_tool_definitions},
     worker_run::{RunCompletion, RunOutcome},
 };
+use kegari_context::instructions::AgentRole;
+use kegari_context::instructions::AssemblyInput;
+use kegari_context::instructions::PermissionManifest;
+use kegari_context::instructions::ProviderDiscovery;
+use kegari_context::instructions::RepositoryContext;
+use kegari_context::instructions::WorkerNetwork;
+use kegari_context::instructions::assemble;
 use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use kegari_types::run::PhaseKey;
@@ -111,7 +114,7 @@ pub(crate) struct WorkerInput<'a> {
     pub(crate) binary: &'a Path,
     pub(crate) git: Arc<Git>,
     pub(crate) gate: &'a FreshGate,
-    pub(crate) workflow: &'a crate::workflow::Workflow,
+    pub(crate) workflow: &'a kegari_context::workflow::Workflow,
     pub(crate) revision: &'a crate::git::Revision,
     pub(crate) repository: &'a crate::git::RepositoryId,
     pub(crate) runtime: Uuid,
@@ -201,6 +204,7 @@ pub(crate) fn worker(input: WorkerInput<'_>) -> WorkerFixture {
         context = assignment.bind_context(context, operation).unwrap();
     }
     let assembled = assemble(AssemblyInput {
+        runtime_build: crate::BUILD_ID,
         workflow,
         role,
         phase,
@@ -212,7 +216,7 @@ pub(crate) fn worker(input: WorkerInput<'_>) -> WorkerFixture {
         profile: gate.profile(),
         cwd: &repo,
         codex_home: &auth,
-        codex_version: crate::instructions::SUPPORTED_CODEX_VERSION,
+        codex_version: kegari_context::instructions::SUPPORTED_CODEX_VERSION,
         repository: Some(RepositoryContext {
             root: repo.clone(),
             revision: revision.commit.clone(),

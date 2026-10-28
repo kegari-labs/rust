@@ -1,13 +1,15 @@
 //! Deterministic replay/grader tests only. No model, account, or live provider is invoked.
 use kegari_config::{Profile, Speed};
+use kegari_context::instructions::AgentRole;
+use kegari_context::instructions::AssemblyInput;
+use kegari_context::instructions::PermissionManifest;
+use kegari_context::instructions::ProviderDiscovery;
+use kegari_context::instructions::RepositoryContext;
+use kegari_context::instructions::WorkerNetwork;
+use kegari_context::workflow::Workflow;
 use kegari_digest::bytes_digest;
 use kegari_v0::evaluation::*;
-use kegari_v0::instructions::{
-    AgentRole, AssemblyInput, PermissionManifest, ProviderDiscovery, RepositoryContext,
-    WorkerNetwork,
-};
 use kegari_v0::isolation::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation};
-use kegari_v0::workflow::Workflow;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -157,6 +159,7 @@ fn declared_native_context_file_uses_production_assembly_without_context_waivers
     context["profile"] = json!(profile);
     context["phase"] = json!(variant.phase);
     let input = AssemblyInput {
+        runtime_build: kegari_v0::BUILD_ID,
         workflow: &workflow,
         role: variant.role,
         phase: &variant.phase,
@@ -168,7 +171,7 @@ fn declared_native_context_file_uses_production_assembly_without_context_waivers
         profile: &profile,
         cwd: &fixture.repository,
         codex_home: &fixture.codex_home,
-        codex_version: kegari_v0::instructions::SUPPORTED_CODEX_VERSION,
+        codex_version: kegari_context::instructions::SUPPORTED_CODEX_VERSION,
         repository: Some(RepositoryContext {
             root: fixture.repository.clone(),
             revision: "1234567890123456789012345678901234567890".into(),
@@ -719,6 +722,7 @@ fn assembly_uses_real_workflow_assets_scoped_guidance_and_context() {
     context["profile"] = serde_json::to_value(&profile).unwrap();
     context["phase"] = json!(variant.phase);
     let input = AssemblyInput {
+        runtime_build: kegari_v0::BUILD_ID,
         workflow: &workflow,
         role: variant.role,
         phase: &variant.phase,
@@ -752,9 +756,9 @@ fn assembly_uses_real_workflow_assets_scoped_guidance_and_context() {
             enforcement_profile: isolation.digest().into(),
             network: WorkerNetwork::Denied,
         },
-        tools: vec![kegari_v0::instructions::ExposedTool {
+        tools: vec![kegari_context::instructions::ExposedTool {
             name: "submit".into(),
-            capability: kegari_v0::instructions::ToolCapability::OutcomeSubmit,
+            capability: kegari_context::instructions::ToolCapability::OutcomeSubmit,
         }],
         provider_discovery: ProviderDiscovery::Unavailable {
             reason: "deterministic assembly test; no live provider".into(),

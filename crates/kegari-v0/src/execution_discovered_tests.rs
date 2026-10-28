@@ -635,10 +635,10 @@ fn discovered_services_bind_actual_observations_and_require_original_bundle_admi
     let boundary = Boundary::default();
     let executor = f.executor(&boundary);
     let mut requested = requirement();
-    requested.services = vec![crate::workflow::CheckService {
+    requested.services = vec![kegari_context::workflow::CheckService {
         name: "owned-service".into(),
         argv: vec!["/usr/bin/true".into()],
-        readiness: crate::workflow::ServiceReadiness {
+        readiness: kegari_context::workflow::ServiceReadiness {
             argv: vec!["/usr/bin/true".into(), "ready".into()],
             timeout_ms: 1000,
         },

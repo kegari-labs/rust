@@ -1,10 +1,10 @@
 //! Protected worker proposals are provenance, never passed workflow gates.
 use crate::{
     control::Receipt,
-    instructions::AgentRole,
     reconcile::{FreshGate, GatePurpose},
     worker::{WorkerOutcome, recover_session},
 };
+use kegari_context::instructions::AgentRole;
 use kegari_digest::canonical_digest;
 use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
@@ -156,8 +156,10 @@ pub(crate) fn recover_authorized(
         || outcome.instructions.operation_id != admission.operation_id
         || outcome.instructions.workspace_id != run.workspace
         || outcome.instructions.phase != run.phase.phase
-        || canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &outcome.instructions)?
-            != run.instruction_digest
+        || canonical_digest(
+            kegari_context::instructions::ASSEMBLY_SCHEMA,
+            &outcome.instructions,
+        )? != run.instruction_digest
         || outcome.instruction_digest != run.instruction_digest
         || canonical_digest(1, &outcome.instructions.profile)? != run.profile_digest
         || canonical_digest(1, &contract["instructions"])? != outcome.instruction_digest
@@ -359,13 +361,13 @@ mod tests {
         authority::{ChildScope, Corrections, IssueKey, Responsibility},
         control::ReceiptPhase,
         evidence::{Generation, WorkIdentity},
-        instructions::InstructionManifest,
         reconcile::{ChildProjection, DependencyOutcomes, ParentProjection},
     };
     use chrono::{Duration, Utc};
     use kegari_codex::SessionState;
     use kegari_codex::{CodexProfile, SessionBinding};
     use kegari_config::{Profile, ReleaseMode, Speed};
+    use kegari_context::instructions::InstructionManifest;
     use kegari_digest::bytes_digest;
     use kegari_types::run::PhaseKey;
     use serde_json::json;
@@ -496,7 +498,7 @@ mod tests {
                 "permissions":{"read_roots":[],"source_write_paths":[],"resource_write_paths":[],"scratch_roots":[],"repository_code_execution":false,
                     "enforcement_profile":canonical_digest(1,&isolation).unwrap(),"network":"denied"}})).unwrap();
             let instruction_digest =
-                canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &manifest).unwrap();
+                canonical_digest(kegari_context::instructions::ASSEMBLY_SCHEMA, &manifest).unwrap();
             let mut session = SessionState::new(
                 SessionBinding {
                     schema_version: 1,
@@ -645,7 +647,7 @@ mod tests {
         fixture.outcome.instructions.profile = original.profile().clone();
         fixture.outcome.instructions.workflow_digest = original.workflow_digest().into();
         fixture.outcome.instruction_digest = canonical_digest(
-            crate::instructions::ASSEMBLY_SCHEMA,
+            kegari_context::instructions::ASSEMBLY_SCHEMA,
             &fixture.outcome.instructions,
         )
         .unwrap();
@@ -880,7 +882,7 @@ mod tests {
         manifest.workflow_digest = authority.workflow_digest().into();
         manifest.profile = authority.profile().clone();
         fixture.outcome.instruction_digest =
-            canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, manifest).unwrap();
+            canonical_digest(kegari_context::instructions::ASSEMBLY_SCHEMA, manifest).unwrap();
         let state = &mut fixture.outcome.session;
         state.binding.account_id = account.into();
         state.binding.work_identity = authority.work_key().unwrap();

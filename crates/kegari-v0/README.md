@@ -10,7 +10,7 @@ packages, completion gates and progress reporting. Goal mode is cancelled; work 
 The [`kegari-cli` package](../kegari-cli/README.md) now owns the public CLI, control
 client and `kegari-v0` executable. This package retains the backend library and
 `kegari-v0-evaluation` inspection tool. Both CLI and backend import shared command,
-response, error, snapshot and run data directly from
+response, error, snapshot, run and artifact data directly from
 [`kegari-types`](../kegari-types/README.md); there are no backend compatibility
 reexports. The backend retains current-operator authorization, exit-code policy and domain
 state. Authenticated transport, command validation/classification, operator
@@ -97,10 +97,22 @@ supply no native authority. `RunReference` and `PhaseKey` are shared data in
 `control::run_reference_from_receipt(&Receipt)` and validation stays private to
 Control. See the [final extraction report](validation/CODEX-CLIENT-EXTRACTION.md).
 
+Workflow models, parsing, bounded rendering, instruction assembly, embedded assets
+and sealed resume compatibility now belong to
+[`kegari-context`](../kegari-context/README.md). Import the moved interfaces from
+`kegari_context::{workflow, instructions}`; the old backend modules are removed
+without compatibility reexports. Production assembly supplies `crate::BUILD_ID`
+through `AssemblyInput::runtime_build`, retaining the single application identity.
+Configuration workflow loading and required-check cross-validation remain here,
+alongside execution, protected archives and admission authority.
+`ArtifactProof` is descriptive data in `kegari_types::artifact`; the former
+`ArtifactProof::reference()` method becomes `execution::artifact_reference(&proof)`.
+See the [context extraction report](validation/CONTEXT-EXTRACTION.md).
+
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all thirteen packages:
+test and lint commands cover all fourteen packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
@@ -130,7 +142,7 @@ retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISS
 execution design has been removed. The source now separates `kegari-cli`,
 `kegari-types`, `kegari-config`, `kegari-digest`, `kegari-providers`,
 `kegari-storage`, `kegari-process`, `kegari-platform`, `kegari-secrets`,
-`kegari-control-api`, `kegari-controller` and `kegari-codex`
+`kegari-control-api`, `kegari-controller`, `kegari-codex` and `kegari-context`
 from the remaining backend while retaining the
 same workspace version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a
@@ -218,13 +230,13 @@ provider and execution prerequisites remain blockers.
 Read the [configuration contract](docs/configuration.md),
 [CLI command guide](docs/cli.md), [native host lifecycle](docs/native-host.md),
 and [control transport](docs/transport.md) before installation or activation.
-The [starter WORKFLOW.md](examples/WORKFLOW.md) is optional guidance. Omitting a
+The [starter WORKFLOW.md](../kegari-context/examples/WORKFLOW.md) is optional guidance. Omitting a
 workflow selects the installed generic workflow; selecting an invalid file still
 fails. Agents retrieve project commands, technology boundaries and validation
 needs from accessible repository instructions, documentation, configuration and
 scripts. Empty repositories begin from the authorized task and actual observed
 state. Preserve existing repository guidance; runtime-owned instructions are
-shipped in [instructions/](instructions/) and bound to the installed binary.
+shipped in [instructions/](../kegari-context/instructions/) and bound to the installed binary.
 
 An operator must supply canonical account/workspace/repository identities,
 the runtime's protected executable and credential locations, explicit scoped

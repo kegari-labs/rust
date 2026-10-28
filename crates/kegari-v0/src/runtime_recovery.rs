@@ -8,7 +8,6 @@ use crate::{
     },
     git::{Git, GitLimits, HostGitExecutionScope, VerifiedReusableSource},
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
-    instructions::AgentRole,
     process_records::ProcessJournal,
     runtime_schedule::RunSchedule,
     runtime_workers::{LaunchRequest, SourceSelection},
@@ -18,6 +17,7 @@ use crate::{
     },
 };
 use kegari_config::Config;
+use kegari_context::instructions::AgentRole;
 use kegari_types::run::RunReference;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

@@ -2,13 +2,16 @@
 //!
 //! Live execution requires a host authority lease and the real production broker.
 //! Recorded/replayed observations exercise graders only and cannot qualify behavior.
-use crate::instructions::{self, AgentRole, AssembledInstructions, AssemblyInput};
 use crate::isolation::{ExecutionRole, PathGrant, ValidatedIsolation};
 use chrono::Utc;
 use kegari_codex::SessionState;
 use kegari_codex::ToolBroker;
 use kegari_codex::{CodexProfile, EventKind, PermissionConfiguration, SessionBinding, ToolCall};
 use kegari_config::Profile;
+use kegari_context::instructions;
+use kegari_context::instructions::AgentRole;
+use kegari_context::instructions::AssembledInstructions;
+use kegari_context::instructions::AssemblyInput;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};

@@ -1,5 +1,42 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Context extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. `kegari-context` owns workflow documents,
+bounded instruction assembly, embedded assets and sealed resume compatibility.
+Backend callers supply the existing application build identity. Configuration
+workflow loading, required-check cross-validation, execution, protected artifacts
+and admission remain backend-owned. `ArtifactProof` lives in
+`kegari_types::artifact`; `execution::artifact_reference` retains its backend
+conversion. The old backend workflow/instructions modules are removed without
+compatibility reexports or reverse dependencies. All fourteen packages remain
+at `0.2.0-alpha.10`.
+
+The six-assembly before/after corpus matches exactly with the original build
+identity and canonical paths. All ten relocated assets/starter files and 239
+external lock entries remain unchanged. All **171 focused release tests passed**.
+The complete workspace release suite passed **1,322 tests, zero failed, exactly
+three native ignores**, with normal concurrency. Formatting, strict all-target
+Clippy, contract inventory and its 11 tests passed. One bounded independent review
+found no material issue. The initial missed artifact conversion call was fixed;
+its original compile diagnostic remains recorded. No test failed, and the complete
+suite ran once on the final reviewed candidate.
+
+The optimized arm64 executable passed all five minimal-environment inspections,
+with consistent identity and no runtime-state creation. Independent reconstruction
+confirmed all 390 application hash inputs and the 812 reviewed source/test/build
+inputs. See the [context boundary](../kegari-context/README.md) and
+[verification report](validation/CONTEXT-EXTRACTION.md) for migrations, results,
+retained diagnostics and source/executable identities.
+
+This adds no feature, workflow redesign, toolset support or qualification claim.
+Native/live restrictions, milestone requirements, schemas, asset version `7` and
+the alpha.10 archive remain intact. No installed Codex, live accounts, Keychain,
+native qualification, services, goal resumption, release packaging, commits or
+remote operations were involved.
+
+## Previous final Codex extraction checkpoint
+
 **Goal mode cancelled. Final Codex extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. `kegari-codex` owns the protocol

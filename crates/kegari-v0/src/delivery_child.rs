@@ -1,9 +1,9 @@
 //! Finite delivery actions consume host-authenticated worker claims and sealed
 //! execution/provider capabilities. A model claim never supplies a passed gate.
 use super::*;
-use crate::instructions::AgentRole;
 use crate::runtime::VerifiedAuthorizedOutcome;
 use crate::worker_run::{RunCompletion, RunOutcome};
+use kegari_context::instructions::AgentRole;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

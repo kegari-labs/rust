@@ -79,7 +79,7 @@ impl CheckExecutionRecord {
             || bundle.effect_id.is_nil()
             || bundle.effect_id == self.binding.operation_id
             || bundle.services.is_empty()
-            || bundle.services.len() > crate::workflow::MAX_CHECK_SERVICES
+            || bundle.services.len() > kegari_context::workflow::MAX_CHECK_SERVICES
         {
             return Err(malformed(
                 "check bundle identity or service count is invalid",
@@ -89,7 +89,7 @@ impl CheckExecutionRecord {
         let mut processes = BTreeSet::from([bundle.effect_id, self.binding.operation_id]);
         for service in &bundle.services {
             if service.name.is_empty()
-                || service.name.len() > crate::workflow::MAX_SERVICE_NAME_BYTES
+                || service.name.len() > kegari_context::workflow::MAX_SERVICE_NAME_BYTES
                 || !service.name.as_bytes()[0].is_ascii_alphanumeric()
                 || !service
                     .name
@@ -359,7 +359,7 @@ mod tests {
     fn bundle_service_and_process_inventories_are_unique_and_bounded() {
         let mut record = record(3);
         let first = record.bundle.as_ref().unwrap().services[0].clone();
-        for index in 1..crate::workflow::MAX_CHECK_SERVICES {
+        for index in 1..kegari_context::workflow::MAX_CHECK_SERVICES {
             let mut service = first.clone();
             service.name = format!("service-{index}");
             service.service_process = Uuid::from_u128(100 + 2 * index as u128);

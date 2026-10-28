@@ -799,7 +799,7 @@ fn broker_actual_report_shape_rejects_context_tools_source_and_permission_contra
         .variants
         .iter()
         .position(|variant| {
-            variant.role == kegari_v0::instructions::AgentRole::IndependentReview
+            variant.role == kegari_context::instructions::AgentRole::IndependentReview
                 && variant.phase == "independent_review"
         })
         .unwrap();
@@ -825,11 +825,11 @@ fn broker_actual_report_shape_rejects_context_tools_source_and_permission_contra
         encoded["operation_id"] = json!(uuid::Uuid::from_u128(31));
         encoded["workspace_id"] = json!(uuid::Uuid::from_u128(33));
         encoded["repository_revision"] = json!("1".repeat(40));
-        let manifest: kegari_v0::instructions::InstructionManifest =
+        let manifest: kegari_context::instructions::InstructionManifest =
             serde_json::from_value(encoded).unwrap();
         data.instruction_manifest = Some(serde_json::to_value(&manifest).unwrap());
         let instruction =
-            canonical_digest(kegari_v0::instructions::ASSEMBLY_SCHEMA, &manifest).unwrap();
+            canonical_digest(kegari_context::instructions::ASSEMBLY_SCHEMA, &manifest).unwrap();
         let digest = bytes_digest(b"explicit report-only identity");
         let mut observation = json!({"schema_version":1,"operation":manifest.operation_id,"runtime":uuid::Uuid::from_u128(32),"workspace":manifest.workspace_id,
             "trial_digest":canonical_digest(1,&data.trial).unwrap(),"suite_digest":data.suite_digest,"fixture_digest":data.fixture_digest,"instruction_digest":instruction,

@@ -3,6 +3,7 @@
 This package owns the shared serialized data used by the CLI and backend:
 
 - `api`: `CommandName`, `CommandRequest` and `Envelope`.
+- `artifact`: descriptive `ArtifactProof` records with their existing serialized format.
 - `error`: `Error`, `Result`, error constructors and safe standard trait implementations.
 - `snapshot`: `Segment`, `Node` and `Page`.
 - `run`: `RunReference` and `PhaseKey`, preserving their existing serialized formats.
@@ -21,6 +22,11 @@ policy: replace `kegari_v0::control::RunReference` and
 PhaseKey}`, and replace `RunReference::from_receipt` with
 `kegari_v0::control::run_reference_from_receipt`. Deserializing run data does not
 validate admission or establish receipt lineage.
+Artifact descriptions are imported from `kegari_types::artifact::ArtifactProof`
+instead of `kegari_v0::execution::ArtifactProof`. The former `reference()` method
+is now backend `execution::artifact_reference(&ArtifactProof)`; protected reads,
+artifact capture, archive verification and evidence admission stay backend-owned.
+
 Moving the types does not change their serialized schemas or turn deserialized
 data into verified execution or delivery evidence.
 

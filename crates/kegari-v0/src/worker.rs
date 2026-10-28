@@ -36,17 +36,19 @@ use crate::execution::{
     LocalExecutor, OwnedDirectory, RetainedArtifact, SourceWrite, VerifiedCheckExecution,
 };
 use crate::git::Git;
-use crate::instructions::{
-    AgentRole, AssembledInstructions, ExposedTool, InstructionManifest, ToolCapability,
-};
 use crate::isolation::{ExecutionRole, ValidatedIsolation};
 use crate::providers::{ProviderBroker, ProviderMutation};
 use crate::reconcile::{FreshGate, IndependentReviewGate};
-use crate::workflow::Workflow;
 use chrono::{Duration, Utc};
 use kegari_codex::SessionState;
 use kegari_codex::ToolBroker;
 use kegari_codex::ToolCall;
+use kegari_context::instructions::AgentRole;
+use kegari_context::instructions::AssembledInstructions;
+use kegari_context::instructions::ExposedTool;
+use kegari_context::instructions::InstructionManifest;
+use kegari_context::instructions::ToolCapability;
+use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::RepositoryIdentity;

@@ -1,9 +1,7 @@
 //! Descriptive schema/predicate tests only. These values do not construct a
 //! ValidationPlan, VerifiedCheckExecution, worker outcome or native capability.
 use super::*;
-use crate::execution::{
-    ArtifactProof, DiscoveredCheckProvenance, ExecutionBinding, SourceSnapshot,
-};
+use crate::execution::{DiscoveredCheckProvenance, ExecutionBinding, SourceSnapshot};
 use crate::git::{RepositoryId, Revision};
 use crate::isolation::{CommandObservation, CommandOutcome};
 use crate::validation::{
@@ -11,6 +9,7 @@ use crate::validation::{
 };
 use kegari_digest::bytes_digest;
 use kegari_platform::BinaryIdentity;
+use kegari_types::artifact::ArtifactProof;
 use std::path::PathBuf;
 
 fn at(seconds: i64) -> DateTime<Utc> {
@@ -317,7 +316,7 @@ fn duplicate_substituted_and_fixture_attempts_cannot_form_production_evidence() 
 #[test]
 fn configured_obligation_is_preserved_and_empty_configuration_is_not_a_blocker() {
     let (evidence, _) = evidence();
-    let workflow = crate::workflow::Workflow::parse("---\nchecks:\n  local:\n    behavior:\n      argv: [unfamiliar-tool, verify]\n      result_artifact: result.json\n---\nTask\n", "/descriptive/workflow.md").unwrap();
+    let workflow = kegari_context::workflow::Workflow::parse("---\nchecks:\n  local:\n    behavior:\n      argv: [unfamiliar-tool, verify]\n      result_artifact: result.json\n---\nTask\n", "/descriptive/workflow.md").unwrap();
     evidence.verify_configured(&[], &workflow).unwrap();
     evidence
         .verify_configured(&["behavior".into()], &workflow)
@@ -529,7 +528,7 @@ fn integrated_description_requires_separate_sufficient_exact_vector_review() {
 #[test]
 fn integrated_configuration_is_optional_but_selected_constraints_remain_exact() {
     let (reviewed, _, _, _, _) = integrated_description();
-    let workflow = crate::workflow::Workflow::parse("---\nchecks:\n  integrated:\n    behavior:\n      argv: [unfamiliar-tool, verify]\n      result_artifact: result.json\n---\nTask\n", "/descriptive/workflow.md").unwrap();
+    let workflow = kegari_context::workflow::Workflow::parse("---\nchecks:\n  integrated:\n    behavior:\n      argv: [unfamiliar-tool, verify]\n      result_artifact: result.json\n---\nTask\n", "/descriptive/workflow.md").unwrap();
     reviewed
         .validation
         .verify_configured(&[], &workflow)
@@ -547,10 +546,10 @@ fn integrated_configuration_is_optional_but_selected_constraints_remain_exact() 
     let mut changed = reviewed.validation;
     changed.history[0].requirements[0]
         .services
-        .push(crate::workflow::CheckService {
+        .push(kegari_context::workflow::CheckService {
             name: "extra".into(),
             argv: vec!["service".into()],
-            readiness: crate::workflow::ServiceReadiness {
+            readiness: kegari_context::workflow::ServiceReadiness {
                 argv: vec!["ready".into()],
                 timeout_ms: 1,
             },

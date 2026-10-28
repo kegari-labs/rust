@@ -4,6 +4,7 @@
 mod pinned_git;
 #[path = "support/process_probe.rs"]
 mod process_probe;
+use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_control_api::identity::Principal;
 use kegari_digest::bytes_digest;
@@ -28,7 +29,6 @@ use kegari_v0::git::RepositoryId;
 use kegari_v0::housekeeping::*;
 use kegari_v0::isolation::ExecutionRole;
 use kegari_v0::isolation::IsolationPlan;
-use kegari_v0::workflow::Workflow;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,

@@ -278,12 +278,13 @@ impl PreparedFixture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instructions::{
-        PermissionManifest, ProviderDiscovery, RepositoryContext, WorkerNetwork,
-    };
     use crate::isolation::IsolationPlan;
-    use crate::workflow::Workflow;
     use kegari_config::{Profile, Speed};
+    use kegari_context::instructions::PermissionManifest;
+    use kegari_context::instructions::ProviderDiscovery;
+    use kegari_context::instructions::RepositoryContext;
+    use kegari_context::instructions::WorkerNetwork;
+    use kegari_context::workflow::Workflow;
     use serde_json::json;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -485,6 +486,7 @@ mod tests {
             context["profile"] = json!(profile);
             context["phase"] = json!(variant.phase);
             let assembled = instructions::assemble(AssemblyInput {
+                runtime_build: crate::BUILD_ID,
                 workflow: &workflow,
                 role: variant.role,
                 phase: &variant.phase,

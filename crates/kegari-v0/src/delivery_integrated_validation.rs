@@ -1,9 +1,9 @@
 //! Original integrated execution and separate read-only adequacy. The prepared
 //! type deliberately cannot enter readiness/publication as IntegratedEvidence.
 use super::*;
-use crate::instructions::AgentRole;
 use crate::runtime::VerifiedAuthorizedOutcome;
 use crate::worker_run::RunCompletion;
+use kegari_context::instructions::AgentRole;
 
 #[derive(Clone, Debug)]
 pub struct PreparedIntegratedValidation {

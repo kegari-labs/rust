@@ -14,9 +14,9 @@ use crate::providers::{
     HostedProofExpectation, HostedProofVerifier, ProviderBroker, ProviderMutation,
 };
 use crate::reconcile::FreshGate;
-use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
 use kegari_config::{CiSuite, Repository as RepositoryConfig};
+use kegari_context::workflow::Workflow;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::{GithubClient, RepositoryIdentity};
@@ -565,7 +565,11 @@ impl DeliveryCoordinator {
                 started_at: Some(record.started_at),
                 completed_at: Some(record.completed_at),
                 conclusion: Conclusion::Success,
-                artifacts: record.artifacts.iter().map(|a| a.reference()).collect(),
+                artifacts: record
+                    .artifacts
+                    .iter()
+                    .map(crate::execution::artifact_reference)
+                    .collect(),
             });
         }
         let snapshot = CheckSnapshot {
@@ -674,8 +678,10 @@ impl crate::worker::OutcomeSink for DeliveryCoordinator {
             || outcome.fresh_gate_digest != binding.gate.digest()?
             || outcome.instruction_digest != binding.instruction_digest
             || outcome.tool_contract_digest != binding.tool_digest
-            || canonical_digest(crate::instructions::ASSEMBLY_SCHEMA, &outcome.instructions)?
-                != binding.instruction_digest
+            || canonical_digest(
+                kegari_context::instructions::ASSEMBLY_SCHEMA,
+                &outcome.instructions,
+            )? != binding.instruction_digest
             || outcome.instructions.operation_id != outcome.operation_id
             || outcome.session.binding.operation_id != outcome.operation_id.to_string()
             || outcome.session.binding.instruction_digest != binding.instruction_digest

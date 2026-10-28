@@ -1738,6 +1738,7 @@ fn correction_context_contains_exact_native_text_and_rejects_stale_or_missing_re
     let manifest = &fixture.contract.instructions().manifest;
     let build = |context: &Value| {
         assemble(AssemblyInput {
+            runtime_build: kegari_v0::BUILD_ID,
             workflow: &fixture.input.workflow,
             role: AgentRole::Coordination,
             phase: "work",
