@@ -4,10 +4,10 @@
 mod pinned_git;
 #[path = "support/process_probe.rs"]
 mod process_probe;
+use kegari_types::error::{Error, Result};
 use kegari_v0::{
     control::*,
     digest::bytes_digest,
-    error::{Error, Result},
     evidence::{Generation, WorkIdentity},
     execution::{
         DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass, HookLedger, HookPhase,
@@ -174,7 +174,7 @@ impl kegari_v0::app::ConfigurationControl for NativeReadConfiguration {
     fn execute(
         &self,
         _: Actor,
-        _: kegari_v0::api::CommandRequest,
+        _: kegari_types::api::CommandRequest,
         _: Option<kegari_v0::secrets::Secret>,
         _: Receipt,
     ) -> kegari_v0::app::HostFuture<'_, Receipt> {

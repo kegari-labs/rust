@@ -1,7 +1,7 @@
 //! Explicit read-only maintainer tooling; this entry never starts agent work.
 use clap::{Parser, Subcommand};
+use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    error::{Error, Result},
     evaluation::SuiteManifest,
     evaluation_reports::{ReportArchive, compare},
 };
@@ -49,7 +49,7 @@ fn main() {
     let (exit, output) = match result {
         Ok(data) => (0, serde_json::json!({"ok":true,"data":data,"error":null})),
         Err(error) => (
-            error.exit_code(),
+            kegari_v0::error::exit_code(&error),
             serde_json::json!({"ok":false,"data":null,"error":error}),
         ),
     };

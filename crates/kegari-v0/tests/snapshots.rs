@@ -1,4 +1,5 @@
 use chrono::{Duration, Utc};
+use kegari_types::snapshot::*;
 use kegari_v0::snapshot::*;
 use serde_json::json;
 use uuid::Uuid;

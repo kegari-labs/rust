@@ -5,11 +5,16 @@ This package owns the `kegari-v0` executable and the `cli`, `client` and
 Command arguments, output, local setup, service actions and hidden process
 entrypoints retain their existing behaviour.
 
-The temporary dependency is `kegari-cli` → `kegari-v0`. The backend continues to
-provide configuration, protocol types, storage, credentials, platform operations
-and the runtime. This is not yet a lightweight standalone client. The backend's
-build identity covers both packages' application sources; CLI version output and
-internal metadata identify that same assembled application.
+The CLI imports shared command/response, error and snapshot data directly from
+[`kegari-types`](../kegari-types/README.md). Its temporary dependency on
+`kegari-v0` remains for configuration, validation, command classification, role
+and exit-code decisions, snapshot operations, storage, credentials, platform
+operations and the runtime. The backend also depends on `kegari-types`, without
+reexporting those types. This is not yet a lightweight standalone client.
+
+All packages share workspace version `0.2.0-alpha.10`. CLI version output and
+internal metadata identify the same assembled application; its build identity
+must cover the application sources in all three packages.
 
 From the workspace root:
 

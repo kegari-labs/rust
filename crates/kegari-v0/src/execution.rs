@@ -1,12 +1,12 @@
 //! Local execution tools. Production commands always use the OS boundary;
 //! deterministic boundary fixtures never become qualified validation evidence.
 use crate::digest::{bytes_digest, canonical_digest};
-use crate::error::{Error, Result};
 use crate::evidence::{ArtifactReference, CheckKind, WorkIdentity, validate_digest};
 use crate::git::{Git, RepositoryId, Revision};
 use crate::isolation::{self, CommandOutcome, ExecutionRole, ValidatedIsolation};
 use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

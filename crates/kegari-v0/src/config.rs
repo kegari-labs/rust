@@ -1,7 +1,7 @@
 //! Versioned host configuration. Parsing validates shape, never contacts a provider
 //! or grants authority; connection identities and policies require preflight.
 use crate::digest::canonical_digest;
-use crate::error::{Error, Result};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;

@@ -88,11 +88,11 @@ async fn parent_grant_capture_uses_actual_retry_command_and_current_native_publi
         principal: Some(crate::control::Principal::Unix { uid: 501 }),
         roles: ["recover".into(), "inspect".into(), "lifecycle".into()].into(),
     };
-    let mut request = crate::api::CommandRequest {
+    let mut request = kegari_types::api::CommandRequest {
         api_version: 1,
         request_id: Uuid::new_v4(),
         runtime_id: config.runtime.id,
-        command: crate::api::CommandName::Retry,
+        command: kegari_types::api::CommandName::Retry,
         args: json!({"work":"TEST-100","reason":"The known failed parent task is understood; retry with a bounded budget"}),
         expected_config_revision: Some(config.revision().unwrap()),
         expected_control_generation: Some(

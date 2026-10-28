@@ -501,7 +501,7 @@ fn grading_error_cannot_be_relabelled_passed_or_hidden_by_later_success() {
     let suite = suite();
     let failure = GradingError {
         stage: GradingStage::ScorerLoad,
-        error: kegari_v0::error::Error::new("grader_changed", "scorer was modified")
+        error: kegari_types::error::Error::new("grader_changed", "scorer was modified")
             .detail(json!({"component":"exact retained error details"})),
     };
     let mut blocked = report(&suite, TrialOutcome::Blocked);
@@ -609,7 +609,7 @@ fn grading_error_is_an_independent_assessment_blocker() {
     );
     shape.grading_error = Some(GradingError {
         stage: GradingStage::Grade,
-        error: kegari_v0::error::Error::new(
+        error: kegari_types::error::Error::new(
             "evaluation_fidelity",
             "actual grader rejected changed fixture",
         ),
@@ -632,14 +632,14 @@ fn independent_boundary_diagnostics_survive_archive_and_legacy_absence_stays_unk
         source_revision: "1".repeat(40),
         candidate_digest: bytes_digest(b"data-only source snapshot"),
         check: IndependentBoundaryCheck::Unavailable {
-            error: kegari_v0::error::Error::new("access_denied", "data-only fenced observation"),
+            error: kegari_types::error::Error::new("access_denied", "data-only fenced observation"),
         },
     };
     boundary.validate().unwrap();
     data.independent_boundary = Some(boundary.clone());
     data.grading_error = Some(GradingError {
         stage: GradingStage::ScorerLoad,
-        error: kegari_v0::error::Error::new("record_missing", "data-only missing scorer"),
+        error: kegari_types::error::Error::new("record_missing", "data-only missing scorer"),
     });
     let (_temp, store) = archive(&suite);
     store.started(&data.trial).unwrap();
@@ -709,7 +709,7 @@ fn declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence() 
                 frames: 3,
                 decoded_bytes: 120,
                 wire_bytes: 160,
-                error: kegari_v0::error::Error::new("timeout", "data-only original cutoff"),
+                error: kegari_types::error::Error::new("timeout", "data-only original cutoff"),
             },
         ),
         records: vec![],

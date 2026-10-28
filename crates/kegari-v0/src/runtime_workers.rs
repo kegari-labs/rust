@@ -9,7 +9,6 @@ use crate::{
         RunAdmission, RunReference,
     },
     digest::canonical_digest,
-    error::{Error, Result},
     execution::{
         DirectoryIdentity, ExecutionBinding, ExecutionLimits, HookInvocation, HookLedger,
         HookPhase, JournaledSandboxBoundary, LocalExecutor, OwnedDirectory,
@@ -36,6 +35,7 @@ use crate::{
     },
     workflow::Workflow,
 };
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

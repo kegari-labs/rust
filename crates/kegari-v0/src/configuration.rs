@@ -1,13 +1,11 @@
 //! Serialized host configuration transactions. Verification is read-only;
 //! credential import and durable configuration replacement share the mutation gate.
 use crate::{
-    api::{CommandName, CommandRequest},
     codex::{CodexConnectionMetadata, CodexProfile, PermissionConfiguration},
     config::{Config, Connection, ControlRole, Deployment, ProviderKind, Speed, Workspace},
     connections::{VerifiedCredential, verify_credential},
     control::{Actor, ControlHost, Intent, MutationRequest, Principal, Receipt},
     digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
     isolation::{ExecutionRole, IsolationPlan},
     platform::{HostIdentity, Registration},
     providers::{AccountIdentity, GithubClient, HttpPolicy, HttpTransport},
@@ -15,6 +13,8 @@ use crate::{
     storage::PrivateDir,
     transport::TransportAuthentication,
 };
+use kegari_types::api::{CommandName, CommandRequest};
+use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -390,7 +390,7 @@ impl ConfigManager {
         parent: Option<Receipt>,
     ) -> Result<Receipt> {
         let current = self.snapshot()?;
-        request.validate(current.runtime.id)?;
+        crate::api::validate_command_request(&request, current.runtime.id)?;
         if !matches!(
             request.command,
             CommandName::Setup

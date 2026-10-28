@@ -1,11 +1,11 @@
 //! Production provider algorithms with an injected wire boundary. No request in
 //! these tests contacts Linear, GitHub, or a live agent.
 use base64::Engine;
+use kegari_types::error::{Error, Result};
 use kegari_v0::{
     config::{GithubSelection, LinearSelection, Selector},
     control::{Actor, ControlHost, MutationRequest, ReceiptPhase},
     digest::bytes_digest,
-    error::{Error, Result},
     providers::*,
     storage::PrivateDir,
 };

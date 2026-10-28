@@ -1,8 +1,6 @@
 //! Host-owned evaluation task slots. This table supplies no model authority.
-use crate::{
-    control::Receipt,
-    error::{Error, Result},
-};
+use crate::control::Receipt;
+use kegari_types::error::{Error, Result};
 use std::{collections::BTreeMap, future::Future, sync::Mutex};
 use tokio::{sync::Notify, task::JoinHandle};
 use uuid::Uuid;

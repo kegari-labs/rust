@@ -1,6 +1,6 @@
 //! One monotonic work deadline. Expiry fences work but never drops its owned
 //! future or turns cancellation into joined/process-exit evidence.
-use crate::error::{Error, Result};
+use kegari_types::error::{Error, Result};
 use serde_json::json;
 use std::{future::Future, time::Duration};
 use tokio::time::Instant;

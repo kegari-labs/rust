@@ -8,12 +8,12 @@ mod pinned_git;
 mod process_probe;
 use base64::Engine as _;
 use chrono::{Duration, Utc};
+use kegari_types::error::{Error, Result};
 use kegari_v0::{
     config::Config,
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
     delivery::*,
     digest::canonical_digest,
-    error::{Error, Result},
     evidence::{AttestationKey, Publication},
     evidence::{ReviewAttestation, ReviewKind, RevisionBinding, Verdict, no_change_digest},
     git::{Git, RepositoryId},

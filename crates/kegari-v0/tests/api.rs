@@ -2,11 +2,9 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use kegari_v0::{
-    api::*,
-    control::Actor,
-    error::{Error, Result},
-};
+use kegari_types::api::*;
+use kegari_types::error::{Error, Result};
+use kegari_v0::{api::*, control::Actor};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -370,12 +368,12 @@ fn correction_limits_and_recovery_actions_are_closed() {
         expected_config_revision: None,
         expected_control_generation: None,
     };
-    assert!(command.validate(runtime).is_err());
+    assert!(kegari_v0::api::validate_command_request(&command, runtime).is_err());
     command.command = CommandName::ReleaseRecover;
     command.args = json!({"parent":"p","operation":Uuid::new_v4(),"reason":"inspection","action":"mark_successful"});
-    assert!(command.validate(runtime).is_err());
+    assert!(kegari_v0::api::validate_command_request(&command, runtime).is_err());
     command.args["action"] = Value::String("supersede".into());
-    assert!(command.validate(runtime).is_err());
+    assert!(kegari_v0::api::validate_command_request(&command, runtime).is_err());
 }
 
 #[tokio::test]
@@ -396,7 +394,7 @@ async fn optional_filters_and_get_bodies_cannot_broaden_inspection() {
             expected_config_revision: None,
             expected_control_generation: None,
         };
-        assert!(command.validate(state.runtime_id).is_err());
+        assert!(kegari_v0::api::validate_command_request(&command, state.runtime_id).is_err());
     }
     for (path, bytes) in [
         ("/v1/status", vec![b'x']),
@@ -517,7 +515,7 @@ async fn collection_and_operation_snapshots_retrieve_every_page() {
             )
             .await;
             assert!(result.ok, "{:?}", result.error);
-            let page: kegari_v0::snapshot::Page = serde_json::from_value(result.data).unwrap();
+            let page: kegari_types::snapshot::Page = serde_json::from_value(result.data).unwrap();
             assert!(page.entries.len() <= 100);
             let next = page.next_cursor;
             args["snapshot_id"] = json!(page.snapshot_id);

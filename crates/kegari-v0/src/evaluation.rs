@@ -8,10 +8,10 @@ use crate::codex::{
 };
 use crate::config::Profile;
 use crate::digest::{bytes_digest, canonical_digest};
-use crate::error::{Error, Result};
 use crate::instructions::{self, AgentRole, AssembledInstructions, AssemblyInput};
 use crate::isolation::{ExecutionRole, PathGrant, ValidatedIsolation};
 use chrono::Utc;
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

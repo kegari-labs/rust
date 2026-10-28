@@ -5,8 +5,8 @@
 //! admission permit and the repository integration/release lock before effects.
 
 use crate::digest::{bytes_digest, canonical_digest};
-use crate::error::{Error, Result};
 use crate::evidence::VerifiedAcceptedCandidate;
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};

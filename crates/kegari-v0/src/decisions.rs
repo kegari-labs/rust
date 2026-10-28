@@ -1,7 +1,6 @@
 //! Authenticated human decisions. Provider publications, fresh scope observations
 //! and durable command lineage are required independently of orchestration intent.
 use crate::{
-    api::{CommandName, CommandRequest},
     app::{
         ConfigurationControl, HostFuture, mutation_request, verified_operator, verify_current_actor,
     },
@@ -14,7 +13,6 @@ use crate::{
         ReceiptPhase, RunReference,
     },
     digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
     evidence::{
         AcceptanceActor, AcceptanceRequest, AttestationKey, Publication, Signed,
         VerifiedAcceptance, WorkIdentity, decode_signed_publication, encode_signed_publication,
@@ -31,6 +29,8 @@ use crate::{
     secrets::SecretStore,
 };
 use chrono::{DateTime, Duration, Utc};
+use kegari_types::api::{CommandName, CommandRequest};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -329,7 +329,7 @@ impl AuthorizedDecision {
         verify_current_actor(
             config,
             &self.actor,
-            self.request.command.role(&self.request.args),
+            crate::api::command_role(&self.request.command, &self.request.args),
         )?;
         if config.revision() != Ok(self.config_revision.clone())
             || snapshot.intent.generation != self.control_generation
@@ -542,9 +542,16 @@ impl DecisionManager {
         self.services
             .configuration
             .authority_fences()?
-            .check_actor(&actor, request.command.role(&request.args))?;
-        request.validate(config.runtime.id)?;
-        verify_current_actor(&config, &actor, request.command.role(&request.args))?;
+            .check_actor(
+                &actor,
+                crate::api::command_role(&request.command, &request.args),
+            )?;
+        crate::api::validate_command_request(&request, config.runtime.id)?;
+        verify_current_actor(
+            &config,
+            &actor,
+            crate::api::command_role(&request.command, &request.args),
+        )?;
         let effect = self.lineage(&actor, &request, &parent)?;
         match if request.command == CommandName::Cleanup {
             Err(Error::new(
@@ -558,7 +565,7 @@ impl DecisionManager {
                 return self.services.control.mutate_observed(
                     effect,
                     None,
-                    Some(request.command.role(&request.args)),
+                    Some(crate::api::command_role(&request.command, &request.args)),
                     |_| Err(Error::invalid("replay unexpectedly evaluated gate")),
                     |_| Err(Error::invalid("replay unexpectedly executed effect")),
                 );
@@ -701,13 +708,16 @@ impl DecisionManager {
     }
     fn current_control(&self, ctx: &Context, snapshot: &ControlSnapshot) -> Result<()> {
         let fences = self.services.configuration.authority_fences()?;
-        fences.check_actor(&ctx.actor, ctx.request.command.role(&ctx.request.args))?;
+        fences.check_actor(
+            &ctx.actor,
+            crate::api::command_role(&ctx.request.command, &ctx.request.args),
+        )?;
         fences.check_workspace(ctx.workspace)?;
         let config = self.services.configuration.snapshot()?;
         verify_current_actor(
             &config,
             &ctx.actor,
-            ctx.request.command.role(&ctx.request.args),
+            crate::api::command_role(&ctx.request.command, &ctx.request.args),
         )?;
         if config.revision()? != ctx.config.revision()?
             || snapshot.intent.generation != ctx.generation
@@ -871,7 +881,7 @@ impl DecisionManager {
             self.services.control.clone(),
             request,
             None,
-            Some(ctx.request.command.role(&ctx.request.args).into()),
+            Some(crate::api::command_role(&ctx.request.command, &ctx.request.args).into()),
             ProviderMutation::LinearComment {
                 issue: target,
                 body: body.clone(),
@@ -1476,7 +1486,7 @@ impl DecisionManager {
         let proof = decision.clone();
         let control = self.services.control.clone();
         let request = self.stage_request(ctx, "release_admission")?;
-        let role = ctx.request.command.role(&ctx.request.args).to_owned();
+        let role = crate::api::command_role(&ctx.request.command, &ctx.request.args).to_owned();
         let command = ctx.request.command.clone();
         let authorization = tokio::task::spawn_blocking(move || {
             let gate = |snapshot: &ControlSnapshot| {
@@ -1560,16 +1570,19 @@ impl DecisionManager {
         self.services.control.mutate_observed(
             effect,
             None,
-            Some(request.command.role(&request.args)),
+            Some(crate::api::command_role(&request.command, &request.args)),
             |snapshot| {
                 self.services
                     .configuration
                     .authority_fences()?
-                    .check_actor(actor, request.command.role(&request.args))?;
+                    .check_actor(
+                        actor,
+                        crate::api::command_role(&request.command, &request.args),
+                    )?;
                 verify_current_actor(
                     &self.services.configuration.snapshot()?,
                     actor,
-                    request.command.role(&request.args),
+                    crate::api::command_role(&request.command, &request.args),
                 )?;
                 if !snapshot.background_commands.contains(&parent.operation_id) {
                     return Err(Error::new(

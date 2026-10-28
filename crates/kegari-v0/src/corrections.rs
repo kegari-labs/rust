@@ -5,12 +5,12 @@ use crate::{
     config::{Config, Workspace},
     control::{ControlHost, Receipt, ReceiptPhase},
     digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
     evidence::{AttestationKey, Signed, WorkIdentity, decode_signed_publication},
     providers::Comment,
     reconcile::{ParentProjection, ReconcileRefs, RuntimeProjection},
 };
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;

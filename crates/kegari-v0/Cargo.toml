@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
+kegari-types = { path = "../kegari-types" }
 axum = { version = "=0.8.6", features = ["json", "http1", "tokio"] }
 base64 = "=0.22.1"
 chrono = { version = "=0.4.45", features = ["serde"] }

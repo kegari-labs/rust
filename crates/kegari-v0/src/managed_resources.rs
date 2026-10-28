@@ -3,7 +3,7 @@
 //! through no-follow descriptors; link targets are not traversed or claimed as
 //! observed. The execution domain, not this evidence, supplies access authority.
 use super::PathGrant;
-use crate::error::{Error, Result};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{

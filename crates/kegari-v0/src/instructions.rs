@@ -2,8 +2,8 @@
 //! Assembly does not attest provider discovery or grant sandbox permissions.
 use crate::config::{Profile, validate_write_path};
 use crate::digest::{bytes_digest, canonical_digest};
-use crate::error::{Error, Result};
 use crate::workflow::{Workflow, canonical_roots, contained_path};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

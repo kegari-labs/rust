@@ -26,7 +26,7 @@ fn source(command: Value, kind: &str) -> String {
         json!({"schema_version":1,"checks":checks})
     )
 }
-fn parse(command: Value) -> kegari_v0::error::Result<Workflow> {
+fn parse(command: Value) -> kegari_types::error::Result<Workflow> {
     Workflow::parse(&source(command, "local"), "/configured/WORKFLOW.md")
 }
 

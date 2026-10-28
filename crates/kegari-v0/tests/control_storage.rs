@@ -1,7 +1,7 @@
+use kegari_types::error::Error;
 use kegari_v0::{
     control::*,
     digest::canonical_digest,
-    error::Error,
     storage::{PrivateDir, WriteBoundary},
 };
 use serde_json::json;
@@ -1356,7 +1356,7 @@ fn concurrent_session_capacity_is_counted_and_reserved_in_one_host_transaction()
                             .map(|permit| {
                                 RunReference::from_receipt(&host.operation(permit.operation_id)?)
                             })
-                            .collect::<kegari_v0::error::Result<Vec<_>>>()?
+                            .collect::<kegari_types::error::Result<Vec<_>>>()?
                             .into_iter()
                             .flatten()
                             .filter(|run| run.account == "same-actual-account")

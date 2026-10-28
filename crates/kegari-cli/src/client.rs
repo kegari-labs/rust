@@ -1,11 +1,11 @@
 //! CLI-only pinned control transport. No redirects, proxies, retries or fallback.
 use chrono::Utc;
-use kegari_v0::api::{
-    CommandName, CommandRequest, Envelope, MAX_BODY, MAX_HEADERS, REQUEST_DEADLINE,
-};
-use kegari_v0::error::{Error, Result};
+use kegari_types::api::{CommandName, CommandRequest, Envelope};
+use kegari_types::error::{Error, Result};
+use kegari_types::snapshot::Page;
+use kegari_v0::api::{MAX_BODY, MAX_HEADERS, REQUEST_DEADLINE};
 use kegari_v0::secrets::Secret;
-use kegari_v0::snapshot::{self, Page};
+use kegari_v0::snapshot;
 use kegari_v0::storage::PrivateDir;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
@@ -342,7 +342,9 @@ impl ControlClient {
                 false,
             );
         }
-        if let Err(error) = request.validate(self.target.runtime_id) {
+        if let Err(error) =
+            kegari_v0::api::validate_command_request(request, self.target.runtime_id)
+        {
             return self.failure(request, error, false);
         }
         if let Endpoint::Unix { socket, .. } = &self.target.endpoint
@@ -411,7 +413,7 @@ impl ControlClient {
                 self.origin[url::Position::BeforeHost..url::Position::AfterPort].to_owned()
             }
         };
-        let mutating = request.command.mutating(&request.args);
+        let mutating = kegari_v0::api::command_mutates(&request.command, &request.args);
         let sent = self
             .http
             .post(url)
@@ -586,7 +588,7 @@ impl ControlClient {
     /// Retrieve every immutable page/chunk before returning one complete envelope.
     /// Expiry restarts a read at most once; mutations are never paginated/replayed.
     pub async fn read_complete(&self, request: &CommandRequest) -> Envelope {
-        if request.command.mutating(&request.args) {
+        if kegari_v0::api::command_mutates(&request.command, &request.args) {
             return self.failure(
                 request,
                 Error::new(
@@ -596,7 +598,9 @@ impl ControlClient {
                 false,
             );
         }
-        if let Err(error) = request.validate(self.target.runtime_id) {
+        if let Err(error) =
+            kegari_v0::api::validate_command_request(request, self.target.runtime_id)
+        {
             return self.failure(request, error, false);
         }
         let deadline = Instant::now() + Duration::from_secs(300);
@@ -754,7 +758,7 @@ impl ControlClient {
             };
             request.expected_control_generation = Some(generation);
         }
-        if request.command.mutating(&request.args) {
+        if kegari_v0::api::command_mutates(&request.command, &request.args) {
             self.send(request, secret).await
         } else {
             self.read_complete(request).await

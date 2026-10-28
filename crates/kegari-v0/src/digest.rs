@@ -1,4 +1,4 @@
-use crate::error::{Error, Result};
+use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};

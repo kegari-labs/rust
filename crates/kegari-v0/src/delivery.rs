@@ -3,7 +3,6 @@
 use crate::config::{CiSuite, Repository as RepositoryConfig};
 use crate::control::{Actor, ControlHost, MutationRequest, Permit, Receipt};
 use crate::digest::{bytes_digest, canonical_digest};
-use crate::error::{Error, Result};
 use crate::evidence::{
     self, ArtifactReference, AttestationKey, CheckKind, CheckRequirement, CheckRun, CheckSnapshot,
     Conclusion, Publication, RevisionBinding, Runner, Signed, WorkIdentity,
@@ -18,6 +17,7 @@ use crate::reconcile::FreshGate;
 use crate::storage::PrivateDir;
 use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};

@@ -4,7 +4,6 @@ use crate::{
     config::Config,
     decisions::VerifiedRetryGrant,
     digest::canonical_digest,
-    error::{Error, Result},
     reconcile::{
         AuthorizationGate, DependencyOutcomes, GatePurpose, ParentDelivery, RuntimeProjection,
     },
@@ -13,6 +12,7 @@ use crate::{
     worker::WorkerAuthority,
 };
 use chrono::{Duration, Utc};
+use kegari_types::error::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 

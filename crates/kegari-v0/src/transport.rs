@@ -5,7 +5,6 @@ use crate::{
     config::{ControlConfig, ControlRole, HttpsConfig, Operator, is_tailscale_address},
     control::{Actor, Principal},
     digest::bytes_digest,
-    error::{Error, Result},
     storage::PrivateDir,
 };
 use chrono::{DateTime, Utc};
@@ -14,6 +13,7 @@ use hyper_util::{
     rt::{TokioIo, TokioTimer},
     service::TowerToHyperService,
 };
+use kegari_types::error::{Error, Result};
 use rustls::{
     RootCertStore, ServerConfig,
     client::{WebPkiServerVerifier, danger::ServerCertVerifier},

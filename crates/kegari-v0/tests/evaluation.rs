@@ -920,7 +920,7 @@ async fn finite_suite_deadline_records_interruption_and_all_remaining_skips() {
     let mut calls = 0;
     let reports = run_suite(&suite, &store, |_, _, _| {
         calls += 1;
-        async { std::future::pending::<kegari_v0::error::Result<TrialReport>>().await }
+        async { std::future::pending::<kegari_types::error::Result<TrialReport>>().await }
     })
     .await
     .unwrap();
@@ -1012,7 +1012,7 @@ async fn finite_trial_deadline_cancels_hung_preparation_before_next_trial() {
             async move {
                 if first {
                     let _guard = Cancelled(cancelled);
-                    std::future::pending::<kegari_v0::error::Result<TrialReport>>().await
+                    std::future::pending::<kegari_types::error::Result<TrialReport>>().await
                 } else {
                     assert!(cancelled.load(Ordering::SeqCst));
                     TrialReport::unrun(
@@ -1180,7 +1180,7 @@ async fn every_executor_failure_is_retained_without_retry_or_synthetic_pass() {
     let reports = run_suite(&suite, &store, |_, _, _| {
         count += 1;
         async {
-            Err(kegari_v0::error::Error::new(
+            Err(kegari_types::error::Error::new(
                 "fixture_failure",
                 "deterministic failure",
             ))

@@ -2,10 +2,10 @@
 //! the scheduler and workers only receive revocable operation permits.
 use crate::{
     digest::canonical_digest,
-    error::{Error, Result},
     storage::{ExclusiveLock, PrivateDir},
 };
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{

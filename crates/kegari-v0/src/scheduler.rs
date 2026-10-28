@@ -1,7 +1,7 @@
 //! Pure scheduling projection. Admission and durable run recording are injected
 //! host transactions; polling and profile changes are deliberately not triggers.
-use crate::error::{Error, Result};
 use chrono::{DateTime, Duration, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;

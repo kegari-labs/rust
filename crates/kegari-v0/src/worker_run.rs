@@ -8,7 +8,6 @@ use crate::{
     config::{Config, ProviderKind, Speed},
     control::{Actor, ControlHost, InFlightEffect, MutationRequest, Permit},
     digest::canonical_digest,
-    error::{Error, Result},
     evaluation::TrialHost,
     execution::{CommandCancellation, VerifiedCheckExecution},
     instructions::{
@@ -23,6 +22,7 @@ use crate::{
     },
     workflow::Workflow,
 };
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

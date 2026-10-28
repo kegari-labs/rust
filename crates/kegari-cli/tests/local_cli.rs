@@ -3,9 +3,9 @@ use kegari_cli::{
     client::{Endpoint, Target},
     local_cli::*,
 };
+use kegari_types::error::Result;
 use kegari_v0::{
     config::{Config, ProviderKind},
-    error::Result,
     platform::*,
     storage::PrivateDir,
 };

@@ -5,12 +5,12 @@ use crate::{
     authority::IssueKey,
     config::Config,
     control::ControlSnapshot,
-    error::{Error, Result},
     evidence::WorkIdentity,
     reconcile::{HistoryRow, Overview, OverviewInputs, RuntimeProjection},
     release::ReleaseAttempt,
 };
 use chrono::{DateTime, Duration, Utc};
+use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;

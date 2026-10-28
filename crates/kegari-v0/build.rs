@@ -20,14 +20,15 @@ fn collect(root: &Path, files: &mut Vec<PathBuf>) {
 fn main() {
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest root"));
     let mut files = Vec::new();
-    // The executable lives in the CLI package, but all process roles retain one
-    // application identity. Track its sources without a reverse Cargo dependency.
+    // All process roles retain one application identity. Track extracted packages
+    // as build inputs without introducing a reverse Cargo dependency.
     for name in [
         "src",
         "instructions",
         "protocol",
         "examples",
         "../kegari-cli/src",
+        "../kegari-types/src",
     ] {
         println!("cargo:rerun-if-changed={name}");
         collect(&root.join(name), &mut files);
@@ -36,6 +37,7 @@ fn main() {
         "build.rs",
         "Cargo.toml",
         "../kegari-cli/Cargo.toml",
+        "../kegari-types/Cargo.toml",
         "../../Cargo.toml",
         "../../Cargo.lock",
         "../../rust-toolchain.toml",

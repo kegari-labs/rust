@@ -9,8 +9,12 @@ packages, completion gates and progress reporting. Goal mode is cancelled; work 
 
 The [`kegari-cli` package](../kegari-cli/README.md) now owns the public CLI, control
 client and `kegari-v0` executable. This package retains the backend library and
-`kegari-v0-evaluation` inspection tool. The temporary dependency points from CLI
-to backend only; application arguments and hidden process modes remain unchanged.
+`kegari-v0-evaluation` inspection tool. Both CLI and backend import shared command,
+response, error and snapshot data directly from
+[`kegari-types`](../kegari-types/README.md); there are no backend compatibility
+reexports. The backend retains validation, command classification, role and
+exit-code decisions, and snapshot operations. The temporary CLI-to-backend
+dependency remains; application arguments and hidden process modes are unchanged.
 
 ## Build and deterministic checks
 
@@ -41,9 +45,9 @@ The archived stabilization checkpoint is `0.2.0-alpha.10`, built before CLI
 extraction. Its final release suite passed 1,260 tests, with
 three native qualification tests ignored. See the artifact links, checksums and
 retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md). The Cargo-specific
-execution design has been removed. The source now separates `kegari-cli` from
-the remaining backend while retaining the same workspace version and executable
-name. Its build identity changes with the refactor; the archived alpha.10 bytes
+execution design has been removed. The source now separates `kegari-cli` and
+`kegari-types` from the remaining backend while retaining the same workspace
+version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a
 new prerelease, and native execution remains blocked.
 Repository commands still refuse missing profiles (`process_tree_unverified`) or

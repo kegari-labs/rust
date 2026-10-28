@@ -9,7 +9,6 @@ use crate::{
         ReceiptPhase, Reconciliation,
     },
     digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
     evidence::{AttestationKey, Publication, decode_signed_publication, encode_signed_publication},
     observations::ObservationCache,
     providers::{LinearClient, ProviderBroker, ProviderMutation},
@@ -17,6 +16,7 @@ use crate::{
     secrets::SecretStore,
 };
 use chrono::{Duration, Utc};
+use kegari_types::error::{Error, Result};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 use uuid::Uuid;

@@ -49,10 +49,8 @@ mod pinned_git {
 mod process_probe {
     // Deterministic boot identity for owned process fixtures. This deliberately
     // does not qualify native host boot identity or detached-process containment.
-    use crate::{
-        error::{Error, Result},
-        platform::{ProcessIdentity, ProcessObservation, ProcessProbe},
-    };
+    use crate::platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
+    use kegari_types::error::{Error, Result};
     use std::path::{Path, PathBuf};
     use uuid::Uuid;
     pub struct FixtureBootProbe {
@@ -148,7 +146,6 @@ use crate::{
     config::Config,
     control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
     digest::canonical_digest,
-    error::{Error, Result},
     evidence::{AttestationKey, Publication},
     evidence::{ReviewAttestation, ReviewKind, RevisionBinding, Verdict, no_change_digest},
     git::{Git, RepositoryId},
@@ -158,6 +155,7 @@ use crate::{
     workflow::Workflow,
 };
 use chrono::{Duration, Utc};
+use kegari_types::error::{Error, Result};
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
 use std::{

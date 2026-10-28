@@ -1,7 +1,7 @@
 //! Native control-host composition. Construction requires an actual runtime
 //! backend; no permissive scheduler, credential bootstrap or client fallback.
 use crate::{
-    api::{ApiState, CommandRequest},
+    api::ApiState,
     app::{
         ConfigurationControl, HostDispatcher, HostFuture, HostServices, RuntimeInspection,
         WorkflowControl,
@@ -9,7 +9,6 @@ use crate::{
     configuration::{ConfigManager, ConfigurationInputs},
     control::{Actor, ControlHost, Receipt},
     digest::canonical_digest,
-    error::{Error, Result},
     evidence::AttestationKey,
     housekeeping::{Housekeeping, LogEvent, LogSink, Severity},
     observations::{ObservationCache, ReferenceStore},
@@ -22,6 +21,8 @@ use crate::{
     },
     transport::{self, ServerHandle, TailscaleClient, TransportAuthentication},
 };
+use kegari_types::api::CommandRequest;
+use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,

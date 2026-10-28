@@ -4,7 +4,6 @@ use crate::{
     config::Config,
     control::{ControlSnapshot, Intent, Lease, ReceiptPhase},
     digest::canonical_digest,
-    error::{Error, Result},
     preparation::AuthorizationPublisher,
     process_records::{ProcessJournal, ProcessRecovery},
     runtime::{
@@ -18,6 +17,7 @@ use crate::{
     worker::WorkerHost,
 };
 use chrono::Utc;
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

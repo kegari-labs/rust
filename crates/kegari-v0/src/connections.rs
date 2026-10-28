@@ -3,7 +3,6 @@
 use crate::{
     config::{Config, Connection, ProviderKind},
     digest::canonical_digest,
-    error::{Error, Result},
     providers::{
         AccountIdentity, GithubClient, HttpPolicy, HttpTransport, LinearClient,
         verify_connection_identity,
@@ -11,6 +10,7 @@ use crate::{
     reconcile::WorkspaceClients,
     secrets::{Secret, SecretStore, resolve_reference},
 };
+use kegari_types::error::{Error, Result};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,

@@ -3,10 +3,10 @@
 use crate::{
     config::RuntimeConfig,
     control::{Receipt, ReceiptPhase, RunReference},
-    error::{Error, Result},
     scheduler::{PhaseKey, Trigger, retry_at},
 };
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;

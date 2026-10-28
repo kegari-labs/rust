@@ -2,12 +2,17 @@
 
 | Package | Responsibility |
 | --- | --- |
+| [`kegari-types`](crates/kegari-types/README.md) | Shared command, response, error and snapshot data types. |
 | [`kegari-cli`](crates/kegari-cli/README.md) | Public CLI, control client and the `kegari-v0` executable. |
 | [`kegari-v0`](crates/kegari-v0/README.md) | Remaining backend library and the `kegari-v0-evaluation` inspection executable. |
 
-The CLI temporarily depends on the backend; the backend does not depend on the
-CLI. Both packages use the workspace version. This extraction preserves the
-existing executable, process roles and configuration/protocol schemas.
+Both CLI and backend depend directly on `kegari-types`. The CLI also temporarily
+depends on the backend; the backend does not depend on the CLI. Shared types are
+imported from `kegari_types`, without backend compatibility reexports. Validation,
+authorization, exit-code mapping and snapshot operations remain in the backend.
+All packages use workspace version `0.2.0-alpha.10`; the executable name, process
+roles and serialized schemas remain unchanged. This extraction creates no new
+prerelease or qualification claim.
 
 From the workspace root, using the pinned toolchain:
 

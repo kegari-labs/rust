@@ -1044,10 +1044,10 @@ async fn authorize_link(
     accepted_at: chrono::DateTime<Utc>,
 ) {
     use crate::{
-        api::{CommandName, CommandRequest},
         control::{Actor, Principal},
         decisions::{DecisionDependencies, DecisionManager},
     };
+    use kegari_types::api::{CommandName, CommandRequest};
     let runtime = &delivery.runtime;
     let services = &runtime.services;
     let manager = DecisionManager::new(DecisionDependencies {

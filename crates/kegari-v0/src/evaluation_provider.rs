@@ -4,10 +4,10 @@ use crate::{
     config::{Config, EvaluationBinding},
     configuration::{ConfigurationInputs, NativeConfigurationInputs},
     digest::canonical_digest,
-    error::{Error, Result},
     git::Revision,
     providers::{HttpRequest, HttpResponse, HttpTransport, Method},
 };
+use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,

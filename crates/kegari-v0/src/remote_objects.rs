@@ -4,7 +4,6 @@ use crate::{
     control::{Actor, ControlHost, MutationRequest, Permit, ReceiptPhase},
     delivery::{DeliveryAdmission, RepositoryContract},
     digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
     evidence::{AttestationKey, Signed},
     git::{Git, GitLimits, RepositoryId, Revision},
     process_records::ProcessJournal,
@@ -12,6 +11,7 @@ use crate::{
     storage::PrivateDir,
     worker::{ExecutionRegistry, WorkerAuthority},
 };
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::Read;

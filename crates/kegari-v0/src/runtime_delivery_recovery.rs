@@ -2,12 +2,12 @@
 //! prepared before control serialization; durable records never recreate permits.
 use super::*;
 use crate::{
-    api::CommandName,
     control::Receipt,
     decisions::{AuthorizedDecision, AuthorizedOperationRecovery},
     deployment::VerifiedRecoveryBaseline,
     digest::canonical_digest,
 };
+use kegari_types::api::CommandName;
 
 impl RuntimeDelivery {
     fn recovery_record(
@@ -1153,7 +1153,7 @@ mod tests {
             housekeeping: services.housekeeping.clone(),
             inputs: services.inputs.clone(),
         });
-        let mut request = crate::api::CommandRequest {
+        let mut request = kegari_types::api::CommandRequest {
             api_version: 1,
             request_id: Uuid::new_v4(),
             runtime_id: plan.runtime_id,
@@ -1259,7 +1259,7 @@ mod tests {
             principal: Some(Principal::Unix { uid: 501 }),
             roles: ["recover".into(), "inspect".into(), "lifecycle".into()].into(),
         };
-        let mut request = crate::api::CommandRequest {
+        let mut request = kegari_types::api::CommandRequest {
             api_version: 1,
             request_id: Uuid::new_v4(),
             runtime_id: runtime.configuration.snapshot()?.runtime.id,

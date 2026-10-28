@@ -3,9 +3,9 @@
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
 use chrono::Utc;
+use kegari_types::error::Result;
 use kegari_v0::{
-    config::Config, digest::canonical_digest, error::Result, evidence::AttestationKey,
-    providers::*, reconcile::*,
+    config::Config, digest::canonical_digest, evidence::AttestationKey, providers::*, reconcile::*,
 };
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
@@ -156,7 +156,7 @@ impl HttpTransport for Wire {
                         f.comments.entry(issue).or_default().push(json!({"id":id(977),"body":"Correct the exact expected output before approval","createdAt":Utc::now(),"updatedAt":Utc::now(),"editedAt":null,"url":"https://linear.invalid/comment/977","user":{"id":id(5)},"onBehalfOf":null,"botActor":null,"issue":{"id":issue}}));
                     }
                     if f.comment_response_lost {
-                        return Err(kegari_v0::error::Error::new(
+                        return Err(kegari_types::error::Error::new(
                             "timeout",
                             "fixture loses the acknowledgement after storing the comment",
                         ));
@@ -288,15 +288,15 @@ impl HttpTransport for Wire {
         })
     }
 }
+use kegari_types::api::{CommandName, CommandRequest};
+use kegari_types::error::Error;
 use kegari_v0::{
-    api::{CommandName, CommandRequest},
     app::{ConfigurationControl, HostFuture, mutation_request},
     control::{
         Actor, ControlHost, MutationRequest, Principal, Receipt, ReceiptPhase, ReceiptStore,
         RunReference,
     },
     decisions::*,
-    error::Error,
     evidence::{VerifiedAcceptance, WorkIdentity, encode_signed_publication},
     housekeeping::Housekeeping,
     observations::ObservationCache,
@@ -561,7 +561,11 @@ impl DecisionFixture {
         mutation.payload = json!({"arguments":request.args,"secret_digest":null});
         let (receipt, fresh) = self
             .control
-            .queue_command(mutation, command.role(&request.args), || Ok(()))
+            .queue_command(
+                mutation,
+                kegari_v0::api::command_role(&command, &request.args),
+                || Ok(()),
+            )
             .unwrap();
         assert!(fresh);
         request.request_id = kegari_v0::app::command_effect_id(receipt.request_id);

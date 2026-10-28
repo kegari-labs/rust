@@ -1,6 +1,6 @@
 //! Strict repository workflow parsing and deterministic bounded rendering.
 use crate::digest::bytes_digest;
-use crate::error::{Error, Result};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};

@@ -1,7 +1,7 @@
 //! Pinned stdio app-server protocol. Provider messages are data, never authority.
 use crate::digest::canonical_digest;
-use crate::error::{Error, Result};
 use crate::isolation::ValidatedIsolation;
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

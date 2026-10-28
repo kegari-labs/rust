@@ -1,11 +1,9 @@
 //! Immutable, actor-bound, in-memory control snapshots. This is pagination state,
 //! not authoritative work persistence. Clients verify completeness before output.
-use crate::{
-    digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
-};
+use crate::digest::{bytes_digest, canonical_digest};
 use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
+use kegari_types::error::{Error, Result};
+use kegari_types::snapshot::{Node, Page, Segment};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -13,56 +11,13 @@ use uuid::Uuid;
 const CHUNK_BYTES: usize = 64 * 1024;
 const PAGE_BYTES: usize = 7 * 1024 * 1024;
 const PAGE_ENTRIES: usize = 100;
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
-pub enum Segment {
-    Field(String),
-    Index(usize),
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Node {
-    Object {
-        path: Vec<Segment>,
-        keys: Vec<String>,
-    },
-    Array {
-        path: Vec<Segment>,
-        length: usize,
-    },
-    Scalar {
-        path: Vec<Segment>,
-        value: Value,
-    },
-    Text {
-        path: Vec<Segment>,
-        offset: usize,
-        total_bytes: usize,
-        complete_digest: String,
-        text: String,
-    },
-}
-impl Node {
-    fn path(&self) -> &[Segment] {
-        match self {
-            Self::Object { path, .. }
-            | Self::Array { path, .. }
-            | Self::Scalar { path, .. }
-            | Self::Text { path, .. } => path,
-        }
+fn node_path(node: &Node) -> &[Segment] {
+    match node {
+        Node::Object { path, .. }
+        | Node::Array { path, .. }
+        | Node::Scalar { path, .. }
+        | Node::Text { path, .. } => path,
     }
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Page {
-    pub snapshot_id: Uuid,
-    pub observed_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub projection_digest: String,
-    pub cursor: Option<Uuid>,
-    pub next_cursor: Option<Uuid>,
-    pub total_entries: usize,
-    pub entries: Vec<Node>,
 }
 #[derive(Debug, Clone)]
 struct Snapshot {
@@ -302,7 +257,7 @@ pub fn assemble(pages: &[Page]) -> Result<Value> {
             return Err(error());
         }
         let node = entries.get(*index).ok_or_else(error)?;
-        if node.path() != path.as_slice() {
+        if node_path(node) != path.as_slice() {
             return Err(error());
         }
         *index += 1;

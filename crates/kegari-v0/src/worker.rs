@@ -25,7 +25,6 @@ pub use validation::ValidationHistorySeal;
 use crate::codex::{SessionState, ToolBroker, ToolCall};
 use crate::control::{Actor, ControlHost, Lease, MutationRequest, Permit};
 use crate::digest::{bytes_digest, canonical_digest};
-use crate::error::{Error, Result};
 use crate::evaluation::{
     AgentSummary, BoundToolContracts, CheckStatus, ObservedArtifact, ObservedCheck, ObservedFacts,
     TrialHost,
@@ -45,6 +44,7 @@ use crate::reconcile::{FreshGate, IndependentReviewGate};
 use crate::storage::{ExclusiveLock, PrivateDir};
 use crate::workflow::Workflow;
 use chrono::{Duration, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};

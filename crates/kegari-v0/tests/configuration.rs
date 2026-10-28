@@ -1,12 +1,12 @@
 //! Real private storage/control serialization with labeled provider/Keychain fixtures.
 //! No native Keychain, account login, provider network or agent process is invoked.
+use kegari_types::api::{CommandName, CommandRequest};
+use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    api::{CommandName, CommandRequest},
     codex::CodexConnectionMetadata,
     config::{Config, Connection},
     configuration::{ConfigManager, ConfigurationInputs},
     control::{Actor, ControlHost, Intent, Lifecycle, MutationRequest, Principal, ReceiptPhase},
-    error::{Error, Result},
     platform::{
         BinaryIdentity, HostIdentity, ProcessIdentity, ProcessObservation, ProcessProbe,
         Registration,

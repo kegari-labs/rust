@@ -1,7 +1,7 @@
 //! One bounded capture supplies both fixture provenance and reset contents.
 use super::{FileSnapshot, MAX_EVIDENCE_BYTES, MAX_FILES, file_mode, relative};
 use crate::digest::bytes_digest;
-use crate::error::{Error, Result};
+use kegari_types::error::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};

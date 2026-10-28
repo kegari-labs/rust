@@ -2,11 +2,11 @@
 //! is mandatory: no successful empty recovery or permissive scheduler is supplied.
 use crate::{
     control::{ControlHost, ControlSnapshot, Intent, Lease},
-    error::{Error, Result},
     orchestration::RunningOrchestration,
     platform::{BinaryIdentity, HostIdentity, Registration},
 };
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::Serialize;
 use std::{
     collections::BTreeSet,

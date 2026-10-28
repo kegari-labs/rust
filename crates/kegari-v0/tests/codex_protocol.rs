@@ -14,7 +14,7 @@ struct ObservingBroker {
     checkpoint: Option<Vec<u8>>,
 }
 impl ToolBroker for ObservingBroker {
-    fn observe_session(&mut self, state: &SessionState) -> kegari_v0::error::Result<()> {
+    fn observe_session(&mut self, state: &SessionState) -> kegari_types::error::Result<()> {
         self.turn = state.turn_id.clone();
         self.intervention = state.intervention.is_some();
         self.checkpoint = Some(serde_json::to_vec(state).unwrap());
@@ -24,7 +24,7 @@ impl ToolBroker for ObservingBroker {
         &'a mut self,
         call: &'a ToolCall,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = kegari_v0::error::Result<Value>> + Send + 'a>,
+        Box<dyn std::future::Future<Output = kegari_types::error::Result<Value>> + Send + 'a>,
     > {
         Box::pin(async move {
             assert_eq!(self.turn.as_deref(), Some(call.turn_id.as_str()));
@@ -963,14 +963,14 @@ impl RequestGate for FixtureRequestGate {
         id: u64,
         method: &str,
         _: &Value,
-        transmit: &mut dyn FnMut() -> kegari_v0::error::Result<()>,
-    ) -> kegari_v0::error::Result<()> {
+        transmit: &mut dyn FnMut() -> kegari_types::error::Result<()>,
+    ) -> kegari_types::error::Result<()> {
         self.observations
             .lock()
             .unwrap()
             .push(format!("dispatch:{id}:{method}"));
         if self.deny.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(kegari_v0::error::Error::new(
+            return Err(kegari_types::error::Error::new(
                 "access_denied",
                 "fixture already fenced",
             ));
@@ -981,15 +981,15 @@ impl RequestGate for FixtureRequestGate {
         &self,
         id: u64,
         method: &str,
-        result: &kegari_v0::error::Result<Value>,
-    ) -> kegari_v0::error::Result<()> {
+        result: &kegari_types::error::Result<Value>,
+    ) -> kegari_types::error::Result<()> {
         self.observations
             .lock()
             .unwrap()
             .push(format!("observed:{id}:{method}:{}", result.is_ok()));
         Ok(())
     }
-    fn uncertain(&self, id: u64, method: &str) -> kegari_v0::error::Result<()> {
+    fn uncertain(&self, id: u64, method: &str) -> kegari_types::error::Result<()> {
         self.observations
             .lock()
             .unwrap()

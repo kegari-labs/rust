@@ -1,19 +1,20 @@
 //! One authenticated command dispatcher for both transports. Inspection consumes
 //! a coherent provider projection and sealed evidence, never an agent summary.
 use crate::{
-    api::{CommandName, CommandRequest, DispatchResult, Dispatcher},
+    api::{DispatchResult, Dispatcher},
     authority::IssueKey,
     config::{Config, ControlRole, Operator},
     control::{
         Actor, ControlHost, ControlSnapshot, Intent, Lifecycle, MutationRequest, Principal,
         Receipt, ReceiptPhase,
     },
-    error::{Error, Result},
     reconcile::{Activity, DependencyOutcomes, HistoryRow, ParentDelivery, RuntimeProjection},
     secrets::Secret,
     snapshot::Snapshots,
 };
 use chrono::{Duration, Utc};
+use kegari_types::api::{CommandName, CommandRequest};
+use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -208,7 +209,7 @@ impl HostDispatcher {
         data: Value,
     ) -> Result<DispatchResult> {
         if data.get("snapshot_id").is_some() {
-            let page: crate::snapshot::Page =
+            let page: kegari_types::snapshot::Page =
                 serde_json::from_value(data.clone()).map_err(|_| {
                     Error::new("snapshot_invalid", "inspection page metadata is invalid")
                 })?;
@@ -304,13 +305,20 @@ impl HostDispatcher {
         request: CommandRequest,
         secret: Option<Secret>,
     ) -> Result<DispatchResult> {
-        request.validate(self.runtime)?;
+        crate::api::validate_command_request(&request, self.runtime)?;
         let config = self.services.configuration.snapshot()?;
         self.services
             .configuration
             .authority_fences()?
-            .check_actor(&actor, request.command.role(&request.args))?;
-        verify_current_actor(&config, &actor, request.command.role(&request.args))?;
+            .check_actor(
+                &actor,
+                crate::api::command_role(&request.command, &request.args),
+            )?;
+        verify_current_actor(
+            &config,
+            &actor,
+            crate::api::command_role(&request.command, &request.args),
+        )?;
         if secret.is_some() && request.command != CommandName::ConnectionAdd {
             return Err(Error::new(
                 "invalid_input",
@@ -585,7 +593,7 @@ impl HostDispatcher {
         config: &Config,
         configuration_command: bool,
     ) -> Result<DispatchResult> {
-        let role = request.command.role(&request.args).to_owned();
+        let role = crate::api::command_role(&request.command, &request.args).to_owned();
         let existing = self
             .services
             .control

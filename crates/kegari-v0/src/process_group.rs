@@ -2,7 +2,7 @@
 //! their group while the leader PID is still reserved, then let the Child owner
 //! reap. This proves group cleanup, not containment of descendants which escape
 //! into a new session/group. Such descendants are outside the managed v0 profile.
-use crate::error::{Error, Result};
+use kegari_types::error::{Error, Result};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Termination {

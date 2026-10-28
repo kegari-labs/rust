@@ -1,5 +1,6 @@
 use kegari_cli::local_cli;
-use kegari_v0::{error::Result, platform};
+use kegari_types::error::Result;
+use kegari_v0::platform;
 use std::io::Write;
 
 /// Hidden process entrypoints are closed argument forms; public commands always
@@ -36,7 +37,7 @@ async fn main() {
             }
             Err(error) => {
                 eprintln!("{error}");
-                error.exit_code()
+                kegari_v0::error::exit_code(&error)
             }
         },
         Some("__orchestrate") => {
@@ -58,7 +59,7 @@ fn internal_result(result: Result<()>, control_host: bool) -> i32 {
             // Stable safe Error messages never contain provider secrets or the
             // inherited orchestration handshake. No input bytes are logged.
             eprintln!("{error}");
-            error.exit_code()
+            kegari_v0::error::exit_code(&error)
         }
     }
 }

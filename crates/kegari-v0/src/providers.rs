@@ -3,8 +3,8 @@
 use crate::config::{GithubSelection, LinearSelection, Selector};
 use crate::control::{ControlHost, ControlSnapshot, MutationRequest, Permit, Receipt};
 use crate::digest::{bytes_digest, canonical_digest};
-use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

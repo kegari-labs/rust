@@ -1,9 +1,7 @@
 //! Deterministic boot identity for owned process fixtures. This deliberately
 //! does not qualify native host boot identity or detached-process containment.
-use crate::{
-    error::{Error, Result},
-    platform::{ProcessIdentity, ProcessObservation, ProcessProbe},
-};
+use crate::platform::{ProcessIdentity, ProcessObservation, ProcessProbe};
+use kegari_types::error::{Error, Result};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 pub struct FixtureBootProbe {

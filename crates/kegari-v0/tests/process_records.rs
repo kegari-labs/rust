@@ -1,7 +1,7 @@
+use kegari_types::error::Result;
 use kegari_v0::{
     control::Lease,
     digest::bytes_digest,
-    error::Result,
     platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe},
     process_group::{OwnedGroup, Termination},
     process_records::{

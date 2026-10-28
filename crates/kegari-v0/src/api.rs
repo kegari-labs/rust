@@ -1,9 +1,6 @@
 //! Versioned Axum CLI protocol, shared by authenticated Unix and direct TLS
 //! listeners. Connection identity must come from the accepting transport.
-use crate::{
-    control::Actor,
-    error::{Error, Result},
-};
+use crate::control::Actor;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -13,8 +10,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
+use kegari_types::api::{CommandName, CommandRequest, Envelope};
+use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration,
@@ -43,317 +41,244 @@ pub trait Dispatcher: Send + Sync {
         secret: Option<crate::secrets::Secret>,
     ) -> Pin<Box<dyn Future<Output = Result<DispatchResult>> + Send + '_>>;
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandName {
-    Overview,
-    Status,
-    Show,
-    Open,
-    Approve,
-    Correct,
-    Release,
-    Setup,
-    ConnectionList,
-    ConnectionAdd,
-    ConnectionReconnect,
-    WorkspaceList,
-    WorkspaceAdd,
-    WorkspaceConfigure,
-    ConfigShow,
-    ConfigCheck,
-    Pause,
-    Resume,
-    Stop,
-    Start,
-    /// Local Unix peer only; never exposed as a remote service action.
-    ServiceStop,
-    /// One explicit local native evaluation; no remote endpoint authorization.
-    EvaluationRun,
-    OperationShow,
-    OperationReconcile,
-    Retry,
-    ReleaseRecover,
-    Cleanup,
-}
-impl CommandName {
-    pub fn mutating(&self, args: &Value) -> bool {
-        match self {
-            Self::Overview
-            | Self::Status
-            | Self::Show
-            | Self::Open
-            | Self::ConnectionList
-            | Self::WorkspaceList
-            | Self::ConfigShow
-            | Self::ConfigCheck
-            | Self::OperationShow => false,
-            Self::Cleanup => args.get("apply") == Some(&Value::Bool(true)),
-            _ => true,
-        }
-    }
-    pub fn role(&self, args: &Value) -> &'static str {
-        match self {
-            Self::EvaluationRun => "evaluate",
-            Self::Approve => "accept",
-            Self::Correct => "correct",
-            Self::Release => "release",
-            Self::Setup
-            | Self::ConnectionAdd
-            | Self::ConnectionReconnect
-            | Self::WorkspaceAdd
-            | Self::WorkspaceConfigure => "configure",
-            Self::Pause | Self::Resume | Self::Stop | Self::Start | Self::ServiceStop => {
-                "lifecycle"
-            }
-            Self::OperationReconcile | Self::Retry | Self::ReleaseRecover => "recover",
-            Self::Cleanup if self.mutating(args) => "recover",
-            _ => "inspect",
-        }
+pub fn command_mutates(command: &CommandName, args: &Value) -> bool {
+    match command {
+        CommandName::Overview
+        | CommandName::Status
+        | CommandName::Show
+        | CommandName::Open
+        | CommandName::ConnectionList
+        | CommandName::WorkspaceList
+        | CommandName::ConfigShow
+        | CommandName::ConfigCheck
+        | CommandName::OperationShow => false,
+        CommandName::Cleanup => args.get("apply") == Some(&Value::Bool(true)),
+        _ => true,
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CommandRequest {
-    pub api_version: u32,
-    pub runtime_id: Uuid,
-    pub request_id: Uuid,
-    pub command: CommandName,
-    pub args: Value,
-    pub expected_config_revision: Option<String>,
-    pub expected_control_generation: Option<u64>,
-}
-impl std::fmt::Debug for CommandRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CommandRequest")
-            .field("runtime_id", &self.runtime_id)
-            .field("request_id", &self.request_id)
-            .field("command", &self.command)
-            .field("args", &"[OMITTED]")
-            .finish()
+pub fn command_role(command: &CommandName, args: &Value) -> &'static str {
+    match command {
+        CommandName::EvaluationRun => "evaluate",
+        CommandName::Approve => "accept",
+        CommandName::Correct => "correct",
+        CommandName::Release => "release",
+        CommandName::Setup
+        | CommandName::ConnectionAdd
+        | CommandName::ConnectionReconnect
+        | CommandName::WorkspaceAdd
+        | CommandName::WorkspaceConfigure => "configure",
+        CommandName::Pause
+        | CommandName::Resume
+        | CommandName::Stop
+        | CommandName::Start
+        | CommandName::ServiceStop => "lifecycle",
+        CommandName::OperationReconcile | CommandName::Retry | CommandName::ReleaseRecover => {
+            "recover"
+        }
+        CommandName::Cleanup if command_mutates(command, args) => "recover",
+        _ => "inspect",
     }
 }
-impl CommandRequest {
-    pub fn validate(&self, runtime: Uuid) -> Result<()> {
-        if self.api_version != 1 {
-            return Err(Error::new(
-                "incompatible_version",
-                "CLI protocol major must be 1",
-            ));
+pub fn validate_command_request(request: &CommandRequest, runtime: Uuid) -> Result<()> {
+    if request.api_version != 1 {
+        return Err(Error::new(
+            "incompatible_version",
+            "CLI protocol major must be 1",
+        ));
+    }
+    if request.runtime_id != runtime || request.request_id.is_nil() {
+        return Err(Error::new(
+            "identity_mismatch",
+            "request runtime or request ID is invalid",
+        ));
+    }
+    let args = request
+        .args
+        .as_object()
+        .ok_or_else(|| Error::new("invalid_input", "command args must be an object"))?;
+    let allowed: &[&str] = match request.command {
+        CommandName::Status | CommandName::ConnectionList | CommandName::WorkspaceList => {
+            &["snapshot_id", "cursor"]
         }
-        if self.runtime_id != runtime || self.request_id.is_nil() {
-            return Err(Error::new(
-                "identity_mismatch",
-                "request runtime or request ID is invalid",
-            ));
+        CommandName::Overview => &["workspace", "snapshot_id", "cursor"],
+        CommandName::Show | CommandName::Open => &["parent", "workspace", "snapshot_id", "cursor"],
+        CommandName::Approve | CommandName::Release => &["parent", "result"],
+        CommandName::Correct => &["parent", "message"],
+        CommandName::Setup => &["configuration"],
+        CommandName::ConnectionAdd => &["name", "connection", "secret_reference"],
+        CommandName::ConnectionReconnect => &["name"],
+        CommandName::WorkspaceAdd => &["name", "workspace_configuration"],
+        CommandName::WorkspaceConfigure => &["workspace", "workspace_configuration"],
+        CommandName::ConfigShow | CommandName::ConfigCheck => {
+            &["workspace", "snapshot_id", "cursor"]
         }
-        let args = self
-            .args
-            .as_object()
-            .ok_or_else(|| Error::new("invalid_input", "command args must be an object"))?;
-        let allowed: &[&str] = match self.command {
-            CommandName::Status | CommandName::ConnectionList | CommandName::WorkspaceList => {
-                &["snapshot_id", "cursor"]
-            }
-            CommandName::Overview => &["workspace", "snapshot_id", "cursor"],
-            CommandName::Show | CommandName::Open => {
-                &["parent", "workspace", "snapshot_id", "cursor"]
-            }
-            CommandName::Approve | CommandName::Release => &["parent", "result"],
-            CommandName::Correct => &["parent", "message"],
-            CommandName::Setup => &["configuration"],
-            CommandName::ConnectionAdd => &["name", "connection", "secret_reference"],
-            CommandName::ConnectionReconnect => &["name"],
-            CommandName::WorkspaceAdd => &["name", "workspace_configuration"],
-            CommandName::WorkspaceConfigure => &["workspace", "workspace_configuration"],
-            CommandName::ConfigShow | CommandName::ConfigCheck => {
-                &["workspace", "snapshot_id", "cursor"]
-            }
-            CommandName::Pause | CommandName::Resume | CommandName::ServiceStop => &[],
-            CommandName::Start => &["wait", "timeout_seconds"],
-            CommandName::Stop => &["force", "wait", "timeout_seconds"],
-            CommandName::OperationShow => &["operation", "snapshot_id", "cursor"],
-            CommandName::OperationReconcile => &["operation"],
-            CommandName::Retry => &["work", "reason"],
-            CommandName::ReleaseRecover => &["parent", "operation", "action", "reason", "result"],
-            CommandName::Cleanup => &["operation", "apply", "plan", "snapshot_id", "cursor"],
-            CommandName::EvaluationRun => &[
-                "workspace",
-                "suite_digest",
-                "case",
-                "variant",
-                "profile",
-                "repetition",
-            ],
-        };
-        if args.keys().any(|key| !allowed.contains(&key.as_str())) {
+        CommandName::Pause | CommandName::Resume | CommandName::ServiceStop => &[],
+        CommandName::Start => &["wait", "timeout_seconds"],
+        CommandName::Stop => &["force", "wait", "timeout_seconds"],
+        CommandName::OperationShow => &["operation", "snapshot_id", "cursor"],
+        CommandName::OperationReconcile => &["operation"],
+        CommandName::Retry => &["work", "reason"],
+        CommandName::ReleaseRecover => &["parent", "operation", "action", "reason", "result"],
+        CommandName::Cleanup => &["operation", "apply", "plan", "snapshot_id", "cursor"],
+        CommandName::EvaluationRun => &[
+            "workspace",
+            "suite_digest",
+            "case",
+            "variant",
+            "profile",
+            "repetition",
+        ],
+    };
+    if args.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(Error::new(
+            "invalid_input",
+            "unknown or forbidden command argument",
+        ));
+    }
+    let text = |key: &str| -> Result<&str> {
+        args.get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| Error::new("invalid_input", format!("command requires nonempty {key}")))
+    };
+    // Validate optional fields before any dispatcher can interpret missing
+    // strings as an absent filter and accidentally broaden an inspection.
+    for key in allowed {
+        if args.contains_key(*key)
+            && !["force", "wait", "apply", "timeout_seconds", "repetition"].contains(key)
+        {
+            text(key)?;
+        }
+    }
+    if args.contains_key("snapshot_id") != args.contains_key("cursor") {
+        return Err(Error::new(
+            "invalid_input",
+            "snapshot continuation requires both snapshot_id and cursor",
+        ));
+    }
+    for key in ["snapshot_id", "cursor"] {
+        if args.contains_key(key) {
+            Uuid::parse_str(text(key)?)
+                .map_err(|_| Error::new("invalid_input", "snapshot identities must be UUIDs"))?;
+        }
+    }
+    for key in ["parent", "name", "work", "reason"] {
+        if allowed.contains(&key)
+            && !matches!(
+                request.command,
+                CommandName::Overview | CommandName::ConfigShow | CommandName::ConfigCheck
+            )
+        {
+            text(key)?;
+        }
+    }
+    if request.command == CommandName::EvaluationRun {
+        for key in ["workspace", "suite_digest", "case", "variant", "profile"] {
+            text(key)?;
+        }
+        Uuid::parse_str(text("workspace")?).map_err(|_| {
+            Error::new(
+                "invalid_input",
+                "evaluation workspace must be canonical UUID",
+            )
+        })?;
+        crate::evidence::validate_digest(text("suite_digest")?)?;
+        if args
+            .get("repetition")
+            .and_then(Value::as_u64)
+            .is_none_or(|n| n == 0 || n > u32::MAX as u64)
+            || request.expected_config_revision.is_none()
+            || request.expected_control_generation.is_none()
+        {
             return Err(Error::new(
                 "invalid_input",
-                "unknown or forbidden command argument",
+                "evaluation needs exact declared repetition and expected config/control revisions",
             ));
         }
-        let text = |key: &str| -> Result<&str> {
-            args.get(key)
-                .and_then(Value::as_str)
-                .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| {
-                    Error::new("invalid_input", format!("command requires nonempty {key}"))
-                })
-        };
-        // Validate optional fields before any dispatcher can interpret missing
-        // strings as an absent filter and accidentally broaden an inspection.
-        for key in allowed {
-            if args.contains_key(*key)
-                && !["force", "wait", "apply", "timeout_seconds", "repetition"].contains(key)
-            {
-                text(key)?;
-            }
+    }
+    if matches!(request.command, CommandName::Approve | CommandName::Release) {
+        text("result")?;
+    }
+    if request.command == CommandName::Correct && text("message")?.len() > 1024 * 1024 {
+        return Err(Error::new("invalid_input", "correction exceeds 1 MiB"));
+    }
+    match request.command {
+        CommandName::Setup => {
+            text("configuration")?;
         }
-        if args.contains_key("snapshot_id") != args.contains_key("cursor") {
+        CommandName::ConnectionAdd => {
+            text("connection")?;
+        }
+        CommandName::WorkspaceAdd => {
+            text("workspace_configuration")?;
+        }
+        CommandName::WorkspaceConfigure => {
+            text("workspace")?;
+            text("workspace_configuration")?;
+        }
+        _ => (),
+    }
+    if allowed.contains(&"operation") {
+        Uuid::parse_str(text("operation")?)
+            .map_err(|_| Error::new("invalid_input", "operation must be a UUID"))?;
+    }
+    for key in ["force", "wait", "apply"] {
+        if args.get(key).is_some_and(|v| !v.is_boolean()) {
             return Err(Error::new(
                 "invalid_input",
-                "snapshot continuation requires both snapshot_id and cursor",
+                format!("{key} must be boolean"),
             ));
         }
-        for key in ["snapshot_id", "cursor"] {
-            if args.contains_key(key) {
-                Uuid::parse_str(text(key)?).map_err(|_| {
-                    Error::new("invalid_input", "snapshot identities must be UUIDs")
-                })?;
-            }
+    }
+    if args
+        .get("timeout_seconds")
+        .is_some_and(|v| v.as_u64().is_none_or(|n| n == 0))
+    {
+        return Err(Error::new(
+            "invalid_input",
+            "timeout_seconds must be positive",
+        ));
+    }
+    if request.command == CommandName::Cleanup && command_mutates(&request.command, &request.args) {
+        text("plan")?;
+        if args.contains_key("snapshot_id") {
+            return Err(Error::new(
+                "invalid_input",
+                "cleanup application cannot carry inspection pagination",
+            ));
         }
-        for key in ["parent", "name", "work", "reason"] {
-            if allowed.contains(&key)
-                && !matches!(
-                    self.command,
-                    CommandName::Overview | CommandName::ConfigShow | CommandName::ConfigCheck
-                )
-            {
-                text(key)?;
-            }
+    }
+    if request.command == CommandName::ReleaseRecover {
+        let action = text("action")?;
+        if !["resume", "abandon", "resolve", "supersede"].contains(&action) {
+            return Err(Error::new(
+                "invalid_input",
+                "unsupported release recovery action",
+            ));
         }
-        if self.command == CommandName::EvaluationRun {
-            for key in ["workspace", "suite_digest", "case", "variant", "profile"] {
-                text(key)?;
-            }
-            Uuid::parse_str(text("workspace")?).map_err(|_| {
-                Error::new(
-                    "invalid_input",
-                    "evaluation workspace must be canonical UUID",
-                )
-            })?;
-            crate::evidence::validate_digest(text("suite_digest")?)?;
-            if args
-                .get("repetition")
-                .and_then(Value::as_u64)
-                .is_none_or(|n| n == 0 || n > u32::MAX as u64)
-                || self.expected_config_revision.is_none()
-                || self.expected_control_generation.is_none()
-            {
-                return Err(Error::new(
-                    "invalid_input",
-                    "evaluation needs exact declared repetition and expected config/control revisions",
-                ));
-            }
-        }
-        if matches!(self.command, CommandName::Approve | CommandName::Release) {
+        if action == "supersede" {
             text("result")?;
         }
-        if self.command == CommandName::Correct && text("message")?.len() > 1024 * 1024 {
-            return Err(Error::new("invalid_input", "correction exceeds 1 MiB"));
-        }
-        match self.command {
-            CommandName::Setup => {
-                text("configuration")?;
-            }
-            CommandName::ConnectionAdd => {
-                text("connection")?;
-            }
-            CommandName::WorkspaceAdd => {
-                text("workspace_configuration")?;
-            }
-            CommandName::WorkspaceConfigure => {
-                text("workspace")?;
-                text("workspace_configuration")?;
-            }
-            _ => (),
-        }
-        if allowed.contains(&"operation") {
-            Uuid::parse_str(text("operation")?)
-                .map_err(|_| Error::new("invalid_input", "operation must be a UUID"))?;
-        }
-        for key in ["force", "wait", "apply"] {
-            if args.get(key).is_some_and(|v| !v.is_boolean()) {
-                return Err(Error::new(
-                    "invalid_input",
-                    format!("{key} must be boolean"),
-                ));
-            }
-        }
-        if args
-            .get("timeout_seconds")
-            .is_some_and(|v| v.as_u64().is_none_or(|n| n == 0))
-        {
-            return Err(Error::new(
-                "invalid_input",
-                "timeout_seconds must be positive",
-            ));
-        }
-        if self.command == CommandName::Cleanup && self.command.mutating(&self.args) {
-            text("plan")?;
-            if args.contains_key("snapshot_id") {
-                return Err(Error::new(
-                    "invalid_input",
-                    "cleanup application cannot carry inspection pagination",
-                ));
-            }
-        }
-        if self.command == CommandName::ReleaseRecover {
-            let action = text("action")?;
-            if !["resume", "abandon", "resolve", "supersede"].contains(&action) {
-                return Err(Error::new(
-                    "invalid_input",
-                    "unsupported release recovery action",
-                ));
-            }
-            if action == "supersede" {
-                text("result")?;
-            }
-        }
-        if matches!(
-            self.command,
-            CommandName::Pause | CommandName::Resume | CommandName::Stop | CommandName::Start
-        ) && self.expected_control_generation.is_none()
-        {
-            return Err(Error::new(
-                "invalid_input",
-                "lifecycle command requires the client's observed control generation",
-            ));
-        }
-        if self.command == CommandName::WorkspaceConfigure
-            && self.expected_config_revision.is_none()
-        {
-            return Err(Error::new(
-                "invalid_input",
-                "workspace change requires expected config revision",
-            ));
-        }
-        Ok(())
     }
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Envelope {
-    pub api_version: u32,
-    pub request_id: Uuid,
-    pub runtime_id: Uuid,
-    pub config_revision: Option<String>,
-    pub observed_at: DateTime<Utc>,
-    pub ok: bool,
-    pub operation_id: Option<Uuid>,
-    pub state: Option<String>,
-    pub data: Value,
-    pub error: Option<Error>,
+    if matches!(
+        request.command,
+        CommandName::Pause | CommandName::Resume | CommandName::Stop | CommandName::Start
+    ) && request.expected_control_generation.is_none()
+    {
+        return Err(Error::new(
+            "invalid_input",
+            "lifecycle command requires the client's observed control generation",
+        ));
+    }
+    if request.command == CommandName::WorkspaceConfigure
+        && request.expected_config_revision.is_none()
+    {
+        return Err(Error::new(
+            "invalid_input",
+            "workspace change requires expected config revision",
+        ));
+    }
+    Ok(())
 }
 #[derive(Debug, Clone)]
 pub struct DispatchResult {
@@ -648,11 +573,12 @@ async fn dispatch(
             false,
         );
     }
-    let mutating = command.command.mutating(&command.args);
-    if let Err(error) = command
-        .validate(state.runtime_id)
-        .and_then(|()| verified.actor.require(command.command.role(&command.args)))
-    {
+    let mutating = command_mutates(&command.command, &command.args);
+    if let Err(error) = validate_command_request(&command, state.runtime_id).and_then(|()| {
+        verified
+            .actor
+            .require(command_role(&command.command, &command.args))
+    }) {
         return response(state.runtime_id, id, Err(error), false);
     }
     match timeout_at(
@@ -881,7 +807,7 @@ pub fn connection_router(state: ApiState, peer: Peer) -> Router {
 /// Identity only: a declared repetition is a finite trial slot, not authority.
 /// The actual command receipt retains this before any evaluator task starts.
 pub(crate) fn evaluation_trial_identity(request: &CommandRequest) -> Result<String> {
-    request.validate(request.runtime_id)?;
+    validate_command_request(request, request.runtime_id)?;
     if request.command != CommandName::EvaluationRun {
         return Err(Error::invalid("not an evaluation command"));
     }

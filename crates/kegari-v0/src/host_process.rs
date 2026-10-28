@@ -4,13 +4,13 @@ use crate::{
     app::ConfigurationControl,
     control::{Actor, ControlHost, HostProcessToken, MutationRequest, Receipt},
     digest::canonical_digest,
-    error::{Error, Result},
     execution::CommandCancellation,
     git::VerifiedHostReadRoot,
     platform::{BinaryIdentity, ProcessIdentity, Registration},
     process_records::{ProcessJournal, SpawnBinding, SpawnGuard},
     worker::ExecutionRegistry,
 };
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

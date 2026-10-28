@@ -10,6 +10,7 @@ name = "kegari-v0"
 path = "src/main.rs"
 
 [dependencies]
+kegari-types = { path = "../kegari-types" }
 kegari-v0 = { path = "../kegari-v0" }
 chrono = { version = "=0.4.45", features = ["serde"] }
 clap = { version = "=4.6.7", features = ["derive"] }

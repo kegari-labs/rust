@@ -1,7 +1,6 @@
 //! Shared control-host decision facade. Provider publication and release work
 //! remain concrete services; cache insertion accepts only sealed evidence.
 use crate::{
-    api::CommandRequest,
     app::{HostFuture, RuntimeInspection, WorkflowControl},
     authority::IssueKey,
     control::{Actor, Receipt, ReceiptPhase, RunReference},
@@ -11,7 +10,6 @@ use crate::{
     },
     delivery::RuntimeDeliveryDecisions,
     digest::canonical_digest,
-    error::{Error, Result},
     evidence::{
         AttestationKey, Publication, VerifiedAcceptance, WorkIdentity, decode_signed_publication,
     },
@@ -19,6 +17,8 @@ use crate::{
     runtime::RuntimeCoordinator,
     scheduler::PhaseKey,
 };
+use kegari_types::api::CommandRequest;
+use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -93,7 +93,7 @@ impl WorkflowControl for RuntimeWorkflow {
             "accounts":self.runtime.account_observations()?}))
     }
     fn command_targets(&self, request: &CommandRequest) -> Result<Vec<String>> {
-        if request.command == crate::api::CommandName::EvaluationRun {
+        if request.command == kegari_types::api::CommandName::EvaluationRun {
             return self.runtime.evaluation_targets(request);
         }
         self.decisions.command_targets(request)
@@ -104,7 +104,7 @@ impl WorkflowControl for RuntimeWorkflow {
         request: CommandRequest,
         parent: Receipt,
     ) -> HostFuture<'_, Receipt> {
-        if request.command == crate::api::CommandName::EvaluationRun {
+        if request.command == kegari_types::api::CommandName::EvaluationRun {
             return Box::pin(self.runtime.execute_evaluation(actor, request, parent));
         }
         Box::pin(self.decisions.execute(actor, request, parent))

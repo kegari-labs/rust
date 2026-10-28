@@ -1,6 +1,7 @@
 //! Synthetic provider facts only; shared with production-path correction tests.
-use crate::{config::Config, error::Result, providers::*};
+use crate::{config::Config, providers::*};
 use chrono::Utc;
+use kegari_types::error::Result;
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
 use std::{
@@ -193,7 +194,7 @@ impl HttpTransport for Wire {
                         f.comments.entry(issue).or_default().push(duplicate);
                     }
                     if f.comment_response_lost {
-                        return Err(crate::error::Error::new(
+                        return Err(kegari_types::error::Error::new(
                             "timeout",
                             "fixture loses the acknowledgement after storing the comment",
                         ));
@@ -275,7 +276,7 @@ impl crate::app::ConfigurationControl for CacheConfiguration {
     fn execute(
         &self,
         _: crate::control::Actor,
-        _: crate::api::CommandRequest,
+        _: kegari_types::api::CommandRequest,
         _: Option<crate::secrets::Secret>,
         _: crate::control::Receipt,
     ) -> crate::app::HostFuture<'_, crate::control::Receipt> {

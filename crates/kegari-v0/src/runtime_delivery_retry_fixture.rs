@@ -200,11 +200,11 @@ async fn publish_inner(
         principal: Some(crate::control::Principal::Unix { uid: 501 }),
         roles: ["recover".into(), "inspect".into(), "lifecycle".into()].into(),
     };
-    let mut request = crate::api::CommandRequest {
+    let mut request = kegari_types::api::CommandRequest {
         api_version: 1,
         request_id: Uuid::new_v4(),
         runtime_id: runtime.configuration.snapshot().unwrap().runtime.id,
-        command: crate::api::CommandName::Retry,
+        command: kegari_types::api::CommandName::Retry,
         args: json!({"work":"TEST-101","reason":"The exact finding is understood; grant a bounded repair budget after the previous limit"}),
         expected_config_revision: Some(
             runtime

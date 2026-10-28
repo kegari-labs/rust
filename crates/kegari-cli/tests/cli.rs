@@ -1,8 +1,8 @@
 use clap::Parser;
 use kegari_cli::cli::*;
 use kegari_cli::client::*;
-use kegari_v0::api::{CommandName, CommandRequest};
-use kegari_v0::error::{Error, Result};
+use kegari_types::api::{CommandName, CommandRequest};
+use kegari_types::error::{Error, Result};
 use kegari_v0::secrets::Secret;
 use kegari_v0::snapshot::Snapshots;
 use kegari_v0::storage::PrivateDir;
@@ -112,7 +112,7 @@ fn evaluation_cli_preserves_declared_slot_and_requires_observed_revisions() {
     assert_eq!(inputs.reads, 0);
     assert_eq!(invocation.request_id, request_id);
     let command = server(&invocation).request(runtime(), invocation.request_id);
-    command.validate(runtime()).unwrap();
+    kegari_v0::api::validate_command_request(&command, runtime()).unwrap();
     assert_eq!(command.command, CommandName::EvaluationRun);
     assert_eq!(
         command.expected_config_revision.as_deref(),
@@ -647,7 +647,10 @@ async fn dropped_mutation_response_remains_unknown_with_original_request_id() {
     assert_eq!(result.request_id, id);
     assert_eq!(result.operation_id, None);
     assert_eq!(result.state.as_deref(), Some("uncertain"));
-    assert_eq!(result.error.as_ref().unwrap().exit_code(), 4);
+    assert_eq!(
+        kegari_v0::error::exit_code(result.error.as_ref().unwrap()),
+        4
+    );
     fixture.task.await.unwrap();
     assert_eq!(fixture.calls.lock().unwrap().len(), 1);
 }
@@ -1274,7 +1277,7 @@ async fn wait_timeout_observes_only_and_never_forces_or_replays_mutation() {
     .await;
     let request_id = Uuid::new_v4();
     let operation = Uuid::new_v4();
-    let response = kegari_v0::api::Envelope {
+    let response = kegari_types::api::Envelope {
         api_version: 1,
         request_id,
         runtime_id: runtime(),
@@ -1320,7 +1323,7 @@ async fn wait_rejects_completion_for_missing_or_different_operation() {
         .await;
         let original = Uuid::new_v4();
         let operation = Uuid::new_v4();
-        let response = kegari_v0::api::Envelope {
+        let response = kegari_types::api::Envelope {
             api_version: 1,
             request_id: original,
             runtime_id: runtime(),

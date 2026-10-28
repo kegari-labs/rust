@@ -3,12 +3,12 @@
 //! No user-controlled socket/header can construct this process handshake.
 use crate::{
     control::{ControlHost, Intent, Lease},
-    error::{Error, Result},
     platform::{
         BinaryIdentity, HostIdentity, OwnedChild, ProcessIdentity, Registration, RuntimeLock,
     },
     storage::PrivateDir,
 };
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::{

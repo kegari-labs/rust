@@ -5,7 +5,6 @@ use crate::{
     app::{ConfigurationControl, HostFuture},
     configuration::{AuthorityFences, ConfigurationInputs},
     control::{Actor, Receipt},
-    error::{Error, Result},
     evidence::AttestationKey,
     host::RuntimeDependencies,
     housekeeping::{Housekeeping, LogSink},
@@ -16,6 +15,7 @@ use crate::{
     secrets::SecretStore,
     storage::PrivateDir,
 };
+use kegari_types::error::{Error, Result};
 use serde_json::Value;
 use std::{
     path::PathBuf,
@@ -37,7 +37,7 @@ impl ConfigurationControl for FixtureConfiguration {
     fn execute(
         &self,
         _: Actor,
-        _: crate::api::CommandRequest,
+        _: kegari_types::api::CommandRequest,
         _: Option<crate::secrets::Secret>,
         _: Receipt,
     ) -> HostFuture<'_, Receipt> {

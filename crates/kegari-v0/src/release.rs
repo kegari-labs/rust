@@ -6,13 +6,13 @@
 //! failure and uncertainty fence its remaining steps.
 
 use crate::digest::canonical_digest;
-use crate::error::{Error, Result};
 use crate::evidence::{
     CarriedAcceptance, Generation, VerifiedAcceptance, VerifiedCarry, VerifiedNoReleaseRequired,
     VerifiedParent, VerifiedProduction, validate_digest,
 };
 use crate::git::{RepositoryId, Revision, validate_oid};
 use chrono::{DateTime, Duration, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;

@@ -8,7 +8,6 @@ use crate::{
     connections::ConnectionRegistry,
     control::{ControlHost, Receipt, ReceiptPhase},
     digest::canonical_digest,
-    error::{Error, Result},
     evidence::{AttestationKey, Publication, decode_signed_publication},
     reconcile::{
         AuthorizationSnapshot, Blocker, DefinitionCorrection, ParentProjection, ParentRefs,
@@ -20,6 +19,7 @@ use crate::{
     workflow::Workflow,
 };
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

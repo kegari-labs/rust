@@ -1,7 +1,8 @@
 //! Fresh release admission after explicit recovery. Serializable references are
 //! provenance only; they cannot reconstruct an execution permit.
 use super::*;
-use crate::{api::CommandName, decisions::AuthorizedDecision, evidence::validate_digest};
+use crate::{decisions::AuthorizedDecision, evidence::validate_digest};
+use kegari_types::api::CommandName;
 use serde_json::json;
 
 #[path = "control_release_history.rs"]

@@ -1,11 +1,11 @@
 //! Reconciliation through production provider parsers; all HTTP is injected.
 use chrono::{Duration, Utc};
+use kegari_types::error::Result;
 use kegari_v0::{
     authority::CommentClass,
     config::Config,
     control::{ControlSnapshot, Intent, IntentRecord},
     digest::canonical_digest,
-    error::Result,
     evidence::{self, AttestationKey, Publication},
     providers::*,
     reconcile::*,
@@ -164,7 +164,7 @@ impl HttpTransport for Wire {
                         f.comments.entry(issue).or_default().push(duplicate);
                     }
                     if f.comment_response_lost {
-                        return Err(kegari_v0::error::Error::new(
+                        return Err(kegari_types::error::Error::new(
                             "timeout",
                             "fixture loses the acknowledgement after storing the comment",
                         ));
@@ -173,7 +173,7 @@ impl HttpTransport for Wire {
                 } else if query.contains("KegariIssue(") {
                     if f.fail_issue_once {
                         f.fail_issue_once = false;
-                        let mut error = kegari_v0::error::Error::new(
+                        let mut error = kegari_types::error::Error::new(
                             "provider_transport",
                             "fixture preflight read failed before mutation",
                         );
@@ -1381,7 +1381,7 @@ impl kegari_v0::app::ConfigurationControl for CacheConfiguration {
     fn execute(
         &self,
         _: kegari_v0::control::Actor,
-        _: kegari_v0::api::CommandRequest,
+        _: kegari_types::api::CommandRequest,
         _: Option<kegari_v0::secrets::Secret>,
         _: kegari_v0::control::Receipt,
     ) -> kegari_v0::app::HostFuture<'_, kegari_v0::control::Receipt> {
@@ -1774,7 +1774,7 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
                 if observed != &expected_owner
                     || (scenario == "owner_lost_before_send" && check >= 4)
                 {
-                    Err(kegari_v0::error::Error::new(
+                    Err(kegari_types::error::Error::new(
                         "ownership_conflict",
                         "fixture owner no longer owns its OS lease",
                     ))
@@ -1899,7 +1899,7 @@ async fn authorization_publication_reconciles_real_wire_records_without_retransm
                 let recovered = publisher
                     .recover_receipt(operation, || {
                         if scenario == "lost_ack_owner_lost" {
-                            Err(kegari_v0::error::Error::new(
+                            Err(kegari_types::error::Error::new(
                                 "ownership_conflict",
                                 "fixture control owner lost",
                             ))
@@ -1970,7 +1970,7 @@ impl kegari_v0::app::ConfigurationControl for MutableConfiguration {
     fn execute(
         &self,
         _: kegari_v0::control::Actor,
-        _: kegari_v0::api::CommandRequest,
+        _: kegari_types::api::CommandRequest,
         _: Option<kegari_v0::secrets::Secret>,
         _: kegari_v0::control::Receipt,
     ) -> kegari_v0::app::HostFuture<'_, kegari_v0::control::Receipt> {
@@ -2359,7 +2359,7 @@ async fn active_independent_review_drains_intake_filter_changes_but_never_a_chan
 struct PreservedProbe;
 impl kegari_v0::platform::ProcessProbe for PreservedProbe {
     fn current(&self) -> Result<kegari_v0::platform::ProcessIdentity> {
-        Err(kegari_v0::error::Error::new(
+        Err(kegari_types::error::Error::new(
             "fixture",
             "no live process in this preservation fixture",
         ))
@@ -2584,7 +2584,7 @@ async fn shared_corrective_publication_fence_blocks_cached_and_active_work_befor
         None,
         Some("correct"),
         || {
-            Err(kegari_v0::error::Error::new(
+            Err(kegari_types::error::Error::new(
                 "stale_result",
                 "fixture rejects before transmission",
             ))

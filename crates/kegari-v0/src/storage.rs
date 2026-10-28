@@ -1,8 +1,6 @@
 //! Owner-only, descriptor-relative control storage. No symlink-following writes.
-use crate::{
-    digest::canonical_digest,
-    error::{Error, Result},
-};
+use crate::digest::canonical_digest;
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     ffi::CString,

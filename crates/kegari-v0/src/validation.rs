@@ -1,11 +1,11 @@
 //! Host-enrolled validation obligations. Serialized records describe history;
 //! only an actual worker's observed reads and current admission enroll a plan.
 use crate::digest::canonical_digest;
-use crate::error::{Error, Result};
 use crate::evidence::{CheckKind, validate_digest};
 use crate::execution::{CorrectionExecutionProvenance, ExecutionBinding};
 use crate::workflow::{CheckCommand, CheckService};
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;

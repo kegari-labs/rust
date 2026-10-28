@@ -4,10 +4,10 @@ use crate::{
     config::Config,
     control::{ControlHost, Intent, IntentRecord, Lease},
     digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
     storage::{ExclusiveLock, PrivateDir},
 };
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::{CStr, CString},

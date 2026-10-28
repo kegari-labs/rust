@@ -2,11 +2,11 @@
 //! nor configuration can manufacture this in-memory command authorization.
 use super::*;
 use crate::{
-    api::{CommandName, CommandRequest},
     control::{Actor, Principal, Receipt, ReceiptPhase},
     evaluation::{LiveAuthority, LiveLease, LiveRequest, TrialKey},
     runtime_workers::{self, LaunchRequest},
 };
+use kegari_types::api::{CommandName, CommandRequest};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[path = "runtime_evaluation_owned_return.rs"]
@@ -273,7 +273,7 @@ impl RuntimeCoordinator {
         request: CommandRequest,
         parent: Receipt,
     ) -> Result<Arc<VerifiedEvaluationRequest>> {
-        request.validate(self.runtime_id)?;
+        crate::api::validate_command_request(&request, self.runtime_id)?;
         if request.command != CommandName::EvaluationRun
             || !matches!(actor.principal, Some(Principal::Unix { .. }))
             || request.request_id != crate::app::command_effect_id(parent.operation_id)
@@ -1388,7 +1388,7 @@ mod command_tests {
     #[test]
     fn trial_command_cannot_supply_authority_or_omit_observed_revisions() {
         let original = request();
-        original.validate(original.runtime_id).unwrap();
+        crate::api::validate_command_request(&original, original.runtime_id).unwrap();
         for field in [
             "actor",
             "lease",
@@ -1401,19 +1401,21 @@ mod command_tests {
             let mut changed = original.clone();
             changed.args[field] = json!({"pretend":"authority"});
             assert_eq!(
-                changed.validate(changed.runtime_id).unwrap_err().code,
+                crate::api::validate_command_request(&changed, changed.runtime_id)
+                    .unwrap_err()
+                    .code,
                 "invalid_input"
             );
         }
         let mut changed = original.clone();
         changed.expected_config_revision = None;
-        assert!(changed.validate(changed.runtime_id).is_err());
+        assert!(crate::api::validate_command_request(&changed, changed.runtime_id).is_err());
         let mut changed = original.clone();
         changed.expected_control_generation = None;
-        assert!(changed.validate(changed.runtime_id).is_err());
+        assert!(crate::api::validate_command_request(&changed, changed.runtime_id).is_err());
         let mut changed = original;
         changed.args["repetition"] = json!(0);
-        assert!(changed.validate(changed.runtime_id).is_err());
+        assert!(crate::api::validate_command_request(&changed, changed.runtime_id).is_err());
     }
 }
 

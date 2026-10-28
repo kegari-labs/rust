@@ -1,5 +1,5 @@
+use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    error::{Error, Result},
     secrets::{Keychain, Secret, SecretStore, resolve_reference},
     storage::PrivateDir,
 };

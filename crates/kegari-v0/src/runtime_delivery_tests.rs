@@ -636,7 +636,7 @@ async fn manual_release_recovery_uses_actual_queued_command_identity() {
         request_id: Uuid::new_v4(),
         runtime_id: config.runtime.id,
         actor: actor.clone(),
-        kind: format!("command/{:?}", crate::api::CommandName::Release),
+        kind: format!("command/{:?}", kegari_types::api::CommandName::Release),
         canonical_targets: vec![parent.key.identity().unwrap()],
         expected: BTreeMap::new(),
         payload: json!({"fixture":"actual queued release command"}),

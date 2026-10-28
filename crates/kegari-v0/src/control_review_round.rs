@@ -4,12 +4,8 @@
 use super::{
     PreparationReference, Receipt, RunContinuationReference, RunReference, SourceAdvancedReference,
 };
-use crate::{
-    digest::canonical_digest,
-    error::{Error, Result},
-    evidence::validate_digest,
-    scheduler::PhaseKey,
-};
+use crate::{digest::canonical_digest, evidence::validate_digest, scheduler::PhaseKey};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 const KEY: &str = "review_round";

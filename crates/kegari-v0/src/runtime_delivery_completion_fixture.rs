@@ -1118,10 +1118,10 @@ async fn execute_recovery(
     fixture_resume: bool,
 ) -> Result<Option<Permit>> {
     use crate::{
-        api::{CommandName, CommandRequest},
         control::{Actor, Principal},
         decisions::{DecisionDependencies, DecisionManager},
     };
+    use kegari_types::api::{CommandName, CommandRequest};
     let runtime = &delivery.runtime;
     runtime.observations.refresh().await.unwrap();
     let evidence = Arc::new(ResumeEvidence {

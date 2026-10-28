@@ -1,9 +1,9 @@
 //! Complete command grammar and client-device input handling. Parsing never starts work.
 use crate::client::{API_VERSION, ControlClient, Endpoint, Target, TargetStore};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use kegari_v0::api::{CommandName, CommandRequest, Envelope};
+use kegari_types::api::{CommandName, CommandRequest, Envelope};
+use kegari_types::error::{Error, Result};
 use kegari_v0::config::{Config, Connection, ProviderKind, Workspace};
-use kegari_v0::error::{Error, Result};
 use kegari_v0::secrets::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1035,7 +1035,7 @@ impl OutputEnvelope {
     }
     pub fn exit_code(&self) -> i32 {
         if let Some(error) = &self.error {
-            return error.exit_code();
+            return kegari_v0::error::exit_code(error);
         }
         if self
             .state

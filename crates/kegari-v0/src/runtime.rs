@@ -7,7 +7,6 @@ use crate::{
     authority::IssueKey,
     control::{ControlHost, Lease, Permit, RunReference},
     digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
     host::RuntimeDependencies,
     observations::ObservationCache,
     platform::Registration,
@@ -20,6 +19,7 @@ use crate::{
     worker_run::{OwnedWorkerRun, RunCompletion},
 };
 use chrono::{Duration, Utc};
+use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},

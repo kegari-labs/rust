@@ -22,7 +22,7 @@ fn host_fixture() -> (tempfile::TempDir, HostIdentity) {
 }
 struct FixtureProbe;
 impl ProcessProbe for FixtureProbe {
-    fn current(&self) -> kegari_v0::error::Result<ProcessIdentity> {
+    fn current(&self) -> kegari_types::error::Result<ProcessIdentity> {
         Ok(ProcessIdentity {
             pid: std::process::id(),
             parent_pid: 1,
@@ -34,14 +34,17 @@ impl ProcessProbe for FixtureProbe {
             executable: std::env::current_exe().unwrap(),
         })
     }
-    fn observe(&self, process: &ProcessIdentity) -> kegari_v0::error::Result<ProcessObservation> {
+    fn observe(
+        &self,
+        process: &ProcessIdentity,
+    ) -> kegari_types::error::Result<ProcessObservation> {
         Ok(if *process == self.current()? {
             ProcessObservation::Running
         } else {
             ProcessObservation::DifferentIdentity
         })
     }
-    fn matching_executable(&self, _: &Path) -> kegari_v0::error::Result<Vec<ProcessIdentity>> {
+    fn matching_executable(&self, _: &Path) -> kegari_types::error::Result<Vec<ProcessIdentity>> {
         Ok(vec![self.current()?])
     }
 }
@@ -50,13 +53,13 @@ fn bootstrap(
     runtime: Uuid,
     binary: BinaryIdentity,
     request: Uuid,
-) -> kegari_v0::error::Result<(Registration, kegari_v0::control::ControlHost)> {
+) -> kegari_types::error::Result<(Registration, kegari_v0::control::ControlHost)> {
     Registration::bootstrap_with_probe(host, runtime, binary, request, Arc::new(FixtureProbe))
 }
 fn recover(
     host: &HostIdentity,
     binary: &BinaryIdentity,
-) -> kegari_v0::error::Result<(Registration, kegari_v0::control::ControlHost, Config)> {
+) -> kegari_types::error::Result<(Registration, kegari_v0::control::ControlHost, Config)> {
     Registration::recover_with_probe(host, binary, Arc::new(FixtureProbe))
 }
 fn binary() -> BinaryIdentity {
@@ -191,17 +194,20 @@ async fn control_socket_recovery_requires_owned_dead_socket_and_preserves_other_
 fn runtime_lock_requires_running_and_exact_reserved_owner() {
     struct ChildProbe;
     impl ProcessProbe for ChildProbe {
-        fn current(&self) -> kegari_v0::error::Result<ProcessIdentity> {
+        fn current(&self) -> kegari_types::error::Result<ProcessIdentity> {
             let mut p = FixtureProbe.current()?;
             p.parent_pid = p.pid;
             p.pid += 1;
             p.process_group = p.pid;
             Ok(p)
         }
-        fn observe(&self, p: &ProcessIdentity) -> kegari_v0::error::Result<ProcessObservation> {
+        fn observe(&self, p: &ProcessIdentity) -> kegari_types::error::Result<ProcessObservation> {
             FixtureProbe.observe(p)
         }
-        fn matching_executable(&self, p: &Path) -> kegari_v0::error::Result<Vec<ProcessIdentity>> {
+        fn matching_executable(
+            &self,
+            p: &Path,
+        ) -> kegari_types::error::Result<Vec<ProcessIdentity>> {
             FixtureProbe.matching_executable(p)
         }
     }
@@ -241,10 +247,13 @@ fn fixture_child() -> ProcessIdentity {
 /// invoking native process discovery or launching a subprocess.
 struct RunningChildProbe;
 impl ProcessProbe for RunningChildProbe {
-    fn current(&self) -> kegari_v0::error::Result<ProcessIdentity> {
+    fn current(&self) -> kegari_types::error::Result<ProcessIdentity> {
         FixtureProbe.current()
     }
-    fn observe(&self, process: &ProcessIdentity) -> kegari_v0::error::Result<ProcessObservation> {
+    fn observe(
+        &self,
+        process: &ProcessIdentity,
+    ) -> kegari_types::error::Result<ProcessObservation> {
         Ok(
             if *process == self.current()? || *process == fixture_child() {
                 ProcessObservation::Running
@@ -253,7 +262,7 @@ impl ProcessProbe for RunningChildProbe {
             },
         )
     }
-    fn matching_executable(&self, _: &Path) -> kegari_v0::error::Result<Vec<ProcessIdentity>> {
+    fn matching_executable(&self, _: &Path) -> kegari_types::error::Result<Vec<ProcessIdentity>> {
         Ok(vec![self.current()?, fixture_child()])
     }
 }
@@ -407,16 +416,19 @@ fn partial_setup_and_corrupt_recovery_preserve_all_records() {
 fn pending_startup_recovery_requires_no_live_process_and_no_runtime_lock() {
     struct Inventory(std::sync::Mutex<Vec<ProcessIdentity>>);
     impl ProcessProbe for Inventory {
-        fn current(&self) -> kegari_v0::error::Result<ProcessIdentity> {
+        fn current(&self) -> kegari_types::error::Result<ProcessIdentity> {
             FixtureProbe.current()
         }
         fn observe(
             &self,
             process: &ProcessIdentity,
-        ) -> kegari_v0::error::Result<ProcessObservation> {
+        ) -> kegari_types::error::Result<ProcessObservation> {
             FixtureProbe.observe(process)
         }
-        fn matching_executable(&self, _: &Path) -> kegari_v0::error::Result<Vec<ProcessIdentity>> {
+        fn matching_executable(
+            &self,
+            _: &Path,
+        ) -> kegari_types::error::Result<Vec<ProcessIdentity>> {
             let mut result = self.0.lock().unwrap().clone();
             result.push(self.current()?);
             Ok(result)

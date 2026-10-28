@@ -3,9 +3,9 @@
 use super::{FindingExpectation, ObservedFacts, PreparedFixture, bounded_read, relative};
 use crate::{
     delivery::ReviewResultClaim,
-    error::{Error, Result},
     evidence::{Verdict, validate_digest},
 };
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

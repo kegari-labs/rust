@@ -5,10 +5,8 @@ use super::{
     ExecutionRole, IsolationPlan, PathGrant, canonical_target, contained_path, overlap,
     safe_absolute,
 };
-use crate::{
-    digest::canonical_digest,
-    error::{Error, Result},
-};
+use crate::digest::canonical_digest;
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,

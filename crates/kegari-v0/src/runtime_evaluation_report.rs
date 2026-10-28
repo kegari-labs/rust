@@ -1,9 +1,7 @@
 //! Report classification only. Actual terminal authority remains with the owned
 //! worker and runtime; collected rubric evidence is preserved on cleanup failure.
-use crate::{
-    error::Error,
-    evaluation::{TrialOutcome, TrialReport},
-};
+use crate::evaluation::{TrialOutcome, TrialReport};
+use kegari_types::error::Error;
 
 pub(super) fn classify(
     report: &mut TrialReport,

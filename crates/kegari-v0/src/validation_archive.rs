@@ -4,11 +4,11 @@
 //! Producers supply original retained artifact bytes; current scratch paths are
 //! deliberately not read. A reference becomes usable only after full readback.
 use crate::digest::{bytes_digest, canonical_digest};
-use crate::error::{Error, Result};
 use crate::evidence::validation::MAX_VALIDATION_EVIDENCE_BYTES;
 use crate::evidence::{AttestationKey, CheckKind, RevisionBinding, Signed, ValidationEvidence};
 use crate::execution::{ArtifactProof, ExecutionBinding};
 use crate::storage::PrivateDir;
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Write;

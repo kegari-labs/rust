@@ -5,7 +5,6 @@ use crate::{
     control::{ControlHost, Permit, Receipt, ReceiptPhase},
     delivery::{DeliveryAdmission, DeliveryPhase, RepositoryContract},
     digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
     evidence::{AttestationKey, ProductionBaseline, ProductionTargetBaseline, Signed},
     git::Revision,
     providers::{
@@ -16,6 +15,7 @@ use crate::{
     storage::PrivateDir,
 };
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

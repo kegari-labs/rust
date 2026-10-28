@@ -5,10 +5,8 @@
 //! descriptors still marked CLOEXEC. The intended child guard was explicitly
 //! marked inheritable by its own earlier hook. Never unlock the inherited open
 //! file description, wait for a child here, or acquire this mutex after fork.
-use crate::{
-    error::{Error, Result},
-    storage::ExclusiveLock,
-};
+use crate::storage::ExclusiveLock;
+use kegari_types::error::{Error, Result};
 use std::{
     collections::BTreeMap,
     fs::File,

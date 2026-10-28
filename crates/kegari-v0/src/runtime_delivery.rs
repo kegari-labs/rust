@@ -7,7 +7,6 @@ use crate::{
         DeliveryCoordinator, DeliveryServices, GateCheck, ParentHydrationInputs, RepositoryContract,
     },
     deployment::ProductionObserver,
-    error::{Error, Result},
     git::{Git, GitLimits, HostGitExecutionScope, RepositoryId},
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
     process_records::ProcessJournal,
@@ -17,6 +16,7 @@ use crate::{
     workflow::Workflow,
 };
 use chrono::{Duration, Utc};
+use kegari_types::error::{Error, Result};
 use serde_json::json;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use uuid::Uuid;
@@ -748,7 +748,7 @@ impl RuntimeDelivery {
         &self,
         decision: crate::decisions::AuthorizedDecision,
     ) -> Result<crate::control::Receipt> {
-        if decision.request().command != crate::api::CommandName::Release {
+        if decision.request().command != kegari_types::api::CommandName::Release {
             return Err(Error::new(
                 "access_denied",
                 "release queue requires the authenticated release command",

@@ -2,10 +2,10 @@
 //! never turn a later pass, a replay, or a human-review placeholder into readiness.
 use crate::{
     digest::canonical_digest,
-    error::{Error, Result},
     evaluation::{self, EvidenceClass, SuiteManifest, TrialOutcome, TrialReport},
     storage::PrivateDir,
 };
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

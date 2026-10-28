@@ -2,13 +2,13 @@
 use crate::{
     control::{Receipt, RunReference},
     digest::canonical_digest,
-    error::{Error, Result},
     evidence::{AttestationKey, Signed},
     instructions::AgentRole,
     reconcile::{FreshGate, GatePurpose},
     storage::PrivateDir,
     worker::{WorkerOutcome, recover_session},
 };
+use kegari_types::error::{Error, Result};
 use serde_json::Value;
 use uuid::Uuid;
 #[path = "runtime_claims_transition.rs"]

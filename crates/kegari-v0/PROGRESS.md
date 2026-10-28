@@ -1,5 +1,65 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. `kegari-types` extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. Starting from
+`f02aff866e31c00e83abf2d6c03955833b351af8` on `main`, shared control data moved into
+`kegari-types`: `api::{CommandName, CommandRequest, Envelope}`, `error::{Error,
+Result}` and `snapshot::{Segment, Node, Page}`. Both CLI and backend import these
+types directly, without compatibility reexports. The temporary CLI → backend
+dependency remains. All three packages inherit workspace `0.2.0-alpha.10`;
+the executable remains `kegari-v0`.
+
+Serialization, redacted debugging and safe error constructors moved unchanged.
+Request validation, command classification/required roles and exit-code mapping
+remain single backend functions; snapshot state and reassembly remain backend-owned.
+Configuration, domain and authority-bearing models were not extracted. The types
+crate uses only the existing pinned serde/JSON/chrono/UUID dependencies, without
+clock or UUID-generation features. External lockfile entries are unchanged.
+
+The bounded independent review found no material issues in type ownership,
+policy semantics/call ordering, dependency direction, preserved assertions or
+build identity. Five new contract tests cover wire spellings/shapes, null and
+unknown-field handling, redaction, safe error conversion and pagination variants.
+
+Verification used the pinned Rust/Cargo 1.99.1 toolchain through the verified
+`stable` alias and `CARGO_HOME=/private/tmp/kegari-v0-cargo-cache`. Dependency
+resolution was offline; builds/tests/lint used `--offline --locked` after the
+local-package lockfile update. Normal test concurrency was retained.
+
+| Check | Result |
+| --- | --- |
+| Types crate alone, with its reduced features | 5 passed. |
+| Focused API/snapshot and CLI/local-CLI/executable coverage | 14 + 44 passed. |
+| Formatting and strict workspace all-target Clippy | Passed. |
+| Contract inventory and its tests | 519 blocks, 140 named requirements; 11 tests passed. |
+| Complete workspace release regression | 1,265 passed, 0 failed, 3 native ignored; 46 result groups. |
+| Optimized application build | Passed; aarch64-apple-darwin. |
+| Minimal-environment help/version/setup-help/build/handover inspection | Passed; consistent identity and schemas/assets; no runtime state created. |
+
+Exact commands, logs and the bounded review are indexed in
+`/private/tmp/kegari-types-extraction-checks.json`. Initial integration diagnostics
+(missed test imports/call sites, unused imports, redundant borrows and a trivial
+fixture lint) are retained there; all were corrected before final verification.
+All 755 source/test/build inputs still match
+`/private/tmp/kegari-types-extraction-source.json`, digest
+`sha256:73c0c479a0715ccfa57b274c15c4362a4d727a61e5392ba657eb093a564ba994`.
+
+Independent recomputation matches the 353-input application build identity,
+including the new types manifest and all four source files:
+`sha256:9ba649ea08b7727fb7bda7a7bdb90a9ec43567d8a5ce213ede8d04e3352544fe`.
+The inspected development executable is `target/release/kegari-v0`, SHA-256
+`810d3181a308e6b8cc851d2035281151121003a362f027e49d2152cd1fe04980`.
+Inspection evidence is `/private/tmp/kegari-types-extraction-inspection.json`.
+
+The alpha.10 archive digest and all 381 files listed in its package checksum
+manifest remain unchanged. No new prerelease was packaged. This refactor checkpoint
+closes no minor milestone; no native/live qualification, installation,
+activation or remote operation occurred. The existing execution restrictions and
+operational-qualification gaps remain. Further extraction requires a separate prompt.
+
+### CLI extraction — historical checkpoint (committed as `f02aff8`)
+
 **Goal mode cancelled. `kegari-cli` extraction verified; stopped for review.**
 
 Starting from `ae71891ba4ea3052aa919d74f6ab90b5283fd23f` on `main`, the CLI,

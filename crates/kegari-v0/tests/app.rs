@@ -4,12 +4,13 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
+use kegari_types::api::{CommandName, CommandRequest, Envelope};
+use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    api::{self, CommandName, CommandRequest, Dispatcher, Envelope, Peer},
+    api::{self, Dispatcher, Peer},
     app::*,
     config::Config,
     control::*,
-    error::{Error, Result},
     reconcile::RuntimeProjection,
     secrets::Secret,
     storage::PrivateDir,
@@ -315,7 +316,7 @@ async fn stopped_inspection_uses_shared_dispatcher_and_creates_no_receipts_or_wo
         let id = request.request_id;
         let response = f.api(request).await;
         assert!(response.ok, "{:?}", response.error);
-        let page: kegari_v0::snapshot::Page = serde_json::from_value(response.data).unwrap();
+        let page: kegari_types::snapshot::Page = serde_json::from_value(response.data).unwrap();
         let data = kegari_v0::snapshot::assemble(&[page]).unwrap();
         assert!(data.is_object());
         assert_eq!(f.control.operation(id).unwrap_err().code, "record_missing");
@@ -601,7 +602,8 @@ async fn paged_read_retains_original_revision_and_never_refetches_after_config_c
     let first = f.api(f.request(CommandName::ConfigShow, json!({}))).await;
     assert!(first.ok);
     let original = first.config_revision.clone();
-    let mut pages = vec![serde_json::from_value::<kegari_v0::snapshot::Page>(first.data).unwrap()];
+    let mut pages =
+        vec![serde_json::from_value::<kegari_types::snapshot::Page>(first.data).unwrap()];
     f.config.value.lock().unwrap().runtime.max_agents = 7;
     while let Some(cursor) = pages.last().unwrap().next_cursor {
         let snapshot = pages[0].snapshot_id;

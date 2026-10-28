@@ -1,7 +1,7 @@
 //! Bounded Git wire framing and pre-index expansion validation. This does not
 //! grant repository authority or replace Git's strict object/link verification.
-use crate::error::{Error, Result};
 use flate2::{Decompress, FlushDecompress, Status};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::{BTreeMap, BTreeSet};

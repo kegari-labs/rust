@@ -7,7 +7,6 @@ use crate::{
     },
     config::{Config, Profile, ReleaseMode, Workspace},
     digest::canonical_digest,
-    error::{Error, Result},
     evidence::{
         AttestationKey, Generation, Publication, Signed, VerifiedAcceptance, VerifiedChild,
         VerifiedParent, WorkIdentity,
@@ -19,6 +18,7 @@ use crate::{
     workflow::Workflow,
 };
 use chrono::{DateTime, Duration, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;

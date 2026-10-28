@@ -2,8 +2,8 @@
 //! live sandbox or media qualification; no provider/network actions occur.
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
+use kegari_types::error::{Error, Result};
 use kegari_v0::digest::bytes_digest;
-use kegari_v0::error::{Error, Result};
 use kegari_v0::evidence::{CheckKind, Generation, WorkIdentity};
 use kegari_v0::execution::*;
 use kegari_v0::git::{Git, RepositoryId};

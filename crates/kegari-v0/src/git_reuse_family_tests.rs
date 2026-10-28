@@ -2,13 +2,11 @@
 //! No provider session, ConfinedExecution or runtime joined cache is created.
 use crate::test_process_probe as process_probe;
 use crate::{
-    api::CommandRequest,
     app::{ConfigurationControl, HostFuture},
     authority::IssueKey,
     config::Config,
     control::{Actor, Lifecycle, MutationRequest, Receipt},
     delivery::RepositoryContract,
-    error::{Error, Result},
     git::{Git, GitLimits, HostGitExecutionScope, RepositoryId, configured_host_read_root},
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
     platform::{BinaryIdentity, HostIdentity, ProcessProbe, Registration},
@@ -29,6 +27,8 @@ use crate::{
     isolation::{ExecutionRole, IsolationPlan, ValidatedIsolation},
     workflow::Workflow,
 };
+use kegari_types::api::CommandRequest;
+use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,

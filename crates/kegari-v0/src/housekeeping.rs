@@ -5,7 +5,6 @@ use crate::{
         Actor, ControlHost, ControlSnapshot, MutationRequest, Receipt, ReceiptPhase, ReceiptStore,
     },
     digest::{bytes_digest, canonical_digest},
-    error::{Error, Result},
     execution::{
         ExecutionBinding, ExecutionLimits, HookInvocation, HookLedger, HookPhase, LocalExecutor,
         OwnedDirectory,
@@ -21,6 +20,7 @@ use crate::{
     workflow::Workflow,
 };
 use chrono::{DateTime, Utc};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};

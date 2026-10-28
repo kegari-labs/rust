@@ -849,11 +849,11 @@ async fn reconcile(h: &Harness, target: Uuid) -> Result<Receipt> {
         principal: Some(crate::control::Principal::Unix { uid: 501 }),
         roles: ["recover".into(), "inspect".into(), "lifecycle".into()].into(),
     };
-    let mut request = crate::api::CommandRequest {
+    let mut request = kegari_types::api::CommandRequest {
         api_version: 1,
         request_id: Uuid::new_v4(),
         runtime_id: h.lease.runtime_id,
-        command: crate::api::CommandName::OperationReconcile,
+        command: kegari_types::api::CommandName::OperationReconcile,
         args: json!({"operation":target}),
         expected_config_revision: Some(h.built.runtime.configuration.snapshot()?.revision()?),
         expected_control_generation: Some(h.built.runtime.control.snapshot()?.intent.generation),

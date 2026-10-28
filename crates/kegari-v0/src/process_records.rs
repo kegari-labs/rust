@@ -3,12 +3,12 @@
 use crate::{
     control::Lease,
     digest::canonical_digest,
-    error::{Error, Result},
     platform::{
         BinaryIdentity, NativeProcessProbe, ProcessIdentity, ProcessObservation, ProcessProbe,
     },
     storage::PrivateDir,
 };
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,

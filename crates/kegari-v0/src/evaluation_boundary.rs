@@ -1,10 +1,7 @@
 //! Diagnostic data only. Decoding this does not authorize any operation or
 //! qualify native containment, acceptance, source reuse or a successful trial.
-use crate::{
-    error::{Error, Result},
-    evidence::validate_digest,
-    worker::ReviewTarget,
-};
+use crate::{evidence::validate_digest, worker::ReviewTarget};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

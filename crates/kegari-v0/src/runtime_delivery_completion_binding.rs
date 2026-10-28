@@ -1,10 +1,6 @@
 //! Exact configured identity retained by immutable historical completion seals.
-use crate::{
-    config::Config,
-    error::{Error, Result},
-    evidence::WorkIdentity,
-    git::RepositoryId,
-};
+use crate::{config::Config, evidence::WorkIdentity, git::RepositoryId};
+use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uuid::Uuid;
