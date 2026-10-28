@@ -1,89 +1,112 @@
-# Kegari Rust workspace
+<h1 align="center">Kegari — Codex Orchestration</h1>
 
-| Package | Responsibility |
-| --- | --- |
-| [`kegari-types`](crates/kegari-types/README.md) | Shared command, response, error, snapshot, run and artifact data types. |
-| [`kegari-config`](crates/kegari-config/README.md) | Configuration models, TOML parsing, validation and path resolution. |
-| [`kegari-digest`](crates/kegari-digest/README.md) | Shared byte hashing and canonical JSON identities. |
-| [`kegari-providers`](crates/kegari-providers/README.md) | Typed GitHub/Linear network adapters and records. |
-| [`kegari-storage`](crates/kegari-storage/README.md) | Protected filesystem access, durable records and lock primitives. |
-| [`kegari-process`](crates/kegari-process/README.md) | Guarded process spawning, owned process groups and exit evidence. |
-| [`kegari-platform`](crates/kegari-platform/README.md) | OS identity, executable inspection and native host helpers. |
-| [`kegari-secrets`](crates/kegari-secrets/README.md) | Secret values, Keychain storage and generic signed-record primitives. |
-| [`kegari-control-api`](crates/kegari-control-api/README.md) | Authenticated transport, request rules, operator identities and snapshot operations. |
-| [`kegari-scheduler`](crates/kegari-scheduler/README.md) | Synchronous scheduling, capacity allocation, attempt accounting and retry timing. |
-| [`kegari-context`](crates/kegari-context/README.md) | Workflow documents, instruction assembly, embedded assets and resume compatibility. |
-| [`kegari-codex`](crates/kegari-codex/README.md) | Codex protocol client, session recovery, observations, stream transport and pinned schemas. |
-| [`kegari-controller`](crates/kegari-controller/README.md) | Control-host composition, dispatch, supervision and orchestration channel. |
-| [`kegari-cli`](crates/kegari-cli/README.md) | Public CLI, control client and the `kegari-v0` executable. |
-| [`kegari-v0`](crates/kegari-v0/README.md) | Remaining backend library and the `kegari-v0-evaluation` inspection executable. |
+<p align="center"><strong>0.2.0-alpha.10 · Development preview</strong></p>
 
-Both CLI and backend depend directly on `kegari-config` and `kegari-types`;
-`kegari-config` depends on `kegari-types`. The CLI also temporarily depends on the
-backend; the backend does not depend on the CLI. Shared types and configuration
-models are imported directly from their owning crates, without backend
-compatibility reexports. Configuration transactions, workflow integration,
-current-operator authorization and exit-code mapping remain in the backend.
-Command validation and snapshot operations now belong to `kegari-control-api`. Shared hashing belongs to `kegari-digest`.
-Provider adapters depend on config/types/digest; the backend retains the mutation
-broker, receipts and evidence admission. Neither new crate depends on the backend.
-CLI and backend also depend directly on `kegari-storage`, which depends on
-`kegari-types` and `kegari-digest`. Domain persistence policy remains in the backend.
-The backend also depends directly on `kegari-process`, which owns the single
-spawn/retirement interlock and owned process-group handling. It depends on
-storage/types without a backend dependency; the CLI has no direct process
-dependency. Process journals, authorization and application supervision remain
-in the backend.
-CLI and backend import native host helpers directly from `kegari-platform`, which
-depends on process/digest/types without a backend dependency. Registration,
-runtime ownership, services and application build metadata remain in the backend.
-CLI and backend import secret values directly from `kegari-secrets`, which also
-owns Keychain access, explicit reference resolution and generic attestation
-signing. It depends on types/digest without a backend or provider dependency.
-Provider credential conversion, authorized imports, publication framing and
-delivery-evidence policy remain in the backend.
-The controller temporarily depends on the backend and control API. The backend
-depends on control API, with no reverse dependency on controller, including in
-tests. Shared runtime contracts and command-policy helpers remain below the
-controller in `kegari_v0::{runtime_host, control_command}`. Registration, durable
-admission, configuration transactions and the execution/delivery engine remain
-backend-owned. Control-host and child process responsibilities are unchanged.
-The backend depends directly on `kegari-codex` for protocol/session ownership,
-request sequencing, deadlines, protocol recovery and observations. Its production
-workspace dependencies are shared types and digest; disposable storage fixtures
-are test-only. It has no backend dependency. Native launch and owned cleanup stay
-in `kegari_v0::codex_host`; protected retained sessions, receipt lineage and
-execution admission remain backend-owned. Shared run values are imported from
-`kegari_types::run`, while receipt parsing remains backend policy.
-The backend depends directly on `kegari-context` for workflow documents,
-instruction assembly, embedded assets and sealed instruction-resume compatibility.
-Context depends on config/digest/types without a backend, process or Codex
-dependency. Backend callers supply the existing application build identity;
-configuration workflow selection, protected artifact handling and execution
-admission remain backend-owned. `ArtifactProof` is descriptive shared data in
-`kegari_types::artifact`; conversion to a backend evidence reference uses
-`kegari_v0::execution::artifact_reference`.
-The backend imports synchronous scheduling and attempt-accounting interfaces from
-`kegari-scheduler`, whose only production workspace dependency is `kegari-types`.
-Configuration-derived limits, admission callbacks, permits, receipts and runtime
-orchestration remain in the backend. The scheduler performs no I/O or process
-management; CLI and controller need no direct dependency. Its existing `Attempts`
-helper does not replace the backend's receipt-based attempt accounting.
-All packages use workspace version `0.2.0-alpha.10`; the executable name, process
-roles and serialized schemas remain unchanged. This extraction creates no new
-prerelease or qualification claim.
+<p align="center">
+  A fork and extension of the
+  <a href="https://github.com/kegari-labs/symphony">OpenAI Symphony specification</a>.
+</p>
 
-From the workspace root, using the pinned toolchain; `--workspace` checks all fifteen
-packages:
+Kegari is designed to coordinate Codex agents around **Linear work and GitHub
+repositories**, bringing scoped implementation, testing, review and human
+acceptance into one workflow. Define the outcome and steer corrections while
+the system coordinates the work and gathers evidence for your decision.
+
+Its technology-agnostic approach lets agents discover commands from repository
+guidance, documentation and configuration. Projects should not need
+language-specific adapters or operator-maintained command inventories. The goal
+is less routine supervision, clearer delivery evidence and recoverable work
+across different repositories and technology stacks.
+
+**Preview status:** you can build and inspect the macOS CLI today. End-to-end
+native operation is still being qualified; this preview is not ready for
+production use or unattended orchestration.
+
+## Features and roadmap
+
+Checked items are available preview checkpoints. Unchecked items are target
+milestones, including capabilities with partial implementations; they are not
+release-date commitments.
+
+- [x] **0.2.0-alpha.10 — Development preview.** Build the macOS CLI and inspect
+  its commands and setup guidance.
+- [ ] **0.2.0 — Repository-aware execution.** Discover project commands and run
+  scoped work without toolset-specific configuration requirements.
+- [ ] **0.3.0 — Recoverable workflows.** Resume interrupted work while preserving
+  context, decisions, execution budgets and unresolved operations.
+- [ ] **0.4.0 — Delivery evidence.** Connect external targets and visual evidence
+  to the exact changes under review.
+- [ ] **0.5.0 — Installation and handover.** Establish supported installation,
+  upgrades and operator handover with compatibility checks.
+- [ ] **0.6.0 — Repeatable evaluation.** Exercise representative workflows and
+  assess observed behavior against defined outcomes.
+- [ ] **0.7.0 — Validated managed operation.** Complete native, provider and
+  actual-agent qualification for the supported workload scope.
+- [ ] **1.0.0 — Production readiness.** A future readiness milestone whose scope
+  and timing remain uncommitted.
+
+See the [detailed milestones](crates/kegari-v0/MILESTONES.md) for completion
+criteria and remaining work.
+
+## Installation: build the preview
+
+You will need:
+
+- **macOS on Apple silicon**, the currently verified executable build target.
+- **Rust 1.99.1**, installed through [rustup](https://rustup.rs/). The repository's
+  toolchain file selects the pinned version automatically.
+- **Xcode Command Line Tools**, or equivalent build tools supplied by Xcode,
+  for the native compiler and linker.
+- **Git** to clone this repository.
+
+Clone the source and build the optimized executable:
 
 ```sh
-cargo build --offline --locked -p kegari-cli --bin kegari-v0
-cargo run --offline --locked -p kegari-cli -- --help
-cargo test --offline --locked --workspace
-cargo clippy --offline --locked --workspace --all-targets -- -D warnings
-cargo fmt --all -- --check
+git clone https://github.com/kegari-labs/rust.git kegari
+cd kegari
+cargo build --release --locked -p kegari-cli --bin kegari-v0
 ```
 
-See [current progress](crates/kegari-v0/PROGRESS.md) and
-[version milestones](crates/kegari-v0/MILESTONES.md). Goal mode remains cancelled;
-native execution and operational qualification remain incomplete.
+The executable is written to `target/release/kegari-v0`. Explore it without
+creating a runtime or starting services:
+
+```sh
+./target/release/kegari-v0 --version
+./target/release/kegari-v0 --help
+./target/release/kegari-v0 setup --help
+```
+
+Rust is required to build from source, not to run an already-built executable.
+Launching `kegari-v0` without a command requests local status; before setup it
+reports an unavailable runtime rather than starting an orchestrator.
+
+For eventual operation, the current compatibility pins are **Git 2.56.0** and
+**Codex CLI 0.164.0-alpha.11.1**, with authorized Linear and GitHub connections.
+Remote control additionally requires Tailscale identity and TLS configuration.
+Service activation remains subject to the qualification and installation
+milestones above; these build instructions do not install a background service.
+
+## Documentation
+
+[Configuration](crates/kegari-v0/docs/configuration.md) ·
+[CLI guidance](crates/kegari-v0/docs/cli.md) ·
+[Milestones](crates/kegari-v0/MILESTONES.md) ·
+[Developer guide](docs/development.md)
+
+## Credits
+
+Luke Gareth Ribchester
+
+## Licenses
+
+Kegari's original Rust implementation is licensed under the [MIT License](LICENSE.md).
+
+The project forks and extends the
+[OpenAI Symphony specification](https://github.com/openai/symphony/blob/be10a1b79df723d6d7612b5651c8522704dafb2e/SPEC.md),
+retained in the [Kegari Labs Symphony fork](https://github.com/kegari-labs/symphony).
+The resulting [Kegari specification](crates/kegari-v0/SPEC.md) is a modified
+adaptation under **Apache License 2.0**, with the upstream OpenAI attribution,
+NOTICE and license preserved in its
+[attribution section](crates/kegari-v0/SPEC.md#15-attribution-and-apache-20-license).
+The Rust application implements that adapted specification; it is not a port of
+Symphony's Elixir reference implementation.
