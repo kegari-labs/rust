@@ -260,7 +260,7 @@ impl RuntimeDelivery {
                     CarryImportStatus::Failed
                 };
                 if retry {
-                    record.not_before = crate::scheduler::retry_at(
+                    record.not_before = kegari_scheduler::retry_at(
                         Utc::now(),
                         attempts,
                         workspace.configuration.runtime.retry_cap_ms,

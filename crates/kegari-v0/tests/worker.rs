@@ -1561,12 +1561,9 @@ fn recovered_session_retains_earlier_intervention_and_rejects_wrong_account_or_m
 
 #[test]
 fn driver_preparation_identity_ignores_refresh_noise_without_resetting_phase_attempt() {
+    use kegari_scheduler::{ReadyWork, Trigger, WorkKind};
     use kegari_types::run::PhaseKey;
-    use kegari_v0::{
-        runtime::WorkerAction,
-        runtime_schedule::RunSchedule,
-        scheduler::{ReadyWork, Trigger, WorkKind},
-    };
+    use kegari_v0::{runtime::WorkerAction, runtime_schedule::RunSchedule};
     let f = Fixture::new(AgentRole::Implementation);
     let gate = f
         .parent

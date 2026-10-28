@@ -1,11 +1,9 @@
 //! Durable worker-attempt planning. This selects a possible future admission;
 //! it never grants a permit, consumes a slot or turns a worker exit into delivery.
-use crate::{
-    control::{Receipt, ReceiptPhase},
-    scheduler::{Trigger, retry_at},
-};
+use crate::control::{Receipt, ReceiptPhase};
 use chrono::{DateTime, Utc};
 use kegari_config::RuntimeConfig;
+use kegari_scheduler::{Trigger, retry_at};
 use kegari_types::error::{Error, Result};
 use kegari_types::run::PhaseKey;
 use kegari_types::run::RunReference;
@@ -943,7 +941,7 @@ pub fn ensure_capacity(
     config: &kegari_config::Config,
     active: &[RunReference],
     next: &RunReference,
-    quota: Option<&crate::scheduler::Quota>,
+    quota: Option<&kegari_scheduler::Quota>,
 ) -> Result<()> {
     let state = next
         .normalized_state
@@ -972,7 +970,7 @@ pub(crate) fn check_capacity(
     config: &kegari_config::Config,
     active: &[RunReference],
     next: CapacityRequest<'_>,
-    quota: Option<&crate::scheduler::Quota>,
+    quota: Option<&kegari_scheduler::Quota>,
 ) -> Result<()> {
     let workspace = config
         .workspaces
@@ -994,7 +992,7 @@ pub(crate) fn check_capacity(
             "session capacity names another configured account",
         ));
     }
-    if matches!(quota, Some(crate::scheduler::Quota::Exhausted { .. })) {
+    if matches!(quota, Some(kegari_scheduler::Quota::Exhausted { .. })) {
         return Err(Error::new(
             "quota_wait",
             "actual account exhaustion blocks new sessions until refreshed",

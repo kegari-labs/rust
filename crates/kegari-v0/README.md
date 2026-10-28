@@ -109,10 +109,20 @@ alongside execution, protected archives and admission authority.
 `ArtifactProof::reference()` method becomes `execution::artifact_reference(&proof)`.
 See the [context extraction report](validation/CONTEXT-EXTRACTION.md).
 
+Synchronous scheduling, capacity/priority selection, attempt-accounting helpers
+and retry timing now belong to [`kegari-scheduler`](../kegari-scheduler/README.md).
+Import these interfaces directly from `kegari_scheduler`; the backend `scheduler`
+module is removed without compatibility reexports. The runtime driver retains
+configuration-to-limit conversion, durable admission, receipts, recovery and its
+existing locking/scheduler replacement sequence. The scheduler's `Attempts` helper
+is preserved without introducing new production use. The distinct private release
+attempt record stays here. See the
+[scheduler extraction report](validation/SCHEDULER-EXTRACTION.md).
+
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all fourteen packages:
+test and lint commands cover all fifteen packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
@@ -142,7 +152,8 @@ retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISS
 execution design has been removed. The source now separates `kegari-cli`,
 `kegari-types`, `kegari-config`, `kegari-digest`, `kegari-providers`,
 `kegari-storage`, `kegari-process`, `kegari-platform`, `kegari-secrets`,
-`kegari-control-api`, `kegari-controller`, `kegari-codex` and `kegari-context`
+`kegari-control-api`, `kegari-controller`, `kegari-codex`, `kegari-context`
+and `kegari-scheduler`
 from the remaining backend while retaining the
 same workspace version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a

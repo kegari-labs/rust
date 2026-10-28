@@ -6,12 +6,12 @@ use crate::{
         AuthorizationGate, DependencyOutcomes, GatePurpose, ParentDelivery, RuntimeProjection,
     },
     runtime_schedule::RunSchedule,
-    scheduler::{ReadyWork, WorkKind},
     worker::WorkerAuthority,
 };
 use chrono::{Duration, Utc};
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
+use kegari_scheduler::{ReadyWork, WorkKind};
 use kegari_types::error::{Error, Result};
 use kegari_types::run::PhaseKey;
 use std::collections::{BTreeMap, BTreeSet};

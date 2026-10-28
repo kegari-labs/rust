@@ -17,12 +17,12 @@ use crate::runtime_host::SupervisorDriver;
 use crate::runtime_host::SupervisorFuture;
 use crate::runtime_workers;
 use crate::runtime_workers::LaunchRequest;
-use crate::scheduler::Limits;
-use crate::scheduler::Scheduler;
 use crate::worker::WorkerHost;
 use chrono::Utc;
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
+use kegari_scheduler::Limits;
+use kegari_scheduler::Scheduler;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -1051,7 +1051,7 @@ fn preadmission_plan(
                     .and_then(Value::as_u64),
             )
             .max();
-        let mut retry_at = crate::scheduler::retry_at(
+        let mut retry_at = kegari_scheduler::retry_at(
             record.observed_at,
             prior.attempt,
             config.retry_cap_ms,
@@ -1865,62 +1865,6 @@ mod tests {
                 .unwrap_err()
                 .code,
             "correction_pending"
-        );
-    }
-    #[test]
-    fn scheduler_reload_keeps_running_reservation_and_fair_workspace_rotation() {
-        use crate::scheduler::{ReadyWork, Trigger, WorkKind};
-        let limits = Limits {
-            global: 2,
-            accounts: BTreeMap::from([("account".into(), 2)]),
-            workspaces: BTreeMap::from([(id(1), 2), (id(2), 2)]),
-            states: BTreeMap::new(),
-        };
-        let mut scheduler = Scheduler::new(limits.clone()).unwrap();
-        for (work, workspace) in [("a", id(1)), ("b", id(1)), ("c", id(2))] {
-            scheduler
-                .enqueue(ReadyWork {
-                    canonical_key: work.into(),
-                    workspace,
-                    account: "account".into(),
-                    generation: bytes_digest(work.as_bytes()),
-                    state: "ready".into(),
-                    priority: None,
-                    created_at: None,
-                    kind: WorkKind::Child,
-                    trigger: Some(Trigger::InitialAuthorization),
-                    not_before: Utc::now(),
-                    gate_blockers: vec![],
-                })
-                .unwrap();
-        }
-        let first = scheduler
-            .admit_next(Utc::now(), |_| Ok(id(10)))
-            .unwrap()
-            .unwrap();
-        assert_eq!(first.work.workspace, id(1));
-        let mut reduced = limits.clone();
-        reduced.global = 1;
-        scheduler.replace_limits(reduced).unwrap();
-        assert_eq!(scheduler.running().len(), 1);
-        assert!(
-            scheduler
-                .admit_next(Utc::now(), |_| panic!(
-                    "reduced cap must preserve active reservation"
-                ))
-                .unwrap()
-                .is_none()
-        );
-        scheduler.finish(id(10)).unwrap();
-        scheduler.replace_limits(limits).unwrap();
-        assert_eq!(
-            scheduler
-                .admit_next(Utc::now(), |_| Ok(id(11)))
-                .unwrap()
-                .unwrap()
-                .work
-                .workspace,
-            id(2)
         );
     }
 }

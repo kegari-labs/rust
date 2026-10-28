@@ -15,7 +15,6 @@ pub use crate::runtime_claims::{VerifiedAuthorizedOutcome, VerifiedCoordinationO
 use crate::runtime_host::ConfigurationControl;
 use crate::runtime_host::RuntimeDependencies;
 use crate::runtime_host::RuntimeInspection;
-use crate::scheduler::Quota;
 use crate::worker::ExecutionRegistry;
 use crate::worker::OutcomeSink;
 use crate::worker::WorkerAuthority;
@@ -26,6 +25,7 @@ use crate::worker_run::OwnedWorkerRun;
 use crate::worker_run::RunCompletion;
 use chrono::{Duration, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_scheduler::Quota;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use kegari_types::run::RunReference;

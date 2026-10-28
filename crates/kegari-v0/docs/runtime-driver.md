@@ -8,6 +8,13 @@ selection, isolated preparation, original phase budgets, current admission,
 worker construction and process registration use the production paths in
 `runtime_workers` and `worker_run`.
 
+The synchronous scheduling implementation lives in `kegari-scheduler`, imported
+through `kegari_scheduler`. It owns queue/capacity selection and retry helpers;
+configuration-to-limit conversion and the real admission callback remain in this
+backend. An allocation is not a permit, receipt or process owner. The existing
+`Attempts` helper is retained by the scheduler crate without replacing the runtime's
+receipt-based attempt accounting.
+
 The scheduler reserves capacity for both preparation and model work, rotates
 between workspaces and retains running reservations when configuration lowers
 limits. The control host independently checks actual durable admissions at the
@@ -51,10 +58,13 @@ not evidence of a live model run, native service installation or operational
 qualification. The native host factory must supply the complete production
 backend before the executable entry point is enabled.
 
-Focused checks are `cargo test -p kegari-v0 --lib runtime_driver::tests` and
-`cargo test -p kegari-v0 --test worker`. Fixtures cover admission binding, retained
-unknown exit, scheduler reload/fairness, storage failure during result retention,
-and stable dispatch identity across harmless observation changes.
+Focused checks are `cargo test -p kegari-scheduler`,
+`cargo test -p kegari-v0 --lib runtime_driver::tests`,
+`cargo test -p kegari-v0 --test runtime_schedule` and
+`cargo test -p kegari-v0 --test worker`, using the pinned toolchain/cache with
+`--release --offline --locked`. Pure scheduler reload/fairness coverage lives in
+the scheduler crate; admission binding, retained unknown exit, storage failure
+during result retention and stable dispatch identity remain backend coverage.
 
 Authorization retries distinguish actual admitted publication attempts from
 failures before any admission. The publisher's durable planner owns admitted

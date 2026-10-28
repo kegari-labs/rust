@@ -11,13 +11,13 @@ use crate::{
     process_records::ProcessJournal,
     runtime_schedule::RunSchedule,
     runtime_workers::{LaunchRequest, SourceSelection},
-    scheduler::{ReadyWork, Trigger, WorkKind},
     worker_run::{
         RecoveryPreparation, RecoveryProviderLaunch, RunOutcome, VerifiedProviderRecovery,
     },
 };
 use kegari_config::Config;
 use kegari_context::instructions::AgentRole;
+use kegari_scheduler::{ReadyWork, Trigger, WorkKind};
 use kegari_types::run::RunReference;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -911,7 +911,7 @@ fn recovery_model_plan(
         })
         .count()
         .max(1) as u32;
-    let not_before = crate::scheduler::retry_at(
+    let not_before = kegari_scheduler::retry_at(
         prior.updated_at,
         failures,
         limits.retry_cap_ms,
@@ -1008,7 +1008,7 @@ fn metadata_plan(
                 "metadata stage is successful without its live proof, unknown, or not retryable; it cannot be replayed",
             ));
         }
-        not_before = not_before.max(crate::scheduler::retry_at(
+        not_before = not_before.max(kegari_scheduler::retry_at(
             previous.updated_at,
             *attempt,
             limits.retry_cap_ms,

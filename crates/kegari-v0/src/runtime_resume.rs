@@ -254,7 +254,7 @@ impl RuntimeCoordinator {
             })
             .count()
             .max(1) as u32;
-        let not_before = crate::scheduler::retry_at(
+        let not_before = kegari_scheduler::retry_at(
             latest.updated_at,
             failure_index,
             config.runtime.retry_cap_ms,
@@ -277,7 +277,7 @@ impl RuntimeCoordinator {
             max_attempts: caps.0,
             max_turns: caps.1,
             max_review_rounds: caps.2,
-            trigger: crate::scheduler::Trigger::ScheduledRetry,
+            trigger: kegari_scheduler::Trigger::ScheduledRetry,
             not_before,
         })
     }

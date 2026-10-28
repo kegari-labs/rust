@@ -1,5 +1,41 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Scheduler extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. `kegari-scheduler` owns the existing
+synchronous scheduling, capacity/work/quota models, attempt-accounting helpers and
+retry timing. The complete production implementation is byte-identical to the
+original backend module. Callers import `kegari_scheduler` directly without
+compatibility reexports or reverse dependencies. Configuration-derived limits,
+durable admission, driver locking, receipts, recovery and process ownership remain
+backend-owned. The scheduler's `Attempts` helper gains no production callers, and
+the distinct private release attempt record is unchanged.
+
+All fifteen packages retain `0.2.0-alpha.10`; all 239 external lock entries remain
+unchanged. The original serialization corpus passes exactly, and all ten original
+scheduler/authority test bodies and assertions remain intact. All **76 focused
+release tests passed**. The complete workspace release suite passed **1,333 tests,
+zero failed, exactly three native ignores**, with normal concurrency. Formatting,
+strict all-target Clippy, contract inventory and its 11 tests passed. One bounded
+independent review found no material issue. The temporary baseline capture's syntax
+error and an initially empty recovery filter were corrected; diagnostics remain
+recorded. No test failed, and the complete suite ran once on the reviewed candidate.
+
+The optimized arm64 executable passed all five minimal-environment inspections,
+with consistent identity and no runtime-state creation. Independent reconstruction
+confirmed all 391 application hash inputs and the 817 reviewed source/test/build
+inputs. See the [scheduler boundary](../kegari-scheduler/README.md) and
+[verification report](validation/SCHEDULER-EXTRACTION.md) for migrations, results,
+retained diagnostics and source/executable identities.
+
+This adds no scheduling policy, runtime/isolation extraction or qualification claim.
+Native/live restrictions, milestone requirements, schemas, instruction/protocol
+assets and the alpha.10 archive remain intact. No installed Codex, live accounts,
+Keychain, native qualification, services, goal resumption, release packaging,
+commits or remote operations were involved.
+
+## Previous context extraction checkpoint
+
 **Goal mode cancelled. Context extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. `kegari-context` owns workflow documents,

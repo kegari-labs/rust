@@ -50,7 +50,6 @@ pub mod runtime_native;
 pub mod runtime_schedule;
 pub mod runtime_workers;
 pub mod runtime_workflow;
-pub mod scheduler;
 pub mod validation;
 pub mod worker;
 pub mod worker_run;

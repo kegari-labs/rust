@@ -2590,7 +2590,7 @@ mod source_tests {
             max_attempts: 3,
             max_turns: 4,
             max_review_rounds: 2,
-            trigger: crate::scheduler::Trigger::VerifiedUnfinished,
+            trigger: kegari_scheduler::Trigger::VerifiedUnfinished,
             not_before: chrono::Utc::now() - chrono::Duration::seconds(1),
         };
         require_preparation_schedule(&expected, &expected, 4).unwrap();
@@ -2608,7 +2608,7 @@ mod source_tests {
                 "attempt_cap" => current.max_attempts -= 1,
                 "turn_cap" => current.max_turns -= 1,
                 "review_cap" => current.max_review_rounds -= 1,
-                "trigger" => current.trigger = crate::scheduler::Trigger::OperatorRetry,
+                "trigger" => current.trigger = kegari_scheduler::Trigger::OperatorRetry,
                 "spacing" => {
                     current.not_before = chrono::Utc::now() + chrono::Duration::seconds(30)
                 }

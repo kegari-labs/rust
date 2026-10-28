@@ -1,0 +1,28 @@
+{
+  "allocation": "{\"operation\":\"00000000-0000-0000-0000-000000000002\",\"work\":{\"canonical_key\":\"work:fixture\",\"workspace\":\"00000000-0000-0000-0000-000000000001\",\"account\":\"fixture-account\",\"generation\":\"generation-1\",\"state\":\"Ready\",\"priority\":3,\"created_at\":\"2026-01-02T03:04:05Z\",\"kind\":\"child\",\"trigger\":\"initial_authorization\",\"not_before\":\"2026-01-02T03:04:05Z\",\"gate_blockers\":[\"fixture-blocker\"]},\"started_at\":\"2026-01-02T03:04:05Z\"}",
+  "attempt_nulls": "{\"operation_id\":\"00000000-0000-0000-0000-000000000002\",\"key\":{\"work\":\"work:fixture\",\"generation\":\"generation-1\",\"phase\":\"implementation\",\"retry_grant\":null},\"ordinal\":1,\"turns\":2,\"review_round\":0,\"progress_digest\":null,\"outcome\":\"running\"}",
+  "attempt_supplied": "{\"operation_id\":\"00000000-0000-0000-0000-000000000002\",\"key\":{\"work\":\"work:fixture\",\"generation\":\"generation-1\",\"phase\":\"implementation\",\"retry_grant\":\"00000000-0000-0000-0000-000000000003\"},\"ordinal\":1,\"turns\":2,\"review_round\":0,\"progress_digest\":\"fixture-progress-digest\",\"outcome\":\"running\"}",
+  "quotas": [
+    "{\"state\":\"unknown\"}",
+    "{\"state\":\"available\",\"observed_at\":\"2026-01-02T03:04:05Z\"}",
+    "{\"state\":\"exhausted\",\"observed_at\":\"2026-01-02T03:04:05Z\",\"reset_at\":null}",
+    "{\"state\":\"exhausted\",\"observed_at\":\"2026-01-02T03:04:05Z\",\"reset_at\":\"2026-01-02T03:04:05Z\"}"
+  ],
+  "ready_full": "{\"canonical_key\":\"work:fixture\",\"workspace\":\"00000000-0000-0000-0000-000000000001\",\"account\":\"fixture-account\",\"generation\":\"generation-1\",\"state\":\"Ready\",\"priority\":3,\"created_at\":\"2026-01-02T03:04:05Z\",\"kind\":\"child\",\"trigger\":\"initial_authorization\",\"not_before\":\"2026-01-02T03:04:05Z\",\"gate_blockers\":[\"fixture-blocker\"]}",
+  "ready_optional_nulls": "{\"canonical_key\":\"work:fixture\",\"workspace\":\"00000000-0000-0000-0000-000000000001\",\"account\":\"fixture-account\",\"generation\":\"generation-1\",\"state\":\"Ready\",\"priority\":null,\"created_at\":null,\"kind\":\"child\",\"trigger\":null,\"not_before\":\"2026-01-02T03:04:05Z\",\"gate_blockers\":[\"fixture-blocker\"]}",
+  "triggers": [
+    "\"initial_authorization\"",
+    "\"correction\"",
+    "\"dependency_satisfied\"",
+    "\"scheduled_retry\"",
+    "\"verified_unfinished\"",
+    "\"verified_source_advanced\"",
+    "\"verified_parent_reassembly\"",
+    "\"operator_retry\""
+  ],
+  "work_kinds": [
+    "\"child\"",
+    "\"coordination\"",
+    "\"independent_review\""
+  ]
+}

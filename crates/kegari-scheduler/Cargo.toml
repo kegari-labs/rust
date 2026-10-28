@@ -1,0 +1,17 @@
+[package]
+name = "kegari-scheduler"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+kegari-types = { path = "../kegari-types" }
+serde = { version = "=1.0.229", features = ["derive"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["std", "serde"] }
+uuid = { version = "=1.18.1", default-features = false, features = ["std", "serde"] }
+
+[dev-dependencies]
+kegari-digest = { path = "../kegari-digest" }
+serde_json = "=1.0.151"
+chrono = { version = "=0.4.45", default-features = false, features = ["std", "serde", "clock"] }
+uuid = { version = "=1.18.1", default-features = false, features = ["std", "serde", "v4"] }

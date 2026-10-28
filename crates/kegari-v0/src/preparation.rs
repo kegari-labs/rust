@@ -689,7 +689,7 @@ pub(crate) fn metadata_publication_attempt(
             )
             .max();
         let mut retry_at =
-            crate::scheduler::retry_at(updated, *attempt, config.retry_cap_ms, retry_after_ms)?;
+            kegari_scheduler::retry_at(updated, *attempt, config.retry_cap_ms, retry_after_ms)?;
         if let Some(reset) = error
             .details
             .pointer("/rate_limit/reset_at")

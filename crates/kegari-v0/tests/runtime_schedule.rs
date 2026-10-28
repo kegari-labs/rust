@@ -1,13 +1,13 @@
 use chrono::{Duration, Utc};
 use kegari_config::RuntimeConfig;
 use kegari_digest::canonical_digest;
+use kegari_scheduler::Trigger;
 use kegari_types::error::Error;
 use kegari_types::run::PhaseKey;
 use kegari_types::run::RunReference;
 use kegari_v0::{
     control::{Receipt, ReceiptPhase},
     runtime_schedule::{occupying_runs, plan, require_provider_clear},
-    scheduler::Trigger,
 };
 use serde_json::json;
 use std::collections::BTreeMap;

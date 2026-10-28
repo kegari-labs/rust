@@ -11,6 +11,7 @@
 | [`kegari-platform`](crates/kegari-platform/README.md) | OS identity, executable inspection and native host helpers. |
 | [`kegari-secrets`](crates/kegari-secrets/README.md) | Secret values, Keychain storage and generic signed-record primitives. |
 | [`kegari-control-api`](crates/kegari-control-api/README.md) | Authenticated transport, request rules, operator identities and snapshot operations. |
+| [`kegari-scheduler`](crates/kegari-scheduler/README.md) | Synchronous scheduling, capacity allocation, attempt accounting and retry timing. |
 | [`kegari-context`](crates/kegari-context/README.md) | Workflow documents, instruction assembly, embedded assets and resume compatibility. |
 | [`kegari-codex`](crates/kegari-codex/README.md) | Codex protocol client, session recovery, observations, stream transport and pinned schemas. |
 | [`kegari-controller`](crates/kegari-controller/README.md) | Control-host composition, dispatch, supervision and orchestration channel. |
@@ -62,11 +63,17 @@ configuration workflow selection, protected artifact handling and execution
 admission remain backend-owned. `ArtifactProof` is descriptive shared data in
 `kegari_types::artifact`; conversion to a backend evidence reference uses
 `kegari_v0::execution::artifact_reference`.
+The backend imports synchronous scheduling and attempt-accounting interfaces from
+`kegari-scheduler`, whose only production workspace dependency is `kegari-types`.
+Configuration-derived limits, admission callbacks, permits, receipts and runtime
+orchestration remain in the backend. The scheduler performs no I/O or process
+management; CLI and controller need no direct dependency. Its existing `Attempts`
+helper does not replace the backend's receipt-based attempt accounting.
 All packages use workspace version `0.2.0-alpha.10`; the executable name, process
 roles and serialized schemas remain unchanged. This extraction creates no new
 prerelease or qualification claim.
 
-From the workspace root, using the pinned toolchain; `--workspace` checks all fourteen
+From the workspace root, using the pinned toolchain; `--workspace` checks all fifteen
 packages:
 
 ```sh
