@@ -11,11 +11,11 @@ use crate::{
     process_records::ProcessJournal,
     reconcile::{FreshGate, GatePurpose, ParentProjection, RuntimeProjection},
     runtime::RuntimeCoordinator,
-    storage::PrivateDir,
     workflow::Workflow,
 };
 use chrono::{Duration, Utc};
 use kegari_config::Config;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde_json::json;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};

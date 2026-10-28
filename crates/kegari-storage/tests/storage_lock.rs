@@ -1,7 +1,7 @@
 //! Ordinary disposable fork/exec fixtures, not native isolation qualification.
 #![cfg(unix)]
 
-use kegari_v0::storage::PrivateDir;
+use kegari_storage::PrivateDir;
 use std::{
     io::{self, Read, Write},
     net::Shutdown,

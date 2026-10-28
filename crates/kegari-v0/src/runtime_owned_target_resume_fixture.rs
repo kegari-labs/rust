@@ -71,7 +71,7 @@ pub(super) async fn assert_closed(
         "github_dispatch"
     );
     let deployment =
-        crate::storage::PrivateDir::open(&workspace.records.path().join("deployment")).unwrap();
+        kegari_storage::PrivateDir::open(&workspace.records.path().join("deployment")).unwrap();
     reference
         .validate_retained(
             &deployment,
@@ -95,7 +95,7 @@ pub(super) async fn assert_closed(
     let initial_writes = writes();
     let effects = f.github.release_effect_count();
     let receipts = canonical_digest(1, &delivery.runtime.control.operations().unwrap()).unwrap();
-    let directory = crate::storage::PrivateDir::open(
+    let directory = kegari_storage::PrivateDir::open(
         &delivery.runtime.registration.root().path().join("receipts"),
     )
     .unwrap();

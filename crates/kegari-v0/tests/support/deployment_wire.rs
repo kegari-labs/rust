@@ -5,6 +5,7 @@ pub(crate) use chrono::{Duration, Utc};
 pub(crate) use kegari_config::{GithubSelection, Profile, ReleaseMode, Speed};
 pub(crate) use kegari_digest::bytes_digest;
 pub(crate) use kegari_providers::*;
+pub(crate) use kegari_storage::PrivateDir;
 pub(crate) use kegari_types::error::{Error, Result};
 pub(crate) use kegari_v0::{
     authority::{Corrections, IssueKey},
@@ -15,7 +16,6 @@ pub(crate) use kegari_v0::{
     git::{RepositoryId, Revision},
     providers::*,
     reconcile::{DependencyOutcomes, GatePurpose, ParentProjection},
-    storage::PrivateDir,
 };
 pub(crate) use reqwest::header::{HeaderMap, HeaderValue};
 pub(crate) use serde_json::{Value, json};

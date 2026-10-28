@@ -1,8 +1,8 @@
 //! Serialized admission and durable operator intent. The host owns this object;
 //! the scheduler and workers only receive revocable operation permits.
-use crate::storage::{ExclusiveLock, PrivateDir};
 use chrono::{DateTime, Utc};
 use kegari_digest::canonical_digest;
+use kegari_storage::{ExclusiveLock, PrivateDir};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -562,7 +562,7 @@ struct State {
     effect_indexes: BTreeMap<Uuid, effect_index::LiveIndex>,
     effect_history: effect_index::History,
     #[cfg(test)]
-    effect_index_fault: Option<crate::storage::WriteBoundary>,
+    effect_index_fault: Option<kegari_storage::WriteBoundary>,
     fenced: BTreeSet<Uuid>,
     error: Option<String>,
     holds: BTreeMap<Uuid, Vec<String>>,

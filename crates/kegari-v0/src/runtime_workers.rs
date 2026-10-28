@@ -23,7 +23,6 @@ use crate::{
     providers::ProviderBroker,
     runtime::RuntimeCoordinator,
     scheduler::PhaseKey,
-    storage::PrivateDir,
     worker::{
         ReadResource, ReviewTarget, WorkerAuthority, WorkerExecution, WorkerHost, WorkerServices,
     },
@@ -35,6 +34,7 @@ use crate::{
 };
 use kegari_config::{Config, Workspace};
 use kegari_digest::canonical_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

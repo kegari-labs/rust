@@ -5,8 +5,8 @@ use crate::{
     platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe},
     process_group::{OwnedGroup, Termination},
     process_records::{ProcessJournal, RecoveryState, SpawnBinding, SpawnGuard},
-    storage::PrivateDir,
 };
+use kegari_storage::PrivateDir;
 use std::{
     os::{fd::OwnedFd, unix::net::UnixStream},
     sync::{

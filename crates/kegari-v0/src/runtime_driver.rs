@@ -10,13 +10,13 @@ use crate::{
     },
     runtime_workers::{self, LaunchRequest},
     scheduler::{Limits, Scheduler},
-    storage::PrivateDir,
     supervisor::{DrainState, SupervisorDriver, SupervisorFuture},
     worker::WorkerHost,
 };
 use chrono::Utc;
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

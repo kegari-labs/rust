@@ -47,7 +47,7 @@ pub(super) fn prepare(
         let git = original.git_path().unwrap();
         let housekeeping = Arc::new(
             crate::housekeeping::Housekeeping::new(
-                crate::storage::PrivateDir::open(previous.registration.root().path()).unwrap(),
+                kegari_storage::PrivateDir::open(previous.registration.root().path()).unwrap(),
                 previous.control.clone(),
                 probe.clone(),
                 git.clone(),
@@ -128,7 +128,7 @@ impl Drop for ReleaseReader {
     }
 }
 struct RestoreSeal {
-    records: Arc<crate::storage::PrivateDir>,
+    records: Arc<kegari_storage::PrivateDir>,
     leaf: String,
     bytes: Vec<u8>,
     restored: bool,

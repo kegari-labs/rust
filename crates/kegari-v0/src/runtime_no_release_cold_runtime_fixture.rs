@@ -205,7 +205,7 @@ async fn new_runtime_evidence(h: &Harness) -> Arc<RuntimeDelivery> {
     let git = h.delivery.git_path().unwrap();
     let housekeeping = Arc::new(
         crate::housekeeping::Housekeeping::new(
-            crate::storage::PrivateDir::open(previous.registration.root().path()).unwrap(),
+            kegari_storage::PrivateDir::open(previous.registration.root().path()).unwrap(),
             previous.control.clone(),
             probe.clone(),
             git.clone(),

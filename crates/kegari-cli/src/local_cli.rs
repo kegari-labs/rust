@@ -5,12 +5,10 @@ use crate::{
     client::{ControlClient, Endpoint, Target, TargetStore},
 };
 use kegari_config::{Config, Connection, ControlRole, Workspace};
+use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
-use kegari_v0::{
-    platform::{self, AccountHome, HostIdentity, OwnerRecord, ServiceStartState},
-    storage::PrivateDir,
-};
+use kegari_v0::platform::{self, AccountHome, HostIdentity, OwnerRecord, ServiceStartState};
 use serde_json::json;
 use std::{
     collections::BTreeSet,

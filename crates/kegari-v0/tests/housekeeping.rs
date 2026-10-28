@@ -6,6 +6,7 @@ mod pinned_git;
 mod process_probe;
 use kegari_digest::bytes_digest;
 use kegari_providers::*;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     control::*,
@@ -18,7 +19,6 @@ use kegari_v0::{
     housekeeping::*,
     isolation::{ExecutionRole, IsolationPlan},
     platform::{ProcessIdentity, ProcessObservation, ProcessProbe},
-    storage::PrivateDir,
     workflow::Workflow,
 };
 use serde_json::{Value, json};

@@ -19,7 +19,7 @@ mod source_fixture;
 
 struct Harness {
     _root: tempfile::TempDir,
-    _owner: crate::storage::ExclusiveLock,
+    _owner: kegari_storage::ExclusiveLock,
     owner: super::super::super::tests::FixtureOwner,
     built: RuntimeFixture,
     delivery: Arc<RuntimeDelivery>,

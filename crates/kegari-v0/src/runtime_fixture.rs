@@ -13,8 +13,8 @@ use crate::{
     process_records::ProcessJournal,
     runtime::RuntimeCoordinator,
     secrets::SecretStore,
-    storage::PrivateDir,
 };
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde_json::Value;
 use std::{

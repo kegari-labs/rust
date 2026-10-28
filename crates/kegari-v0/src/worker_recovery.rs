@@ -3,9 +3,9 @@ use super::*;
 use crate::{
     codex::{RetainedResumeSession, VerifiedThreadRecovery},
     control::{Lease, SessionRecoveryPreparationReference},
-    storage::PrivateDir,
     worker::RecoveryJournal,
 };
+use kegari_storage::PrivateDir;
 
 pub struct RecoveryPreparation {
     pub config: Arc<Config>,

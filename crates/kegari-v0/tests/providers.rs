@@ -4,6 +4,7 @@ use base64::Engine;
 use kegari_config::{GithubSelection, LinearSelection, Selector};
 use kegari_digest::bytes_digest;
 use kegari_providers::*;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     control::{Actor, ControlHost, MutationRequest, ReceiptPhase},
@@ -11,7 +12,6 @@ use kegari_v0::{
         GITHUB_OIDC_ISSUER, GITHUB_OIDC_JWKS, HostedProofExpectation, HostedProofVerifier,
         LinearAssetReference, ProviderBroker, ProviderMutation, download_uploaded_asset,
     },
-    storage::PrivateDir,
 };
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};

@@ -53,7 +53,7 @@ pub(crate) struct VerifiedReleaseCompletion {
     terminal: ReleaseAttempt,
     work: WorkIdentity,
     holds: BTreeMap<Uuid, domain::ResourceHold>,
-    records: Arc<crate::storage::PrivateDir>,
+    records: Arc<kegari_storage::PrivateDir>,
     control: Arc<crate::control::ControlHost>,
     key: Arc<evidence::AttestationKey>,
 }
@@ -83,14 +83,14 @@ fn completion_context(
 }
 
 fn read_target_reference(
-    workspace: &crate::storage::PrivateDir,
+    workspace: &kegari_storage::PrivateDir,
     operation: Uuid,
     reference: &ProofFile,
 ) -> Result<Signed<Value>> {
     // RuntimeDelivery gives ProductionObserver this exact dedicated namespace.
     // Recovery must open it without creating a missing store or falling back to
     // a similarly named file in the workspace's release/vector store.
-    crate::storage::PrivateDir::open(&workspace.path().join("deployment"))
+    kegari_storage::PrivateDir::open(&workspace.path().join("deployment"))
         .and_then(|deployment| deployment.read(&reference.leaf))
         .map_err(|error| {
             completion_context(error, operation, "target_reference", &reference.purpose)
@@ -229,7 +229,7 @@ fn closed_owner_references(
 }
 
 fn validate_completion_envelope(
-    records: &crate::storage::PrivateDir,
+    records: &kegari_storage::PrivateDir,
     key: &evidence::AttestationKey,
     expected: &CompletionRecord,
 ) -> Result<()> {
@@ -327,7 +327,7 @@ pub(crate) struct ReleaseCompletionAnchor {
     terminal: ReleaseAttempt,
     work: WorkIdentity,
     resources: BTreeSet<domain::ResourceKey>,
-    records: Arc<crate::storage::PrivateDir>,
+    records: Arc<kegari_storage::PrivateDir>,
     key: Arc<evidence::AttestationKey>,
 }
 impl std::fmt::Debug for ReleaseCompletionAnchor {
@@ -448,7 +448,7 @@ impl VerifiedReleaseCompletion {
     }
     fn validate_references(&self) -> Result<()> {
         let mut expected_files = BTreeMap::new();
-        let workspace = crate::storage::PrivateDir::open(
+        let workspace = kegari_storage::PrivateDir::open(
             &self.records.path().join(self.record.workspace.to_string()),
         )?;
         for (id, digest) in &self.record.attempts {
@@ -655,7 +655,7 @@ impl VerifiedReleaseCompletion {
             PURPOSE,
             &self.key,
         )?;
-        let workspace = crate::storage::PrivateDir::open(
+        let workspace = kegari_storage::PrivateDir::open(
             &self.records.path().join(self.record.workspace.to_string()),
         )?;
         for (operation, _) in &self.record.attempts {
@@ -694,7 +694,7 @@ impl VerifiedReleaseCompletion {
         }
         if !self.record.target_proofs.is_empty() {
             let deployment =
-                crate::storage::PrivateDir::open(&workspace.path().join("deployment"))?;
+                kegari_storage::PrivateDir::open(&workspace.path().join("deployment"))?;
             for reference in &self.record.target_proofs {
                 refs.retain_file(
                     CarryNamespace::Deployment {
@@ -1978,7 +1978,7 @@ mod reference_tests {
     #[test]
     fn target_references_use_the_existing_deployment_namespace_only() {
         let root = tempfile::tempdir().unwrap();
-        let workspace = crate::storage::PrivateDir::create(
+        let workspace = kegari_storage::PrivateDir::create(
             &root.path().canonicalize().unwrap().join("workspace"),
         )
         .unwrap();

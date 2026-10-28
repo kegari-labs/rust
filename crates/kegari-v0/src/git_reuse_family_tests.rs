@@ -10,7 +10,6 @@ use crate::{
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
     platform::{BinaryIdentity, HostIdentity, ProcessProbe, Registration},
     process_records::ProcessJournal,
-    storage::PrivateDir,
     worker::ExecutionRegistry,
 };
 use crate::{
@@ -27,6 +26,7 @@ use crate::{
 use kegari_config::Config;
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::RepositoryIdentity;
+use kegari_storage::PrivateDir;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};

@@ -303,7 +303,7 @@ fn enroll(
     let digest = bytes_digest(b"synthetic component instruction/context identity");
     // Retain an actual read and protected record. The fixed instruction/turn
     // labels are component data, not a manufactured native worker enrollment.
-    let records = crate::storage::PrivateDir::create(
+    let records = kegari_storage::PrivateDir::create(
         &f._temp
             .path()
             .canonicalize()
@@ -422,7 +422,7 @@ async fn stdout_only_discovered_check_retains_actual_transcript_plan_and_fixture
         serde_json::from_slice(&std::fs::read(&provenance.transcript).unwrap()).unwrap();
     assert_eq!(transcript["command"]["stdout"], "actual injected stdout\n");
     assert_eq!(transcript["plan_digest"], plan.digest());
-    let protected = crate::storage::PrivateDir::create(
+    let protected = kegari_storage::PrivateDir::create(
         &f._temp.path().canonicalize().unwrap().join("retained"),
     )
     .unwrap();

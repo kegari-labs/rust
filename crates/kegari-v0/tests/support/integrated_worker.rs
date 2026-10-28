@@ -7,11 +7,11 @@ use kegari_v0::evaluation::TrialHost;
 #[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
 mod worker_bundle;
 use kegari_config::Speed;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
     codex::*, control::*, execution::*, git::Git, instructions::*, isolation::*,
-    providers::ProviderBroker, reconcile::ParentProjection, storage::PrivateDir, worker::*,
-    workflow::Workflow,
+    providers::ProviderBroker, reconcile::ParentProjection, worker::*, workflow::Workflow,
 };
 use serde_json::{Value, json};
 use std::{

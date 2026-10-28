@@ -13,7 +13,6 @@ use crate::{
     observations::{ObservationCache, ReferenceStore},
     platform::{BinaryIdentity, HostIdentity, NativeProcessProbe, Registration},
     secrets::{Keychain, SecretStore},
-    storage::PrivateDir,
     supervisor::{
         DrainState, NativeSupervisor, Supervisor, SupervisorDriver, SupervisorFuture,
         SupervisorLimits,
@@ -21,6 +20,7 @@ use crate::{
     transport::{self, ServerHandle, TailscaleClient, TransportAuthentication},
 };
 use kegari_digest::canonical_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};

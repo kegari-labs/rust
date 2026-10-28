@@ -5,8 +5,8 @@ use super::*;
 use crate::{
     control::Lease,
     process_records::{ProcessJournal, RecoveryState, SpawnBinding},
-    storage::PrivateDir,
 };
+use kegari_storage::PrivateDir;
 use std::sync::Arc;
 use uuid::Uuid;
 

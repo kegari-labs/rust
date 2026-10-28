@@ -3,7 +3,6 @@
 use crate::{
     api::{ApiState, Authentication, MAX_HEADERS, Peer, REQUEST_DEADLINE, connection_router},
     control::{Actor, Principal},
-    storage::PrivateDir,
 };
 use chrono::{DateTime, Utc};
 use hyper::server::conn::http1;
@@ -13,6 +12,7 @@ use hyper_util::{
 };
 use kegari_config::{ControlConfig, ControlRole, HttpsConfig, Operator, is_tailscale_address};
 use kegari_digest::bytes_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use rustls::{
     RootCertStore, ServerConfig,

@@ -3,7 +3,7 @@
 use super::*;
 use crate::control::{ControlHost, Receipt, ReceiptPhase};
 use crate::evidence::{VerifiedAcceptance, VerifiedParent};
-use crate::storage::PrivateDir;
+use kegari_storage::PrivateDir;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

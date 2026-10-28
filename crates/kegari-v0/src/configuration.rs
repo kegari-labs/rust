@@ -7,13 +7,13 @@ use crate::{
     isolation::{ExecutionRole, IsolationPlan},
     platform::{HostIdentity, Registration},
     secrets::{Secret, SecretStore, resolve_reference},
-    storage::PrivateDir,
     transport::TransportAuthentication,
 };
 use kegari_config::{Config, Connection, ControlRole, Deployment, ProviderKind, Speed, Workspace};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::HttpTransport;
 use kegari_providers::{AccountIdentity, GithubClient, HttpPolicy};
+use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
 use serde::Serialize;

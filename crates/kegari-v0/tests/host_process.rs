@@ -9,6 +9,7 @@ mod pinned_git;
 mod process_probe;
 use kegari_config::Config;
 use kegari_providers::RepositoryIdentity;
+use kegari_storage::PrivateDir;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
@@ -19,7 +20,6 @@ use kegari_v0::{
     host_process::{HostProcessServices, LocalProcessPermit, MetadataRequest},
     platform::{BinaryIdentity, HostIdentity, ProcessProbe, Registration},
     process_records::{ProcessJournal, RecoveryState},
-    storage::PrivateDir,
     worker::ExecutionRegistry,
 };
 use serde_json::{Value, json};

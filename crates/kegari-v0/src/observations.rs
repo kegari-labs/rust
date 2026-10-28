@@ -13,12 +13,12 @@ use crate::{
         VerifiedDefinitionCorrection,
     },
     secrets::SecretStore,
-    storage::PrivateDir,
     workflow::Workflow,
 };
 use chrono::{DateTime, Utc};
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

@@ -289,6 +289,7 @@ impl HttpTransport for Wire {
         })
     }
 }
+use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::Error;
 use kegari_v0::{
@@ -303,7 +304,6 @@ use kegari_v0::{
     observations::ObservationCache,
     platform::{ProcessIdentity, ProcessObservation, ProcessProbe},
     secrets::{Secret, SecretStore},
-    storage::PrivateDir,
 };
 use std::{
     path::{Path, PathBuf},

@@ -1,10 +1,8 @@
 //! Read-only evidence inspection. Comparisons retain every declared attempt and
 //! never turn a later pass, a replay, or a human-review placeholder into readiness.
-use crate::{
-    evaluation::{self, EvidenceClass, SuiteManifest, TrialOutcome, TrialReport},
-    storage::PrivateDir,
-};
+use crate::evaluation::{self, EvidenceClass, SuiteManifest, TrialOutcome, TrialReport};
 use kegari_digest::canonical_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

@@ -149,13 +149,13 @@ use crate::{
     git::{Git, RepositoryId},
     providers::*,
     reconcile::*,
-    storage::PrivateDir,
     workflow::Workflow,
 };
 use chrono::{Duration, Utc};
 use kegari_config::Config;
 use kegari_digest::canonical_digest;
 use kegari_providers::*;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};

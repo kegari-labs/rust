@@ -329,7 +329,7 @@ mod registry_return_tests {
         let path = temp.path().canonicalize().unwrap();
         let runtime = Uuid::new_v4();
         let control = ControlHost::setup(
-            crate::storage::PrivateDir::create(&path.join("control")).unwrap(),
+            kegari_storage::PrivateDir::create(&path.join("control")).unwrap(),
             runtime,
             Uuid::new_v4(),
         )

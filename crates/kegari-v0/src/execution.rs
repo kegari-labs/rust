@@ -829,14 +829,14 @@ impl FailedCheckExecution {
     pub fn retain_outputs(
         &self,
         boundary: &ValidatedIsolation,
-        directory: &crate::storage::PrivateDir,
+        directory: &kegari_storage::PrivateDir,
     ) -> Result<Vec<RetainedArtifact>> {
         VerifiedCheckExecution::retain_record_outputs(&self.record, boundary, directory)
     }
     pub(crate) fn retain_outputs_into(
         &self,
         boundary: &ValidatedIsolation,
-        directory: &crate::storage::PrivateDir,
+        directory: &kegari_storage::PrivateDir,
         retain: impl FnMut(RetainedArtifact) -> Result<()>,
     ) -> Result<()> {
         VerifiedCheckExecution::retain_record_outputs_into(
@@ -944,14 +944,14 @@ impl VerifiedCheckExecution {
     pub fn retain_outputs(
         &self,
         boundary: &ValidatedIsolation,
-        directory: &crate::storage::PrivateDir,
+        directory: &kegari_storage::PrivateDir,
     ) -> Result<Vec<RetainedArtifact>> {
         Self::retain_record_outputs(&self.record, boundary, directory)
     }
     pub(crate) fn retain_outputs_into(
         &self,
         boundary: &ValidatedIsolation,
-        directory: &crate::storage::PrivateDir,
+        directory: &kegari_storage::PrivateDir,
         retain: impl FnMut(RetainedArtifact) -> Result<()>,
     ) -> Result<()> {
         Self::retain_record_outputs_into(&self.record, boundary, directory, retain)
@@ -959,7 +959,7 @@ impl VerifiedCheckExecution {
     fn retain_record_outputs(
         record: &CheckExecutionRecord,
         boundary: &ValidatedIsolation,
-        directory: &crate::storage::PrivateDir,
+        directory: &kegari_storage::PrivateDir,
     ) -> Result<Vec<RetainedArtifact>> {
         let mut retained = Vec::new();
         Self::retain_record_outputs_into(record, boundary, directory, |proof| {
@@ -971,7 +971,7 @@ impl VerifiedCheckExecution {
     fn retain_record_outputs_into(
         record: &CheckExecutionRecord,
         boundary: &ValidatedIsolation,
-        directory: &crate::storage::PrivateDir,
+        directory: &kegari_storage::PrivateDir,
         mut retain: impl FnMut(RetainedArtifact) -> Result<()>,
     ) -> Result<()> {
         boundary.revalidate()?;

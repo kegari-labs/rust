@@ -641,10 +641,8 @@ pub(crate) fn validate_metadata_argv(argv: &[String]) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        control::{Intent, Lifecycle, ReceiptPhase},
-        storage::PrivateDir,
-    };
+    use crate::control::{Intent, Lifecycle, ReceiptPhase};
+    use kegari_storage::PrivateDir;
     fn request(runtime: Uuid, id: Uuid, kind: &str) -> MutationRequest {
         MutationRequest {
             request_id: id,

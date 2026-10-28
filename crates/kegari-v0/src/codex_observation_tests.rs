@@ -1,7 +1,7 @@
 //! Protocol/storage component evidence only. These synthetic session values do
 //! not construct a worker, native run, permit, check result or source capability.
 use super::*;
-use crate::storage::PrivateDir;
+use kegari_storage::PrivateDir;
 use std::path::PathBuf;
 
 fn active() -> SessionState {

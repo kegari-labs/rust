@@ -5,7 +5,7 @@
 //! descriptors still marked CLOEXEC. The intended child guard was explicitly
 //! marked inheritable by its own earlier hook. Never unlock the inherited open
 //! file description, wait for a child here, or acquire this mutex after fork.
-use crate::storage::ExclusiveLock;
+use kegari_storage::ExclusiveLock;
 use kegari_types::error::{Error, Result};
 use std::{
     collections::BTreeMap,
@@ -314,10 +314,10 @@ mod tests {
         });
     }
 
-    fn guards() -> (tempfile::TempDir, crate::storage::PrivateDir) {
+    fn guards() -> (tempfile::TempDir, kegari_storage::PrivateDir) {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().canonicalize().unwrap();
-        let directory = crate::storage::PrivateDir::create(&path.join("guards")).unwrap();
+        let directory = kegari_storage::PrivateDir::create(&path.join("guards")).unwrap();
         (root, directory)
     }
 

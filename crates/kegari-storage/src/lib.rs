@@ -15,9 +15,8 @@ use std::{
 };
 use uuid::Uuid;
 
-#[path = "storage_retained.rs"]
 mod retained;
-pub(crate) use retained::RetainedPrivateFile;
+pub use retained::RetainedPrivateFile;
 
 const MAX_RECORD: u64 = 256 * 1024;
 
@@ -47,7 +46,7 @@ struct Record<T> {
 /// Decode an already captured protected record without another filesystem read.
 /// The caller retains the actual storage/size checks; this is data validation,
 /// not an ownership, admission, or execution capability.
-pub(crate) fn decode_record<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T> {
+pub fn decode_record<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T> {
     let record: Record<T> = serde_json::from_slice(bytes).map_err(|_| {
         Error::new(
             "record_corrupt",
@@ -175,7 +174,8 @@ impl PrivateDir {
         &self.path
     }
 
-    pub(crate) fn revalidate(&self) -> Result<()> {
+    /// Refuse replacement of the path backing this retained directory descriptor.
+    pub fn revalidate(&self) -> Result<()> {
         let current = open_directory(&self.path)?;
         check_owner(&current, true)?;
         let a = self
@@ -569,11 +569,17 @@ pub struct ExclusiveLock {
     _file: Arc<File>,
 }
 impl ExclusiveLock {
-    pub(crate) fn raw_fd(&self) -> std::os::fd::RawFd {
+    /// Borrow the descriptor number while this lock remains alive.
+    ///
+    /// Do not close or unlock it. Backend process integration must register and
+    /// retire it under its single spawn/retirement interlock; this method does
+    /// not acquire that interlock or authorize spawning.
+    pub fn raw_fd(&self) -> std::os::fd::RawFd {
         use std::os::fd::AsRawFd;
         self._file.as_raw_fd()
     }
-    pub(crate) fn identity(&self) -> Result<(u64, u64)> {
+    /// Read device/inode identity from the actual locked descriptor.
+    pub fn identity(&self) -> Result<(u64, u64)> {
         let metadata = self
             ._file
             .metadata()
@@ -581,8 +587,12 @@ impl ExclusiveLock {
         Ok((metadata.dev(), metadata.ino()))
     }
     /// Duplicate the actual locked open-file description for an owned child.
-    /// The child spawn hook, never an ambient setting, clears close-on-exec.
-    pub(crate) fn inherited_file(&self) -> Result<File> {
+    /// The duplicate retains close-on-exec and shares the lock's open-file
+    /// description. Never explicitly unlock it: that would unlock other owners.
+    /// Acquire, register, and close process-guard duplicates under the backend's
+    /// single spawn/retirement interlock. Only its owned child's pre-exec hook
+    /// may clear close-on-exec. Duplication itself grants no execution authority.
+    pub fn inherited_file(&self) -> Result<File> {
         self._file
             .try_clone()
             .map_err(|error| Error::io("duplicate owned process guard", error))

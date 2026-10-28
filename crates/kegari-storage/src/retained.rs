@@ -6,7 +6,7 @@ use std::sync::Mutex;
 /// Captured from the actual O_EXCL descriptor before any fallible write. The
 /// sealed version is installed only from that descriptor after successful sync.
 /// It retains metadata, not one persistent descriptor per diagnostic chunk.
-pub(crate) struct RetainedPrivateFile {
+pub struct RetainedPrivateFile {
     leaf: String,
     directory: (u64, u64),
     original: (u64, u64),
@@ -63,8 +63,8 @@ impl RetainedPrivateFile {
 impl PrivateDir {
     /// Private diagnostic variant of exclusive creation. The caller receives
     /// the actual creation identity before write/sync can fail, and must retain
-    /// it with its original expected bytes. Existing public APIs are unchanged.
-    pub(crate) fn create_bytes_exclusive_retained(
+    /// it with its original expected bytes. The anchor cannot be constructed from serialized metadata.
+    pub fn create_bytes_exclusive_retained(
         &self,
         leaf: &str,
         bytes: &[u8],
@@ -119,7 +119,7 @@ impl PrivateDir {
 
     /// A single current descriptor supplies the bytes and stable-version checks;
     /// the original creation identity is never learned or replaced by this read.
-    pub(crate) fn read_retained_bytes(
+    pub fn read_retained_bytes(
         &self,
         anchor: &RetainedPrivateFile,
         maximum: u64,
@@ -176,5 +176,5 @@ impl PrivateDir {
 }
 
 #[cfg(test)]
-#[path = "storage_retained_tests.rs"]
+#[path = "retained_tests.rs"]
 mod tests;

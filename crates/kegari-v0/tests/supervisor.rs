@@ -1,5 +1,6 @@
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
-use kegari_v0::{control::*, storage::PrivateDir, supervisor::*};
+use kegari_v0::{control::*, supervisor::*};
 use serde_json::json;
 use std::{
     collections::BTreeMap,

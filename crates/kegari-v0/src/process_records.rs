@@ -5,9 +5,9 @@ use crate::{
     platform::{
         BinaryIdentity, NativeProcessProbe, ProcessIdentity, ProcessObservation, ProcessProbe,
     },
-    storage::PrivateDir,
 };
 use kegari_digest::canonical_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{

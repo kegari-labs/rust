@@ -859,6 +859,7 @@ dependencies = [
  "clap",
  "kegari-config",
  "kegari-digest",
+ "kegari-storage",
  "kegari-types",
  "kegari-v0",
  "libc",
@@ -916,6 +917,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kegari-storage"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "fs2",
+ "kegari-digest",
+ "kegari-types",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "kegari-types"
 version = "0.2.0-alpha.10"
 dependencies = [
@@ -934,7 +949,6 @@ dependencies = [
  "chrono",
  "clap",
  "flate2",
- "fs2",
  "hex",
  "hmac",
  "hyper",
@@ -942,6 +956,7 @@ dependencies = [
  "kegari-config",
  "kegari-digest",
  "kegari-providers",
+ "kegari-storage",
  "kegari-types",
  "libc",
  "reqwest",

@@ -1,7 +1,7 @@
 //! Optional finite host-input diagnostic. These data/owners grant no execution.
 use super::*;
-use crate::storage::{PrivateDir, RetainedPrivateFile};
 use crate::worker::{CaptureBudget, WorkerContract};
+use kegari_storage::{PrivateDir, RetainedPrivateFile};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;

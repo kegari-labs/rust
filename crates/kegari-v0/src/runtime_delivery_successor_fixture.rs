@@ -856,7 +856,7 @@ async fn run_release_fixture(chained: bool, ordinary: bool) {
         corrected_phase.permit.operation_id.to_string()
     );
     let receipts = canonical_digest(1, &built.runtime.control.operations().unwrap()).unwrap();
-    let receipt_dir = crate::storage::PrivateDir::open(
+    let receipt_dir = kegari_storage::PrivateDir::open(
         &built.runtime.registration.root().path().join("receipts"),
     )
     .unwrap();

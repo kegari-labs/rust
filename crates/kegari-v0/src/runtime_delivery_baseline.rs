@@ -13,7 +13,7 @@ pub struct KnownPredecessorBaseline {
     baselines: Vec<VerifiedRecoveryBaseline>,
     effects: BTreeMap<String, Arc<ObservedReleaseStep>>,
     lineage: super::lineage::VerifiedReleaseLineage,
-    pub(super) records: Arc<crate::storage::PrivateDir>,
+    pub(super) records: Arc<kegari_storage::PrivateDir>,
     pub(super) control: Arc<crate::control::ControlHost>,
     pub(super) key: Arc<evidence::AttestationKey>,
     observed_at: chrono::DateTime<Utc>,

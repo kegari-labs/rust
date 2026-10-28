@@ -16,6 +16,10 @@ reexports. The backend retains command validation and classification, role and
 exit-code decisions, and snapshot operations. The temporary CLI-to-backend
 dependency remains; application arguments and hidden process modes are unchanged.
 
+Protected filesystem access, durable record encoding and locking now belong to
+[`kegari-storage`](../kegari-storage/README.md), imported as `kegari_storage`.
+Domain records, recovery policy and the single process-spawn interlock remain here.
+
 Configuration models, TOML parsing, validation and path resolution now belong to
 [`kegari-config`](../kegari-config/README.md), imported directly as `kegari_config`.
 The backend's `config` module retains `config_revision(&Config)`,
@@ -36,7 +40,7 @@ from [`kegari-digest`](../kegari-digest/README.md), without compatibility reexpo
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all six packages:
+test and lint commands cover all seven packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0

@@ -369,9 +369,9 @@ fn bounded_read(path: &Path) -> Result<Vec<u8>> {
 pub(crate) fn prepare_private_scorer(
     suite_root: &Path,
     variant: &Variant,
-    report: &crate::storage::PrivateDir,
+    report: &kegari_storage::PrivateDir,
     operation: uuid::Uuid,
-) -> Result<crate::storage::PrivateDir> {
+) -> Result<kegari_storage::PrivateDir> {
     if operation.is_nil() || !identifier(&variant.id) {
         return Err(Error::invalid(
             "private scorer needs exact operation and variant",
@@ -2736,7 +2736,7 @@ pub(crate) async fn run_live_trial_until(
 /// Creates an append-only run directory. Attempts have a durable started record before
 /// dispatch; after a crash, missing result files mean interrupted/unknown, never passed.
 pub struct ReportStore {
-    directory: crate::storage::PrivateDir,
+    directory: kegari_storage::PrivateDir,
 }
 #[derive(Default)]
 pub(crate) struct CanaryFailureObservations {
@@ -2756,7 +2756,7 @@ impl ReportStore {
             .create(root)
             .map_err(|e| Error::io("create exclusive report directory", e))?;
         let store = Self {
-            directory: crate::storage::PrivateDir::open(root)?,
+            directory: kegari_storage::PrivateDir::open(root)?,
         };
         store.write("suite.json", suite)?;
         Ok(store)
@@ -2807,7 +2807,7 @@ impl ReportStore {
         diagnostics: CanaryFailureObservations,
     ) -> Result<()> {
         let store = Self {
-            directory: crate::storage::PrivateDir::open(root)?,
+            directory: kegari_storage::PrivateDir::open(root)?,
         };
         let original: SuiteManifest = serde_json::from_slice(
             &store
@@ -3135,7 +3135,7 @@ mod fidelity_tests {
 mod cancellation_tests {
     use super::*;
     use crate::control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest, Permit};
-    use crate::storage::PrivateDir;
+    use kegari_storage::PrivateDir;
     use std::sync::Arc;
     use uuid::Uuid;
 

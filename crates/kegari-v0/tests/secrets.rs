@@ -1,8 +1,6 @@
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
-use kegari_v0::{
-    secrets::{Keychain, Secret, SecretStore, resolve_reference},
-    storage::PrivateDir,
-};
+use kegari_v0::secrets::{Keychain, Secret, SecretStore, resolve_reference};
 use std::sync::Mutex;
 
 #[derive(Default)]

@@ -54,7 +54,7 @@ async fn multiple_targets() {
         .unwrap();
     assert_eq!(refs.len(), 2);
     let deployment =
-        crate::storage::PrivateDir::open(&workspace.records.path().join("deployment")).unwrap();
+        kegari_storage::PrivateDir::open(&workspace.records.path().join("deployment")).unwrap();
     // These are ordinary serialized retained references, never proof constructors.
     // Each must bind its own target+artifact rather than borrow its neighbor's.
     for index in 0..2 {

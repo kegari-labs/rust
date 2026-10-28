@@ -4,10 +4,10 @@ use crate::{
     evidence::{AttestationKey, Signed},
     instructions::AgentRole,
     reconcile::{FreshGate, GatePurpose},
-    storage::PrivateDir,
     worker::{WorkerOutcome, recover_session},
 };
 use kegari_digest::canonical_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde_json::Value;
 use uuid::Uuid;

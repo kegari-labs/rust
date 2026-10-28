@@ -1,6 +1,7 @@
 use kegari_digest::canonical_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::error::Error;
-use kegari_v0::{control::*, scheduler::PhaseKey, storage::PrivateDir};
+use kegari_v0::{control::*, scheduler::PhaseKey};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use tempfile::TempDir;

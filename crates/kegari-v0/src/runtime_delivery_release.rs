@@ -3308,7 +3308,7 @@ mod tests {
             repositories: attempt.preparations.clone(),
         };
         let root = tempfile::TempDir::new().unwrap();
-        let directory = crate::storage::PrivateDir::create(
+        let directory = kegari_storage::PrivateDir::create(
             &root.path().canonicalize().unwrap().join("records"),
         )
         .unwrap();

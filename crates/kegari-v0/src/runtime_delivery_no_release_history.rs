@@ -9,9 +9,9 @@ use crate::{
     evidence::{AttestationKey, VerifiedNoReleaseRequired, WorkIdentity},
     git::{RepositoryId, Revision},
     runtime_delivery::completion_binding::DependencyBinding,
-    storage::PrivateDir,
 };
 use chrono::{DateTime, Duration, Utc};
+use kegari_storage::PrivateDir;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},

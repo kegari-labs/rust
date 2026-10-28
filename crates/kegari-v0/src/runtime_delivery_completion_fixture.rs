@@ -473,7 +473,7 @@ fn terminal_history(
             assert!(refs.contains_key(&receipt.operation_id.to_string()));
         }
         let receipt_root = f.built.runtime.registration.root().path().join("receipts");
-        let receipt_dir = crate::storage::PrivateDir::open(&receipt_root).unwrap();
+        let receipt_dir = kegari_storage::PrivateDir::open(&receipt_root).unwrap();
         // Control owns its descriptor-relative receipt layout; locate only known
         // operation UUID leaves within this owned fixture registration.
         let tamper_window = f.observation_barrier.lock().await;
@@ -583,12 +583,12 @@ fn terminal_history(
         );
         files.sort();
         files.dedup();
-        let workspace_dir = crate::storage::PrivateDir::open(
+        let workspace_dir = kegari_storage::PrivateDir::open(
             &delivery.records.path().join(c.workspace.to_string()),
         )
         .unwrap();
         let deployment_dir =
-            crate::storage::PrivateDir::open(&workspace_dir.path().join("deployment")).unwrap();
+            kegari_storage::PrivateDir::open(&workspace_dir.path().join("deployment")).unwrap();
         for (target_reference, leaf) in files {
             let store = if target_reference {
                 &deployment_dir

@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::PrivateDir;
+use kegari_storage::PrivateDir;
 use uuid::Uuid;
 
 fn variant() -> Variant {

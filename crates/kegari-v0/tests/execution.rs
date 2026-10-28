@@ -961,7 +961,7 @@ async fn named_checks_capture_fresh_artifacts_and_refuse_stale_unrun_or_changed_
         bytes_digest(b"real fixture check output")
     );
     assert!(verified.production_evidence().is_err());
-    let retention = kegari_v0::storage::PrivateDir::create(
+    let retention = kegari_storage::PrivateDir::create(
         &f._temp
             .path()
             .canonicalize()
@@ -1062,7 +1062,7 @@ async fn failed_check_artifacts_are_retained_before_a_corrected_rerun() {
         "unqualified_fixture"
     );
     assert!(!failed.record().successful);
-    let directory = kegari_v0::storage::PrivateDir::create(
+    let directory = kegari_storage::PrivateDir::create(
         &f._temp
             .path()
             .canonicalize()

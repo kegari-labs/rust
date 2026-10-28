@@ -208,7 +208,7 @@ fn captured_journal_record(leaf: &str, bytes: &[u8]) -> Result<(String, Option<V
                 "private file exceeds its size bound",
             ));
         }
-        Some(crate::storage::decode_record(bytes)?)
+        Some(kegari_storage::decode_record(bytes)?)
     };
     Ok((bytes_digest(bytes), event))
 }

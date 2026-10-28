@@ -4,8 +4,9 @@ use kegari_cli::{
     local_cli::*,
 };
 use kegari_config::{Config, ProviderKind};
+use kegari_storage::PrivateDir;
 use kegari_types::error::Result;
-use kegari_v0::{platform::*, storage::PrivateDir};
+use kegari_v0::platform::*;
 use serde_json::json;
 use std::{
     io::Cursor,

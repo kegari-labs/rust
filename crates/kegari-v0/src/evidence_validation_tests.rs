@@ -568,7 +568,7 @@ fn compact_review_resolves_large_complete_history_before_child_predicates() {
     use crate::validation_archive::{self, tests::descriptive_fixture};
     let temp = tempfile::tempdir().unwrap();
     let records =
-        crate::storage::PrivateDir::create(&temp.path().canonicalize().unwrap().join("records"))
+        kegari_storage::PrivateDir::create(&temp.path().canonicalize().unwrap().join("records"))
             .unwrap();
     let key = AttestationKey::new("compact-test".into(), vec![43; 32]).unwrap();
     let (namespace, mut history, artifacts) = descriptive_fixture();
@@ -725,7 +725,7 @@ fn compact_integrated_selection_resolves_original_records_and_rejects_substituti
     use crate::validation_archive::{self, ValidationArchiveNamespace};
     let temp = tempfile::tempdir().unwrap();
     let records =
-        crate::storage::PrivateDir::create(&temp.path().canonicalize().unwrap().join("records"))
+        kegari_storage::PrivateDir::create(&temp.path().canonicalize().unwrap().join("records"))
             .unwrap();
     let key = AttestationKey::new("integrated-compact".into(), vec![44; 32]).unwrap();
     let (mut original, parent, vector, candidate, _) = integrated_description();

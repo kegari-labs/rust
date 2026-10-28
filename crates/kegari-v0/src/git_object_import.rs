@@ -1,6 +1,6 @@
 //! Private quarantine operations; never available through host metadata scope.
 use super::*;
-use crate::storage::PrivateDir;
+use kegari_storage::PrivateDir;
 
 impl Git {
     pub(crate) fn object_import_binary(&self) -> &crate::platform::BinaryIdentity {

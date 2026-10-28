@@ -224,7 +224,7 @@ async fn native_correction_check_keeps_original_marker_and_historical_evidence()
     let retained = historical
         .retain_outputs(
             &isolation,
-            &crate::storage::PrivateDir::create(&root.join("retained")).unwrap(),
+            &kegari_storage::PrivateDir::create(&root.join("retained")).unwrap(),
         )
         .unwrap();
     let invocation = || CheckInvocation {

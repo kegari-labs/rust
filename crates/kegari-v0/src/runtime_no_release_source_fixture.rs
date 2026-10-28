@@ -114,7 +114,7 @@ pub(super) fn prepare<'a>(
                 )
                 .await?;
             let root = source.parent().unwrap().join("no-release-candidate");
-            crate::storage::PrivateDir::create(&root)?;
+            kegari_storage::PrivateDir::create(&root)?;
             let slice = phase
                 .coordinator
                 .assemble_isolated_slice(

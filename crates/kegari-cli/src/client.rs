@@ -1,12 +1,12 @@
 //! CLI-only pinned control transport. No redirects, proxies, retries or fallback.
 use chrono::Utc;
+use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest, Envelope};
 use kegari_types::error::{Error, Result};
 use kegari_types::snapshot::Page;
 use kegari_v0::api::{MAX_BODY, MAX_HEADERS, REQUEST_DEADLINE};
 use kegari_v0::secrets::Secret;
 use kegari_v0::snapshot;
-use kegari_v0::storage::PrivateDir;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

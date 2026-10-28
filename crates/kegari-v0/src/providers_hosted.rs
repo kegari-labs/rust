@@ -242,7 +242,7 @@ impl HostedProofVerifier {
         token: &str,
         expected: &HostedProofExpectation,
         now: DateTime<Utc>,
-        directory: &crate::storage::PrivateDir,
+        directory: &kegari_storage::PrivateDir,
     ) -> Result<VerifiedHostedJob> {
         let candidate = self.verify(token, expected, now)?;
         let _lock = directory.section_lock("hosted-proof.lock")?;

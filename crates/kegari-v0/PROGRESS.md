@@ -1,6 +1,32 @@
 # Kegari v0 build progress
 
-**Goal mode cancelled. Provider/digest extraction verified; checkpoint complete.**
+**Goal mode cancelled. Storage extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. `kegari-storage` now owns protected
+filesystem access, durable records, locks and opaque retained-file identity.
+CLI/backend depend directly on it; it depends on types/digest without a backend
+dependency. Domain persistence policy and the single process-spawn/retirement
+interlock remain in the backend. Import storage directly from `kegari_storage`;
+there is no backend compatibility reexport.
+
+Version remains `0.2.0-alpha.10`; record schema 1, all other persisted/API schemas,
+instruction assets and the archived alpha.10 remain unchanged. See the
+[storage boundary](../kegari-storage/README.md) and
+[verification report](validation/STORAGE-EXTRACTION.md). Native qualification,
+service activation and later milestone work remain outside this refactor.
+
+Verification: 1,275 workspace release tests passed, zero failed, three native
+qualification tests ignored. Formatting, strict workspace all-target Clippy,
+contract inventory and its 11 tests passed. One bounded independent review found
+no material issues. The optimized arm64 executable passed all five minimal-env
+inspections with matching identity/schemas/assets and no runtime state created.
+All 239 external lockfile entries and the alpha.10 archive are unchanged.
+No native/live qualification, release packaging, commit or remote operation was
+performed. This checkpoint is ready for review, not operational qualification.
+
+## Previous provider/digest extraction checkpoint
+
+**Provider/digest extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. Starting from
 `d1648894ad1b59aa728bd831bc8a8e88033baf9d` on `main`, the unchanged shared hash

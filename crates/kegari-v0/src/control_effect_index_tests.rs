@@ -1,7 +1,8 @@
 //! Actual Control + protected-file ordering tests. No worker process, joined
 //! completion, human acceptance, or cold execution capability is manufactured.
 use super::*;
-use crate::{scheduler::PhaseKey, storage::WriteBoundary};
+use crate::scheduler::PhaseKey;
+use kegari_storage::WriteBoundary;
 use serde_json::json;
 use std::sync::{
     Arc,

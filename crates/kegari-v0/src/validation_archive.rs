@@ -6,8 +6,8 @@
 use crate::evidence::validation::MAX_VALIDATION_EVIDENCE_BYTES;
 use crate::evidence::{AttestationKey, CheckKind, RevisionBinding, Signed, ValidationEvidence};
 use crate::execution::{ArtifactProof, ExecutionBinding};
-use crate::storage::PrivateDir;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

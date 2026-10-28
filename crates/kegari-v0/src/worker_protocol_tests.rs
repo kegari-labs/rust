@@ -1,6 +1,7 @@
 //! Real control receipts with deterministic provider transport observations.
 use super::*;
-use crate::{control::Lifecycle, storage::PrivateDir};
+use crate::control::Lifecycle;
+use kegari_storage::PrivateDir;
 use std::collections::BTreeSet;
 struct Host {
     authority: WorkerAuthority,

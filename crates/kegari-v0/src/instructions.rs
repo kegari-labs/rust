@@ -967,7 +967,7 @@ mod validation_review_assembly_tests {
         for path in [&repository, &scratch, &auth] {
             std::fs::create_dir(path).unwrap();
         }
-        let records = crate::storage::PrivateDir::create(&base.join("records")).unwrap();
+        let records = kegari_storage::PrivateDir::create(&base.join("records")).unwrap();
         let key =
             crate::evidence::AttestationKey::new("assembly-fixture".into(), vec![9; 32]).unwrap();
         let (namespace, evidence, artifacts) =

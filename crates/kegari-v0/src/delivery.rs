@@ -11,12 +11,12 @@ use crate::providers::{
     HostedProofExpectation, HostedProofVerifier, ProviderBroker, ProviderMutation,
 };
 use crate::reconcile::FreshGate;
-use crate::storage::PrivateDir;
 use crate::workflow::Workflow;
 use chrono::{DateTime, Utc};
 use kegari_config::{CiSuite, Repository as RepositoryConfig};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::{GithubClient, RepositoryIdentity};
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

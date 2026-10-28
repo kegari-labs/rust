@@ -255,7 +255,7 @@ async fn owned_target_cycle() {
     history_fixture::assert_credit(&h, &key, &proof.work().generation, Some(&outcome)).await;
 
     let deployment =
-        crate::storage::PrivateDir::open(&workspace.records.path().join("deployment")).unwrap();
+        kegari_storage::PrivateDir::open(&workspace.records.path().join("deployment")).unwrap();
     let pointers: Vec<_> = deployment
         .records_bounded(65_536)
         .unwrap()
@@ -271,7 +271,7 @@ async fn owned_target_cycle() {
     history_fixture::assert_credit(&h, &key, &proof.work().generation, Some(&outcome)).await;
     deployment.write_bytes(pointer, &pointer_bytes).unwrap();
 
-    let receipts = crate::storage::PrivateDir::open(
+    let receipts = kegari_storage::PrivateDir::open(
         &h.built.runtime.registration.root().path().join("receipts"),
     )
     .unwrap();

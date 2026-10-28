@@ -295,7 +295,7 @@ async fn history_cycle() {
         cold.sync_no_release_completions().unwrap();
         assert_credit(&h, &key, &proof.work().generation, Some(&outcome)).await;
     }
-    let receipt_directory = crate::storage::PrivateDir::open(
+    let receipt_directory = kegari_storage::PrivateDir::open(
         &h.built.runtime.registration.root().path().join("receipts"),
     )
     .unwrap();

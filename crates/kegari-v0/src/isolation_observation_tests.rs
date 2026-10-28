@@ -293,8 +293,8 @@ fn expired_original_deadline_refuses_before_probe_journal_or_unqualified_start()
         control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
         platform::{ProcessIdentity, ProcessObservation, ProcessProbe},
         process_records::ProcessJournal,
-        storage::PrivateDir,
     };
+    use kegari_storage::PrivateDir;
     use std::{
         collections::BTreeSet,
         sync::{

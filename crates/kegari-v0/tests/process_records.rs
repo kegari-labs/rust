@@ -1,4 +1,5 @@
 use kegari_digest::bytes_digest;
+use kegari_storage::PrivateDir;
 use kegari_types::error::Result;
 use kegari_v0::{
     control::Lease,
@@ -8,7 +9,6 @@ use kegari_v0::{
         CheckBundleMember, CheckMemberKind, ProcessJournal, ProcessRecord, RecoveryState,
         SpawnBinding,
     },
-    storage::PrivateDir,
 };
 use std::{
     path::Path,

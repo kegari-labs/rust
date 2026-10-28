@@ -5,8 +5,8 @@ use crate::{
     control::{Actor, Lease, Lifecycle, MutationRequest},
     observations::ObservationCache,
     reconcile::{DependencyOutcomes, GatePurpose},
-    storage::PrivateDir,
 };
+use kegari_storage::PrivateDir;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 struct Harness {

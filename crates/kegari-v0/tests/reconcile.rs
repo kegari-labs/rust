@@ -1420,7 +1420,8 @@ impl kegari_v0::configuration::ConfigurationInputs for CacheInputs {
 }
 #[tokio::test]
 async fn cached_authority_is_reconstructed_after_restart_and_removed_publication_revokes_it() {
-    use kegari_v0::{observations::ObservationCache, storage::PrivateDir};
+    use kegari_storage::PrivateDir;
+    use kegari_v0::observations::ObservationCache;
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().canonicalize().unwrap();
     let workflow = path.join("WORKFLOW.md");
@@ -1679,11 +1680,11 @@ async fn authorization_preparation_requires_current_human_scope_and_is_not_a_wor
 
 #[tokio::test]
 async fn authorization_publication_reconciles_real_wire_records_without_retransmitting_unknowns() {
+    use kegari_storage::PrivateDir;
     use kegari_v0::{
         control::{Actor, ControlHost, Lease, Lifecycle, MutationRequest},
         observations::ObservationCache,
         preparation::AuthorizationPublisher,
-        storage::PrivateDir,
     };
     for scenario in [
         "acknowledged",
@@ -1993,7 +1994,8 @@ struct ActiveFixture {
 }
 impl ActiveFixture {
     async fn new() -> Self {
-        use kegari_v0::{observations::ObservationCache, storage::PrivateDir};
+        use kegari_storage::PrivateDir;
+        use kegari_v0::observations::ObservationCache;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let workflow = root.join("WORKFLOW.md");
@@ -2380,11 +2382,11 @@ impl kegari_v0::platform::ProcessProbe for PreservedProbe {
 }
 #[tokio::test]
 async fn coordination_preservation_binds_actual_opaque_authority_and_directory_identity() {
+    use kegari_storage::PrivateDir;
     use kegari_v0::{
         control::{Actor, Lease, Lifecycle, MutationRequest},
         housekeeping::{Housekeeping, ReadOnlyIdentity, ReadOnlyPreparation},
         isolation::{ExecutionRole, IsolationPlan},
-        storage::PrivateDir,
         worker::WorkerAuthority,
     };
     let f = ActiveFixture::new().await;

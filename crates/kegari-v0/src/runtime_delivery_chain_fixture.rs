@@ -489,7 +489,7 @@ pub(super) fn chained_after_merge(
             f.held.attempt.plan.operation_id
         );
         let root = f.source.parent().unwrap().join("lineage-b");
-        crate::storage::PrivateDir::create(&root).unwrap();
+        kegari_storage::PrivateDir::create(&root).unwrap();
         let slice = phase
             .coordinator
             .assemble_isolated_slice(
@@ -703,7 +703,7 @@ pub(super) fn chained_after_merge(
         );
         eprintln!("lineage fixture: original A integration recovered through held B");
         let root = f.source.parent().unwrap().join("lineage-c");
-        crate::storage::PrivateDir::create(&root).unwrap();
+        kegari_storage::PrivateDir::create(&root).unwrap();
         let slice = phase
             .coordinator
             .assemble_isolated_slice(

@@ -84,7 +84,7 @@ impl VerifiedReleaseLineage {
     }
     pub(super) fn revalidate(
         &self,
-        records: &crate::storage::PrivateDir,
+        records: &kegari_storage::PrivateDir,
         control: &crate::control::ControlHost,
         key: &evidence::AttestationKey,
     ) -> Result<()> {

@@ -1,12 +1,10 @@
 //! macOS registration and process ownership. Metadata is evidence to inspect;
 //! live OS locks and unreaped owned child handles establish exclusive control.
-use crate::{
-    control::{ControlHost, Intent, IntentRecord, Lease},
-    storage::{ExclusiveLock, PrivateDir},
-};
+use crate::control::{ControlHost, Intent, IntentRecord, Lease};
 use chrono::{DateTime, Utc};
 use kegari_config::Config;
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_storage::{ExclusiveLock, PrivateDir};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{

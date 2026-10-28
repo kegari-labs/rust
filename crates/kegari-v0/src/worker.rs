@@ -40,11 +40,11 @@ use crate::instructions::{
 use crate::isolation::{ExecutionRole, ValidatedIsolation};
 use crate::providers::{ProviderBroker, ProviderMutation};
 use crate::reconcile::{FreshGate, IndependentReviewGate};
-use crate::storage::{ExclusiveLock, PrivateDir};
 use crate::workflow::Workflow;
 use chrono::{Duration, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::RepositoryIdentity;
+use kegari_storage::{ExclusiveLock, PrivateDir};
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

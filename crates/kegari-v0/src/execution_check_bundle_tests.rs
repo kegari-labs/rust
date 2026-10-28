@@ -242,8 +242,8 @@ async fn warm_empty_bundle_uses_original_control_and_registry_owner_cold_records
             Actor, ControlHost, Lease, Lifecycle, MutationRequest, ReceiptPhase, ReceiptStore,
             RunAdmission, RunReference,
         };
-        use crate::storage::PrivateDir;
         use crate::worker::ExecutionRegistry;
+        use kegari_storage::PrivateDir;
         use serde_json::json;
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().canonicalize().unwrap().join("control");

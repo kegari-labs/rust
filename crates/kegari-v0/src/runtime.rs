@@ -11,7 +11,6 @@ use crate::{
     platform::Registration,
     reconcile::{DependencyOutcomes, GatePurpose, HistoryRow, ParentDelivery},
     scheduler::Quota,
-    storage::PrivateDir,
     worker::{
         ExecutionRegistry, OutcomeSink, WorkerAuthority, WorkerContract, WorkerHost, WorkerOutcome,
     },
@@ -19,6 +18,7 @@ use crate::{
 };
 use chrono::{Duration, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{

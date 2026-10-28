@@ -1,9 +1,9 @@
 #![cfg(target_os = "macos")]
 use kegari_config::Config;
+use kegari_storage::PrivateDir;
 use kegari_v0::{
     control::{Actor, Lifecycle, MutationRequest},
     platform::*,
-    storage::PrivateDir,
 };
 use serde_json::json;
 use std::{collections::BTreeMap, path::Path, sync::Arc};

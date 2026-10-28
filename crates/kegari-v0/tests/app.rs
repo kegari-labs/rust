@@ -5,6 +5,7 @@ use axum::{
     http::Request,
 };
 use kegari_config::Config;
+use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest, Envelope};
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
@@ -13,7 +14,6 @@ use kegari_v0::{
     control::*,
     reconcile::RuntimeProjection,
     secrets::Secret,
-    storage::PrivateDir,
     transport::TransportAuthentication,
 };
 use serde_json::{Value, json};

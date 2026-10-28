@@ -183,7 +183,7 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
             .as_deref()
             .ok_or_else(|| Error::invalid("Codex auth_home is missing"))?,
     );
-    crate::storage::PrivateDir::open(&auth_home)?;
+    kegari_storage::PrivateDir::open(&auth_home)?;
     let isolation = input.isolation.validate()?;
     let permissions = PermissionConfiguration::for_isolation(&isolation, &auth_home)?;
     let repository_execution =
@@ -1932,7 +1932,7 @@ pub struct ExecutorHookServices {
     pub registry: Arc<ExecutionRegistry>,
     /// Retained private ledger from the owned directory's actual after_create
     /// phase. An absent/uninitialized ledger never fabricates creation success.
-    pub records: crate::storage::PrivateDir,
+    pub records: kegari_storage::PrivateDir,
     pub session_id: Uuid,
 }
 #[derive(Clone)]
@@ -1942,10 +1942,10 @@ pub struct ExecutorRunHooks {
     host: Arc<dyn WorkerHost>,
     execution: Arc<crate::worker::WorkerExecution>,
     registry: Arc<ExecutionRegistry>,
-    records: Arc<crate::storage::PrivateDir>,
+    records: Arc<kegari_storage::PrivateDir>,
     ledger: Arc<tokio::sync::Mutex<crate::execution::HookLedger>>,
     session_id: Uuid,
-    _lock: Arc<crate::storage::ExclusiveLock>,
+    _lock: Arc<kegari_storage::ExclusiveLock>,
 }
 impl ExecutorRunHooks {
     pub(crate) fn new_reused(
@@ -2311,7 +2311,7 @@ mod protocol_tests;
 mod trial_lifecycle_tests {
     use super::*;
     use crate::control::{Lease, Lifecycle};
-    use crate::storage::PrivateDir;
+    use kegari_storage::PrivateDir;
     use std::collections::BTreeSet;
     use std::sync::atomic::AtomicUsize;
 

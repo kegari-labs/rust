@@ -14,12 +14,12 @@ use crate::{
         BinaryIdentity, HostIdentity, OwnerRecord, ProcessIdentity, ProcessObservation,
         ProcessProbe, ServiceShutdown,
     },
-    storage::PrivateDir,
     workflow::Workflow,
 };
 use chrono::{DateTime, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::{GithubClient, RepositoryIdentity};
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;

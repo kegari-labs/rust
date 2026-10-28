@@ -6,8 +6,8 @@ use crate::{
     control::Lease,
     platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe},
     process_records::{ProcessJournal, RecoveryState, SpawnBinding},
-    storage::PrivateDir,
 };
+use kegari_storage::PrivateDir;
 use std::{
     pin::Pin,
     sync::{

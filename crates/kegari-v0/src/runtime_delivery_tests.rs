@@ -27,7 +27,7 @@ impl FixtureOwner {
     pub(crate) fn start(
         &self,
         runtime: &RuntimeCoordinator,
-    ) -> (crate::control::Lease, crate::storage::ExclusiveLock) {
+    ) -> (crate::control::Lease, kegari_storage::ExclusiveLock) {
         let snapshot = runtime.control.snapshot().unwrap();
         runtime
             .control

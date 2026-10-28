@@ -6,11 +6,11 @@ use crate::{
     evidence::{AttestationKey, Signed},
     git::{Git, GitLimits, RepositoryId, Revision},
     process_records::ProcessJournal,
-    storage::PrivateDir,
     worker::{ExecutionRegistry, WorkerAuthority},
 };
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_providers::GithubClient;
+use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
