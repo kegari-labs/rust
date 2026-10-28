@@ -1,7 +1,8 @@
 //! Same-process ownership returned without entering provider/hook execution.
 //! No receipt, report, missing handle or public flag can construct this proof.
 use super::*;
-use crate::control::{Receipt, ReceiptPhase, RunReference};
+use crate::control::{Receipt, ReceiptPhase};
+use kegari_types::run::RunReference;
 
 pub(crate) enum OwnedTrialReturn {
     Completed(Box<VerifiedTrialCompletion>),
@@ -65,7 +66,7 @@ impl VerifiedUnusedAdmission {
         let (prepared, permit, services) = transfer.parts()?;
         let control = services.worker.control.clone();
         let receipt = control.operation(permit.operation_id)?;
-        let budget = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+        let budget = crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| {
             Error::new("worker_binding", "unused admission lost its actual budget")
         })?;
         let value = Self {
@@ -83,7 +84,7 @@ impl VerifiedUnusedAdmission {
     }
     fn verify_identity(&self) -> Result<Receipt> {
         let receipt = self.control.operation(self.operation())?;
-        let actual = RunReference::from_receipt(&receipt)?
+        let actual = crate::control::run_reference_from_receipt(&receipt)?
             .ok_or_else(|| Error::new("worker_binding", "unused admission lost its typed run"))?;
         if returned_admission_digest(&receipt)? != self.request_digest
             || receipt.operation_id != self.operation()
@@ -258,7 +259,7 @@ impl AdmittedTrial {
             ));
         }
         let receipt = session.control.operation(session.permit.operation_id)?;
-        let budget = RunReference::from_receipt(&receipt)?
+        let budget = crate::control::run_reference_from_receipt(&receipt)?
             .ok_or_else(|| Error::new("worker_binding", "unused trial lost its actual budget"))?;
         let proof = VerifiedUnusedAdmission {
             permit: session.permit.clone(),
@@ -373,7 +374,7 @@ mod registry_return_tests {
                         workspace: Uuid::new_v4(),
                         account: "fixture".into(),
                         normalized_state: None,
-                        phase: crate::scheduler::PhaseKey {
+                        phase: kegari_types::run::PhaseKey {
                             work: "fixture".into(),
                             generation: kegari_digest::bytes_digest(b"generation"),
                             phase: "independent_review".into(),

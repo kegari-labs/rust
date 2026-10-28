@@ -1117,7 +1117,7 @@ mod tests {
             worker_operation: Uuid::new_v4(),
             workspace: Uuid::new_v4(),
             account: "fixture-codex".into(),
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: original.work_key.clone(),
                 generation: canonical_digest(1, &"fixture-generation").unwrap(),
                 phase: "implementation".into(),

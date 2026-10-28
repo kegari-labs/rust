@@ -1,6 +1,7 @@
 //! Exact immutable request identity for an owned ordinary admission return.
 //! These digests are comparison data; they never mint admission or exit authority.
 use super::*;
+use kegari_types::run::RunReference;
 
 pub(super) fn request(
     permit: &Permit,
@@ -258,7 +259,7 @@ pub(crate) fn ordinary_run_request_digest(
     permit: &Permit,
     reference: &RunReference,
 ) -> Result<String> {
-    reference.validate()?;
+    crate::control::validate_run_reference(reference)?;
     if reference.phase.work != permit.work_key || reference.phase.retry_grant.is_some() {
         return Err(Error::new(
             "worker_binding",
@@ -290,7 +291,7 @@ mod tests {
             workspace: Uuid::from_u128(6),
             account: "component".into(),
             normalized_state: None,
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: "parent".into(),
                 generation: digest("generation"),
                 phase: "parent_evidence_review".into(),

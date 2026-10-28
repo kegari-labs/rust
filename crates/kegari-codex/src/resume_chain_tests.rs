@@ -130,7 +130,7 @@ pub(super) async fn repeated_resume_sequence(first: &VerifiedThreadRecovery, thr
     // recovery's missing ordered/submitted history.
     SessionState::restore(&serde_json::to_vec(&legacy).unwrap()).unwrap();
     assert!(
-        RetainedResumeSession::from_journal(
+        ResumeCandidate::from_retained_parts(
             legacy,
             second.retained().admission_digest().into(),
             second.retained().reference().clone(),
@@ -141,7 +141,7 @@ pub(super) async fn repeated_resume_sequence(first: &VerifiedThreadRecovery, thr
     let mut enlarged = third.retained().reference().clone();
     enlarged.max_attempts += 1;
     assert!(
-        RetainedResumeSession::from_journal(
+        ResumeCandidate::from_retained_parts(
             state.clone(),
             third.retained().admission_digest().into(),
             enlarged,
@@ -159,123 +159,6 @@ pub(super) async fn repeated_resume_sequence(first: &VerifiedThreadRecovery, thr
     assert!(next_again.earlier_usage_unknown.contains(key));
     assert!(next_again.observed_tokens.is_empty());
     assert_eq!(next_again.cumulative_baselines[key], 100);
-    receipt_lineage_observations(third.retained());
-}
-
-/// Read-only synthetic receipt observations exercise the data-link validator.
-/// They do not enter Control or create a joined worker/recovery capability.
-fn receipt_lineage_observations(observed: &RetainedResumeSession) {
-    use crate::control::{Receipt, ReceiptPhase, RunResumeReference};
-    use uuid::Uuid;
-
-    let runtime = Uuid::new_v4();
-    let mut state = observed.state().clone();
-    let origin = state.resume_origin.as_mut().unwrap();
-    let prefix = origin.prefix.as_mut().unwrap();
-    let mut receipts = Vec::<Receipt>::new();
-    for index in 0..=prefix.segments.len() {
-        let (operation, run) = if let Some(segment) = prefix.segments.get(index) {
-            (
-                segment.binding.operation_id.parse().unwrap(),
-                segment.reference.clone(),
-            )
-        } else {
-            (
-                observed.state().binding.operation_id.parse().unwrap(),
-                observed.reference().clone(),
-            )
-        };
-        let mut expected = BTreeMap::from([("run".into(), serde_json::to_string(&run).unwrap())]);
-        if index > 0 {
-            let prior = &prefix.segments[index - 1];
-            let resume = RunResumeReference {
-                predecessor: receipts[index - 1].operation_id,
-                predecessor_receipt_digest: canonical_digest(1, &receipts[index - 1]).unwrap(),
-                recovery_digest: prior.transition.recovery_digest.clone(),
-                instruction_compatibility_digest: prior.transition.instruction_digest.clone(),
-                directory_reuse_digest: canonical_digest(1, &"synthetic receipt only").unwrap(),
-                review_rounds_consumed: 0,
-            };
-            expected.insert(
-                "session_resume".into(),
-                serde_json::to_string(&resume).unwrap(),
-            );
-        }
-        let receipt = Receipt {
-            operation_id: operation,
-            request_id: operation,
-            runtime_id: runtime,
-            owner_generation: 1,
-            actor: "synthetic receipt observation".into(),
-            kind: "admission".into(),
-            canonical_targets: vec![run.phase.work.clone()],
-            payload_digest: canonical_digest(1, &expected).unwrap(),
-            expected,
-            phase: ReceiptPhase::Reconciled,
-            remote_ids: BTreeMap::new(),
-            observed_result: Some(json!({"local_execution":"exited","unresolved_effects":[]})),
-            cancellation: "none".into(),
-            updated_at: chrono::Utc::now(),
-        };
-        if let Some(segment) = prefix.segments.get_mut(index) {
-            segment.admission_digest = canonical_digest(1, &receipt).unwrap();
-        }
-        receipts.push(receipt);
-    }
-    prefix.digest = prefix.content_digest().unwrap();
-    let candidate = RetainedResumeSession::from_journal(
-        state,
-        canonical_digest(1, receipts.last().unwrap()).unwrap(),
-        observed.reference().clone(),
-        observed.journal_digest().into(),
-    )
-    .unwrap();
-    candidate.verify_prior_receipts(&receipts).unwrap();
-    for index in 0..receipts.len() {
-        let mut missing = receipts.clone();
-        missing.remove(index);
-        assert!(
-            candidate.verify_prior_receipts(&missing).is_err(),
-            "missing {index}"
-        );
-        let mut changed = receipts.clone();
-        changed[index].owner_generation += 1;
-        assert!(
-            candidate.verify_prior_receipts(&changed).is_err(),
-            "changed whole receipt {index}"
-        );
-    }
-    for field in [
-        "missing",
-        "predecessor",
-        "predecessor_receipt_digest",
-        "recovery_digest",
-        "instruction_compatibility_digest",
-    ] {
-        let mut changed = receipts.clone();
-        let next = changed.last_mut().unwrap();
-        if field == "missing" {
-            next.expected.remove("session_resume");
-        } else {
-            let mut reference: Value =
-                serde_json::from_str(&next.expected["session_resume"]).unwrap();
-            reference[field] = if field == "predecessor" {
-                json!(Uuid::new_v4())
-            } else {
-                json!(canonical_digest(1, &field).unwrap())
-            };
-            next.expected
-                .insert("session_resume".into(), reference.to_string());
-        }
-        // Permit the changed final envelope at this data-only seam to isolate
-        // typed-link checking from the already-tested whole-receipt hash check.
-        let mut candidate = candidate.clone();
-        candidate.admission_digest = canonical_digest(1, next).unwrap();
-        assert!(
-            candidate.verify_prior_receipts(&changed).is_err(),
-            "typed link {field}"
-        );
-    }
 }
 
 async fn successor(
@@ -364,7 +247,7 @@ async fn successor(
     };
     rpc.resume_protocol(
         &mut state,
-        ResumeProtocol {
+        ResumeRequest {
             recovery: proof,
             prompt: "independently assembled identical task semantics",
             predecessor: old.binding.operation_id.parse().unwrap(),
@@ -388,7 +271,7 @@ async fn successor(
     let mut reference = proof.retained().reference().clone();
     reference.attempt += 1;
     reference.instruction_digest = state.binding.instruction_digest.clone();
-    let retained = RetainedResumeSession::from_journal(
+    let retained = ResumeCandidate::from_retained_parts(
         state,
         canonical_digest(1, &reference).unwrap(),
         reference,
@@ -415,10 +298,7 @@ async fn handshake(
     write(sw,json!({"id":account["id"],"result":{"account":{"type":"chatgpt"},"workspaceRouting":{"chatgptAccountId":"fixture-account"}}})).await;
 }
 
-async fn observe(
-    candidate: &RetainedResumeSession,
-    thread: Value,
-) -> Result<VerifiedThreadRecovery> {
+async fn observe(candidate: &ResumeCandidate, thread: Value) -> Result<VerifiedThreadRecovery> {
     let (client, server) = tokio::io::duplex(65_536);
     let (reader, writer) = tokio::io::split(client);
     let (sr, mut sw) = tokio::io::split(server);

@@ -2,6 +2,7 @@
 //! and terminal model observations below are synthetic component inputs. They
 //! neither create human acceptance nor any opaque reassembly/joined capability.
 use super::*;
+use kegari_types::run::{PhaseKey, RunReference};
 use serde_json::json;
 fn digest(label: &str) -> String {
     canonical_digest(1, &label).unwrap()
@@ -286,7 +287,9 @@ fn actual_parent_preparation_is_required_and_final_callback_leaves_no_receipt() 
         serde_json::from_str::<ReviewReceiptReference>(&receipt.expected[PREPARATION]).unwrap(),
         preparation
     );
-    let actual = RunReference::from_receipt(&receipt).unwrap().unwrap();
+    let actual = crate::control::run_reference_from_receipt(&receipt)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (
             actual.attempt,
@@ -361,7 +364,9 @@ fn exact_inventory_caps_and_unknown_exit_cannot_be_relabelled() {
         .iter_mut()
         .find(|r| r.operation_id == f.reference.predecessor.operation)
         .unwrap();
-    let mut run = RunReference::from_receipt(previous).unwrap().unwrap();
+    let mut run = crate::control::run_reference_from_receipt(previous)
+        .unwrap()
+        .unwrap();
     run.phase.retry_grant = Some(Uuid::new_v4());
     previous
         .expected
@@ -640,7 +645,7 @@ fn marked_failed_parent_grant_preserves_source_and_renews_only_exact_budget() {
     let prior_admissions = receipts
         .iter()
         .filter_map(|r| {
-            RunReference::from_receipt(r)
+            crate::control::run_reference_from_receipt(r)
                 .unwrap()
                 .filter(|run| run.phase == old_reference.phase)
                 .map(|_| (r.operation_id, r.payload_digest.clone()))
@@ -745,10 +750,12 @@ fn marked_failed_parent_grant_preserves_source_and_renews_only_exact_budget() {
         )
         .unwrap();
     assert_eq!(
-        RunReference::from_receipt(&f.host.operation(admitted.operation_id).unwrap())
-            .unwrap()
-            .unwrap()
-            .attempt,
+        crate::control::run_reference_from_receipt(
+            &f.host.operation(admitted.operation_id).unwrap()
+        )
+        .unwrap()
+        .unwrap()
+        .attempt,
         1
     );
     f.host
@@ -815,9 +822,10 @@ fn marked_failed_parent_grant_preserves_source_and_renews_only_exact_budget() {
             |_| Ok(()),
         )
         .unwrap();
-    let run = RunReference::from_receipt(&f.host.operation(next.operation_id).unwrap())
-        .unwrap()
-        .unwrap();
+    let run =
+        crate::control::run_reference_from_receipt(&f.host.operation(next.operation_id).unwrap())
+            .unwrap()
+            .unwrap();
     assert_eq!(
         (
             run.phase.retry_grant,
@@ -974,7 +982,7 @@ fn absent_parent_grant_fields_preserve_legacy_reference_bytes() {
         .unwrap()
         .iter()
         .filter_map(|receipt| {
-            RunReference::from_receipt(receipt)
+            crate::control::run_reference_from_receipt(receipt)
                 .unwrap()
                 .filter(|run| run.phase == f.reference.phase)
                 .map(|run| {

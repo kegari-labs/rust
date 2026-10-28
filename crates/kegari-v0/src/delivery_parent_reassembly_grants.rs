@@ -1,6 +1,7 @@
 //! Exact native grant ancestry for the parent-only reassembly lane.
 use super::*;
 use crate::control::ParentGrantReference;
+use kegari_types::run::PhaseKey;
 
 pub(super) fn capture(
     phase: &PhaseKey,
@@ -152,7 +153,7 @@ pub(super) fn history(receipts: &[Receipt], phase: &PhaseKey) -> Result<BTreeMap
         Ok(())
     };
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && run.phase.work == phase.work
             && run.phase.generation == phase.generation
             && run.phase.phase == phase.phase

@@ -12,7 +12,7 @@ pub const BUILD_ID: &str = env!("KEGARI_BUILD_ID");
 pub const VERSION_WITH_BUILD: &str =
     concat!(env!("CARGO_PKG_VERSION"), " ", env!("KEGARI_BUILD_ID"));
 pub mod authority;
-pub mod codex;
+pub mod codex_host;
 pub mod config;
 pub mod configuration;
 pub mod connections;

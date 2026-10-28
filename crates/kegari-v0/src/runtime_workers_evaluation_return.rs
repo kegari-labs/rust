@@ -2,6 +2,9 @@
 //! reconstruction from absent receipts and never grants another model attempt.
 use super::*;
 use crate::control::{Receipt, ReceiptPhase};
+#[cfg(test)]
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 
 pub(crate) enum EvaluationPreparationReturn {
     Ready(Box<AdmittedWorker>),
@@ -287,9 +290,10 @@ impl PreparationReturned {
         match &self.model {
             Some((permit, contract, budget)) => {
                 let actual = runtime.control.operation(self.operation)?;
-                let found = RunReference::from_receipt(&actual)?.ok_or_else(|| {
-                    Error::new("worker_binding", "returned model lost its actual admission")
-                })?;
+                let found =
+                    crate::control::run_reference_from_receipt(&actual)?.ok_or_else(|| {
+                        Error::new("worker_binding", "returned model lost its actual admission")
+                    })?;
                 require_request_identity(&self.model_request_digest, &actual)?;
                 if canonical_digest(1, &found)? != canonical_digest(1, budget)?
                     || actual.runtime_id != permit.lease.runtime_id

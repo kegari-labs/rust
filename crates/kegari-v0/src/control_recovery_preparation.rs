@@ -1,6 +1,8 @@
 //! Finite metadata-only recovery preparation. This is neither a worker
 //! preparation nor a model admission; opaque recovery still precedes resume.
 use super::*;
+#[cfg(test)]
+use kegari_types::run::RunReference;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -10,7 +12,7 @@ pub struct SessionRecoveryPreparationReference {
     pub(crate) candidate_digest: String,
     pub(crate) workspace: Uuid,
     pub(crate) account: String,
-    pub(crate) phase: crate::scheduler::PhaseKey,
+    pub(crate) phase: kegari_types::run::PhaseKey,
     pub(crate) attempt: u32,
     pub(crate) max_attempts: u32,
 }
@@ -21,7 +23,7 @@ impl SessionRecoveryPreparationReference {
     pub fn candidate_digest(&self) -> &str {
         &self.candidate_digest
     }
-    pub fn phase(&self) -> &crate::scheduler::PhaseKey {
+    pub fn phase(&self) -> &kegari_types::run::PhaseKey {
         &self.phase
     }
     pub fn account(&self) -> &str {
@@ -160,7 +162,7 @@ impl ControlHost {
         let mut cap = reference.max_attempts;
         let mut model_cap = u32::MAX;
         for receipt in &receipts {
-            if let Some(run) = RunReference::from_receipt(receipt)?
+            if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
                 && run.phase == reference.phase
             {
                 if run.workspace != reference.workspace
@@ -336,7 +338,7 @@ mod tests {
             workspace: Uuid::new_v4(),
             account: "fixture".into(),
             normalized_state: None,
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: "fixture-work".into(),
                 generation: digest("generation"),
                 phase: "implementation".into(),
@@ -421,7 +423,11 @@ mod tests {
             SessionRecoveryPreparationReference::from_receipt(&receipt).unwrap(),
             Some(reference)
         );
-        assert!(RunReference::from_receipt(&receipt).unwrap().is_none());
+        assert!(
+            crate::control::run_reference_from_receipt(&receipt)
+                .unwrap()
+                .is_none()
+        );
         assert!(
             PreparationReference::from_receipt(&receipt)
                 .unwrap()

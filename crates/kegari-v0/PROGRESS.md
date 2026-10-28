@@ -1,5 +1,41 @@
 # Kegari v0 build progress
 
+**Goal mode cancelled. Final Codex extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. `kegari-codex` owns the protocol
+client, session/history state, protocol recovery and callback-driven observations.
+Backend `codex_host` retains actual native launch and cleanup. Protected journals,
+receipt lineage, joined recovery and execution admission remain backend-owned.
+Shared `RunReference` and `PhaseKey` data live in `kegari_types::run`; receipt
+parsing and validation remain Control policy. The original backend `codex`
+module is removed without compatibility reexports or reverse dependencies.
+
+All thirteen packages retain `0.2.0-alpha.10`. The original session/history byte
+and digest corpus passes unchanged. All 38 protocol files, 239 external lock
+entries, persisted/API schemas and instruction assets remain unchanged.
+All **181 focused tests passed**. The complete workspace release suite passed
+**1,315 tests, zero failed, exactly three native ignores**, with normal concurrency.
+Formatting, strict all-target Clippy, contract inventory and its 11 tests passed.
+One bounded independent review found no material issues. Initial integration
+compile errors and a redundant test-only macro caught by Clippy were corrected;
+original diagnostics are retained. No tests failed, and the complete suite ran
+once on the final reviewed candidate.
+
+The optimized arm64 executable passed all five minimal-environment inspections
+with consistent identity and no runtime-state creation. Independent reconstruction
+confirmed all 386 application hash inputs and the 805 reviewed source/test/build
+inputs. See the [final crate boundary](../kegari-codex/README.md) and
+[verification report](validation/CODEX-CLIENT-EXTRACTION.md) for migrations,
+results and source/executable identities.
+
+This completes Codex protocol ownership while preserving explicit backend
+integration. It adds no feature or qualification claim. Native/live restrictions,
+milestone requirements and the alpha.10 archive remain intact. No installed Codex,
+live accounts, Keychain, native qualification, services, goal resumption,
+release packaging, commits or remote operations were involved.
+
+## Previous Codex protocol/transport extraction checkpoint
+
 **Goal mode cancelled. Codex protocol/transport extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. `kegari-codex` owns independent protocol

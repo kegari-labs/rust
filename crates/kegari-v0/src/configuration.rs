@@ -110,8 +110,8 @@ impl ConfigurationInputs for NativeConfigurationInputs {
                 managed_execution: None,
             }
             .validate()?;
-            let permissions = crate::codex::permission_configuration(&plan, &auth_home)?;
-            crate::codex::probe_connection(
+            let permissions = crate::codex_host::permission_configuration(&plan, &auth_home)?;
+            crate::codex_host::probe_connection(
                 &executable,
                 &auth_home,
                 &permissions,

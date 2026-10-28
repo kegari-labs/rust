@@ -173,13 +173,13 @@ impl DeclaredProtocolObservation {
             &self.suite_digest,
             &self.fixture_digest,
         ] {
-            crate::evidence::validate_digest(digest)?;
+            validate_digest(digest)?;
         }
         if let Some(digest) = &self.trial_digest {
-            crate::evidence::validate_digest(digest)?;
+            validate_digest(digest)?;
         }
         if let Some(digest) = &self.session_binding_digest {
-            crate::evidence::validate_digest(digest)?;
+            validate_digest(digest)?;
         }
         if self.thread_id.as_deref().is_some_and(|s| !identifier(s)) {
             return Err(invalid());
@@ -198,7 +198,7 @@ impl DeclaredProtocolObservation {
             {
                 return Err(invalid());
             }
-            crate::evidence::validate_digest(&record.digest)?;
+            validate_digest(&record.digest)?;
             total = total.checked_add(record.bytes).ok_or_else(invalid)?;
         }
         if total > MAX_CAPTURE_BYTES as u64 {
@@ -227,14 +227,14 @@ struct RequestCapture {
     digest: String,
     open: u32,
 }
-/// Private live collector. Its input is adapter data; authority is supplied by
+/// Callback-driven live collector. Its input is adapter data; authority is supplied by
 /// the actual ScopedWorker separately, never by constructing this data helper.
-pub(crate) struct ProtocolOperationBinding {
+pub struct ProtocolOperationBinding {
     pub operation: Uuid,
     pub runtime: Uuid,
     pub workspace: Uuid,
 }
-pub(crate) struct ProtocolCapture {
+pub struct ProtocolCapture {
     report: DeclaredProtocolObservation,
     requests: BTreeMap<String, RequestCapture>,
     calls: BTreeMap<String, String>,
@@ -247,7 +247,7 @@ pub(crate) struct ProtocolCapture {
     established: bool,
 }
 impl ProtocolCapture {
-    pub(crate) fn new(
+    pub fn new(
         binding: ProtocolOperationBinding,
         scope: String,
         instruction: String,
@@ -288,11 +288,11 @@ impl ProtocolCapture {
             established: false,
         }
     }
-    pub(crate) fn disable(&mut self, issue: ProtocolCaptureIssue) {
+    pub fn disable(&mut self, issue: ProtocolCaptureIssue) {
         self.enabled = false;
         self.issue(issue);
     }
-    pub(crate) fn issue(&mut self, issue: ProtocolCaptureIssue) {
+    pub fn issue(&mut self, issue: ProtocolCaptureIssue) {
         self.report.issues.insert(issue);
     }
     fn bind<'a>(&mut self, state: Option<&'a SessionState>) -> Option<&'a SessionState> {
@@ -435,7 +435,7 @@ impl ProtocolCapture {
             }
         }
     }
-    pub(crate) fn observe(
+    pub fn observe(
         &mut self,
         event: ProtocolObservation<'_>,
         write: &mut dyn FnMut(&Value) -> Result<String>,
@@ -955,7 +955,7 @@ impl ProtocolCapture {
         }
         self.record(json!({"channel":"matched_turn_response","request":canonical_digest(1,rpc_id).ok(),"method":method,"thread":thread,"turn":turn_id}),write);
     }
-    pub(crate) fn finish(
+    pub fn finish(
         &self,
         state: Option<&SessionState>,
         pending: Option<&str>,
@@ -1086,5 +1086,5 @@ impl ProtocolCapture {
 }
 
 #[cfg(test)]
-#[path = "codex_observation_tests.rs"]
+#[path = "observation_tests.rs"]
 mod tests;

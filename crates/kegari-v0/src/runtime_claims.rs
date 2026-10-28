@@ -1,6 +1,6 @@
 //! Protected worker proposals are provenance, never passed workflow gates.
 use crate::{
-    control::{Receipt, RunReference},
+    control::Receipt,
     instructions::AgentRole,
     reconcile::{FreshGate, GatePurpose},
     worker::{WorkerOutcome, recover_session},
@@ -9,6 +9,8 @@ use kegari_digest::canonical_digest;
 use kegari_secrets::{AttestationKey, Signed};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
+#[cfg(test)]
+use kegari_types::run::RunReference;
 use serde_json::Value;
 use uuid::Uuid;
 #[path = "runtime_claims_transition.rs"]
@@ -126,7 +128,7 @@ pub(crate) fn recover_authorized(
     }
     let outcome: WorkerOutcome = serde_json::from_value(signed.payload["outcome"].clone())
         .map_err(|_| Error::new("record_corrupt", "pending worker outcome is invalid"))?;
-    let run = RunReference::from_receipt(&admission)?
+    let run = crate::control::run_reference_from_receipt(&admission)?
         .ok_or_else(|| Error::new("worker_binding", "proposal has no actual worker admission"))?;
     let authority = FreshGate::recover_host_claim(key, &signed, &outcome.fresh_gate_digest)?;
     let original =
@@ -355,17 +357,17 @@ mod tests {
     use super::*;
     use crate::{
         authority::{ChildScope, Corrections, IssueKey, Responsibility},
-        codex::SessionState,
         control::ReceiptPhase,
         evidence::{Generation, WorkIdentity},
         instructions::InstructionManifest,
         reconcile::{ChildProjection, DependencyOutcomes, ParentProjection},
-        scheduler::PhaseKey,
     };
     use chrono::{Duration, Utc};
+    use kegari_codex::SessionState;
     use kegari_codex::{CodexProfile, SessionBinding};
     use kegari_config::{Profile, ReleaseMode, Speed};
     use kegari_digest::bytes_digest;
+    use kegari_types::run::PhaseKey;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
     fn id(n: u128) -> Uuid {
@@ -662,7 +664,7 @@ mod tests {
             input_digest: transition.input_digest(),
             transition_digest: Some(transition.digest().into()),
         });
-        let mut run = RunReference::from_receipt(&fixture.admission)
+        let mut run = crate::control::run_reference_from_receipt(&fixture.admission)
             .unwrap()
             .unwrap();
         run.workspace = original.workspace_id();
@@ -895,7 +897,7 @@ mod tests {
         };
         state.correction_required = authority.correction_watermark();
         state.correction_consumed = state.correction_required;
-        let mut run = RunReference::from_receipt(&fixture.admission)
+        let mut run = crate::control::run_reference_from_receipt(&fixture.admission)
             .unwrap()
             .unwrap();
         run.workspace = authority.workspace_id();
@@ -1020,7 +1022,9 @@ mod tests {
     fn later_turn_or_pending_protocol_request_supersedes_completed_claim() {
         for terminal in ["active", "failed", "interrupted", "completed", "pending"] {
             let mut f = Fixture::new();
-            let mut run = RunReference::from_receipt(&f.admission).unwrap().unwrap();
+            let mut run = crate::control::run_reference_from_receipt(&f.admission)
+                .unwrap()
+                .unwrap();
             run.max_turns = 2;
             f.admission
                 .expected

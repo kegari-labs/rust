@@ -4,15 +4,15 @@
 use super::accepted_origin::{AcceptedOriginIdentity, VerifiedAcceptedOriginRefs};
 use super::*;
 use crate::{
-    control::{ParentReassemblyReference, ReviewReceiptReference, RunReference},
+    control::{ParentReassemblyReference, ReviewReceiptReference},
     decisions::VerifiedRetryGrant,
     evidence::VerifiedParent,
     runtime_delivery::VerifiedBaselineTransition,
-    scheduler::PhaseKey,
     worker::{WorkerAuthority, WorkerContract},
     worker_run::{RunCompletion, RunOutcome},
 };
 use kegari_config::Config;
+use kegari_types::run::PhaseKey;
 
 #[path = "delivery_parent_reassembly_grants.rs"]
 mod grant_lineage;
@@ -908,7 +908,7 @@ impl DeliveryCoordinator {
             .iter()
             .find(|r| r.operation_id == predecessor.operation_id)
             .ok_or_else(|| blocked("parent predecessor admission missing"))?;
-        let prior = RunReference::from_receipt(receipt)?
+        let prior = crate::control::run_reference_from_receipt(receipt)?
             .ok_or_else(|| blocked("parent predecessor has no actual worker run"))?;
         let original_contract = predecessor
             .contract
@@ -999,7 +999,7 @@ impl DeliveryCoordinator {
                 .min(prior.max_review_rounds),
         };
         for r in &receipts {
-            if let Some(run) = RunReference::from_receipt(r)?
+            if let Some(run) = crate::control::run_reference_from_receipt(r)?
                 && run.phase == reference.phase
             {
                 reference.max_attempts = reference.max_attempts.min(run.max_attempts);

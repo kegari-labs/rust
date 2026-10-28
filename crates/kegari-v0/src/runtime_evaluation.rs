@@ -12,6 +12,7 @@ use crate::runtime_workers::LaunchRequest;
 use kegari_control_api::identity::Actor;
 use kegari_control_api::identity::Principal;
 use kegari_types::api::{CommandName, CommandRequest};
+use kegari_types::run::RunReference;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[path = "runtime_evaluation_owned_return.rs"]
@@ -163,7 +164,7 @@ impl VerifiedEvaluationRequest {
         snapshot: &crate::control::ControlSnapshot,
         operation: Uuid,
         authority: &WorkerAuthority,
-        phase: &crate::scheduler::PhaseKey,
+        phase: &kegari_types::run::PhaseKey,
         max_turns: u32,
     ) -> Result<()> {
         self.current(runtime, snapshot)?;
@@ -581,7 +582,7 @@ impl RuntimeCoordinator {
             ));
         }
         let authority = WorkerAuthority::Independent(gate);
-        let phase = crate::scheduler::PhaseKey {
+        let phase = kegari_types::run::PhaseKey {
             work: authority.work_key()?,
             generation: match &authority {
                 WorkerAuthority::Independent(g) => g.review_identity().into(),
@@ -758,7 +759,7 @@ impl RuntimeCoordinator {
         snapshot: &crate::control::ControlSnapshot,
         operation: Uuid,
         authority: &WorkerAuthority,
-        phase: &crate::scheduler::PhaseKey,
+        phase: &kegari_types::run::PhaseKey,
         max_turns: u32,
     ) -> Result<()> {
         let workspace = authority_settings(authority).0;
@@ -1187,7 +1188,7 @@ pub(super) fn closed_model_observation(
     budget: &RunReference,
     observed: &Value,
 ) -> Result<bool> {
-    let reference = RunReference::from_receipt(receipt)?
+    let reference = crate::control::run_reference_from_receipt(receipt)?
         .ok_or_else(|| Error::new("record_corrupt", "evaluation model has no typed admission"))?;
     if receipt.operation_id != permit.operation_id
         || receipt.request_id != permit.operation_id
@@ -1483,7 +1484,7 @@ mod model_retirement_observation_tests {
             workspace: Uuid::new_v4(),
             account: "fixture-account".into(),
             normalized_state: None,
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: "evaluation-fixture".into(),
                 generation: bytes_digest(b"generation"),
                 phase: "independent_review".into(),

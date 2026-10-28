@@ -1,6 +1,7 @@
 //! Real Control/private-storage ordering; callbacks are explicit component
 //! observations, never processes, worker capabilities or cold launch authority.
 use super::*;
+use kegari_types::run::RunReference;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -58,7 +59,7 @@ impl Fixture {
                         workspace: Uuid::new_v4(),
                         account: "component-account".into(),
                         normalized_state: None,
-                        phase: crate::scheduler::PhaseKey {
+                        phase: kegari_types::run::PhaseKey {
                             work,
                             generation: digest("generation"),
                             phase: "parent_evidence_review".into(),

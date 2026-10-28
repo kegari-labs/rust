@@ -1,12 +1,39 @@
-//! Pinned Codex protocol data and stream framing. Messages are data, never authority.
+//! Pinned Codex protocol client, session observations and stream framing.
+//! Protocol data never establishes native execution authority.
+use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::PathBuf;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::time::Instant;
+use tokio::time::{Instant, timeout_at};
+
+mod client;
+mod history;
+mod observation;
+mod resume;
+mod session;
+mod transport_observation;
+pub use client::{DenyTools, RequestGate, RpcClient, SessionScope, ToolBroker};
+use client::{instruction_sources, validate_thread_response};
+pub use history::RecordedThreadHistory;
+pub use observation::{
+    DeclaredProtocolObservation, ProtocolCapture, ProtocolCaptureIssue, ProtocolCaptureState,
+    ProtocolObservation, ProtocolOperationBinding, ProtocolRecordReference,
+    ProtocolTransportEndDiagnostic,
+};
+pub use resume::{
+    ResumeCandidate, ResumeLineageEntry, ResumeRequest, SessionResumeOrigin, SubmissionHistory,
+    TransientTurnFailure, VerifiedThreadRecovery,
+};
+pub use session::SessionState;
+use transport_observation::ObservationOnlyDeny;
+pub use transport_observation::ProtocolTransportEnd;
+const MAX_PENDING_EVENTS: usize = 4096;
 
 pub const SUPPORTED_CODEX_VERSION: &str = "codex-cli 0.164.0-alpha.11.1";
 pub const PROTOCOL_PROFILE: &str = "kegari-codex-0.164.0-alpha.11.1-v1";
@@ -655,3 +682,26 @@ impl RpcTransport {
 
 #[cfg(test)]
 mod tests;
+
+fn required_str<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
+    v.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| Error::new("protocol_error", format!("missing or invalid {key}")))
+}
+
+fn validate_digest(value: &str) -> Result<()> {
+    let suffix = value
+        .strip_prefix("sha256:v1:")
+        .or_else(|| value.strip_prefix("sha256:"));
+    if !suffix.is_some_and(|s| {
+        s.len() == 64
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return Err(Error::invalid(
+            "evidence reference requires an explicit SHA-256 digest/schema",
+        ));
+    }
+    Ok(())
+}

@@ -1,6 +1,7 @@
 //! Exact submitted-input provenance and narrowly bounded thread recovery.
 use super::*;
-use kegari_codex::MAX_FRAME_BYTES;
+use crate::MAX_FRAME_BYTES;
+use kegari_types::run::RunReference;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,7 +30,7 @@ pub(crate) struct ResumeHistoryPrefix {
 #[serde(deny_unknown_fields)]
 struct ResumeHistorySegment {
     binding: SessionBinding,
-    reference: crate::control::RunReference,
+    reference: RunReference,
     admission_digest: String,
     journal_digest: String,
     history: RecordedThreadHistory,
@@ -48,7 +49,16 @@ struct ResumeHistoryTransition {
     failure: TransientTurnFailure,
 }
 impl SessionResumeOrigin {
-    pub(crate) fn from_recovery(
+    pub fn predecessor(&self) -> uuid::Uuid {
+        self.predecessor
+    }
+    pub fn recovery_digest(&self) -> &str {
+        &self.recovery_digest
+    }
+    pub fn instruction_compatibility_digest(&self) -> &str {
+        &self.instruction_compatibility_digest
+    }
+    pub fn from_recovery(
         recovery: &VerifiedThreadRecovery,
         recovery_digest: &str,
         instruction_digest: &str,
@@ -132,7 +142,7 @@ impl SessionResumeOrigin {
         origin.validate(&empty)?;
         Ok(origin)
     }
-    pub(crate) fn preserves(&self, previous: &Self) -> Result<()> {
+    pub fn preserves(&self, previous: &Self) -> Result<()> {
         let mut normalized = self.clone();
         normalized.readback_digest = previous.readback_digest.clone();
         if canonical_digest(1, &normalized)? != canonical_digest(1, previous)?
@@ -175,7 +185,7 @@ impl SessionResumeOrigin {
         .into_iter()
         .chain(self.readback_digest.as_ref())
         {
-            crate::evidence::validate_digest(digest)?;
+            crate::validate_digest(digest)?;
         }
         if let Some(prefix) = &self.prefix {
             prefix.validate(self, &state.binding)?;
@@ -289,7 +299,7 @@ impl ResumeHistoryPrefix {
                 &segment.transition.history_digest,
                 &segment.transition.submission_digest,
             ] {
-                crate::evidence::validate_digest(digest)?;
+                crate::validate_digest(digest)?;
             }
             previous = Some(segment);
         }
@@ -376,8 +386,8 @@ impl SubmissionHistory {
                     "historical input changed its exact operation-scoped turn binding",
                 ));
             }
-            crate::evidence::validate_digest(&record.frame_digest)?;
-            crate::evidence::validate_digest(record.input_digest.as_deref().ok_or_else(|| {
+            crate::validate_digest(&record.frame_digest)?;
+            crate::validate_digest(record.input_digest.as_deref().ok_or_else(|| {
                 resume_history_error("historical submitted text digest is absent")
             })?)?;
         }
@@ -475,7 +485,7 @@ impl SubmissionHistory {
                     "invalid submitted-input binding",
                 ));
             }
-            crate::evidence::validate_digest(&record.frame_digest)?;
+            crate::validate_digest(&record.frame_digest)?;
             if let SubmissionOutcome::Acknowledged { turn } = &record.outcome
                 && state.require_new_turn_identity(turn).is_err()
             {
@@ -485,12 +495,12 @@ impl SubmissionHistory {
                 ));
             }
             if let Some(digest) = &record.input_digest {
-                crate::evidence::validate_digest(digest)?;
+                crate::validate_digest(digest)?;
             }
         }
         Ok(())
     }
-    pub(crate) fn preserves(&self, previous: &Self) -> Result<()> {
+    pub fn preserves(&self, previous: &Self) -> Result<()> {
         if self.records.len() < previous.records.len() {
             return Err(Error::new(
                 "record_corrupt",
@@ -564,25 +574,25 @@ impl SubmissionHistory {
     }
 }
 
-/// Protected journal provenance only. Native recovery also requires the actual
-/// retained joined worker and original owned directory; this grants no permit.
+/// Consistent retained protocol data. Native recovery still requires the backend
+/// protected journal, actual joined worker and original owned directory.
 #[derive(Clone, Debug)]
-pub struct RetainedResumeSession {
+pub struct ResumeCandidate {
     state: SessionState,
     admission_digest: String,
-    reference: crate::control::RunReference,
+    reference: RunReference,
     journal_digest: String,
     digest: String,
 }
-impl RetainedResumeSession {
-    pub(crate) fn from_journal(
+impl ResumeCandidate {
+    pub fn from_retained_parts(
         state: SessionState,
         admission_digest: String,
-        reference: crate::control::RunReference,
+        reference: RunReference,
         journal_digest: String,
     ) -> Result<Self> {
-        crate::evidence::validate_digest(&admission_digest)?;
-        crate::evidence::validate_digest(&journal_digest)?;
+        crate::validate_digest(&admission_digest)?;
+        crate::validate_digest(&journal_digest)?;
         if reference.account != state.binding.account_id
             || reference.phase.work != state.binding.work_identity
             || reference.instruction_digest != state.binding.instruction_digest
@@ -645,13 +655,23 @@ impl RetainedResumeSession {
             digest,
         })
     }
+    /// Existing ordered data only; no receipt lookup or authority construction.
+    pub fn prior_lineage(&self) -> impl Iterator<Item = ResumeLineageEntry<'_>> {
+        self.state
+            .resume_origin
+            .as_ref()
+            .and_then(|origin| origin.prefix.as_ref())
+            .into_iter()
+            .flat_map(|prefix| prefix.segments.iter())
+            .map(|segment| ResumeLineageEntry { segment })
+    }
     pub fn state(&self) -> &SessionState {
         &self.state
     }
     pub fn admission_digest(&self) -> &str {
         &self.admission_digest
     }
-    pub fn reference(&self) -> &crate::control::RunReference {
+    pub fn reference(&self) -> &RunReference {
         &self.reference
     }
     pub fn journal_digest(&self) -> &str {
@@ -660,67 +680,30 @@ impl RetainedResumeSession {
     pub fn digest(&self) -> &str {
         &self.digest
     }
-    /// Data linkage only: the native consumer still requires its genuine joined
-    /// completion and independent source, ownership and current authority proofs.
-    pub(crate) fn verify_prior_receipts(&self, receipts: &[crate::control::Receipt]) -> Result<()> {
-        let operation: uuid::Uuid = self
-            .state
-            .binding
-            .operation_id
-            .parse()
-            .map_err(|_| resume_history_error("candidate operation is invalid"))?;
-        let current = receipts
-            .iter()
-            .find(|receipt| receipt.operation_id == operation)
-            .ok_or_else(|| resume_history_error("candidate actual admission disappeared"))?;
-        if canonical_digest(1, current)? != self.admission_digest {
-            return Err(resume_history_error("candidate actual receipt changed"));
-        }
-        let Some(prefix) = self
-            .state
-            .resume_origin
-            .as_ref()
-            .and_then(|origin| origin.prefix.as_ref())
-        else {
-            return Ok(());
-        };
-        for segment in &prefix.segments {
-            let predecessor: uuid::Uuid = segment
-                .binding
-                .operation_id
-                .parse()
-                .map_err(|_| resume_history_error("historical operation is invalid"))?;
-            let prior = receipts
-                .iter()
-                .find(|receipt| receipt.operation_id == predecessor)
-                .ok_or_else(|| resume_history_error("historical admission disappeared"))?;
-            let run = crate::control::RunReference::from_receipt(prior)?
-                .ok_or_else(|| resume_history_error("historical run reference disappeared"))?;
-            let next = receipts
-                .iter()
-                .find(|receipt| receipt.operation_id == segment.transition.successor)
-                .ok_or_else(|| {
-                    resume_history_error("historical successor admission disappeared")
-                })?;
-            let resume =
-                crate::control::RunResumeReference::from_receipt(next)?.ok_or_else(|| {
-                    resume_history_error("historical successor lost its typed resume admission")
-                })?;
-            if prior.runtime_id != current.runtime_id
-                || next.runtime_id != current.runtime_id
-                || canonical_digest(1, prior)? != segment.admission_digest
-                || canonical_digest(1, &run)? != canonical_digest(1, &segment.reference)?
-                || resume.predecessor() != predecessor
-                || resume.predecessor_receipt_digest != segment.admission_digest
-                || resume.recovery_digest() != segment.transition.recovery_digest
-                || resume.instruction_compatibility_digest != segment.transition.instruction_digest
-            {
-                return Err(resume_history_error(
-                    "historical submitted-input chain differs from actual Control lineage",
-                ));
-            }
-        }
-        Ok(())
+}
+
+/// Read-only projection of one retained historical segment.
+pub struct ResumeLineageEntry<'a> {
+    segment: &'a ResumeHistorySegment,
+}
+impl ResumeLineageEntry<'_> {
+    pub fn operation_id(&self) -> &str {
+        &self.segment.binding.operation_id
+    }
+    pub fn reference(&self) -> &RunReference {
+        &self.segment.reference
+    }
+    pub fn admission_digest(&self) -> &str {
+        &self.segment.admission_digest
+    }
+    pub fn successor(&self) -> uuid::Uuid {
+        self.segment.transition.successor
+    }
+    pub fn recovery_digest(&self) -> &str {
+        &self.segment.transition.recovery_digest
+    }
+    pub fn instruction_compatibility_digest(&self) -> &str {
+        &self.segment.transition.instruction_digest
     }
 }
 
@@ -775,7 +758,7 @@ pub enum TransientTurnFailure {
 /// separate opaque host capabilities and must still be checked by the consumer.
 #[derive(Clone, Debug)]
 pub struct VerifiedThreadRecovery {
-    retained: RetainedResumeSession,
+    retained: ResumeCandidate,
     response_digest: String,
     history_digest: String,
     submission_digest: String,
@@ -783,7 +766,7 @@ pub struct VerifiedThreadRecovery {
     digest: String,
 }
 impl VerifiedThreadRecovery {
-    pub fn retained(&self) -> &RetainedResumeSession {
+    pub fn retained(&self) -> &ResumeCandidate {
         &self.retained
     }
     pub fn response_digest(&self) -> &str {
@@ -803,46 +786,20 @@ impl VerifiedThreadRecovery {
     }
 }
 
-// Kept private to the protocol adapter. Production constructs this only from
-// the admitted semantic bridge; component tests exercise the wire sequence
-// without constructing a worker admission or a joined-completion capability.
-struct ResumeProtocol<'a> {
-    recovery: &'a VerifiedThreadRecovery,
-    prompt: &'a str,
-    predecessor: uuid::Uuid,
-    bridge_digest: &'a str,
+/// Ordinary protocol-resume parameters. The backend separately validates its
+/// admitted semantic bridge; these values create no native execution authority.
+pub struct ResumeRequest<'a> {
+    pub recovery: &'a VerifiedThreadRecovery,
+    pub prompt: &'a str,
+    pub predecessor: uuid::Uuid,
+    pub bridge_digest: &'a str,
 }
 
 impl RpcClient {
-    /// Consume an actual semantic/metadata bridge without changing the original
-    /// SessionBinding compatibility rule or relabelling historical turns.
-    pub(crate) async fn resume_verified(
+    pub async fn resume_protocol(
         &mut self,
         state: &mut SessionState,
-        proof: &crate::worker_run::VerifiedSessionResume,
-        isolation: &ValidatedIsolation,
-        permissions: &PermissionConfiguration,
-        broker: &mut dyn ToolBroker,
-    ) -> Result<()> {
-        self.validate_session(state, isolation, permissions)?;
-        proof.verify_session(state)?;
-        self.resume_protocol(
-            state,
-            ResumeProtocol {
-                recovery: proof.recovery().observation(),
-                prompt: proof.prompt(),
-                predecessor: proof.predecessor(),
-                bridge_digest: proof.digest(),
-            },
-            permissions,
-            broker,
-        )
-        .await
-    }
-    async fn resume_protocol(
-        &mut self,
-        state: &mut SessionState,
-        proof: ResumeProtocol<'_>,
+        proof: ResumeRequest<'_>,
         permissions: &PermissionConfiguration,
         broker: &mut dyn ToolBroker,
     ) -> Result<()> {
@@ -905,9 +862,9 @@ impl RpcClient {
     /// The native wrapper uses this closed metadata sequence so even a policy
     /// notification arriving during initialization is durably observed against
     /// the original session. The caller's gate precedes each outbound read.
-    pub(crate) async fn recover_metadata(
+    pub async fn recover_metadata(
         &mut self,
-        retained: &RetainedResumeSession,
+        retained: &ResumeCandidate,
         permissions: &PermissionConfiguration,
         sink: &mut dyn ToolBroker,
         fresh: &dyn Fn() -> Result<()>,
@@ -999,7 +956,7 @@ impl RpcClient {
     /// process-journal authority, then join it before consuming the observation.
     pub async fn recover_terminal_failure(
         &mut self,
-        retained: &RetainedResumeSession,
+        retained: &ResumeCandidate,
         sink: &mut dyn ToolBroker,
     ) -> Result<VerifiedThreadRecovery> {
         let mut state = retained.state.clone();
@@ -1259,13 +1216,13 @@ fn input_digest(input: &Value) -> Result<String> {
 }
 
 #[cfg(test)]
-#[path = "codex_resume_chain_tests.rs"]
+#[path = "resume_chain_tests.rs"]
 mod chain_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kegari_codex::{CodexProfile, PriorUnattributedUsage};
+    use crate::{CodexProfile, PriorUnattributedUsage};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -1416,11 +1373,11 @@ mod tests {
             let state = SessionState::restore(&serialized).unwrap();
             // Component fixture: actual protocol observations, no claim of a
             // native joined worker, filesystem recovery or admitted successor.
-            let reference = crate::control::RunReference {
+            let reference = RunReference {
                 workspace: uuid::Uuid::new_v4(),
                 account: state.binding.account_id.clone(),
                 normalized_state: None,
-                phase: crate::scheduler::PhaseKey {
+                phase: kegari_types::run::PhaseKey {
                     work: state.binding.work_identity.clone(),
                     generation: canonical_digest(1, &"generation").unwrap(),
                     phase: "implementation".into(),
@@ -1433,7 +1390,7 @@ mod tests {
                 max_review_rounds: 3,
                 attempt: 1,
             };
-            let candidate = RetainedResumeSession::from_journal(
+            let candidate = ResumeCandidate::from_retained_parts(
                 state,
                 canonical_digest(1, &"fixture receipt").unwrap(),
                 reference,
@@ -1478,7 +1435,7 @@ mod tests {
             }
         }
     }
-    async fn metadata_sequence(candidate: &RetainedResumeSession, thread: Value) {
+    async fn metadata_sequence(candidate: &ResumeCandidate, thread: Value) {
         for scenario in ["current", "setup_policy", "setup_tool", "wrong_account"] {
             let (client, server) = tokio::io::duplex(32_768);
             let (reader, writer) = tokio::io::split(client);
@@ -1888,7 +1845,7 @@ mod tests {
             let result = rpc
                 .resume_protocol(
                     &mut state,
-                    ResumeProtocol {
+                    ResumeRequest {
                         recovery: proof,
                         prompt: "actual independently assembled current prompt",
                         predecessor: old.binding.operation_id.parse().unwrap(),
@@ -2081,3 +2038,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "resume_compat_tests.rs"]
+mod final_compat_tests;

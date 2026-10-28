@@ -4,8 +4,8 @@
 //! bridge and joined result is retained by identity; raw receipts only describe
 //! their immutable lineage. This module cannot launch a model or mint a source.
 use super::*;
+use crate::worker_run::RetainedResumeSession;
 use crate::{
-    codex::RetainedResumeSession,
     control::{
         ControlHost, PairedResumeResultReference, ReviewRoundRecoveryReference,
         ReviewRoundResumeReference,
@@ -13,6 +13,7 @@ use crate::{
     housekeeping::VerifiedDirectoryReuse,
     worker_run::{AdmittedSessionResume, VerifiedProviderRecovery, VerifiedSessionResume},
 };
+use kegari_types::run::PhaseKey;
 
 pub(crate) struct PairedRecoveryInput<'a> {
     pub plan: Arc<VerifiedReviewRoundPlan>,
@@ -293,12 +294,12 @@ impl VerifiedPairedRecoveryCandidate {
         Ok(candidate)
     }
 }
-fn classification(failure: &crate::codex::TransientTurnFailure) -> TransientFailureCode {
+fn classification(failure: &kegari_codex::TransientTurnFailure) -> TransientFailureCode {
     match failure {
-        crate::codex::TransientTurnFailure::ServerOverloaded => {
+        kegari_codex::TransientTurnFailure::ServerOverloaded => {
             TransientFailureCode::ServerOverloaded
         }
-        crate::codex::TransientTurnFailure::InternalServerError => {
+        kegari_codex::TransientTurnFailure::InternalServerError => {
             TransientFailureCode::InternalServerError
         }
     }

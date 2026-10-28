@@ -2,6 +2,7 @@ use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_storage::PrivateDir;
 use kegari_types::error::Error;
+use kegari_types::run::RunReference;
 use kegari_v0::control::*;
 use serde_json::json;
 use std::{
@@ -552,7 +553,11 @@ fn metadata_budget_is_atomic_and_survives_restart_without_model_claims() {
         .admit_metadata(&lease, admission(1, 2), || Ok(()))
         .unwrap();
     let receipt = host.operation(first.operation_id).unwrap();
-    assert!(RunReference::from_receipt(&receipt).unwrap().is_none());
+    assert!(
+        kegari_v0::control::run_reference_from_receipt(&receipt)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         MetadataReference::from_receipt(&receipt)
             .unwrap()
@@ -1160,7 +1165,7 @@ fn atomic_run_budget_survives_restart_and_profile_edits_without_reset() {
         normalized_state: Some("todo".into()),
         workspace: Uuid::new_v4(),
         account: "actual-fixture-account".into(),
-        phase: kegari_v0::scheduler::PhaseKey {
+        phase: kegari_types::run::PhaseKey {
             work: "canonical-child".into(),
             generation: canonical_digest(1, &"definition-correction").unwrap(),
             phase: "implementation".into(),
@@ -1182,9 +1187,11 @@ fn atomic_run_budget_survives_restart_and_profile_edits_without_reset() {
     let first = host
         .admit_run(&lease, admission(reference.clone()), || Ok(()))
         .unwrap();
-    let recorded = RunReference::from_receipt(&host.operation(first.operation_id).unwrap())
-        .unwrap()
-        .unwrap();
+    let recorded = kegari_v0::control::run_reference_from_receipt(
+        &host.operation(first.operation_id).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(recorded.attempt, 1);
     host.retire_local(
         first.operation_id,
@@ -1252,7 +1259,7 @@ fn concurrent_session_capacity_is_counted_and_reserved_in_one_host_transaction()
                     workspace: Uuid::from_u128(2),
                     account: "same-actual-account".into(),
                     normalized_state: Some("todo".into()),
-                    phase: kegari_v0::scheduler::PhaseKey {
+                    phase: kegari_types::run::PhaseKey {
                         work: work.clone(),
                         generation: canonical_digest(1, &"current-generation").unwrap(),
                         phase: "implementation".into(),
@@ -1279,7 +1286,9 @@ fn concurrent_session_capacity_is_counted_and_reserved_in_one_host_transaction()
                             .active_operations
                             .iter()
                             .map(|permit| {
-                                RunReference::from_receipt(&host.operation(permit.operation_id)?)
+                                kegari_v0::control::run_reference_from_receipt(
+                                    &host.operation(permit.operation_id)?,
+                                )
                             })
                             .collect::<kegari_types::error::Result<Vec<_>>>()?
                             .into_iter()
@@ -1315,7 +1324,11 @@ fn concurrent_session_capacity_is_counted_and_reserved_in_one_host_transaction()
         host.operations()
             .unwrap()
             .iter()
-            .filter(|receipt| RunReference::from_receipt(receipt).unwrap().is_some())
+            .filter(
+                |receipt| kegari_v0::control::run_reference_from_receipt(receipt)
+                    .unwrap()
+                    .is_some()
+            )
             .count(),
         1
     );

@@ -247,7 +247,7 @@ fn validate_actual_report(
     if let Some(observation) = &report.declared_protocol {
         observation.validate()?;
         if (manifest.role != crate::instructions::AgentRole::IndependentReview
-            && observation.state != crate::codex::ProtocolCaptureState::NotDeclared)
+            && observation.state != kegari_codex::ProtocolCaptureState::NotDeclared)
             || observation.operation != manifest.operation_id
             || observation.workspace != manifest.workspace_id
             || observation.suite_digest != report.suite_digest

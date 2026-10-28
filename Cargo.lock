@@ -886,11 +886,15 @@ version = "0.2.0-alpha.10"
 dependencies = [
  "chrono",
  "hex",
+ "kegari-digest",
+ "kegari-storage",
  "kegari-types",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -18,6 +18,7 @@ use crate::{
     },
 };
 use kegari_config::Config;
+use kegari_types::run::RunReference;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -45,7 +46,7 @@ pub(crate) struct SessionRecoveryAction {
 #[derive(Clone)]
 struct Candidate {
     previous: Arc<RunCompletion>,
-    retained: crate::codex::RetainedResumeSession,
+    retained: crate::worker_run::RetainedResumeSession,
     config: Arc<Config>,
     records: PathBuf,
     key: String,
@@ -229,7 +230,7 @@ impl RuntimeCoordinator {
             ));
         }
         let receipt = self.control.operation(previous.operation_id)?;
-        let reference = RunReference::from_receipt(&receipt)?
+        let reference = crate::control::run_reference_from_receipt(&receipt)?
             .ok_or_else(|| incompatible("joined admission missing"))?;
         if reference.phase.phase != "implementation"
             || reference.phase.work != contract.work_key()?
@@ -849,7 +850,7 @@ fn recovery_model_plan(
         limits.max_review_rounds,
     );
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && run.phase == original.phase
         {
             if receipt.runtime_id != runtime
@@ -936,7 +937,7 @@ fn recovery_model_plan(
 }
 
 fn metadata_plan(
-    candidate: &crate::codex::RetainedResumeSession,
+    candidate: &crate::worker_run::RetainedResumeSession,
     proof: Option<&VerifiedProviderRecovery>,
     receipts: &[Receipt],
     limits: &kegari_config::RuntimeConfig,
@@ -1082,7 +1083,7 @@ mod tests {
             workspace: Uuid::new_v4(),
             account: "account".into(),
             normalized_state: Some("in progress".into()),
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: "work".into(),
                 generation: bytes_digest(b"generation"),
                 phase: "implementation".into(),

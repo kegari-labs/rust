@@ -1,4 +1,5 @@
 use super::*;
+use kegari_types::run::RunReference;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -48,7 +49,7 @@ impl Fixture {
             workspace: Uuid::new_v4(),
             account: "component".into(),
             normalized_state: None,
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: format!("component-parent:{}", Uuid::new_v4()),
                 generation: digest("generation"),
                 phase: "parent_evidence_review".into(),

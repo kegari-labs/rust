@@ -5,6 +5,7 @@ use crate::runtime_workers::{EvaluationWorkerTransfer, PreparationReturned};
 use crate::worker_run::{
     AdmittedTrial, OwnedTrialReturn, RetainedTrialCompletion, VerifiedUnusedAdmission,
 };
+use kegari_types::run::RunReference;
 
 pub(super) enum CleanupOwner {
     Preparation(Box<PreparationReturned>),

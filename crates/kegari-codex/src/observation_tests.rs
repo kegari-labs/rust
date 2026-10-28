@@ -1,7 +1,7 @@
 //! Protocol/storage component evidence only. These synthetic session values do
 //! not construct a worker, native run, permit, check result or source capability.
 use super::*;
-use kegari_codex::CodexProfile;
+use crate::CodexProfile;
 use kegari_storage::PrivateDir;
 use std::path::PathBuf;
 
@@ -566,7 +566,7 @@ fn processed_request_inventory_detects_missing_prefix_but_never_proves_stream_en
     }
 }
 
-#[path = "codex_transport_observation_tests.rs"]
+#[path = "transport_observation_tests.rs"]
 mod transport_tests;
 
 // Actual JSON-RPC transport ordering only. This component sink is deliberately

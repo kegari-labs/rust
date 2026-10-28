@@ -1,6 +1,7 @@
 //! Data-only native grant closure. Opaque callers separately require the exact
 //! current VerifiedRetryGrant objects; serialized fields never authorize reads.
 use super::*;
+use kegari_types::run::PhaseKey;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,7 +106,7 @@ pub(super) fn inventory(
     let mut inventory: BTreeMap<Option<Uuid>, BTreeMap<u32, (Uuid, String)>> = BTreeMap::new();
     let mut payloads: BTreeMap<Option<Uuid>, BTreeMap<Uuid, String>> = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && run.phase.work == reference.phase.work
             && run.phase.phase == reference.phase.phase
             && run.phase.generation == reference.phase.generation
@@ -169,7 +170,7 @@ pub(super) fn verify_receipts(
     receipts: &[Receipt],
 ) -> Result<()> {
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && run.phase.work == reference.phase.work
             && run.phase.phase == reference.phase.phase
             && run.phase.generation == reference.phase.generation
@@ -179,7 +180,7 @@ pub(super) fn verify_receipts(
     }
     if !reference.history.is_empty() || !reference.grants.is_empty() {
         for receipt in receipts {
-            let Some(run) = RunReference::from_receipt(receipt)? else {
+            let Some(run) = crate::control::run_reference_from_receipt(receipt)? else {
                 continue;
             };
             if run.phase.work != reference.phase.work

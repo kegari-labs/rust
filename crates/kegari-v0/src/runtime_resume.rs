@@ -84,7 +84,7 @@ impl RuntimeCoordinator {
         let old = proof.recovery().observation().retained();
         let mut rounds = 0;
         for receipt in self.control.operations()? {
-            if crate::control::RunReference::from_receipt(&receipt)?
+            if crate::control::run_reference_from_receipt(&receipt)?
                 .is_some_and(|run| run.phase == old.reference().phase)
             {
                 if let Some(previous) = crate::control::RunResumeReference::from_receipt(&receipt)?
@@ -182,7 +182,7 @@ impl RuntimeCoordinator {
             return Err(error.clone());
         }
         let receipts = self.control.operations()?;
-        old.verify_prior_receipts(&receipts)?;
+        proof.recovery().verify_prior_receipts(&receipts)?;
         crate::runtime_schedule::require_provider_clear(
             self.runtime_id,
             &original.account,
@@ -208,7 +208,7 @@ impl RuntimeCoordinator {
             config.runtime.max_review_rounds,
         );
         for receipt in &receipts {
-            if let Some(run) = RunReference::from_receipt(receipt)?
+            if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
                 && run.phase == original.phase
             {
                 if run.account != original.account

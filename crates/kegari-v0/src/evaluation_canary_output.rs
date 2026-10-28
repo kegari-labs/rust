@@ -1,7 +1,8 @@
 //! Declared egress subset only. No negative coverage, grading or execution capability.
 use super::*;
-use crate::codex::{ProtocolObservation, SessionState};
 use crate::control::Permit;
+use kegari_codex::ProtocolObservation;
+use kegari_codex::SessionState;
 
 const LIMIT: usize = 4096;
 const PROJECTION: &str = "independent_declared_egress_v1";

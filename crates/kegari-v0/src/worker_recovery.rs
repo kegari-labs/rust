@@ -1,10 +1,11 @@
 //! Guarded, metadata-only recovery of one retained terminal failed thread.
 use super::*;
+use crate::worker_run::RetainedResumeSession;
 use crate::{
-    codex::{RetainedResumeSession, VerifiedThreadRecovery},
     control::{Lease, SessionRecoveryPreparationReference},
     worker::RecoveryJournal,
 };
+use kegari_codex::VerifiedThreadRecovery;
 use kegari_storage::PrivateDir;
 
 pub struct RecoveryPreparation {
@@ -26,6 +27,7 @@ pub struct RecoveryPreparation {
 /// completion, compatible assembly and directory-family ownership.
 #[derive(Clone, Debug)]
 pub struct VerifiedProviderRecovery {
+    retained: RetainedResumeSession,
     observation: VerifiedThreadRecovery,
     preparation: crate::control::Receipt,
     digest: String,
@@ -33,6 +35,9 @@ pub struct VerifiedProviderRecovery {
 impl VerifiedProviderRecovery {
     pub fn observation(&self) -> &VerifiedThreadRecovery {
         &self.observation
+    }
+    pub(crate) fn verify_prior_receipts(&self, receipts: &[crate::control::Receipt]) -> Result<()> {
+        self.retained.verify_prior_receipts(receipts)
     }
     pub fn preparation(&self) -> &crate::control::Receipt {
         &self.preparation
@@ -136,7 +141,8 @@ impl RecoveryProviderLaunch {
         )
         .canonicalize()
         .map_err(|e| Error::io("resolve recovery auth home", e))?;
-        let permissions = crate::codex::permission_configuration(contract.isolation(), &auth_home)?;
+        let permissions =
+            crate::codex_host::permission_configuration(contract.isolation(), &auth_home)?;
         let journal = RecoveryJournal::open(
             &input.records,
             &original,
@@ -259,16 +265,19 @@ impl RecoveryProviderLaunch {
         let mut core = Box::pin(async {
             client =
                 Some(launch_provider(&self.input, &self.cancellation, self.gate.clone()).await?);
-            let rpc = client.as_mut().ok_or_else(|| {
-                Error::new("ownership_conflict", "recovery provider was not launched")
-            })?;
+            let rpc = client
+                .as_mut()
+                .ok_or_else(|| {
+                    Error::new("ownership_conflict", "recovery provider was not launched")
+                })?
+                .client_mut();
             let control = self.input.control.clone();
             let permit = self.input.permit.clone();
             let gate = self.gate.clone();
             let fresh = || control.validate_permit(&permit, || gate.fresh());
             let proof = rpc
                 .recover_metadata(
-                    &self.candidate,
+                    self.candidate.protocol_candidate(),
                     &self.input.permissions,
                     &mut self.journal,
                     &fresh,
@@ -346,6 +355,7 @@ impl RecoveryProviderLaunch {
             &json!({"observation":proof.digest(),"preparation":receipt,"executable":self.input.executable,"permissions":self.input.permissions,"protocol":kegari_codex::PROTOCOL_PROFILE}),
         )?;
         Ok(VerifiedProviderRecovery {
+            retained: self.candidate.clone(),
             observation: proof,
             preparation: receipt,
             digest,
@@ -527,13 +537,37 @@ impl VerifiedSessionResume {
         state.advertised_tools = old.advertised_tools.clone();
         state.provider_instruction_sources = old.provider_instruction_sources.clone();
         state.usage = old.usage.resumed_session(&old.binding.account_id, thread);
-        state.resume_origin = Some(crate::codex::SessionResumeOrigin::from_recovery(
+        state.resume_origin = Some(kegari_codex::SessionResumeOrigin::from_recovery(
             self.recovery.observation(),
             self.recovery.digest(),
             self.instructions.digest(),
             &state.binding,
         )?);
         Ok(state)
+    }
+    pub(crate) async fn resume(
+        &self,
+        client: &mut RpcClient,
+        state: &mut SessionState,
+        isolation: &ValidatedIsolation,
+        permissions: &PermissionConfiguration,
+        broker: &mut dyn kegari_codex::ToolBroker,
+    ) -> Result<()> {
+        client.validate_session(state, isolation, permissions)?;
+        self.verify_session(state)?;
+        client
+            .resume_protocol(
+                state,
+                kegari_codex::ResumeRequest {
+                    recovery: self.recovery().observation(),
+                    prompt: self.prompt(),
+                    predecessor: self.predecessor(),
+                    bridge_digest: self.digest(),
+                },
+                permissions,
+                broker,
+            )
+            .await
     }
     pub(crate) fn verify_session(&self, state: &SessionState) -> Result<()> {
         let expected = self.new_session(state.binding.clone(), state.max_turns)?;
@@ -623,7 +657,7 @@ impl AdmittedSessionResume {
             )
         })?;
         self.bridge.verify_contract(contract)?;
-        let run = crate::control::RunReference::from_receipt(receipt)?.ok_or_else(|| {
+        let run = crate::control::run_reference_from_receipt(receipt)?.ok_or_else(|| {
             Error::new(
                 "resume_incompatible",
                 "completed resume lost its run admission",

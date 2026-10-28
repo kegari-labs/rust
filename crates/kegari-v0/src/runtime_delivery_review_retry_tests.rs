@@ -413,10 +413,10 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
         .unwrap(),
         original_digest
     );
-    let prior = crate::control::RunReference::from_receipt(&original)
+    let prior = crate::control::run_reference_from_receipt(&original)
         .unwrap()
         .unwrap();
-    let new = crate::control::RunReference::from_receipt(
+    let new = crate::control::run_reference_from_receipt(
         &f.built
             .runtime
             .control
@@ -673,7 +673,7 @@ async fn another_failed_review(
     }
     assert_eq!(
         transient,
-        Some(crate::codex::TransientTurnFailure::ServerOverloaded)
+        Some(kegari_codex::TransientTurnFailure::ServerOverloaded)
     );
     Arc::get_mut(&mut failed).unwrap().local_exit_confirmed = false;
     assert!(

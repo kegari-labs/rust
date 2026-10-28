@@ -10,6 +10,7 @@ use crate::delivery::{CompletedReviewRound, ReviewRoundSource, VerifiedReviewRou
 use crate::runtime_delivery::worker_fixture::{
     WorkerFixture, complete_admitted, failed_admitted_review_with_gate,
 };
+use kegari_types::run::RunReference;
 
 #[path = "runtime_delivery_round_pair_fixture.rs"]
 mod pair;
@@ -802,7 +803,7 @@ pub(super) async fn marked_retry(f: ReviewFixture<'_>) {
     assert_eq!(retry.next_attempt().unwrap(), 1);
     let receipts = f.built.runtime.control.operations().unwrap();
     assert!(!receipts.iter().any(|receipt| {
-        RunReference::from_receipt(receipt)
+        crate::control::run_reference_from_receipt(receipt)
             .unwrap()
             .is_some_and(|run| run.phase == *retry.phase())
     }));

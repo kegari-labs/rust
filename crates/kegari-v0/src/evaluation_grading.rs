@@ -189,7 +189,7 @@ mod tests {
                         ),
                     },
                 }),
-                declared_protocol: Some(crate::codex::DeclaredProtocolObservation {
+                declared_protocol: Some(kegari_codex::DeclaredProtocolObservation {
                     schema_version: 1,
                     operation: uuid::Uuid::from_u128(1),
                     runtime: uuid::Uuid::from_u128(2),
@@ -201,8 +201,8 @@ mod tests {
                     instruction_digest: bytes_digest(b"data-only instructions"),
                     session_binding_digest: None,
                     thread_id: None,
-                    state: crate::codex::ProtocolCaptureState::Unavailable,
-                    issues: BTreeSet::from([crate::codex::ProtocolCaptureIssue::MissingSession]),
+                    state: kegari_codex::ProtocolCaptureState::Unavailable,
+                    issues: BTreeSet::from([kegari_codex::ProtocolCaptureIssue::MissingSession]),
                     tool_request_attempts: 0,
                     observed_server_requests: 0,
                     processed_server_requests: None,

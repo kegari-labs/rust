@@ -357,8 +357,11 @@ pub(crate) fn start_control(runtime: &RuntimeCoordinator) -> crate::control::Lea
     runtime.control.attach_reconciled(lease.clone()).unwrap();
     lease
 }
-fn fixture_run(workspace: Uuid, phase: crate::scheduler::PhaseKey) -> crate::control::RunReference {
-    crate::control::RunReference {
+fn fixture_run(
+    workspace: Uuid,
+    phase: kegari_types::run::PhaseKey,
+) -> kegari_types::run::RunReference {
+    kegari_types::run::RunReference {
         workspace,
         account: "codex-fixture".into(),
         normalized_state: Some("in progress".into()),
@@ -382,7 +385,7 @@ async fn rejected_launch_intent_retries_only_when_preparation_and_run_have_no_ef
         .runtime
         .max_agents = 1;
     let lease = start_control(&fixture.runtime);
-    let phase = crate::scheduler::PhaseKey {
+    let phase = kegari_types::run::PhaseKey {
         work: "fixture-occupied-work".into(),
         generation: canonical_digest(1, &"generation").unwrap(),
         phase: "implementation".into(),
@@ -408,7 +411,7 @@ async fn rejected_launch_intent_retries_only_when_preparation_and_run_have_no_ef
         .records
         .write("fixture-launch-intent.json", &json!({"operation":worker}))
         .unwrap();
-    let next = crate::scheduler::PhaseKey {
+    let next = kegari_types::run::PhaseKey {
         work: "fixture-next-work".into(),
         phase: "child_validation".into(),
         ..phase

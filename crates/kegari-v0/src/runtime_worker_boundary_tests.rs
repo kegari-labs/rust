@@ -3,6 +3,7 @@ use crate::control::Lifecycle;
 use crate::control::MutationRequest;
 use crate::control::RunAdmission;
 use kegari_control_api::identity::Actor;
+use kegari_types::run::RunReference;
 
 #[test]
 fn actual_model_request_observation_retains_pause_and_refuses_change_fence_or_missing_bytes() {
@@ -39,7 +40,7 @@ fn actual_model_request_observation_retains_pause_and_refuses_change_fence_or_mi
         workspace: Uuid::new_v4(),
         account: "component account".into(),
         normalized_state: None,
-        phase: crate::scheduler::PhaseKey {
+        phase: kegari_types::run::PhaseKey {
             work: "component independent PR".into(),
             generation: bytes_digest(b"generation"),
             phase: "independent_review".into(),

@@ -6,6 +6,7 @@ use crate::control::{
 };
 use crate::delivery::PreparedParentRunOrigin;
 use kegari_secrets::Signed;
+use kegari_types::run::RunReference;
 use serde::{Deserialize, Serialize};
 const PURPOSE: &str = "parent_run_retirement";
 const LIMIT: u64 = 8 * 1024 * 1024;
@@ -281,7 +282,7 @@ impl AuthenticatedParentRunRetirement {
         if origin.payload.grant_commands(&runtime.control)? != record.grant_commands {
             return Err(invalid("retired parent grant command closure changed"));
         }
-        let actual_run = RunReference::from_receipt(model)?
+        let actual_run = crate::control::run_reference_from_receipt(model)?
             .ok_or_else(|| invalid("retired parent run reference missing"))?;
         let prep = crate::control::PreparationReference::from_receipt(preparation)?
             .ok_or_else(|| invalid("retired parent preparation reference missing"))?;
@@ -567,7 +568,7 @@ impl RuntimeCoordinator {
                     || model.owner_generation != candidate.permit.lease.owner_generation
                     || model.expected.get("scope") != Some(&candidate.permit.scope_digest)
                     || model.canonical_targets != [candidate.permit.work_key.clone()]
-                    || RunReference::from_receipt(model)?
+                    || crate::control::run_reference_from_receipt(model)?
                         .as_ref()
                         .map(|r| canonical_digest(1, r))
                         .transpose()?
@@ -630,7 +631,7 @@ impl RuntimeCoordinator {
                     preparation: preparation_id,
                     model: canonical_digest(1, model)?,
                     observation: candidate.observation.clone(),
-                    run: RunReference::from_receipt(model)?
+                    run: crate::control::run_reference_from_receipt(model)?
                         .ok_or_else(|| invalid("parent run reference absent"))?,
                     processes: process_history(self, [preparation, model], history.effects())?,
                     effects: effect_map,

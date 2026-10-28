@@ -97,7 +97,7 @@ fn receipt_parser_bounds_do_not_become_a_new_operational_round_cap() {
 #[test]
 fn absent_resumed_source_field_preserves_direct_canonical_bytes() {
     let source = crate::control::ReviewedSourceReference {
-        implementation_phase: crate::scheduler::PhaseKey {
+        implementation_phase: kegari_types::run::PhaseKey {
             work: "data-only-work".into(),
             generation: digest("generation"),
             phase: "implementation".into(),

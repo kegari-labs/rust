@@ -2,13 +2,11 @@
 //! These capabilities are never reconstructed from serialized worker summaries.
 use super::*;
 use crate::{
-    control::{ReceiptPhase, RunReference},
-    execution::CheckExecutionRecord,
-    instructions::AgentRole,
-    runtime::VerifiedAuthorizedOutcome,
-    scheduler::PhaseKey,
-    worker_run::RunCompletion,
+    control::ReceiptPhase, execution::CheckExecutionRecord, instructions::AgentRole,
+    runtime::VerifiedAuthorizedOutcome, worker_run::RunCompletion,
 };
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 
 #[path = "delivery_validation_budget.rs"]
 mod validation_budget;
@@ -634,12 +632,13 @@ impl DeliveryCoordinator {
         input.verify_paired_resume(&self.host.operations()?)?;
         let predecessor_receipt = closed_run(&self.host, input.original.operation_id())?;
         let failure_receipt = closed_run(&self.host, failure.operation_id)?;
-        let reference = RunReference::from_receipt(&predecessor_receipt)?.ok_or_else(|| {
-            Error::new(
-                "worker_binding",
-                "original operation is not an admitted worker",
-            )
-        })?;
+        let reference = crate::control::run_reference_from_receipt(&predecessor_receipt)?
+            .ok_or_else(|| {
+                Error::new(
+                    "worker_binding",
+                    "original operation is not an admitted worker",
+                )
+            })?;
         if predecessor_receipt.expected != original.run_receipt().expected
             || failure_receipt.expected != outcome.run_receipt().expected
             || reference.workspace != input.admission.gate.workspace_id()
@@ -674,7 +673,7 @@ impl DeliveryCoordinator {
         }
         let mut review_rounds_consumed = 0u32;
         for receipt in self.host.operations()? {
-            if let Some(review) = RunReference::from_receipt(&receipt)?
+            if let Some(review) = crate::control::run_reference_from_receipt(&receipt)?
                 && review.workspace == reference.workspace
                 && review.phase.work == reference.phase.work
                 && review.phase.generation == reference.phase.generation
@@ -703,9 +702,10 @@ impl DeliveryCoordinator {
                 "review findings lack the actual admitted review round",
             ));
         }
-        let failure_phase = RunReference::from_receipt(&failure_receipt)?.ok_or_else(|| {
-            Error::new("worker_binding", "failure admission lacks phase identity")
-        })?;
+        let failure_phase = crate::control::run_reference_from_receipt(&failure_receipt)?
+            .ok_or_else(|| {
+                Error::new("worker_binding", "failure admission lacks phase identity")
+            })?;
         let expected_failure_phase = if review_round {
             "child_codex_review"
         } else {
@@ -1132,7 +1132,7 @@ impl VerifiedSourceAdvanced {
     }
     fn verify_next_run_header(&self, receipt: &Receipt, outcome: &str) -> Result<()> {
         self.verify_admission_reference(receipt)?;
-        let run = RunReference::from_receipt(receipt)?
+        let run = crate::control::run_reference_from_receipt(receipt)?
             .ok_or_else(|| Error::new("worker_binding", "advanced review admission missing"))?;
         let result = receipt.observed_result.as_ref().ok_or_else(|| {
             Error::new(
@@ -1448,7 +1448,7 @@ impl DeliveryCoordinator {
         )?;
         let receipt = self.host.operation(completion.operation_id)?;
         proof.verify_admission_reference(&receipt)?;
-        let run = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+        let run = crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| {
             Error::new("worker_binding", "advanced review lacks actual admission")
         })?;
         if run.phase != *proof.phase()
@@ -1591,14 +1591,15 @@ impl DeliveryCoordinator {
             .verify_paired_resume(&self.host.operations()?)?;
         let source_operation = request.source.original.operation_id();
         let source_receipt = closed_run(&self.host, source_operation)?;
-        let reference = RunReference::from_receipt(&predecessor)?
+        let reference = crate::control::run_reference_from_receipt(&predecessor)?
             .ok_or_else(|| Error::new("worker_binding", "previous check lacks worker admission"))?;
-        let source_run = RunReference::from_receipt(&source_receipt)?.ok_or_else(|| {
-            Error::new(
-                "worker_binding",
-                "advanced source lacks implementation admission",
-            )
-        })?;
+        let source_run =
+            crate::control::run_reference_from_receipt(&source_receipt)?.ok_or_else(|| {
+                Error::new(
+                    "worker_binding",
+                    "advanced source lacks implementation admission",
+                )
+            })?;
         if source_run.phase.phase != "implementation"
             || reference.phase.phase != request.assignment.phase()
             || source_run.phase.work != reference.phase.work
@@ -1616,7 +1617,7 @@ impl DeliveryCoordinator {
         }
         let mut review_rounds_consumed = 0u32;
         for receipt in self.host.operations()? {
-            if let Some(run) = RunReference::from_receipt(&receipt)? {
+            if let Some(run) = crate::control::run_reference_from_receipt(&receipt)? {
                 if (run.phase == reference.phase && run.attempt > reference.attempt)
                     || (run.phase == source_run.phase && run.attempt > source_run.attempt)
                 {
@@ -1711,7 +1712,7 @@ fn same_phase_group(
 fn phase_inventory(receipts: &[Receipt], runtime: Uuid, expected: &RunReference) -> Result<String> {
     let mut selected = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && same_phase_group(runtime, expected, receipt, &run)
             && selected.insert(receipt.operation_id, receipt).is_some()
         {
@@ -1729,7 +1730,7 @@ fn require_latest_phase(
     expected: &RunReference,
 ) -> Result<()> {
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && same_phase_group(runtime, expected, receipt, &run)
             && (run.phase.retry_grant != expected.phase.retry_grant
                 || run.attempt > expected.attempt)
@@ -1752,7 +1753,7 @@ pub use retry::RetriedUnfinishedWork;
 fn retained_round_scalar_floor(receipts: &[Receipt], subject: &RunReference) -> Result<u32> {
     let mut floor = 0;
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && run.phase == subject.phase
             && run.workspace == subject.workspace
         {

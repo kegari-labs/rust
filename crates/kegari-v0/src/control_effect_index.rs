@@ -54,7 +54,7 @@ fn required(receipt: &Receipt) -> Result<bool> {
     }
     let phase = match (
         PreparationReference::from_receipt(receipt)?,
-        RunReference::from_receipt(receipt)?,
+        crate::control::run_reference_from_receipt(receipt)?,
     ) {
         (Some(v), None) => v.phase,
         (None, Some(v)) => v.phase,

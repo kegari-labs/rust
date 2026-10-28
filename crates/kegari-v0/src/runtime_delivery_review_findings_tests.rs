@@ -204,9 +204,10 @@ pub(super) async fn run(
         Some(&proof),
         None,
     );
-    let admitted = RunReference::from_receipt(&host.operation(repaired.operation_id).unwrap())
-        .unwrap()
-        .unwrap();
+    let admitted =
+        crate::control::run_reference_from_receipt(&host.operation(repaired.operation_id).unwrap())
+            .unwrap()
+            .unwrap();
     assert_eq!(admitted.phase, *proof.phase());
     assert_eq!(admitted.attempt, 2);
     assert_eq!(admitted.max_attempts, 3);
@@ -485,9 +486,10 @@ pub(super) async fn run(
         None,
         Some(&advanced),
     );
-    let run = RunReference::from_receipt(&host.operation(clean.operation_id).unwrap())
-        .unwrap()
-        .unwrap();
+    let run =
+        crate::control::run_reference_from_receipt(&host.operation(clean.operation_id).unwrap())
+            .unwrap()
+            .unwrap();
     assert_eq!(run.phase, *retry.phase());
     assert_eq!(run.attempt, 2);
     // Read-only substituted observations retain the same phase/head/ordinal;

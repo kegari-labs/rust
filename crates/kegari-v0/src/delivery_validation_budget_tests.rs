@@ -1,6 +1,7 @@
 //! Synthetic receipt-observation tests only. These do not create source/check
 //! capabilities, runtime joined entries, native grants, or actual admissions.
 use super::*;
+use kegari_types::run::{PhaseKey, RunReference};
 fn hash(value: &str) -> String {
     kegari_digest::bytes_digest(value.as_bytes())
 }

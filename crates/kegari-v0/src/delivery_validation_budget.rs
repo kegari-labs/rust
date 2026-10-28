@@ -3,6 +3,7 @@
 //! runtime owner after the passed/failed-check/paired capabilities validate.
 use super::*;
 use crate::{decisions::VerifiedRetryGrant, runtime::RuntimeCoordinator};
+use kegari_types::run::{PhaseKey, RunReference};
 const MAX_VALIDATION_HISTORY: usize = 65_536;
 
 #[derive(Clone)]
@@ -188,7 +189,7 @@ impl DeliveryCoordinator {
         child::completed_run(request.predecessor, &request.completion)?;
         require_joined(&request.completion, runtime)?;
         let predecessor = actual(&receipts, request.completion.operation_id)?;
-        let reference = RunReference::from_receipt(predecessor)?
+        let reference = crate::control::run_reference_from_receipt(predecessor)?
             .ok_or_else(|| invalid("validation predecessor is not an actual run"))?;
         if reference.phase.phase != "child_local_validation"
             || reference.phase.retry_grant.is_none()
@@ -401,7 +402,7 @@ impl DeliveryCoordinator {
         let mut joined = BTreeMap::new();
         for id in retained.keys() {
             let receipt = actual(&receipts, *id)?;
-            if RunReference::from_receipt(receipt)?.is_some() {
+            if crate::control::run_reference_from_receipt(receipt)?.is_some() {
                 let completion = runtime
                     .retained_completion(*id)?
                     .ok_or_else(|| invalid("validation ancestry has no genuine joined run"))?;
@@ -514,7 +515,7 @@ fn retain_preparation(
     operation: Uuid,
 ) -> Result<()> {
     let model = actual(receipts, operation)?;
-    let run = RunReference::from_receipt(model)?
+    let run = crate::control::run_reference_from_receipt(model)?
         .ok_or_else(|| invalid("validation ancestor is not a model run"))?;
     let prep = actual(receipts, crate::control::preparation_operation(operation)?)?;
     let reference = crate::control::PreparationReference::from_receipt(prep)?
@@ -549,7 +550,7 @@ fn implementation_inventory(
 ) -> Result<String> {
     let mut selected = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && receipt.runtime_id == runtime
             && run.workspace == reference.workspace
             && run.phase.work == reference.phase.work
@@ -588,7 +589,7 @@ fn verify_accounted_validation_history(
     }
     let mut seen = BTreeSet::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && same_phase_group(runtime, expected, receipt, &run)
             && (!seen.insert(receipt.operation_id)
                 || retained.get(&receipt.operation_id) != Some(&canonical_digest(1, receipt)?))

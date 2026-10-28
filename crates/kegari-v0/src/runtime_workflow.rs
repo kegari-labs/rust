@@ -3,7 +3,6 @@
 use crate::authority::IssueKey;
 use crate::control::Receipt;
 use crate::control::ReceiptPhase;
-use crate::control::RunReference;
 use crate::decisions::AuthorizedDecision;
 use crate::decisions::AuthorizedOperationRecovery;
 use crate::decisions::DecisionDependencies;
@@ -23,12 +22,13 @@ use crate::runtime::RuntimeCoordinator;
 use crate::runtime_host::HostFuture;
 use crate::runtime_host::RuntimeInspection;
 use crate::runtime_host::WorkflowControl;
-use crate::scheduler::PhaseKey;
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_secrets::AttestationKey;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -197,7 +197,7 @@ pub(crate) fn recover_retry_comment(
     let mut actual = BTreeMap::new();
     let mut ordinals = BTreeSet::new();
     for prior in receipts {
-        if let Some(run) = RunReference::from_receipt(prior)?
+        if let Some(run) = crate::control::run_reference_from_receipt(prior)?
             && &run.phase == grant.phase()
         {
             if prior.runtime_id != runtime
@@ -448,7 +448,7 @@ pub(crate) fn published_retry_target(
     let mut actual = BTreeMap::new();
     let mut ordinals = BTreeSet::new();
     for receipt in receipts {
-        let Some(run) = RunReference::from_receipt(receipt)? else {
+        let Some(run) = crate::control::run_reference_from_receipt(receipt)? else {
             continue;
         };
         if run.phase != *expected.phase() && run.phase != expected.phase_key() {
@@ -597,7 +597,7 @@ fn select_retry_target_inner(
     let generation = canonical_digest(1, &work.generation)?;
     let mut phases: BTreeMap<PhaseKey, Vec<(&Receipt, RunReference)>> = BTreeMap::new();
     for receipt in receipts {
-        let Some(run) = RunReference::from_receipt(receipt)? else {
+        let Some(run) = crate::control::run_reference_from_receipt(receipt)? else {
             continue;
         };
         if run.phase.work != key || run.phase.generation != generation {
@@ -858,7 +858,10 @@ mod tests {
             command_id: command,
             operation_id: operation,
             work: work(),
-            previous_phase: RunReference::from_receipt(&prior).unwrap().unwrap().phase,
+            previous_phase: crate::control::run_reference_from_receipt(&prior)
+                .unwrap()
+                .unwrap()
+                .phase,
             prior_admissions: BTreeMap::from([(prior.operation_id, prior.payload_digest.clone())]),
             budget: RetryBudget {
                 max_attempts: 3,

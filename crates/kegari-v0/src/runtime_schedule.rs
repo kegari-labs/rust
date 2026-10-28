@@ -1,12 +1,14 @@
 //! Durable worker-attempt planning. This selects a possible future admission;
 //! it never grants a permit, consumes a slot or turns a worker exit into delivery.
 use crate::{
-    control::{Receipt, ReceiptPhase, RunReference},
-    scheduler::{PhaseKey, Trigger, retry_at},
+    control::{Receipt, ReceiptPhase},
+    scheduler::{Trigger, retry_at},
 };
 use chrono::{DateTime, Utc};
 use kegari_config::RuntimeConfig;
 use kegari_types::error::{Error, Result};
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -21,7 +23,7 @@ pub fn occupying_runs(runtime: Uuid, receipts: &[Receipt]) -> Result<Vec<RunRefe
     let mut active = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for receipt in receipts {
-        let Some(run) = RunReference::from_receipt(receipt)? else {
+        let Some(run) = crate::control::run_reference_from_receipt(receipt)? else {
             continue;
         };
         if receipt.runtime_id != runtime || !seen.insert(receipt.operation_id) {
@@ -66,7 +68,7 @@ pub(crate) fn grant_requires_unfinished(
     let mut history = Vec::new();
     let mut granted_admitted = false;
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)? {
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)? {
             if &run.phase == phase {
                 history.push((run.attempt, receipt));
             }
@@ -120,7 +122,7 @@ pub fn require_provider_clear(
     receipts: &[Receipt],
 ) -> Result<()> {
     for receipt in receipts {
-        let Some(run) = RunReference::from_receipt(receipt)? else {
+        let Some(run) = crate::control::run_reference_from_receipt(receipt)? else {
             continue;
         };
         if receipt.runtime_id != runtime {
@@ -620,7 +622,7 @@ fn plan_inner(
     }
     let mut history = Vec::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && &run.phase == phase
         {
             if receipt.runtime_id != runtime.id || run.workspace != workspace {
@@ -808,12 +810,13 @@ fn plan_inner(
                     "unfinished obligation has no actual failure admission",
                 )
             })?;
-        let failure_run = RunReference::from_receipt(failure)?.ok_or_else(|| {
-            Error::new(
-                "no_work_trigger",
-                "unfinished obligation lacks a worker run",
-            )
-        })?;
+        let failure_run =
+            crate::control::run_reference_from_receipt(failure)?.ok_or_else(|| {
+                Error::new(
+                    "no_work_trigger",
+                    "unfinished obligation lacks a worker run",
+                )
+            })?;
         if failure.runtime_id != runtime.id
             || failure_run.workspace != workspace
             || failure_run.phase.work != phase.work
@@ -841,7 +844,7 @@ fn plan_inner(
                 ));
             }
             for receipt in receipts {
-                if let Some(source_run) = RunReference::from_receipt(receipt)?
+                if let Some(source_run) = crate::control::run_reference_from_receipt(receipt)?
                     && source_run.phase == failure_run.phase
                     && (source_run.attempt > failure_run.attempt
                         || source_run.attempt == failure_run.attempt
@@ -1093,7 +1096,7 @@ pub(crate) fn plan_parent_reassembly(
         let retry_after = crate::control::parent_transient_failure(failed)?;
         let mut attempts = std::collections::BTreeMap::new();
         for receipt in receipts {
-            if let Some(run) = RunReference::from_receipt(receipt)?
+            if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
                 && run.phase == proof.phase
             {
                 attempts.insert(run.attempt, receipt);

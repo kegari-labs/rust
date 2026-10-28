@@ -295,7 +295,7 @@ impl Housekeeping {
             directory.verify(binding, isolation)?;
             let registration = self.registration(binding.operation_id)?;
             let receipt = self.control.operation(binding.operation_id)?;
-            let run = crate::control::RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+            let run = crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| {
                 Error::new(
                     "resume_incompatible",
                     "retained execution has no actual run admission",
@@ -433,7 +433,7 @@ impl Housekeeping {
             source.revalidate_filesystem()?;
             let registration = self.registration(binding.operation_id)?;
             let receipt = self.control.operation(binding.operation_id)?;
-            let run = crate::control::RunReference::from_receipt(&receipt)?.ok_or_else(|| Error::new("resume_incompatible", "directory predecessor is not an admitted run"))?;
+            let run = crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| Error::new("resume_incompatible", "directory predecessor is not an admitted run"))?;
             if registration.binding != *binding
                 || registration.directory_digest != directory.digest()
                 || registration.marker != directory.marker()
@@ -485,7 +485,7 @@ impl Housekeeping {
             let mut expected_binding = old.binding.clone();
             expected_binding.operation_id = permit.operation_id;
             let receipt = self.control.operation(permit.operation_id)?;
-            let run = crate::control::RunReference::from_receipt(&receipt)?.ok_or_else(|| Error::new("resume_incompatible", "directory enrollment requires actual run admission"))?;
+            let run = crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| Error::new("resume_incompatible", "directory enrollment requires actual run admission"))?;
             let reference = crate::control::RunResumeReference::from_receipt(&receipt)?.ok_or_else(|| Error::new("resume_incompatible", "ordinary admission cannot reuse another operation's directory"))?;
             if !Arc::ptr_eq(&self.control, &proof.housekeeping.control)
                 || binding != &expected_binding

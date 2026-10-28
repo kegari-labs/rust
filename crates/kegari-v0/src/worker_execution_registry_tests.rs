@@ -1,8 +1,9 @@
 //! Real registry and Control, simulated cancellation callbacks. No process,
 //! joined worker or native exit capability is created by these component tests.
 use super::*;
-use crate::control::{Lifecycle, RunAdmission, RunReference};
+use crate::control::{Lifecycle, RunAdmission};
 use crate::execution::CommandCancellation;
+use kegari_types::run::RunReference;
 use std::sync::atomic::AtomicUsize;
 
 struct Handle {
@@ -53,7 +54,7 @@ fn owner() -> (tempfile::TempDir, ControlHost, Uuid, Uuid) {
                     workspace: Uuid::new_v4(),
                     account: "component".into(),
                     normalized_state: None,
-                    phase: crate::scheduler::PhaseKey {
+                    phase: kegari_types::run::PhaseKey {
                         work: "registry-component".into(),
                         generation: bytes_digest(b"generation"),
                         phase: "independent_review".into(),

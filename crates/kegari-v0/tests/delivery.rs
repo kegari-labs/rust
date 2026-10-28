@@ -2105,7 +2105,7 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
             owner_id: Uuid::new_v4(),
         },
         operation_id: Uuid::new_v4(),
-        phase: kegari_v0::scheduler::PhaseKey {
+        phase: kegari_types::run::PhaseKey {
             work: authority.work_key().unwrap(),
             generation: canonical_digest(1, &e2e_gate.work().generation).unwrap(),
             phase: assignment.phase().into(),

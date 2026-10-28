@@ -10,7 +10,7 @@ packages, completion gates and progress reporting. Goal mode is cancelled; work 
 The [`kegari-cli` package](../kegari-cli/README.md) now owns the public CLI, control
 client and `kegari-v0` executable. This package retains the backend library and
 `kegari-v0-evaluation` inspection tool. Both CLI and backend import shared command,
-response, error and snapshot data directly from
+response, error, snapshot and run data directly from
 [`kegari-types`](../kegari-types/README.md); there are no backend compatibility
 reexports. The backend retains current-operator authorization, exit-code policy and domain
 state. Authenticated transport, command validation/classification, operator
@@ -77,16 +77,25 @@ the existing durable reservation and final authorization sequence. Import moved
 adapter types directly from `kegari_providers`; import hash functions directly
 from [`kegari-digest`](../kegari-digest/README.md), without compatibility reexports.
 
-Codex protocol data, JSON-RPC framing, stream transport and pinned schemas now
-belong to [`kegari-codex`](../kegari-codex/README.md). Import moved types directly
-from `kegari_codex`, without backend compatibility reexports. This backend keeps
-`RpcClient`, `SessionState`, tool/request gates, permission derivation, history,
-observations, native launch and owned cleanup/recovery. Replace
-`PermissionConfiguration::for_isolation` with
-`kegari_v0::codex::permission_configuration`, `RpcClient::app_server_argv` with
-`kegari_codex::app_server_argv`, and the `RpcClient.last_valid_output` field with
-`RpcClient::last_valid_output()`. Transport state and its activity timestamp
-have one owner; request deadlines and semantic-event timing remain here.
+Codex protocol data, `RpcClient`, `SessionState`, request/tool gates, history,
+protocol recovery, observations, stream transport and pinned schemas now belong
+to [`kegari-codex`](../kegari-codex/README.md). Import them directly from
+`kegari_codex`; the old backend `codex` module is removed without compatibility
+reexports. Native launch, permission derivation, executable verification,
+connection probing and owned cancellation/cleanup live in `codex_host`.
+`NativeCodexClient` owns the actual child and lends its protocol client through
+`client_mut()`. Native methods formerly on `RpcClient` are now `codex_host` free
+functions. Client timing fields have read-only accessors.
+
+`SessionScope` delegates revalidation to the existing `ValidatedIsolation`;
+native host APIs still require that concrete type. Backend
+`worker_run::RetainedResumeSession` remains an opaque protected-journal wrapper
+around ordinary `kegari_codex::ResumeCandidate` data. Receipt lineage, joined
+recovery and authorized resume stay here. Protocol observations and transport EOF
+supply no native authority. `RunReference` and `PhaseKey` are shared data in
+`kegari_types::run`; receipt parsing uses
+`control::run_reference_from_receipt(&Receipt)` and validation stays private to
+Control. See the [final extraction report](validation/CODEX-CLIENT-EXTRACTION.md).
 
 ## Build and deterministic checks
 

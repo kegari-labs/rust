@@ -9,6 +9,7 @@ use crate::control::{
 };
 use crate::runtime::VerifiedAuthorizedOutcome;
 use crate::worker_run::RunCompletion;
+use kegari_types::run::RunReference;
 
 pub(super) struct PairFixture<'a, 'b> {
     pub f: &'a ReviewFixture<'b>,
@@ -300,7 +301,7 @@ pub(super) async fn continued_pair_component(input: PairFixture<'_, '_>) {
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     refresh(f).await;
     let implementation = host.operation(repaired.operation_id).unwrap();
-    let implementation_run = RunReference::from_receipt(&implementation)
+    let implementation_run = crate::control::run_reference_from_receipt(&implementation)
         .unwrap()
         .unwrap();
     let validation = host.operation(validation_id).unwrap();
@@ -312,7 +313,7 @@ pub(super) async fn continued_pair_component(input: PairFixture<'_, '_>) {
         .unwrap()
         .into_iter()
         .filter(|receipt| {
-            RunReference::from_receipt(receipt)
+            crate::control::run_reference_from_receipt(receipt)
                 .unwrap()
                 .is_some_and(|run| run.phase == validation_run.phase)
         })
@@ -494,7 +495,7 @@ pub(super) async fn continued_pair_component(input: PairFixture<'_, '_>) {
         .operations()
         .unwrap()
         .iter()
-        .filter_map(|r| RunReference::from_receipt(r).unwrap())
+        .filter_map(|r| crate::control::run_reference_from_receipt(r).unwrap())
         .filter(|r| r.phase == continued.review_phase)
         .count();
     assert_eq!(
@@ -555,7 +556,7 @@ fn exact(receipt: &Receipt) -> ReviewReceiptReference {
 /// Bounded local duplex exchange through the same effect dispatch/ACK boundary.
 /// This is not the native provider run loop or a qualified terminal completion.
 fn acknowledge_component_turn(gate: &protocol::RoundProtocol, thread: &str) {
-    use crate::codex::RequestGate;
+    use kegari_codex::RequestGate;
     use std::io::{BufRead, Write};
     let (mut client, mut server) = std::os::unix::net::UnixStream::pair().unwrap();
     for stream in [&client, &server] {

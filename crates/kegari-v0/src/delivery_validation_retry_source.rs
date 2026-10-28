@@ -3,6 +3,7 @@
 //! It never places SourceAdvanced metadata on the retried admission itself.
 use super::*;
 use crate::control::SourceAdvancedReference;
+use kegari_types::run::RunReference;
 
 #[derive(Clone)]
 pub(super) struct ValidationSourceLineage {
@@ -43,7 +44,7 @@ impl ValidationSourceLineage {
             }
             require_plain_retry(receipt)?;
             for item in receipts {
-                if let Some(reference) = RunReference::from_receipt(item)?
+                if let Some(reference) = crate::control::run_reference_from_receipt(item)?
                     && same_group(receipt.runtime_id, run, item, &reference)
                     && SourceAdvancedReference::from_receipt(item)?.is_some()
                 {
@@ -74,7 +75,7 @@ impl ValidationSourceLineage {
         bound_completion(assignment, completion, receipt, run)?;
         let mut prefix = BTreeMap::new();
         for item in receipts {
-            if let Some(reference) = RunReference::from_receipt(item)?
+            if let Some(reference) = crate::control::run_reference_from_receipt(item)?
                 && same_group(receipt.runtime_id, run, item, &reference)
                 && item.operation_id != receipt.operation_id
             {
@@ -190,7 +191,7 @@ impl ValidationSourceLineage {
         let mut prefix = Vec::new();
         let mut found = BTreeSet::new();
         for receipt in receipts {
-            let group = RunReference::from_receipt(receipt)?.is_some_and(|run| {
+            let group = crate::control::run_reference_from_receipt(receipt)?.is_some_and(|run| {
                 same_group(self.origin.runtime_id, &self.origin_run, receipt, &run)
             });
             if !group {
@@ -209,7 +210,7 @@ impl ValidationSourceLineage {
                 // inventory and exact native grant ancestry. It cannot be a new
                 // SourceAdvanced/continuation/resume cause hidden by projection.
                 require_plain_retry(receipt)?;
-                if RunReference::from_receipt(receipt)?
+                if crate::control::run_reference_from_receipt(receipt)?
                     .is_none_or(|run| run.phase.retry_grant.is_none())
                 {
                     return Err(Error::new(

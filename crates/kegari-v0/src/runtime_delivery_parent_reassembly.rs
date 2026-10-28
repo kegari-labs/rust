@@ -93,7 +93,7 @@ impl RuntimeDelivery {
                     )
                 })?;
             let receipt = self.runtime.control.operation(operation)?;
-            let run = crate::control::RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+            let run = crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| {
                 Error::new(
                     "reconciliation_required",
                     "parent predecessor is not an actual run",

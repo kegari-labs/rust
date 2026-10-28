@@ -7,7 +7,7 @@ use kegari_config::{Profile, ReleaseMode, Speed};
 use kegari_types::error::{Error, Result};
 use kegari_storage::PrivateDir;
 use kegari_v0::authority::*;
-use kegari_v0::codex::*;
+use kegari_codex::*;
 use kegari_v0::control::*;
 use kegari_v0::evaluation::TrialHost;
 use kegari_v0::evidence::Generation;

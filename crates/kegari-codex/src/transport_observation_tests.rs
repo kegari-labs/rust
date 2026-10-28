@@ -1,6 +1,7 @@
 //! Real duplex/parser components with explicitly synthetic session/catalog data.
 //! Nothing here constructs a native run, process-exit or Control capability.
 use super::*;
+use crate::client::checkpoint_notification;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 struct TailBroker {
@@ -425,33 +426,36 @@ async fn matched_response_records_full_message_without_completing_or_dispatching
 
 #[tokio::test]
 async fn actual_thread_start_failure_does_not_establish_tentative_thread() {
-    use crate::isolation::{ExecutionRole, IsolationPlan};
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    for leaf in ["repository", "scratch", "private", "auth"] {
-        std::fs::create_dir(root.join(leaf)).unwrap();
+    struct Scope {
+        cwd: PathBuf,
+        digest: String,
     }
-    let plan = IsolationPlan {
-        managed_execution: None,
-        schema_version: 1,
-        role: ExecutionRole::Child,
-        execution_root: root.clone(),
-        repository: root.join("repository"),
-        cwd: root.join("repository"),
-        scratch: root.join("scratch"),
-        read_roots: vec![],
-        resource_writes: vec![],
-        source_writes: vec![],
-        forbidden_roots: vec![root.join("private")],
+    impl SessionScope for Scope {
+        fn revalidate(&self) -> Result<()> {
+            Ok(())
+        }
+        fn cwd(&self) -> &Path {
+            &self.cwd
+        }
+        fn isolation_digest(&self) -> &str {
+            &self.digest
+        }
+    }
+    // Synthetic host scope; actual permission derivation remains backend-tested.
+    let isolation = Scope {
+        cwd: PathBuf::from("/private/tmp/component-repository"),
+        digest: kegari_digest::bytes_digest(b"component-scope"),
     };
-    let isolation = plan.validate().unwrap();
-    let permissions =
-        crate::codex::permission_configuration(&isolation, &root.join("auth")).unwrap();
+    let permissions = PermissionConfiguration {
+        profile_id: "component-profile".into(),
+        isolation_digest: isolation.digest.clone(),
+        settings: json!({}),
+    };
     let mut binding = active().binding;
-    binding.cwd = plan.cwd.clone();
-    binding.isolation_digest = isolation.digest().into();
+    binding.cwd = isolation.cwd.clone();
+    binding.isolation_digest = isolation.digest.clone();
     let mut state = SessionState::new(binding, 4).unwrap();
-    let response = json!({"thread":{"id":"thread"},"cwd":plan.cwd,"model":"component","modelProvider":"openai","reasoningEffort":"high","approvalPolicy":"never","activePermissionProfile":{"id":permissions.profile_id},"serviceTier":"default"});
+    let response = json!({"thread":{"id":"thread"},"cwd":isolation.cwd,"model":"component","modelProvider":"openai","reasoningEffort":"high","approvalPolicy":"never","activePermissionProfile":{"id":permissions.profile_id},"serviceTier":"default"});
     let (client, server) = tokio::io::duplex(65536);
     let (reader, writer) = tokio::io::split(client);
     let (sr, mut sw) = tokio::io::split(server);

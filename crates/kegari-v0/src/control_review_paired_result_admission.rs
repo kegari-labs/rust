@@ -216,7 +216,7 @@ pub(in crate::control) fn verify_prior_repair_sources(
             ));
         }
         verify_passed_validation(snapshot, &round, receipts)?;
-        let run = RunReference::from_receipt(current)?
+        let run = crate::control::run_reference_from_receipt(current)?
             .ok_or_else(|| round_error("paired source prefix lost its actual run"))?;
         let source = round.dispatch_source();
         let source_receipt = exact_receipt(receipts, &source.implementation)?;

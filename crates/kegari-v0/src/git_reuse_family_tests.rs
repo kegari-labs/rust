@@ -20,7 +20,7 @@ use crate::runtime_host::HostFuture;
 use crate::test_process_probe as process_probe;
 use crate::worker::ExecutionRegistry;
 use crate::{
-    control::{Lease, RunAdmission, RunReference, RunResumeReference},
+    control::{Lease, RunAdmission, RunResumeReference},
     evidence::{Generation, WorkIdentity},
     execution::{
         DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass, HookLedger, HookPhase,
@@ -38,6 +38,7 @@ use kegari_providers::RepositoryIdentity;
 use kegari_storage::PrivateDir;
 use kegari_types::api::CommandRequest;
 use kegari_types::error::{Error, Result};
+use kegari_types::run::RunReference;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -401,7 +402,7 @@ impl FamilyFixture {
             workspace: id(2),
             account: "fixture-account".into(),
             normalized_state: None,
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: work.clone(),
                 generation: canonical_digest(1, &source.binding.work.generation).unwrap(),
                 phase: "implementation".into(),

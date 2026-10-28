@@ -8,7 +8,7 @@ pub struct PreparationReference {
     pub worker_operation: Uuid,
     pub workspace: Uuid,
     pub account: String,
-    pub phase: crate::scheduler::PhaseKey,
+    pub phase: kegari_types::run::PhaseKey,
 }
 
 impl PreparationReference {

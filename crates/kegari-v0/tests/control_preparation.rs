@@ -2,8 +2,8 @@ use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_storage::PrivateDir;
 use kegari_types::error::Error;
+use kegari_types::run::PhaseKey;
 use kegari_v0::control::*;
-use kegari_v0::scheduler::PhaseKey;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use tempfile::TempDir;
@@ -80,7 +80,11 @@ fn exact_preparation_lineage_survives_restart_without_becoming_a_run_or_releasin
         PreparationReference::from_receipt(&receipt).unwrap(),
         Some(reference.clone())
     );
-    assert!(RunReference::from_receipt(&receipt).unwrap().is_none());
+    assert!(
+        kegari_v0::control::run_reference_from_receipt(&receipt)
+            .unwrap()
+            .is_none()
+    );
     assert!(MetadataReference::from_receipt(&receipt).unwrap().is_none());
     assert_eq!(receipt.expected["scope"], scope);
     assert_eq!(receipt.phase, ReceiptPhase::Prepared);
@@ -236,7 +240,7 @@ fn preparation_decoder_rejects_transplant_and_mixed_reference_tampering() {
             "{key}"
         );
         if key == "run" {
-            assert!(RunReference::from_receipt(&edited).is_err());
+            assert!(kegari_v0::control::run_reference_from_receipt(&edited).is_err());
         }
         if key == "metadata" {
             assert!(MetadataReference::from_receipt(&edited).is_err());

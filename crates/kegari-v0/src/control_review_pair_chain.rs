@@ -4,6 +4,7 @@
 //! under the existing serialized admission and its required opaque callback.
 use super::*;
 use crate::control::{RepairValidationLineage, RepairValidationReference};
+use kegari_types::run::RunReference;
 
 pub(super) fn findings(round: &ReviewRoundReference) -> Option<&FindingsReference> {
     match &round.cause {
@@ -51,7 +52,7 @@ pub(super) fn verify_repair_chain(
     }
     let mut selected = BTreeMap::new();
     for receipt in receipts {
-        let Some(run) = RunReference::from_receipt(receipt)? else {
+        let Some(run) = crate::control::run_reference_from_receipt(receipt)? else {
             continue;
         };
         if receipt.runtime_id == expected.runtime
@@ -132,7 +133,7 @@ pub(super) fn verify_repair_chain(
             }
             *receipt
         };
-        let logical_run = RunReference::from_receipt(logical)?
+        let logical_run = crate::control::run_reference_from_receipt(logical)?
             .ok_or_else(|| round_error("paired logical origin has no run"))?;
         let marker = ReviewRoundReference::from_receipt(logical)?
             .ok_or_else(|| round_error("pair chain loses typed round ancestry"))?;
@@ -296,7 +297,7 @@ pub(super) fn verify_validation(
     }
     let mut inventory = BTreeMap::new();
     for observed in receipts {
-        let Some(candidate) = RunReference::from_receipt(observed)? else {
+        let Some(candidate) = crate::control::run_reference_from_receipt(observed)? else {
             continue;
         };
         if observed.runtime_id == round.runtime
@@ -374,7 +375,7 @@ fn verify_namespaced_validation(
     let mut selected = BTreeMap::new();
     let mut namespaces = BTreeMap::<Option<Uuid>, Vec<(&Receipt, RunReference)>>::new();
     for observed in receipts {
-        let Some(run) = RunReference::from_receipt(observed)? else {
+        let Some(run) = crate::control::run_reference_from_receipt(observed)? else {
             continue;
         };
         let grouped = observed.runtime_id == round.runtime

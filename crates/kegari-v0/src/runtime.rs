@@ -4,7 +4,6 @@ use crate::authority::IssueKey;
 use crate::control::ControlHost;
 use crate::control::Lease;
 use crate::control::Permit;
-use crate::control::RunReference;
 use crate::observations::ObservationCache;
 use crate::platform::Registration;
 use crate::reconcile::DependencyOutcomes;
@@ -29,6 +28,7 @@ use chrono::{Duration, Utc};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
+use kegari_types::run::RunReference;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -108,7 +108,7 @@ struct State {
     correction_transitions: BTreeMap<Uuid, Arc<crate::corrections::VerifiedCorrectionTransition>>,
     correction_errors: BTreeMap<Uuid, Error>,
     correction_wakes: BTreeMap<Uuid, Arc<tokio::sync::Notify>>,
-    provider_holds: BTreeMap<Uuid, crate::codex::SessionState>,
+    provider_holds: BTreeMap<Uuid, kegari_codex::SessionState>,
     completions: BTreeMap<Uuid, Arc<RunCompletion>>,
     session_recovery: BTreeMap<String, session_recovery::RecoveryEntry>,
     session_recovery_errors: BTreeMap<Uuid, Error>,
@@ -142,7 +142,7 @@ impl RuntimeCoordinator {
         let mut ready = Vec::new();
         let mut errors = BTreeMap::new();
         for receipt in self.control.operations()? {
-            let Some(run) = RunReference::from_receipt(&receipt)? else {
+            let Some(run) = crate::control::run_reference_from_receipt(&receipt)? else {
                 continue;
             };
             if !run.phase.phase.starts_with("correction_classification_")
@@ -437,7 +437,7 @@ impl RuntimeCoordinator {
     }
     pub fn next_attempt(
         &self,
-        phase: &crate::scheduler::PhaseKey,
+        phase: &kegari_types::run::PhaseKey,
         workspace: Uuid,
         account: &str,
     ) -> Result<crate::runtime_schedule::RunSchedule> {
@@ -629,7 +629,7 @@ impl RuntimeCoordinator {
     }
     fn plan_attempt(
         &self,
-        phase: &crate::scheduler::PhaseKey,
+        phase: &kegari_types::run::PhaseKey,
         workspace: Uuid,
         account: &str,
         readmission: Option<WorkerReadmission<'_>>,
@@ -648,7 +648,7 @@ impl RuntimeCoordinator {
     }
     fn plan_attempt_context(
         &self,
-        phase: &crate::scheduler::PhaseKey,
+        phase: &kegari_types::run::PhaseKey,
         workspace: Uuid,
         account: &str,
         planning: WorkerPlanning<'_>,
@@ -713,7 +713,7 @@ impl RuntimeCoordinator {
                 .iter()
                 .try_fold(false, |seen, receipt| -> Result<bool> {
                     Ok(seen
-                        || RunReference::from_receipt(receipt)?
+                        || crate::control::run_reference_from_receipt(receipt)?
                             .is_some_and(|run| run.phase == *phase))
                 })?;
             if phase.retry_grant.is_some() || repeated {
@@ -895,9 +895,10 @@ impl RuntimeCoordinator {
                         "readmission predecessor is unavailable",
                     )
                 })?;
-            let prior_run = RunReference::from_receipt(predecessor)?.ok_or_else(|| {
-                Error::new("worker_binding", "readmission predecessor lacks a run")
-            })?;
+            let prior_run =
+                crate::control::run_reference_from_receipt(predecessor)?.ok_or_else(|| {
+                    Error::new("worker_binding", "readmission predecessor lacks a run")
+                })?;
             if prior_run.account != account {
                 return Err(Error::new(
                     "identity_mismatch",
@@ -1407,7 +1408,7 @@ impl RuntimeCoordinator {
             &self.services.key,
         )?;
         for receipt in &receipts {
-            if let Some(run) = RunReference::from_receipt(receipt)?
+            if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
                 && run.phase.work == canonical
             {
                 self.require_provider_session_clear(&run.account, &canonical)?;
@@ -1571,7 +1572,7 @@ impl RuntimeCoordinator {
     pub fn recover_provider_holds(&self) -> Result<()> {
         let mut recovered = Vec::new();
         for receipt in self.control.operations()? {
-            if RunReference::from_receipt(&receipt)?.is_none() {
+            if crate::control::run_reference_from_receipt(&receipt)?.is_none() {
                 continue;
             }
             if receipt.runtime_id != self.runtime_id {
@@ -1612,7 +1613,7 @@ impl RuntimeCoordinator {
         &self,
         workspace: Uuid,
         account: &str,
-        phase: &crate::scheduler::PhaseKey,
+        phase: &kegari_types::run::PhaseKey,
         normalized_state: &str,
     ) -> Result<()> {
         if phase.work.is_empty() || phase.phase.is_empty() {
@@ -2187,13 +2188,15 @@ impl RuntimeCoordinator {
         contract: Arc<WorkerContract>,
         parent_origin: Option<Arc<crate::delivery::PreparedParentRunOrigin>>,
     ) -> Result<()> {
-        let budget = RunReference::from_receipt(&self.control.operation(permit.operation_id)?)?
-            .ok_or_else(|| {
-                Error::new(
-                    "record_corrupt",
-                    "worker admission has no durable phase budget",
-                )
-            })?;
+        let budget = crate::control::run_reference_from_receipt(
+            &self.control.operation(permit.operation_id)?,
+        )?
+        .ok_or_else(|| {
+            Error::new(
+                "record_corrupt",
+                "worker admission has no durable phase budget",
+            )
+        })?;
         if budget.account != contract.account_id()
             || budget.workspace != contract.instructions().manifest.workspace_id
             || budget.instruction_digest != contract.instructions().manifest_digest
@@ -2945,9 +2948,9 @@ fn authority_settings(authority: &WorkerAuthority) -> (Uuid, &str, &str) {
     }
 }
 fn retain_provider_hold(
-    holds: &mut BTreeMap<Uuid, crate::codex::SessionState>,
+    holds: &mut BTreeMap<Uuid, kegari_codex::SessionState>,
     operation: Uuid,
-    session: &crate::codex::SessionState,
+    session: &kegari_codex::SessionState,
 ) -> Result<()> {
     if session.binding.operation_id != operation.to_string()
         || session
@@ -2999,7 +3002,7 @@ impl WorkerHost for RuntimeCoordinator {
     fn observed_session(
         &self,
         operation: Uuid,
-        session: &crate::codex::SessionState,
+        session: &kegari_codex::SessionState,
     ) -> Result<()> {
         self.control.serialize_observation(|_| {
             let mut state = self
@@ -3508,7 +3511,7 @@ impl<'a> WorkerReadmission<'a> {
             Self::ValidationRetry(p) => p.authority(),
         }
     }
-    fn phase(self) -> &'a crate::scheduler::PhaseKey {
+    fn phase(self) -> &'a kegari_types::run::PhaseKey {
         match self {
             Self::Unfinished(p) => p.phase(),
             Self::SourceAdvanced(p) => p.phase(),
@@ -3652,7 +3655,7 @@ mod tests {
     }
     #[test]
     fn unfinished_selection_requires_joined_terminal_session_without_blockers() {
-        use crate::codex::SessionState;
+        use kegari_codex::SessionState;
         use kegari_codex::{CodexProfile, ProviderIntervention, SessionBinding};
         let operation = Uuid::from_u128(44);
         let digest = canonical_digest(1, &"fixture").unwrap();
@@ -4048,7 +4051,7 @@ mod tests {
     }
     #[test]
     fn provider_hold_cannot_be_cleared_by_later_success_or_transplanted_binding() {
-        use crate::codex::SessionState;
+        use kegari_codex::SessionState;
         use kegari_codex::{CodexProfile, ProviderIntervention, SessionBinding};
         let operation = Uuid::from_u128(1);
         let digest = canonical_digest(1, &"fixture").unwrap();

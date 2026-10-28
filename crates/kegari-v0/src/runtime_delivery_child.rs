@@ -2,16 +2,16 @@
 //! phase references are recovery facts, never replacements for execution proof.
 use super::*;
 use crate::{
-    control::{Lease, Permit, RunReference},
+    control::{Lease, Permit},
     delivery::*,
     evidence::RevisionBinding,
     git::{GitExecutionScope, SourceCommitMetadata},
     runtime::VerifiedAuthorizedOutcome,
-    scheduler::PhaseKey,
     worker::{WorkerAuthority, WorkerHost},
     worker_run::RunCompletion,
 };
 use kegari_digest::canonical_digest;
+use kegari_types::run::PhaseKey;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -224,7 +224,7 @@ impl RuntimeDelivery {
     }
     fn discover_children(&self, projection: &RuntimeProjection) -> Result<()> {
         for receipt in self.runtime.control.operations()? {
-            let Some(run) = RunReference::from_receipt(&receipt)? else {
+            let Some(run) = crate::control::run_reference_from_receipt(&receipt)? else {
                 continue;
             };
             if run.phase.phase != "implementation"
@@ -506,12 +506,13 @@ impl RuntimeDelivery {
                 }
                 if child.reference.stage == Stage::RetryReview {
                     let receipt = self.runtime.control.operation(proof.worker_operation())?;
-                    let run = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
-                        Error::new(
-                            "worker_binding",
-                            "validation successor review admission disappeared",
-                        )
-                    })?;
+                    let run =
+                        crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| {
+                            Error::new(
+                                "worker_binding",
+                                "validation successor review admission disappeared",
+                            )
+                        })?;
                     let grants = self.current_review_grants(&child.reference.work)?;
                     let matching: Vec<_> = grants
                         .iter()
@@ -791,7 +792,7 @@ impl RuntimeDelivery {
     pub(super) fn worker_launch_admitted(&self, operation: Uuid) -> Result<bool> {
         match self.runtime.control.operation(operation) {
             Ok(receipt) => {
-                if RunReference::from_receipt(&receipt)?.is_none() {
+                if crate::control::run_reference_from_receipt(&receipt)?.is_none() {
                     return Err(Error::new(
                         "operation_conflict",
                         "launch identity belongs to another operation",
@@ -875,7 +876,7 @@ impl RuntimeDelivery {
             .validation
             .ok_or_else(|| Error::new("record_corrupt", "failed validation identity is missing"))?;
         let receipt = self.runtime.control.operation(operation)?;
-        let run = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+        let run = crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| {
             Error::new("worker_binding", "failed validation admission is missing")
         })?;
         let grants = self.current_review_grants(&child.reference.work)?;
@@ -1162,12 +1163,13 @@ impl RuntimeDelivery {
             .unwrap_or_else(Uuid::new_v4);
         let model_admitted = match self.runtime.control.operation(operation) {
             Ok(receipt) => {
-                let run = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
-                    Error::new(
-                        "record_corrupt",
-                        "review retry operation is not a model admission",
-                    )
-                })?;
+                let run =
+                    crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| {
+                        Error::new(
+                            "record_corrupt",
+                            "review retry operation is not a model admission",
+                        )
+                    })?;
                 if run.phase != phase
                     || crate::control::ReviewRoundReference::from_receipt(&receipt)?.as_ref()
                         != Some(round.reference())
@@ -1417,7 +1419,7 @@ impl RuntimeDelivery {
         };
         let mut latest = None;
         for receipt in self.runtime.control.operations()? {
-            if let Some(run) = RunReference::from_receipt(&receipt)?
+            if let Some(run) = crate::control::run_reference_from_receipt(&receipt)?
                 && run.phase == phase
                 && latest
                     .as_ref()
@@ -2174,7 +2176,7 @@ impl RuntimeDelivery {
                 .review
                 .ok_or_else(|| Error::new("record_corrupt", "failed review identity missing"))?;
             let receipt = self.runtime.control.operation(operation)?;
-            let run = RunReference::from_receipt(&receipt)?
+            let run = crate::control::run_reference_from_receipt(&receipt)?
                 .ok_or_else(|| Error::new("worker_binding", "failed review admission missing"))?;
             let grants = self.current_review_grants(&child.reference.work)?;
             let matching: Vec<_> = grants

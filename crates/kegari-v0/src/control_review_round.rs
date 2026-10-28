@@ -1,12 +1,11 @@
 //! Bounded receipt provenance, never execution authority.
 //! No constructor here mints a permit,
 //! joined completion, source proof, review result, or VerifiedReviewRoundPlan.
-use super::{
-    PreparationReference, Receipt, RunContinuationReference, RunReference, SourceAdvancedReference,
-};
-use crate::{evidence::validate_digest, scheduler::PhaseKey};
+use super::{PreparationReference, Receipt, RunContinuationReference, SourceAdvancedReference};
+use crate::evidence::validate_digest;
 use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
+use kegari_types::run::PhaseKey;
 use serde::{Deserialize, Serialize};
 
 const KEY: &str = "review_round";
@@ -646,7 +645,7 @@ impl ReviewRoundReference {
                 .get("scope")
                 .ok_or_else(|| invalid("round admission scope is missing"))?,
         )?;
-        let run = RunReference::from_receipt(receipt)?;
+        let run = crate::control::run_reference_from_receipt(receipt)?;
         let prep = PreparationReference::from_receipt(receipt)?;
         let (workspace, account, subject, worker) = match (&run, &prep) {
             (Some(run), None) => {

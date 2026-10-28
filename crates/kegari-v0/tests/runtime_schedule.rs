@@ -2,10 +2,12 @@ use chrono::{Duration, Utc};
 use kegari_config::RuntimeConfig;
 use kegari_digest::canonical_digest;
 use kegari_types::error::Error;
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 use kegari_v0::{
-    control::{Receipt, ReceiptPhase, RunReference},
+    control::{Receipt, ReceiptPhase},
     runtime_schedule::{occupying_runs, plan, require_provider_clear},
-    scheduler::{PhaseKey, Trigger},
+    scheduler::Trigger,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -73,7 +75,9 @@ fn recovered_unknown_admissions_keep_capacity_without_live_permit_handles() {
         let mut old = receipt(1, "completed", "");
         old.operation_id = Uuid::from_u128(200 + index as u128);
         old.request_id = old.operation_id;
-        let mut run = RunReference::from_receipt(&old).unwrap().unwrap();
+        let mut run = kegari_v0::control::run_reference_from_receipt(&old)
+            .unwrap()
+            .unwrap();
         run.phase.work = digest(&format!("held-child-{index}"));
         old.canonical_targets = vec![run.phase.work.clone()];
         old.expected
@@ -301,7 +305,9 @@ fn provider_intervention_survives_generation_retry_and_later_success() {
     blocked.observed_result.as_mut().unwrap()["observation"]["session"]["intervention"] = json!({"account_id":"actual-account","source_method":"turn/completed","source_digest":digest("provider-signal"),"reason_code":"verification_required"});
     let mut later = receipt(1, "completed", "unused");
     later.operation_id = Uuid::from_u128(999);
-    let mut changed = RunReference::from_receipt(&later).unwrap().unwrap();
+    let mut changed = kegari_v0::control::run_reference_from_receipt(&later)
+        .unwrap()
+        .unwrap();
     changed.phase.generation = digest("new-correction");
     changed.phase.retry_grant = Some(Uuid::from_u128(42));
     changed.profile_digest = digest("new-profile");

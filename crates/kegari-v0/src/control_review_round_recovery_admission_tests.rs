@@ -6,6 +6,7 @@ use crate::control::{
     ReviewRoundRecoveryReference, ReviewRoundResumeReference, RoundRecoveryProvenance,
     RoundResumeProvenance,
 };
+use kegari_types::run::RunReference;
 
 struct FailedPair {
     f: Fixture,
@@ -14,8 +15,8 @@ struct FailedPair {
     failed: Receipt,
     recovery: ReviewRoundRecoveryReference,
 }
-fn failed_session(run: &RunReference, operation: Uuid) -> crate::codex::SessionState {
-    let mut state = crate::codex::SessionState::new(
+fn failed_session(run: &RunReference, operation: Uuid) -> kegari_codex::SessionState {
+    let mut state = kegari_codex::SessionState::new(
         kegari_codex::SessionBinding {
             schema_version: 1,
             account_id: run.account.clone(),
@@ -184,7 +185,11 @@ fn paired_recovery_admits_exact_metadata_then_resume_without_new_round_or_budget
         "review_round_required"
     );
     let metadata = p.metadata_success();
-    assert!(RunReference::from_receipt(&metadata).unwrap().is_none());
+    assert!(
+        crate::control::run_reference_from_receipt(&metadata)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         SessionRecoveryPreparationReference::from_receipt(&metadata).unwrap(),
         Some(p.metadata(1))
@@ -247,7 +252,9 @@ fn paired_recovery_admits_exact_metadata_then_resume_without_new_round_or_budget
         RunResumeReference::from_receipt(&receipt).unwrap(),
         Some(resume)
     );
-    let actual = RunReference::from_receipt(&receipt).unwrap().unwrap();
+    let actual = crate::control::run_reference_from_receipt(&receipt)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (
             actual.attempt,
@@ -262,7 +269,7 @@ fn paired_recovery_admits_exact_metadata_then_resume_without_new_round_or_budget
     assert!(!receipt.expected.contains_key("review_round_preparation"));
     let mut orphan = receipt.clone();
     orphan.expected.remove("review_round");
-    assert!(RunReference::from_receipt(&orphan).is_err());
+    assert!(crate::control::run_reference_from_receipt(&orphan).is_err());
     assert!(RunResumeReference::from_receipt(&orphan).is_err());
     let mut orphan = metadata.clone();
     orphan.expected.remove("review_round");
@@ -511,7 +518,7 @@ fn paired_control_repeated_resume_retains_original_and_actual_previous_bridge() 
             .unwrap();
     let actual = p.f.host.operation(permit.operation_id).unwrap();
     assert_eq!(
-        RunReference::from_receipt(&actual)
+        crate::control::run_reference_from_receipt(&actual)
             .unwrap()
             .unwrap()
             .attempt,

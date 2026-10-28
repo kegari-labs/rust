@@ -2,16 +2,15 @@
 //! remains synthetic and must never populate the runtime joined-run cache.
 use super::*;
 use crate::{
-    control::{
-        Lease, Permit, PreparationAdmission, PreparationReference, RunAdmission, RunReference,
-    },
+    control::{Lease, Permit, PreparationAdmission, PreparationReference, RunAdmission},
     decisions::VerifiedRetryGrant,
     delivery::{ValidationRetryOrigin, ValidationRetryRequest, ValidationRetryWork},
     runtime_delivery::worker_fixture::WorkerFixture,
-    scheduler::PhaseKey,
     worker::WorkerAuthority,
     worker_run::{RunCompletion, RunOutcome},
 };
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 use std::{path::Path, sync::Mutex};
 #[path = "runtime_delivery_validation_protocol_fixture.rs"]
 mod protocol;
@@ -326,7 +325,7 @@ pub(super) async fn run(f: ValidationFixture<'_>, code: &str) {
         host.operations()
             .unwrap()
             .iter()
-            .filter_map(|r| RunReference::from_receipt(r).unwrap())
+            .filter_map(|r| crate::control::run_reference_from_receipt(r).unwrap())
             .filter(|r| r.phase.phase == "child_local_validation")
             .count(),
         3
@@ -562,7 +561,13 @@ async fn admit(
         .unwrap();
     let actual = host.operation(operation).unwrap();
     assert_eq!(
-        canonical_digest(1, &RunReference::from_receipt(&actual).unwrap().unwrap()).unwrap(),
+        canonical_digest(
+            1,
+            &crate::control::run_reference_from_receipt(&actual)
+                .unwrap()
+                .unwrap()
+        )
+        .unwrap(),
         canonical_digest(1, &reference).unwrap()
     );
     (worker, reference, permit)

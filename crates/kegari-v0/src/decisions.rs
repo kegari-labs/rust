@@ -9,7 +9,6 @@ use crate::control::Intent;
 use crate::control::MutationRequest;
 use crate::control::Receipt;
 use crate::control::ReceiptPhase;
-use crate::control::RunReference;
 use crate::control_command::mutation_request;
 use crate::control_command::verified_operator;
 use crate::control_command::verify_current_actor;
@@ -34,7 +33,6 @@ use crate::reconcile::RuntimeProjection;
 use crate::reconcile::WorkspaceClients;
 use crate::runtime_host::ConfigurationControl;
 use crate::runtime_host::HostFuture;
-use crate::scheduler::PhaseKey;
 use chrono::{DateTime, Duration, Utc};
 use kegari_config::Config;
 use kegari_control_api::identity::Actor;
@@ -44,6 +42,7 @@ use kegari_providers::{Comment, GithubClient};
 use kegari_secrets::{AttestationKey, SecretStore, Signed};
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
+use kegari_types::run::PhaseKey;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -1289,12 +1288,13 @@ impl DecisionManager {
                 .ok_or_else(|| Error::new("stale_config", "retry workspace disappeared"))?;
             let account = &ctx.config.connections[&workspace.codex_connection].account_id;
             for receipt in &receipts {
-                let binding = if let Some(run) = RunReference::from_receipt(receipt)? {
-                    Some((run.phase, run.workspace, run.account))
-                } else {
-                    crate::control::PreparationReference::from_receipt(receipt)?
-                        .map(|prep| (prep.phase, prep.workspace, prep.account))
-                };
+                let binding =
+                    if let Some(run) = crate::control::run_reference_from_receipt(receipt)? {
+                        Some((run.phase, run.workspace, run.account))
+                    } else {
+                        crate::control::PreparationReference::from_receipt(receipt)?
+                            .map(|prep| (prep.phase, prep.workspace, prep.account))
+                    };
                 if let Some((phase, workspace, successor_account)) = binding
                     && phase == grant.phase_key()
                 {
@@ -1350,7 +1350,7 @@ impl DecisionManager {
         let mut found = BTreeMap::new();
         let mut ordinals = BTreeSet::new();
         for receipt in receipts {
-            if let Some(run) = RunReference::from_receipt(&receipt)?
+            if let Some(run) = crate::control::run_reference_from_receipt(&receipt)?
                 && run.workspace == ctx.workspace
                 && run.phase == target.phase
             {
@@ -1641,7 +1641,7 @@ impl DecisionManager {
             .or_else(|| receipt.expected.get("workspace_id"))
             .and_then(|id| Uuid::parse_str(id).ok())
             .or_else(|| {
-                RunReference::from_receipt(&receipt)
+                crate::control::run_reference_from_receipt(&receipt)
                     .ok()
                     .flatten()
                     .map(|r| r.workspace)

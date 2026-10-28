@@ -2,6 +2,7 @@
 //! observations and authority callbacks are explicitly synthetic. These tests
 //! do not create delivery/source/provider/joined-runtime capabilities.
 use super::*;
+use kegari_types::run::{PhaseKey, RunReference};
 use serde_json::json;
 use std::sync::{Arc, Barrier};
 
@@ -238,7 +239,7 @@ fn complete_first(f: &Fixture) -> Receipt {
             .operations()
             .unwrap()
             .iter()
-            .filter_map(|r| RunReference::from_receipt(r).unwrap())
+            .filter_map(|r| crate::control::run_reference_from_receipt(r).unwrap())
             .all(|run| run.phase != f.round.review_phase)
     );
     let permit = f
@@ -356,7 +357,9 @@ fn final_round_findings_can_repair_but_cannot_allocate_a_confirming_review() {
         .host
         .retire_local(permit.operation_id, observation())
         .unwrap();
-    let actual = RunReference::from_receipt(&repair).unwrap().unwrap();
+    let actual = crate::control::run_reference_from_receipt(&repair)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (
             actual.attempt,
@@ -614,7 +617,9 @@ fn changed_source_allocates_next_round_without_renewing_implementation_budget() 
         .unwrap();
     assert_eq!((recorded.ordinal, recorded.round_limit), (2, 2));
     assert_ne!(recorded.round_id, f.round.round_id);
-    let review_run = RunReference::from_receipt(&actual).unwrap().unwrap();
+    let review_run = crate::control::run_reference_from_receipt(&actual)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (
             review_run.attempt,
@@ -623,7 +628,9 @@ fn changed_source_allocates_next_round_without_renewing_implementation_budget() 
         ),
         (2, 3, 4)
     );
-    let repair_run = RunReference::from_receipt(&repair).unwrap().unwrap();
+    let repair_run = crate::control::run_reference_from_receipt(&repair)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (
             repair_run.attempt,
@@ -742,7 +749,9 @@ fn paired_source_validation_keeps_exact_receipt_without_allocating_review_round(
             .unwrap(),
         Some(pair)
     );
-    let actual = RunReference::from_receipt(&validated).unwrap().unwrap();
+    let actual = crate::control::run_reference_from_receipt(&validated)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (
             actual.attempt,
@@ -757,7 +766,7 @@ fn paired_source_validation_keeps_exact_receipt_without_allocating_review_round(
         .operations()
         .unwrap()
         .iter()
-        .filter_map(|r| RunReference::from_receipt(r).unwrap())
+        .filter_map(|r| crate::control::run_reference_from_receipt(r).unwrap())
         .filter(|r| r.phase.phase == "child_codex_review")
         .count();
     assert_eq!(reviews, 1);
@@ -838,7 +847,7 @@ fn continued_final_round_pair_uses_latest_validation_and_original_attempt_cap() 
         .unwrap()
         .into_iter()
         .filter(|r| {
-            RunReference::from_receipt(r)
+            crate::control::run_reference_from_receipt(r)
                 .unwrap()
                 .is_some_and(|run| run.phase == validation_run.phase)
         })
@@ -950,7 +959,9 @@ fn continued_final_round_pair_uses_latest_validation_and_original_attempt_cap() 
         .host
         .retire_local(permit.operation_id, observation())
         .unwrap();
-    let run = RunReference::from_receipt(&terminal).unwrap().unwrap();
+    let run = crate::control::run_reference_from_receipt(&terminal)
+        .unwrap()
+        .unwrap();
     assert_eq!((run.attempt, run.max_attempts, run.max_turns), (3, 3, 4));
     assert_eq!(
         ReviewRoundReference::from_receipt(&terminal).unwrap(),
@@ -965,7 +976,7 @@ fn continued_final_round_pair_uses_latest_validation_and_original_attempt_cap() 
         .operations()
         .unwrap()
         .iter()
-        .filter_map(|r| RunReference::from_receipt(r).unwrap())
+        .filter_map(|r| crate::control::run_reference_from_receipt(r).unwrap())
         .filter(|run| run.phase.phase == "child_codex_review")
         .count();
     assert_eq!(
@@ -1172,8 +1183,14 @@ fn retried_pair_validation_keeps_origin_separate_and_checks_complete_actual_pref
     grant
         .remote_ids
         .insert("comment_id".into(), Uuid::new_v4().to_string());
-    let phase = RunReference::from_receipt(&latest).unwrap().unwrap().phase;
-    let origin_phase = RunReference::from_receipt(&origin).unwrap().unwrap().phase;
+    let phase = crate::control::run_reference_from_receipt(&latest)
+        .unwrap()
+        .unwrap()
+        .phase;
+    let origin_phase = crate::control::run_reference_from_receipt(&origin)
+        .unwrap()
+        .unwrap()
+        .phase;
     let inventory: BTreeMap<_, _> = [prior.clone(), origin.clone(), latest.clone()]
         .into_iter()
         .map(|r| (r.operation_id, r))
@@ -1340,7 +1357,10 @@ fn advanced_pair_validation_retains_granted_budget_and_complete_consumed_prefix(
         .collect();
     let validation = RepairValidationReference {
         validation: exact(&latest),
-        phase: RunReference::from_receipt(&latest).unwrap().unwrap().phase,
+        phase: crate::control::run_reference_from_receipt(&latest)
+            .unwrap()
+            .unwrap()
+            .phase,
         source_advanced: link.clone(),
         outcome_proposal: Uuid::new_v4(),
         outcome_claim_digest: digest("protected current validation claim reference"),
@@ -1406,7 +1426,9 @@ fn advanced_pair_validation_retains_granted_budget_and_complete_consumed_prefix(
         .iter_mut()
         .find(|r| r.operation_id == latest.operation_id)
         .unwrap();
-    let mut run = RunReference::from_receipt(actual).unwrap().unwrap();
+    let mut run = crate::control::run_reference_from_receipt(actual)
+        .unwrap()
+        .unwrap();
     run.max_turns += 1;
     actual
         .expected

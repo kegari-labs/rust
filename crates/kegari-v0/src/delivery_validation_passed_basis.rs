@@ -1,6 +1,7 @@
 //! Private authentic completed-validation bases for the existing passed marker.
 //! A SourceAdvanced run is never relabelled as a ValidationRetryWork.
 use super::*;
+use kegari_types::run::RunReference;
 
 #[derive(Clone)]
 pub(super) enum PassedValidationBasis {
@@ -217,7 +218,7 @@ impl DeliveryCoordinator {
         advanced.verify_resumed_bridges(&|id| runtime.retained_session_resume(id))?;
         source_lineage::require_joined(&completion, &|id| runtime.retained_completion(id))?;
         let receipt = unique_receipt(&receipts, completion.operation_id)?;
-        let reference = RunReference::from_receipt(receipt)?
+        let reference = crate::control::run_reference_from_receipt(receipt)?
             .ok_or_else(|| passed_error("completed source validator lacks actual run"))?;
         if receipt.expected != outcome.run_receipt().expected
             || receipt

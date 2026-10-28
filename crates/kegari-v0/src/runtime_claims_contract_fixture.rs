@@ -2,10 +2,8 @@
 //! This records synthetic completed protocol input, never native process or
 //! command evidence. Its caller must retain actual execution capabilities.
 use super::*;
-use crate::{
-    codex::SessionState,
-    worker::{WorkerAuthority, WorkerContract},
-};
+use crate::worker::{WorkerAuthority, WorkerContract};
+use kegari_codex::SessionState;
 use kegari_codex::{CodexProfile, SessionBinding};
 use kegari_config::Speed;
 use serde_json::json;
@@ -21,7 +19,7 @@ pub(crate) fn test_completed_contract_fixture(
             "fixture requires authorized work",
         ));
     };
-    let run = RunReference::from_receipt(&admission)?
+    let run = crate::control::run_reference_from_receipt(&admission)?
         .ok_or_else(|| Error::new("worker_binding", "fixture requires actual run admission"))?;
     let manifest = &contract.instructions().manifest;
     if manifest.operation_id != admission.operation_id

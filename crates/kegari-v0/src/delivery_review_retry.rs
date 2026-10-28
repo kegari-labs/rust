@@ -2,13 +2,14 @@
 //! host assignment. A failed session is never promoted to a completed review.
 use super::*;
 use crate::{
-    control::{ReceiptPhase, RunReference},
+    control::ReceiptPhase,
     decisions::VerifiedRetryGrant,
     instructions::AgentRole,
-    scheduler::PhaseKey,
     worker::{WorkerAuthority, WorkerContract},
     worker_run::{RunCompletion, RunOutcome},
 };
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 
 #[derive(Clone)]
 pub struct ReviewRetryWork {
@@ -16,7 +17,7 @@ pub struct ReviewRetryWork {
     failed: Arc<RunCompletion>,
     reference: RunReference,
     origin_reference: RunReference,
-    transient_failure: Option<crate::codex::TransientTurnFailure>,
+    transient_failure: Option<kegari_codex::TransientTurnFailure>,
     receipt: Receipt,
     receipt_digest: String,
     inventory_digest: String,
@@ -149,7 +150,7 @@ impl ReviewRetryWork {
                     "retried review admission missing",
                 )
             })?;
-        let run = RunReference::from_receipt(receipt)?
+        let run = crate::control::run_reference_from_receipt(receipt)?
             .ok_or_else(|| Error::new("worker_binding", "retried review lacks actual run"))?;
         let result = receipt.observed_result.as_ref();
         if receipt.runtime_id != self.receipt.runtime_id
@@ -209,7 +210,7 @@ impl ReviewRetryWork {
         let mut ancestral = Vec::new();
         let mut granted = Vec::new();
         for receipt in receipts {
-            match RunReference::from_receipt(receipt)? {
+            match crate::control::run_reference_from_receipt(receipt)? {
                 Some(run) if run.phase == self.phase => granted.push((receipt, run)),
                 _ => ancestral.push(receipt.clone()),
             }
@@ -359,7 +360,7 @@ impl DeliveryCoordinator {
         let receipts = self.host.operations()?;
         proof.verify_completed_inventory(&receipts, grants, completion.operation_id)?;
         let receipt = self.host.operation(completion.operation_id)?;
-        let reference = RunReference::from_receipt(&receipt)?
+        let reference = crate::control::run_reference_from_receipt(&receipt)?
             .ok_or_else(|| Error::new("worker_binding", "completed review admission missing"))?;
         let receipt_digest = canonical_digest(1, &receipt)?;
         let inventory_digest = review_inventory(&receipts, receipt.runtime_id, &reference)?;
@@ -412,8 +413,10 @@ impl DeliveryCoordinator {
             Error::new("worker_binding", "retried review contract unavailable")
         })?)?;
         child::completed_run(outcome, completion)?;
-        let run = RunReference::from_receipt(&self.host.operation(completion.operation_id)?)?
-            .ok_or_else(|| Error::new("worker_binding", "review run missing"))?;
+        let run = crate::control::run_reference_from_receipt(
+            &self.host.operation(completion.operation_id)?,
+        )?
+        .ok_or_else(|| Error::new("worker_binding", "review run missing"))?;
         if run.phase != *proof.phase()
             || run.instruction_digest != outcome.outcome().instruction_digest
             || run.profile_digest != canonical_digest(1, &outcome.outcome().instructions.profile)?
@@ -532,7 +535,7 @@ impl DeliveryCoordinator {
                 "joined failed review differs from protected terminal observation",
             ));
         }
-        let reference = RunReference::from_receipt(&receipt)?
+        let reference = crate::control::run_reference_from_receipt(&receipt)?
             .ok_or_else(|| Error::new("worker_binding", "failed review lacks admission"))?;
         let manifest = &contract.instructions().manifest;
         if receipt.runtime_id != request.admission.scope.runtime_id
@@ -710,7 +713,7 @@ fn review_inventory(
 ) -> Result<String> {
     let mut inventory = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && same_group(runtime, reference, receipt, &run)
             && inventory.insert(receipt.operation_id, receipt).is_some()
         {
@@ -726,7 +729,7 @@ fn marked_review_admissions(
 ) -> Result<BTreeMap<Uuid, String>> {
     let mut marked = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && same_group(runtime, reference, receipt, &run)
             && crate::control::ReviewRoundReference::from_receipt(receipt)?.is_some()
             && marked
@@ -783,7 +786,7 @@ fn verify_lineage(
         }
         let mut prior = BTreeMap::new();
         for receipt in receipts {
-            if let Some(run) = RunReference::from_receipt(receipt)?
+            if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
                 && run.phase == *phase
                 && same_group(runtime, reference, receipt, &run)
             {
@@ -827,7 +830,7 @@ fn verify_lineage(
             }
             None => {
                 for receipt in receipts {
-                    if let Some(run) = RunReference::from_receipt(receipt)?
+                    if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
                         && same_group(runtime, reference, receipt, &run)
                         && (!phases.contains(&canonical_digest(1, &run.phase)?)
                             || run.phase == reference.phase && run.attempt > reference.attempt)

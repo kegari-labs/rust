@@ -5,6 +5,7 @@ use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_storage::{ExclusiveLock, PrivateDir};
 use kegari_types::error::{Error, Result};
+use kegari_types::run::RunReference;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -143,91 +144,72 @@ pub struct MutationRequest {
     pub payload: Value,
 }
 
-/// Identity-only run-budget record embedded in the atomic admission receipt.
-/// It contains no issue text, prompts, credentials or replicated provider state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunReference {
-    pub workspace: Uuid,
-    pub account: String,
-    #[serde(default)]
-    pub normalized_state: Option<String>,
-    pub phase: crate::scheduler::PhaseKey,
-    pub profile_digest: String,
-    pub instruction_digest: String,
-    pub max_attempts: u32,
-    pub max_turns: u32,
-    pub max_review_rounds: u32,
-    pub attempt: u32,
+pub fn run_reference_from_receipt(receipt: &Receipt) -> Result<Option<RunReference>> {
+    receipt
+        .expected
+        .get("run")
+        .map(|encoded| {
+            if receipt.kind != "admission"
+                || receipt.expected.contains_key("review_round_recovery")
+                || receipt.expected.contains_key("worker_preparation")
+                || receipt
+                    .expected
+                    .contains_key("session_recovery_preparation")
+            {
+                return Err(Error::new(
+                    "record_corrupt",
+                    "run budget is attached to a non-admission receipt",
+                ));
+            }
+            let value: RunReference = serde_json::from_str(encoded)
+                .map_err(|_| Error::new("record_corrupt", "run budget reference is invalid"))?;
+            validate_run_reference(&value)?;
+            if receipt.expected.contains_key("review_round_resume") {
+                ReviewRoundResumeReference::from_model_receipt(receipt)?;
+            }
+            Ok(value)
+        })
+        .transpose()
 }
-impl RunReference {
-    pub fn from_receipt(receipt: &Receipt) -> Result<Option<Self>> {
-        receipt
-            .expected
-            .get("run")
-            .map(|encoded| {
-                if receipt.kind != "admission"
-                    || receipt.expected.contains_key("review_round_recovery")
-                    || receipt.expected.contains_key("worker_preparation")
-                    || receipt
-                        .expected
-                        .contains_key("session_recovery_preparation")
-                {
-                    return Err(Error::new(
-                        "record_corrupt",
-                        "run budget is attached to a non-admission receipt",
-                    ));
-                }
-                let value: Self = serde_json::from_str(encoded)
-                    .map_err(|_| Error::new("record_corrupt", "run budget reference is invalid"))?;
-                value.validate()?;
-                if receipt.expected.contains_key("review_round_resume") {
-                    ReviewRoundResumeReference::from_model_receipt(receipt)?;
-                }
-                Ok(value)
-            })
-            .transpose()
+fn validate_run_reference(reference: &RunReference) -> Result<()> {
+    if reference.workspace.is_nil()
+        || reference.account.is_empty()
+        || reference.account.len() > 512
+        || reference.normalized_state.as_ref().is_some_and(|state| {
+            state.is_empty() || state.len() > 256 || state.trim().to_lowercase() != *state
+        })
+        || reference.phase.work.is_empty()
+        || reference.phase.work.len() > 512
+        || reference.phase.phase.is_empty()
+        || reference.phase.phase.len() > 64
+        || !reference
+            .phase
+            .phase
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+        || reference.phase.retry_grant.is_some_and(|id| id.is_nil())
+        || [
+            reference.max_attempts,
+            reference.max_turns,
+            reference.max_review_rounds,
+            reference.attempt,
+        ]
+        .contains(&0)
+        || reference.attempt > reference.max_attempts
+    {
+        return Err(Error::new(
+            "record_corrupt",
+            "run identity or finite phase budget is invalid",
+        ));
     }
-    fn validate(&self) -> Result<()> {
-        if self.workspace.is_nil()
-            || self.account.is_empty()
-            || self.account.len() > 512
-            || self.normalized_state.as_ref().is_some_and(|state| {
-                state.is_empty() || state.len() > 256 || state.trim().to_lowercase() != *state
-            })
-            || self.phase.work.is_empty()
-            || self.phase.work.len() > 512
-            || self.phase.phase.is_empty()
-            || self.phase.phase.len() > 64
-            || !self
-                .phase
-                .phase
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
-            || self.phase.retry_grant.is_some_and(|id| id.is_nil())
-            || [
-                self.max_attempts,
-                self.max_turns,
-                self.max_review_rounds,
-                self.attempt,
-            ]
-            .contains(&0)
-            || self.attempt > self.max_attempts
-        {
-            return Err(Error::new(
-                "record_corrupt",
-                "run identity or finite phase budget is invalid",
-            ));
-        }
-        for digest in [
-            &self.phase.generation,
-            &self.profile_digest,
-            &self.instruction_digest,
-        ] {
-            crate::evidence::validate_digest(digest)?;
-        }
-        Ok(())
+    for digest in [
+        &reference.phase.generation,
+        &reference.profile_digest,
+        &reference.instruction_digest,
+    ] {
+        crate::evidence::validate_digest(digest)?;
     }
+    Ok(())
 }
 pub struct RunAdmission {
     pub request_id: Uuid,
@@ -1019,7 +1001,7 @@ impl ControlHost {
         input: RunAdmission,
         fresh_gate: impl FnOnce(&ControlSnapshot) -> Result<()>,
     ) -> Result<Permit> {
-        input.reference.validate()?;
+        validate_run_reference(&input.reference)?;
         self.admit_inner(
             lease,
             input.request_id,
@@ -1114,7 +1096,7 @@ impl ControlHost {
                 reject_unmarked_parent_phase(&run.phase, &observed)?;
             }
             for receipt in observed {
-                if let Some(old) = RunReference::from_receipt(&receipt)?
+                if let Some(old) = crate::control::run_reference_from_receipt(&receipt)?
                     && old.phase == run.phase
                 {
                     if old.workspace != run.workspace
@@ -1198,7 +1180,7 @@ impl ControlHost {
             let receipts = self.review_round_receipts()?;
             reject_unmarked_parent_phase(&prep.phase, &receipts)?;
             for receipt in receipts {
-                if let Some(run) = RunReference::from_receipt(&receipt)?
+                if let Some(run) = crate::control::run_reference_from_receipt(&receipt)?
                     && run.phase == prep.phase
                     && receipt.expected.contains_key("review_round")
                 {

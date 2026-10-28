@@ -1,7 +1,7 @@
 //! Completed-current recovery never reconstructs a worker, joined completion,
 //! execution capability, or an unfinished parent pipeline.
 use super::*;
-use crate::control::{ParentReassemblyReference, RunReference};
+use crate::control::ParentReassemblyReference;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -195,7 +195,7 @@ fn exact_phase<'a>(
     closed(receipt)?;
     let reference = ParentReassemblyReference::from_receipt(receipt)?
         .ok_or_else(|| invalid("carry recovery final worker lost parent marker"))?;
-    let run = RunReference::from_receipt(receipt)?
+    let run = crate::control::run_reference_from_receipt(receipt)?
         .ok_or_else(|| invalid("carry recovery final worker lost run"))?;
     let result = receipt
         .observed_result

@@ -2,10 +2,10 @@
 //! completed model protocol is synthetic; no native agent qualification claimed.
 use crate::{
     control::Lease, delivery::*, git::Git, reconcile::FreshGate,
-    runtime::VerifiedAuthorizedOutcome, scheduler::PhaseKey, worker::WorkerAuthority,
+    runtime::VerifiedAuthorizedOutcome, worker::WorkerAuthority,
 };
 use crate::{
-    control::{RunAdmission, RunReference},
+    control::RunAdmission,
     execution::{
         CommandBoundary, DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass,
         ExecutionLimits, OwnedDirectory, StartedCommand,
@@ -20,6 +20,8 @@ use crate::{
 };
 use kegari_digest::canonical_digest;
 use kegari_types::error::{Error, Result};
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
@@ -466,7 +468,9 @@ fn complete_inner(
                         host.operations()
                             .unwrap()
                             .iter()
-                            .filter_map(|receipt| RunReference::from_receipt(receipt).unwrap())
+                            .filter_map(|receipt| {
+                                crate::control::run_reference_from_receipt(receipt).unwrap()
+                            })
                             .filter(|run| {
                                 run.phase.phase == manifest.phase
                                     && run.phase.work == gate.work_key().unwrap()
@@ -505,7 +509,7 @@ fn complete_inner(
             .operations()
             .unwrap()
             .iter()
-            .filter_map(|receipt| RunReference::from_receipt(receipt).unwrap())
+            .filter_map(|receipt| crate::control::run_reference_from_receipt(receipt).unwrap())
         {
             if old.phase == reference.phase {
                 reference.max_attempts = reference.max_attempts.min(old.max_attempts);
@@ -734,13 +738,14 @@ pub(crate) async fn failed_admitted_review_with_gate(
     max_turns: u32,
     retry_after_ms: Option<u64>,
     failure_code: Option<&str>,
-    request_gate: Option<Arc<dyn crate::codex::RequestGate>>,
+    request_gate: Option<Arc<dyn kegari_codex::RequestGate>>,
 ) -> Arc<RunCompletion> {
-    use crate::codex::{RpcClient, SessionState};
+    use kegari_codex::RpcClient;
+    use kegari_codex::SessionState;
     use kegari_codex::{CodexProfile, SessionBinding};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     struct Deny;
-    impl crate::codex::ToolBroker for Deny {
+    impl kegari_codex::ToolBroker for Deny {
         fn call<'a>(
             &'a mut self,
             _: &'a kegari_codex::ToolCall,
@@ -760,7 +765,9 @@ pub(crate) async fn failed_admitted_review_with_gate(
         panic!()
     };
     let actual = host.operation(manifest.operation_id).unwrap();
-    let admitted = RunReference::from_receipt(&actual).unwrap().unwrap();
+    let admitted = crate::control::run_reference_from_receipt(&actual)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         admitted.instruction_digest,
         contract.instructions().manifest_digest

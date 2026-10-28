@@ -4,6 +4,7 @@ use super::*;
 use crate::control::RunContinuationReference;
 use chrono::Duration;
 use kegari_digest::canonical_digest;
+use kegari_types::run::{PhaseKey, RunReference};
 use std::collections::BTreeMap;
 
 fn digest(value: &str) -> String {
@@ -61,7 +62,9 @@ fn failure(now: DateTime<Utc>) -> Receipt {
     let mut value = receipt(1, now);
     value.operation_id = Uuid::from_u128(200);
     value.request_id = value.operation_id;
-    let mut run = RunReference::from_receipt(&value).unwrap().unwrap();
+    let mut run = crate::control::run_reference_from_receipt(&value)
+        .unwrap()
+        .unwrap();
     run.phase.phase = "child_validation".into();
     value
         .expected
@@ -103,7 +106,9 @@ fn explicit_grant_for_completed_work_cannot_be_dispatched_as_initial_implementat
     let mut admitted = receipt(1, now);
     admitted.operation_id = Uuid::from_u128(701);
     admitted.request_id = admitted.operation_id;
-    let mut run = RunReference::from_receipt(&admitted).unwrap().unwrap();
+    let mut run = crate::control::run_reference_from_receipt(&admitted)
+        .unwrap()
+        .unwrap();
     run.phase = granted.clone();
     admitted
         .expected
@@ -293,7 +298,9 @@ fn failure_must_belong_to_the_same_runtime_workspace_work_and_generation() {
     let reference = reference(&predecessor, &original);
     for mutation in 0..4 {
         let mut failure = original.clone();
-        let mut run = RunReference::from_receipt(&failure).unwrap().unwrap();
+        let mut run = crate::control::run_reference_from_receipt(&failure)
+            .unwrap()
+            .unwrap();
         match mutation {
             0 => failure.runtime_id = Uuid::from_u128(888),
             1 => run.workspace = Uuid::from_u128(888),
@@ -408,7 +415,9 @@ fn validation(attempt: u32, now: DateTime<Utc>) -> Receipt {
     let mut receipt = receipt(attempt, now);
     receipt.operation_id = Uuid::from_u128(400 + u128::from(attempt));
     receipt.request_id = receipt.operation_id;
-    let mut run = RunReference::from_receipt(&receipt).unwrap().unwrap();
+    let mut run = crate::control::run_reference_from_receipt(&receipt)
+        .unwrap()
+        .unwrap();
     run.phase.phase = "child_local_validation".into();
     receipt
         .expected
@@ -490,7 +499,9 @@ fn source_advancement_requires_exact_completed_implementation_and_expected_phase
         match mutation {
             0 => reference.source_receipt_digest = digest("stale"),
             1 => {
-                let mut run = RunReference::from_receipt(&source).unwrap().unwrap();
+                let mut run = crate::control::run_reference_from_receipt(&source)
+                    .unwrap()
+                    .unwrap();
                 run.phase.phase = "child_codex_review".into();
                 source
                     .expected

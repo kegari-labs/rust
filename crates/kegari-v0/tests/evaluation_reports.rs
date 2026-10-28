@@ -677,9 +677,9 @@ fn independent_boundary_diagnostics_survive_archive_and_legacy_absence_stays_unk
 fn declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence() {
     // Report-reader data only; these values cannot create a worker, native
     // capability, permission, session or successful disclosure assertion.
-    use kegari_v0::codex::{
-        DeclaredProtocolObservation, ProtocolCaptureIssue, ProtocolCaptureState,
-    };
+    use kegari_codex::DeclaredProtocolObservation;
+    use kegari_codex::ProtocolCaptureIssue;
+    use kegari_codex::ProtocolCaptureState;
     let suite = suite();
     let mut data = report(&suite, TrialOutcome::Blocked);
     let observation = DeclaredProtocolObservation {
@@ -705,14 +705,12 @@ fn declared_protocol_incomplete_inventory_survives_archive_and_legacy_absence() 
         observed_server_requests: 2,
         processed_server_requests: Some(3),
         terminal_turns: 1,
-        transport_end: Some(
-            kegari_v0::codex::ProtocolTransportEndDiagnostic::Incomplete {
-                frames: 3,
-                decoded_bytes: 120,
-                wire_bytes: 160,
-                error: kegari_types::error::Error::new("timeout", "data-only original cutoff"),
-            },
-        ),
+        transport_end: Some(kegari_codex::ProtocolTransportEndDiagnostic::Incomplete {
+            frames: 3,
+            decoded_bytes: 120,
+            wire_bytes: 160,
+            error: kegari_types::error::Error::new("timeout", "data-only original cutoff"),
+        }),
         records: vec![],
     };
     observation.validate().unwrap();

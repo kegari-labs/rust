@@ -3,7 +3,8 @@
 //! joined predecessor. These records independently preserve finite phase bounds.
 use super::*;
 use crate::evidence::{WorkIdentity, validate_digest};
-use crate::scheduler::PhaseKey;
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 
 #[path = "control_parent_reassembly_grants.rs"]
 mod grants;
@@ -170,7 +171,7 @@ impl ParentReassemblyReference {
             .map_err(|_| invalid("parent reassembly reference is invalid"))?;
         reference.validate()?;
         let prep = PreparationReference::from_receipt(receipt)?;
-        let run = RunReference::from_receipt(receipt)?;
+        let run = crate::control::run_reference_from_receipt(receipt)?;
         if receipt.kind != "admission"
             || receipt.runtime_id != reference.runtime
             || receipt.canonical_targets != [reference.phase.work.clone()]
@@ -303,7 +304,7 @@ pub(crate) fn verify_parent_reassembly_reference(
     grants::verify_receipts(snapshot, reference, receipts)?;
     let previous = exact(receipts, &reference.predecessor)?;
     closed(snapshot, previous)?;
-    let previous_run = RunReference::from_receipt(previous)?
+    let previous_run = crate::control::run_reference_from_receipt(previous)?
         .ok_or_else(|| invalid("parent predecessor is not an actual worker"))?;
     let observation = previous
         .observed_result
@@ -381,7 +382,7 @@ pub(crate) fn verify_parent_reassembly_reference(
         ));
     }
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && run.phase == reference.phase
         {
             closed(snapshot, receipt)?;
@@ -552,7 +553,7 @@ impl ControlHost {
         preparation: ReviewReceiptReference,
         fresh: impl FnOnce(&ControlSnapshot) -> Result<()>,
     ) -> Result<Permit> {
-        input.reference.validate()?;
+        crate::control::validate_run_reference(&input.reference)?;
         reference.validate()?;
         if input.request_id != reference.operation
             || input.work_key != reference.phase.work
@@ -654,7 +655,7 @@ pub(crate) fn parent_transient_failure(receipt: &Receipt) -> Result<Option<u64>>
     match error.code.as_str() {
         "process_exit" | "provider_transport" | "timeout" | "stream_timeout" | "stall_timeout" => {}
         "turn_incomplete" => {
-            let session: crate::codex::SessionState =
+            let session: kegari_codex::SessionState =
                 serde_json::from_value(observation["session"].clone())
                     .map_err(|_| invalid("transient parent terminal session is invalid"))?;
             if session.terminal_transient_failure()?.is_none() {

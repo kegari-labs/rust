@@ -2,9 +2,10 @@
 //! never replace the required opaque/current-authority callback. No provider I/O
 //! or public permit reconstruction occurs while Control is locked.
 use super::*;
+use kegari_types::run::RunReference;
 #[path = "control_review_round_recovery_admission.rs"]
 mod recovery;
-use crate::scheduler::PhaseKey;
+use kegari_types::run::PhaseKey;
 pub(super) use recovery::{RoundRecoveryContext, RoundResumeCheck};
 pub(crate) use recovery::{RoundRecoveryProvenance, RoundResumeProvenance};
 
@@ -100,7 +101,7 @@ impl ControlHost {
         provenance: ReviewRoundRunProvenance,
         fresh: impl FnOnce(&ControlSnapshot) -> Result<()>,
     ) -> Result<Permit> {
-        input.reference.validate()?;
+        crate::control::validate_run_reference(&input.reference)?;
         crate::evidence::validate_digest(&input.scope_digest)?;
         if input.work_key != input.reference.phase.work {
             return Err(round_error("round run changes canonical work"));
@@ -333,7 +334,7 @@ fn require_not_held(snapshot: &ControlSnapshot, receipt: &Receipt) -> Result<()>
     Ok(())
 }
 fn closed_worker(receipt: &Receipt, outcome: &str) -> Result<RunReference> {
-    let run = RunReference::from_receipt(receipt)?
+    let run = crate::control::run_reference_from_receipt(receipt)?
         .ok_or_else(|| round_error("round reference is not a worker admission"))?;
     let observed = receipt
         .observed_result
@@ -504,7 +505,7 @@ fn verify_source_reference_fields(
         // Mixed namespaces require an additional opaque ordered ancestry slice;
         // this bounded increment refuses them rather than guessing from time.
         for receipt in receipts {
-            if let Some(other) = RunReference::from_receipt(receipt)?
+            if let Some(other) = crate::control::run_reference_from_receipt(receipt)?
                 && receipt.runtime_id == round.runtime
                 && other.workspace == round.workspace
                 && other.phase.work == round.review_phase.work
@@ -534,7 +535,7 @@ fn review_history<'a>(
     }
     let mut history = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && run.phase == round.review_phase
         {
             if receipt.runtime_id != round.runtime
@@ -618,7 +619,7 @@ fn verify_candidate(
                 ));
             }
             for receipt in receipts {
-                if RunReference::from_receipt(receipt)?.is_some()
+                if crate::control::run_reference_from_receipt(receipt)?.is_some()
                     && let Some(marker) = ReviewRoundReference::from_receipt(receipt)?
                     && let Some(prior) = pair_chain::findings(&marker)
                     && marker.runtime == round.runtime
@@ -701,13 +702,13 @@ fn verify_review_transition(
                 .ok_or_else(|| {
                     round_error("transient predecessor lacks actual terminal session")
                 })?;
-            let state: crate::codex::SessionState = serde_json::from_value(raw.clone())
+            let state: kegari_codex::SessionState = serde_json::from_value(raw.clone())
                 .map_err(|_| round_error("transient terminal session is malformed"))?;
             let actual = match state.terminal_transient_failure()? {
-                Some(crate::codex::TransientTurnFailure::ServerOverloaded) => {
+                Some(kegari_codex::TransientTurnFailure::ServerOverloaded) => {
                     TransientFailureCode::ServerOverloaded
                 }
-                Some(crate::codex::TransientTurnFailure::InternalServerError) => {
+                Some(kegari_codex::TransientTurnFailure::InternalServerError) => {
                     TransientFailureCode::InternalServerError
                 }
                 None => {
@@ -855,7 +856,7 @@ fn verify_persisted_preparation(
 }
 fn verify_review_session_caps(run: &RunReference, history: &BTreeMap<u32, Receipt>) -> Result<()> {
     for receipt in history.values() {
-        let old = RunReference::from_receipt(receipt)?
+        let old = crate::control::run_reference_from_receipt(receipt)?
             .ok_or_else(|| round_error("review run history missing"))?;
         if old.workspace != run.workspace
             || old.account != run.account

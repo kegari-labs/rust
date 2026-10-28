@@ -1,9 +1,6 @@
 //! Actual assembled worker sessions. The host chooses work and reserves the
 //! immutable contract; this module owns the bounded adapter/task lifetime.
-use crate::codex::OwnedProviderCancellation;
-use crate::codex::RequestGate;
-use crate::codex::RpcClient;
-use crate::codex::SessionState;
+use crate::codex_host::{NativeCodexClient, OwnedProviderCancellation};
 use crate::control::ControlHost;
 use crate::control::InFlightEffect;
 use crate::control::MutationRequest;
@@ -33,7 +30,10 @@ use crate::worker::WorkerServices;
 use crate::workflow::Workflow;
 use kegari_codex::CodexProfile;
 use kegari_codex::PermissionConfiguration;
+use kegari_codex::RequestGate;
+use kegari_codex::RpcClient;
 use kegari_codex::SessionBinding;
+use kegari_codex::SessionState;
 use kegari_config::{Config, ProviderKind, Speed};
 use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
@@ -54,6 +54,10 @@ use std::{
 };
 use tokio::sync::Notify;
 use uuid::Uuid;
+#[path = "worker_recovery_retained.rs"]
+mod retained;
+pub use retained::RetainedResumeSession;
+
 #[path = "worker_recovery.rs"]
 mod recovery;
 pub use recovery::{
@@ -201,7 +205,7 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
     );
     kegari_storage::PrivateDir::open(&auth_home)?;
     let isolation = input.isolation.validate()?;
-    let permissions = crate::codex::permission_configuration(&isolation, &auth_home)?;
+    let permissions = crate::codex_host::permission_configuration(&isolation, &auth_home)?;
     let repository_execution =
         input.role.permits_repository_execution() && input.repository_id.is_some();
     let definitions = crate::worker::operation_tool_definitions(
@@ -791,9 +795,9 @@ impl WorkerProviderLaunch {
         registry: Arc<ExecutionRegistry>,
     ) -> Result<Self> {
         let expected =
-            crate::codex::permission_configuration(contract.isolation(), &input.auth_home)?;
+            crate::codex_host::permission_configuration(contract.isolation(), &input.auth_home)?;
         let manifest = &contract.instructions().manifest;
-        let admitted = crate::control::RunReference::from_receipt(
+        let admitted = crate::control::run_reference_from_receipt(
             &input.control.operation(input.permit.operation_id)?,
         )?
         .ok_or_else(|| {
@@ -887,7 +891,7 @@ impl WorkerProviderLaunch {
             .control
             .validate_permit(&self.input.permit, || self.gate.fresh())
     }
-    pub async fn launch(&self) -> Result<RpcClient> {
+    pub async fn launch(&self) -> Result<NativeCodexClient> {
         if self.launched.swap(true, Ordering::SeqCst) {
             return Err(Error::new(
                 "operation_uncertain",
@@ -941,7 +945,7 @@ async fn launch_provider(
     input: &ProviderLaunchInput,
     cancel: &Arc<Cancellation>,
     gate: Arc<ProtocolGate>,
-) -> Result<RpcClient> {
+) -> Result<NativeCodexClient> {
     let control = &input.control;
     let permit = &input.permit;
     let processes = &input.processes;
@@ -964,7 +968,7 @@ async fn launch_provider(
             argv_digest: canonical_digest(1, &vec!["--version"])?,
             kind: "codex-version".into(),
         })?;
-        let spawned = RpcClient::start_version_probe(&input.executable, Some(guard))?;
+        let spawned = crate::codex_host::start_version_probe(&input.executable, Some(guard))?;
         cancel.install(spawned.cancellation())?;
         probe = Some(spawned);
         Ok(())
@@ -990,25 +994,20 @@ async fn launch_provider(
             argv_digest: canonical_digest(1, &kegari_codex::app_server_argv(&input.permissions)?)?,
             kind: "codex-app-server".into(),
         })?;
-        let spawned = RpcClient::start_verified_guarded(
+        let spawned = crate::codex_host::start_verified_guarded(
             &verified,
             &input.auth_home,
             &input.permissions,
             input.timeout,
             guard,
         )?;
-        cancel.install(spawned.cancellation().ok_or_else(|| {
-            Error::new(
-                "ownership_conflict",
-                "native provider process lacks its owned cancellation handle",
-            )
-        })?)?;
+        cancel.install(spawned.cancellation())?;
         client = Some(spawned);
         Ok(())
     })?;
     let mut rpc = client
         .ok_or_else(|| Error::new("ownership_conflict", "provider spawn gate did not run"))?;
-    rpc.bind_request_gate(gate)?;
+    rpc.client_mut().bind_request_gate(gate)?;
     Ok(rpc)
 }
 
@@ -1390,7 +1389,7 @@ fn bind_session(
     prepared.executable.revalidate(false)?;
     prepared.isolation.revalidate()?;
     let control = services.worker.control.clone();
-    let run = crate::control::RunReference::from_receipt(&control.operation(permit.operation_id)?)?
+    let run = crate::control::run_reference_from_receipt(&control.operation(permit.operation_id)?)?
         .ok_or_else(|| {
             Error::new(
                 "admission_budget",
@@ -1678,7 +1677,10 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
             )
             .await?,
         );
-        let rpc = client.as_mut().expect("owned adapter initialized");
+        let rpc = client
+            .as_mut()
+            .expect("owned adapter initialized")
+            .client_mut();
         rpc.initialize().await?;
         rpc.verify_account(&state.binding.account_id).await?;
         state
@@ -1690,14 +1692,16 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
             .await?;
         if let Some(resume) = &options.resume {
             broker.checkpoint(&state, Some("thread/resume"))?;
-            rpc.resume_verified(
-                &mut state,
-                resume.bridge(),
-                &prepared.isolation,
-                &prepared.permissions,
-                &mut broker,
-            )
-            .await?;
+            resume
+                .bridge()
+                .resume(
+                    rpc,
+                    &mut state,
+                    &prepared.isolation,
+                    &prepared.permissions,
+                    &mut broker,
+                )
+                .await?;
         } else {
             broker.checkpoint(&state, Some("thread/start"))?;
             rpc.start_thread(

@@ -3,6 +3,7 @@
 //! serialized retry reference nor a claim can construct this enum.
 use super::*;
 use crate::control::{RepairValidationLineage, SourceAdvancedReference};
+use kegari_types::run::RunReference;
 
 #[derive(Clone)]
 pub(super) enum ValidationEvidence {
@@ -143,7 +144,7 @@ fn validation_publications(
         if !inventory.contains_key(&receipt.operation_id) {
             continue;
         }
-        let run = RunReference::from_receipt(receipt)?
+        let run = crate::control::run_reference_from_receipt(receipt)?
             .ok_or_else(|| blocked("validation inventory contains non-model record"))?;
         if let Some(id) = run.phase.retry_grant {
             let grant = grants
@@ -199,7 +200,7 @@ fn validation_inventory(
     }
     let mut result = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && receipt.runtime_id == runtime
             && run.workspace == expected.workspace
             && run.phase.work == expected.phase.work

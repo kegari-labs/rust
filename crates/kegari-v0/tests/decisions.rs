@@ -297,12 +297,12 @@ use kegari_secrets::{Secret, SecretStore};
 use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::Error;
+use kegari_types::run::RunReference;
 use kegari_v0::control::ControlHost;
 use kegari_v0::control::MutationRequest;
 use kegari_v0::control::Receipt;
 use kegari_v0::control::ReceiptPhase;
 use kegari_v0::control::ReceiptStore;
-use kegari_v0::control::RunReference;
 use kegari_v0::control_command::mutation_request;
 use kegari_v0::decisions::*;
 use kegari_v0::evidence::VerifiedAcceptance;
@@ -1078,7 +1078,7 @@ fn prepare_retry_fixture(f: &DecisionFixture) -> (WorkIdentity, Uuid) {
             .unwrap()
             .identity()
             .unwrap();
-    let phase = kegari_v0::scheduler::PhaseKey {
+    let phase = kegari_types::run::PhaseKey {
         work: key.clone(),
         generation: canonical_digest(1, &work.generation).unwrap(),
         phase: "implementation".into(),

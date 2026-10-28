@@ -1,7 +1,7 @@
 //! Declared-evaluation diagnostics on the original transport. No tool dispatch,
 //! pipe writes, native exit proof, permission renewal or complete-channel claim.
 use super::*;
-use kegari_codex::TransportRead;
+use crate::TransportRead;
 
 /// A diagnostic created only by reading this actual client's transport. Its
 /// serialized projection is ordinary report data, never a native capability.
@@ -62,7 +62,7 @@ fn frame_bytes(message: &RpcMessage) -> Result<u64> {
         .map_err(|_| Error::new("protocol_observation", "cannot measure tail frame"))
 }
 impl RpcClient {
-    pub(crate) async fn observe_declared_tail(
+    pub async fn observe_declared_tail(
         &mut self,
         state: &mut SessionState,
         observer: &mut dyn ToolBroker,

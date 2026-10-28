@@ -2,6 +2,7 @@
 //! host transactions; polling and profile changes are deliberately not triggers.
 use chrono::{DateTime, Duration, Utc};
 use kegari_types::error::{Error, Result};
+use kegari_types::run::PhaseKey;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -283,13 +284,6 @@ impl Scheduler {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct PhaseKey {
-    pub work: String,
-    pub generation: String,
-    pub phase: String,
-    pub retry_grant: Option<Uuid>,
-}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AttemptRecord {

@@ -5,10 +5,10 @@ use crate::control::Lifecycle;
 use crate::control::MutationRequest;
 use crate::control::RemoteReservation;
 use crate::control::RunAdmission;
-use crate::control::RunReference;
 use kegari_control_api::identity::Actor;
 use kegari_providers::HttpTransport;
 use kegari_providers::{Credential, GithubClient, HttpPolicy, HttpRequest, HttpResponse};
+use kegari_types::run::RunReference;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn journal(root: &PrivateDir) -> Journal {
@@ -143,7 +143,7 @@ impl Fixture {
             workspace: Uuid::new_v4(),
             account: "component".into(),
             normalized_state: None,
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: "independent component".into(),
                 generation: bytes_digest(b"generation"),
                 phase: "independent_review".into(),

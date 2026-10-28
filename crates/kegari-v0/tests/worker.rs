@@ -1,5 +1,6 @@
 //! Production composition with deterministic provider/process observations only.
 //! Does not qualify OS confinement or launch any model/provider action.
+use kegari_types::run::RunReference;
 #[path = "support/pinned_git.rs"]
 mod pinned_git;
 include!("support/worker_fixture.rs");
@@ -942,7 +943,7 @@ fn native_fixture_run(
                     normalized_state: Some("in progress".into()),
                     workspace: id(3),
                     account: "fixture-account".into(),
-                    phase: kegari_v0::scheduler::PhaseKey {
+                    phase: kegari_types::run::PhaseKey {
                         work: prepared.contract().work_key().unwrap(),
                         generation: canonical_digest(
                             1,
@@ -1223,8 +1224,8 @@ async fn forced_worker_joins_actual_fixture_provider_before_confirming_local_exi
 
 #[test]
 fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_before_effects() {
+    use kegari_types::run::PhaseKey;
     use kegari_v0::runtime_workers::{LaunchRequest, SourceSelection};
-    use kegari_v0::scheduler::PhaseKey;
     for role in [
         AgentRole::Implementation,
         AgentRole::Coordination,
@@ -1560,10 +1561,11 @@ fn recovered_session_retains_earlier_intervention_and_rejects_wrong_account_or_m
 
 #[test]
 fn driver_preparation_identity_ignores_refresh_noise_without_resetting_phase_attempt() {
+    use kegari_types::run::PhaseKey;
     use kegari_v0::{
         runtime::WorkerAction,
         runtime_schedule::RunSchedule,
-        scheduler::{PhaseKey, ReadyWork, Trigger, WorkKind},
+        scheduler::{ReadyWork, Trigger, WorkKind},
     };
     let f = Fixture::new(AgentRole::Implementation);
     let gate = f
@@ -1986,7 +1988,11 @@ async fn protected_recovery_candidate_requires_actual_input_and_after_hook_and_f
                 .unwrap()
                 .is_some()
         );
-        assert!(RunReference::from_receipt(&metadata).unwrap().is_none());
+        assert!(
+            kegari_v0::control::run_reference_from_receipt(&metadata)
+                .unwrap()
+                .is_none()
+        );
         if scenario == "fenced" {
             f.control.fence(id).unwrap();
             assert_eq!(recovery.recover().await.unwrap_err().code, "access_denied");
@@ -2123,7 +2129,7 @@ fn ordinary_scoped_worker_does_not_enable_raw_protocol_capture() {
     let before = journal.records().unwrap();
     let params = json!({"threadId":"thread","turnId":"turn","callId":"outside-trial","tool":"unsupported","arguments":{"text":"must not be logged"}});
     f.worker
-        .observe_protocol(kegari_v0::codex::ProtocolObservation::ServerRequest {
+        .observe_protocol(kegari_codex::ProtocolObservation::ServerRequest {
             state: Some(&f.state),
             rpc_id: &json!(1),
             sequence: 1,

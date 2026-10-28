@@ -3,6 +3,7 @@
 //! All methods run under the existing Control gate; the mandatory final opaque
 //! callback supplies current native authority without network I/O or reentry.
 use super::*;
+use kegari_types::run::RunReference;
 #[path = "control_review_paired_result_admission.rs"]
 mod completed;
 use completed::retained_round_floor;
@@ -101,7 +102,7 @@ impl ControlHost {
         provenance: RoundResumeProvenance,
         fresh: impl FnOnce(&ControlSnapshot) -> Result<()>,
     ) -> Result<Permit> {
-        input.reference.validate()?;
+        crate::control::validate_run_reference(&input.reference)?;
         resume.validate()?;
         provenance.round.validate()?;
         provenance.resume.validate()?;
@@ -253,7 +254,7 @@ fn verify_origin(
     verify_original_sources(snapshot, round, receipts)?;
     let mut runs = BTreeMap::new();
     for receipt in receipts {
-        let Some(run) = RunReference::from_receipt(receipt)? else {
+        let Some(run) = crate::control::run_reference_from_receipt(receipt)? else {
             continue;
         };
         if run.workspace == round.workspace
@@ -447,13 +448,13 @@ fn verify_transient(receipt: &Receipt, reference: &ReviewRoundRecoveryReference)
         .as_ref()
         .and_then(|v| v.pointer("/observation/session"))
         .ok_or_else(|| round_error("paired failure has no terminal session"))?;
-    let state: crate::codex::SessionState = serde_json::from_value(raw.clone())
+    let state: kegari_codex::SessionState = serde_json::from_value(raw.clone())
         .map_err(|_| round_error("paired failed session is malformed"))?;
     let classification = match state.terminal_transient_failure()? {
-        Some(crate::codex::TransientTurnFailure::ServerOverloaded) => {
+        Some(kegari_codex::TransientTurnFailure::ServerOverloaded) => {
             TransientFailureCode::ServerOverloaded
         }
-        Some(crate::codex::TransientTurnFailure::InternalServerError) => {
+        Some(kegari_codex::TransientTurnFailure::InternalServerError) => {
             TransientFailureCode::InternalServerError
         }
         None => {

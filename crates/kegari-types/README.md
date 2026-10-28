@@ -5,15 +5,22 @@ This package owns the shared serialized data used by the CLI and backend:
 - `api`: `CommandName`, `CommandRequest` and `Envelope`.
 - `error`: `Error`, `Result`, error constructors and safe standard trait implementations.
 - `snapshot`: `Segment`, `Node` and `Page`.
+- `run`: `RunReference` and `PhaseKey`, preserving their existing serialized formats.
 
 Consumers import these types directly from `kegari_types`; the backend does not
 reexport them. CLI, controller, control API and backend depend directly on this package. The CLI
-also retains its temporary backend dependency.
+also retains its temporary backend dependency. Codex protocol state uses the shared
+run data directly.
 
 These data types do not grant authority or perform provider, filesystem or
 process operations. Command validation/classification and snapshot capture/reassembly belong to
 `kegari-control-api`. Current-operator authorization and exit-code mapping remain
-backend free functions.
+backend free functions. Run receipt parsing and validation also remain backend
+policy: replace `kegari_v0::control::RunReference` and
+`kegari_v0::scheduler::PhaseKey` imports with `kegari_types::run::{RunReference,
+PhaseKey}`, and replace `RunReference::from_receipt` with
+`kegari_v0::control::run_reference_from_receipt`. Deserializing run data does not
+validate admission or establish receipt lineage.
 Moving the types does not change their serialized schemas or turn deserialized
 data into verified execution or delivery evidence.
 

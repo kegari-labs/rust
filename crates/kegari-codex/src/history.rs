@@ -137,7 +137,7 @@ impl RecordedThreadHistory {
                 ));
             }
             if let Some(digest) = &turn.content_digest {
-                crate::evidence::validate_digest(digest)?;
+                crate::validate_digest(digest)?;
             }
             validate_failure(turn)?;
         }
@@ -191,8 +191,8 @@ impl RecordedThreadHistory {
 }
 fn validate_failure(turn: &RecordedTurn) -> Result<()> {
     if let Some(failure) = &turn.transient_failure {
-        crate::evidence::validate_digest(&failure.terminal_digest)?;
-        crate::evidence::validate_digest(&failure.error_digest)?;
+        crate::validate_digest(&failure.terminal_digest)?;
+        crate::validate_digest(&failure.error_digest)?;
         if turn.status != "failed"
             || !failure.policy_free
             || turn.content_digest.as_deref() != Some(failure.terminal_digest.as_str())

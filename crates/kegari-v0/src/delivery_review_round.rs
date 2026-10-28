@@ -7,16 +7,17 @@ use crate::{
     control::{
         FindingsReference, PreparationReference, ReceiptPhase, RepairValidationReference,
         ReviewReceiptReference, ReviewRoundCause, ReviewRoundReference, ReviewedSourceReference,
-        RunReference, TransientFailureCode,
+        TransientFailureCode,
     },
     decisions::VerifiedRetryGrant,
     instructions::AgentRole,
     runtime::VerifiedAuthorizedOutcome,
-    scheduler::PhaseKey,
     worker::{WorkerAuthority, WorkerContract},
     worker_run::{RunCompletion, RunOutcome},
 };
 use kegari_config::Config;
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 
 #[path = "delivery_review_validation.rs"]
 mod validation_lineage;
@@ -161,7 +162,7 @@ impl VerifiedReviewRoundPlan {
         match &self.basis {
             RoundBasis::Initial => {
                 for receipt in receipts {
-                    if RunReference::from_receipt(receipt)?
+                    if crate::control::run_reference_from_receipt(receipt)?
                         .is_some_and(|run| run.phase == self.reference.review_phase)
                     {
                         return Err(blocked("initial round already has a review session"));
@@ -842,8 +843,8 @@ impl DeliveryCoordinator {
                 .ok_or_else(|| blocked("review contract disappeared"))?,
         )?;
         let receipt = self.host.operation(completion.operation_id)?;
-        let run =
-            RunReference::from_receipt(&receipt)?.ok_or_else(|| blocked("review run missing"))?;
+        let run = crate::control::run_reference_from_receipt(&receipt)?
+            .ok_or_else(|| blocked("review run missing"))?;
         if receipt.expected != outcome.run_receipt().expected
             || run.instruction_digest != outcome.outcome().instruction_digest
         {
@@ -1359,7 +1360,7 @@ impl DeliveryCoordinator {
                 // so later immutable completion/publication cannot lose a link
                 // merely because current validation has legitimately advanced.
                 for observed in &receipts {
-                    if let Some(run) = RunReference::from_receipt(observed)?
+                    if let Some(run) = crate::control::run_reference_from_receipt(observed)?
                         && observed.runtime_id == reference.runtime
                         && run.workspace == reference.workspace
                         && run.phase.work == validation_run.phase.work
@@ -1473,8 +1474,8 @@ fn actual_receipt(receipts: &[Receipt], id: Uuid) -> Result<&Receipt> {
     Ok(value)
 }
 fn closed_run(receipt: &Receipt, outcome: &str) -> Result<RunReference> {
-    let run =
-        RunReference::from_receipt(receipt)?.ok_or_else(|| blocked("worker admission missing"))?;
+    let run = crate::control::run_reference_from_receipt(receipt)?
+        .ok_or_else(|| blocked("worker admission missing"))?;
     let observed = receipt
         .observed_result
         .as_ref()
@@ -1548,7 +1549,7 @@ fn inventory(receipts: &[Receipt], reference: &ReviewRoundReference) -> Result<S
     }
     let mut selected = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && receipt.runtime_id == reference.runtime
             && run.workspace == reference.workspace
             && run.phase.work == reference.review_phase.work
@@ -1570,7 +1571,7 @@ fn implementation_inventory(
     }
     let mut selected = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && receipt.runtime_id == reference.runtime
             && run.workspace == reference.workspace
             && run.phase.work == reference.review_phase.work
@@ -1599,7 +1600,7 @@ fn initial_reference(
     phase: PhaseKey,
     limit: u32,
 ) -> Result<ReviewRoundReference> {
-    let run = RunReference::from_receipt(source.claim.outcome().run_receipt())?
+    let run = crate::control::run_reference_from_receipt(source.claim.outcome().run_receipt())?
         .ok_or_else(|| blocked("source admitted account is missing"))?;
     let mut reference = ReviewRoundReference {
         schema_version: 1,
@@ -1673,10 +1674,10 @@ fn transient_cause(
     previous: &ReviewRoundReference,
 ) -> Result<ReviewRoundCause> {
     let classification = match failed.state.terminal_transient_failure()? {
-        Some(crate::codex::TransientTurnFailure::ServerOverloaded) => {
+        Some(kegari_codex::TransientTurnFailure::ServerOverloaded) => {
             TransientFailureCode::ServerOverloaded
         }
-        Some(crate::codex::TransientTurnFailure::InternalServerError) => {
+        Some(kegari_codex::TransientTurnFailure::InternalServerError) => {
             TransientFailureCode::InternalServerError
         }
         None => return Err(blocked("terminal review failure is not transient")),
@@ -1765,13 +1766,13 @@ fn require_latest_source(
         receipts,
         reference.dispatch_source().implementation.operation,
     )?;
-    let source = RunReference::from_receipt(current)?
+    let source = crate::control::run_reference_from_receipt(current)?
         .ok_or_else(|| blocked("source implementation admission missing"))?;
     if grants.iter().any(|grant| grant.phase() == &source.phase) {
         return Err(blocked("source implementation budget was superseded"));
     }
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && receipt.runtime_id == reference.runtime
             && run.workspace == reference.workspace
             && run.phase.work == source.phase.work

@@ -2,10 +2,11 @@
 //!
 //! Live execution requires a host authority lease and the real production broker.
 //! Recorded/replayed observations exercise graders only and cannot qualify behavior.
-use crate::codex::{SessionState, ToolBroker};
 use crate::instructions::{self, AgentRole, AssembledInstructions, AssemblyInput};
 use crate::isolation::{ExecutionRole, PathGrant, ValidatedIsolation};
 use chrono::Utc;
+use kegari_codex::SessionState;
+use kegari_codex::ToolBroker;
 use kegari_codex::{CodexProfile, EventKind, PermissionConfiguration, SessionBinding, ToolCall};
 use kegari_config::Profile;
 use kegari_digest::{bytes_digest, canonical_digest};
@@ -1329,7 +1330,7 @@ pub struct ObservedFacts {
     /// Only explicitly enabled declared protocol channels; missing legacy data
     /// is unknown, never an empty successful capture. No scoring authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub declared_protocol: Option<crate::codex::DeclaredProtocolObservation>,
+    pub declared_protocol: Option<kegari_codex::DeclaredProtocolObservation>,
     pub evidence_references: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1663,7 +1664,7 @@ pub struct TrialReport {
     /// Only explicitly enabled declared protocol channels; missing legacy data
     /// is unknown, never an empty successful capture. No scoring authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub declared_protocol: Option<crate::codex::DeclaredProtocolObservation>,
+    pub declared_protocol: Option<kegari_codex::DeclaredProtocolObservation>,
     pub evidence_references: Vec<String>,
     pub omissions: Vec<String>,
     pub unresolved_remote_effects: bool,
@@ -1806,7 +1807,7 @@ impl crate::worker_run::CorrectionBroker for AuditedHost<'_> {
     }
 }
 impl ToolBroker for AuditedHost<'_> {
-    fn observe_protocol(&mut self, event: crate::codex::ProtocolObservation<'_>) {
+    fn observe_protocol(&mut self, event: kegari_codex::ProtocolObservation<'_>) {
         // Attempt observation must survive lease/intervention rejection. This
         // does not invoke a tool, renew the lease or change its authorization.
         self.host.observe_protocol(event);
@@ -2133,8 +2134,10 @@ pub(crate) async fn run_live_trial_until(
         operation.isolation,
         &operation.assembled.manifest.permissions,
     )?;
-    let effective =
-        crate::codex::permission_configuration(operation.isolation, &operation.fixture.codex_home)?;
+    let effective = crate::codex_host::permission_configuration(
+        operation.isolation,
+        &operation.fixture.codex_home,
+    )?;
     if operation.permissions.settings != effective.settings
         || operation.permissions.profile_id != effective.profile_id
         || operation.assembled.manifest.prompt_digest
@@ -2334,7 +2337,8 @@ pub(crate) async fn run_live_trial_until(
         client = Some(spawned);
         let client = client
             .as_mut()
-            .ok_or_else(|| Error::invalid("adapter unavailable"))?;
+            .ok_or_else(|| Error::invalid("adapter unavailable"))?
+            .client_mut();
         client.initialize_observed(&mut audited).await?;
         client
             .verify_account_observed(&profile.account_id, &mut audited)
@@ -2518,20 +2522,21 @@ pub(crate) async fn run_live_trial_until(
         let error = client.terminate().await.err();
         if callback_drained {
             let end = client
+                .client_mut()
                 .observe_declared_tail(&mut state, &mut *audited.host, collection_deadline)
                 .await;
             audited
                 .host
-                .observe_protocol(crate::codex::ProtocolObservation::TransportEnd {
+                .observe_protocol(kegari_codex::ProtocolObservation::TransportEnd {
                     state: &state,
                     end: &end,
                 });
             if tokio::time::Instant::now() >= collection_deadline {
                 audited
                     .host
-                    .observe_protocol(crate::codex::ProtocolObservation::Issue {
+                    .observe_protocol(kegari_codex::ProtocolObservation::Issue {
                         state: Some(&state),
-                        issue: crate::codex::ProtocolCaptureIssue::CollectionDeadline,
+                        issue: kegari_codex::ProtocolCaptureIssue::CollectionDeadline,
                     });
             }
         }
@@ -2598,7 +2603,7 @@ pub(crate) async fn run_live_trial_until(
         report.unresolved_remote_effects = true;
     }
     if let Some(client) = client.as_mut() {
-        for event in client.drain_events() {
+        for event in client.client_mut().drain_events() {
             if report.trace.len() >= MAX_FILES {
                 report.outcome = TrialOutcome::Failed;
                 report.reason = "trace bound exhausted".into();
@@ -2689,11 +2694,11 @@ pub(crate) async fn run_live_trial_until(
     cancellation.disarm();
     audited
         .host
-        .observe_protocol(crate::codex::ProtocolObservation::AdapterInventory {
+        .observe_protocol(kegari_codex::ProtocolObservation::AdapterInventory {
             state: &state,
             processed_requests: client
-                .as_ref()
-                .map(|client| client.observed_server_request_count()),
+                .as_mut()
+                .map(|client| client.client_mut().observed_server_request_count()),
         });
     let canary_diagnostic = operation
         .fixture

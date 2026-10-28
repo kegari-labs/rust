@@ -2,6 +2,7 @@
 //! an active registration or authorizes worker work.
 use super::*;
 use crate::evaluation::IndependentBoundaryIdentity;
+use kegari_types::run::RunReference;
 impl RuntimeCoordinator {
     pub(super) fn observe_registered_independent_boundary(
         &self,

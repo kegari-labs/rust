@@ -9,7 +9,6 @@ use crate::control::Permit;
 use crate::control::PreparationAdmission;
 use crate::control::PreparationReference;
 use crate::control::RunAdmission;
-use crate::control::RunReference;
 use crate::execution::DirectoryIdentity;
 use crate::execution::ExecutionBinding;
 use crate::execution::ExecutionLimits;
@@ -38,7 +37,6 @@ use crate::isolation::PathGrant;
 use crate::isolation::ValidatedIsolation;
 use crate::providers::ProviderBroker;
 use crate::runtime::RuntimeCoordinator;
-use crate::scheduler::PhaseKey;
 use crate::worker::ReadResource;
 use crate::worker::ReviewTarget;
 use crate::worker::WorkerAuthority;
@@ -59,6 +57,8 @@ use kegari_control_api::identity::Actor;
 use kegari_digest::canonical_digest;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -2618,7 +2618,7 @@ mod source_tests {
                 worker_operation: Uuid::new_v4(),
                 workspace: Uuid::new_v4(),
                 account: "fixture".into(),
-                phase: crate::scheduler::PhaseKey {
+                phase: kegari_types::run::PhaseKey {
                     work: "fixture_work".into(),
                     generation: canonical_digest(1, &"generation").unwrap(),
                     phase: "implementation".into(),

@@ -2,6 +2,7 @@
 //! are not execution capabilities; the runtime must supply the opaque provider,
 //! instruction and directory proofs again inside the final admission predicate.
 use super::*;
+use kegari_types::run::RunReference;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,7 +53,7 @@ impl RunResumeReference {
         if paired.is_some() {
             return Ok(Some(value));
         }
-        let run = RunReference::from_receipt(receipt)?
+        let run = crate::control::run_reference_from_receipt(receipt)?
             .ok_or_else(|| Error::new("record_corrupt", "session resume is not an admitted run"))?;
         if run.attempt < 2
             || receipt.operation_id == value.predecessor
@@ -92,7 +93,7 @@ impl ControlHost {
         resume: RunResumeReference,
         fresh: impl FnOnce(&ControlSnapshot) -> Result<()>,
     ) -> Result<Permit> {
-        input.reference.validate()?;
+        crate::control::validate_run_reference(&input.reference)?;
         resume.validate()?;
         if input.request_id == resume.predecessor || input.work_key != input.reference.phase.work {
             return Err(Error::new(
@@ -154,7 +155,7 @@ impl ControlHost {
         let mut caps = (run.max_attempts, run.max_turns, run.max_review_rounds);
         let mut consumed_rounds = 0;
         for receipt in history.values() {
-            let prior = RunReference::from_receipt(receipt)?
+            let prior = crate::control::run_reference_from_receipt(receipt)?
                 .ok_or_else(|| Error::new("record_corrupt", "resume history lacks its run"))?;
             if receipt.runtime_id != snapshot.intent.runtime_id
                 || prior.workspace != run.workspace
@@ -309,7 +310,7 @@ mod tests {
             workspace: Uuid::new_v4(),
             account: "fixture-account".into(),
             normalized_state: None,
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: "work".into(),
                 generation: digest("generation"),
                 phase: "implementation".into(),
@@ -538,10 +539,12 @@ mod tests {
             .admit_run_resumed_observed(&lease, input(run), proof, |_| Ok(()))
             .unwrap();
         assert_eq!(
-            RunReference::from_receipt(&host.operation(permit.operation_id).unwrap())
-                .unwrap()
-                .unwrap()
-                .attempt,
+            crate::control::run_reference_from_receipt(
+                &host.operation(permit.operation_id).unwrap()
+            )
+            .unwrap()
+            .unwrap()
+            .attempt,
             3
         );
     }

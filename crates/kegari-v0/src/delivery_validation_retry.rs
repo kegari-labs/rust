@@ -16,13 +16,14 @@ pub(crate) use passed::{ConsumedValidationSuccessor, VerifiedPassedValidation};
 // and explicitly granted configured caps before every additional session.
 const MAX_VALIDATION_HISTORY_RECEIPTS: usize = 65_536;
 use crate::{
-    control::{ReceiptPhase, RunReference},
+    control::ReceiptPhase,
     decisions::VerifiedRetryGrant,
     instructions::AgentRole,
-    scheduler::PhaseKey,
     worker::{WorkerAuthority, WorkerContract},
     worker_run::{RunCompletion, RunOutcome},
 };
+use kegari_types::run::PhaseKey;
+use kegari_types::run::RunReference;
 
 #[derive(Clone)]
 pub struct ValidationRetryWork {
@@ -32,7 +33,7 @@ pub struct ValidationRetryWork {
     failed: Arc<RunCompletion>,
     reference: RunReference,
     origin_reference: RunReference,
-    transient_failure: Option<crate::codex::TransientTurnFailure>,
+    transient_failure: Option<kegari_codex::TransientTurnFailure>,
     receipt: Receipt,
     receipt_digest: String,
     inventory_digest: String,
@@ -255,7 +256,7 @@ impl ValidationRetryWork {
     ) -> Result<()> {
         let receipt = unique_receipt(receipts, operation)?;
         source_lineage::require_plain_retry(receipt)?;
-        let run = RunReference::from_receipt(receipt)?.ok_or_else(|| {
+        let run = crate::control::run_reference_from_receipt(receipt)?.ok_or_else(|| {
             Error::new(
                 "worker_binding",
                 "validation retry launch is not a model admission",
@@ -320,7 +321,7 @@ impl ValidationRetryWork {
     ) -> Result<()> {
         let receipt = unique_receipt(receipts, operation)?;
         source_lineage::require_plain_retry(receipt)?;
-        let run = RunReference::from_receipt(receipt)?
+        let run = crate::control::run_reference_from_receipt(receipt)?
             .ok_or_else(|| Error::new("worker_binding", "retried validation lacks actual run"))?;
         let result = receipt.observed_result.as_ref();
         self.verify_admitted_header(receipt, &run)?;
@@ -387,7 +388,7 @@ impl ValidationRetryWork {
         let mut ancestral = Vec::new();
         let mut granted = Vec::new();
         for receipt in receipts {
-            match RunReference::from_receipt(receipt)? {
+            match crate::control::run_reference_from_receipt(receipt)? {
                 Some(run) if run.phase == self.phase => granted.push((receipt, run)),
                 _ => ancestral.push(receipt.clone()),
             }
@@ -621,7 +622,7 @@ impl DeliveryCoordinator {
         let receipts = self.host.operations()?;
         proof.verify_completed_inventory(&receipts, grants, completion.operation_id)?;
         let receipt = self.host.operation(completion.operation_id)?;
-        let reference = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+        let reference = crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| {
             Error::new("worker_binding", "completed validation admission missing")
         })?;
         bound_completion(proof.assignment(), completion, &receipt, &reference)?;
@@ -730,7 +731,7 @@ impl DeliveryCoordinator {
                 "joined failed validation differs from protected terminal observation",
             ));
         }
-        let reference = RunReference::from_receipt(&receipt)?
+        let reference = crate::control::run_reference_from_receipt(&receipt)?
             .ok_or_else(|| Error::new("worker_binding", "failed validation lacks admission"))?;
         if receipt.runtime_id != request.admission.scope.runtime_id {
             return Err(Error::new("worker_binding", "validation runtime differs"));
@@ -968,7 +969,7 @@ fn validation_inventory(
 ) -> Result<String> {
     let mut inventory = BTreeMap::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && same_group(runtime, reference, receipt, &run)
             && inventory.insert(receipt.operation_id, receipt).is_some()
         {
@@ -1022,7 +1023,7 @@ fn verify_lineage(
         }
         let mut prior = BTreeMap::new();
         for receipt in receipts {
-            if let Some(run) = RunReference::from_receipt(receipt)?
+            if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
                 && run.phase == *phase
                 && same_group(runtime, reference, receipt, &run)
             {
@@ -1069,7 +1070,7 @@ fn verify_lineage(
             }
             None => {
                 for receipt in receipts {
-                    if let Some(run) = RunReference::from_receipt(receipt)?
+                    if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
                         && same_group(runtime, reference, receipt, &run)
                         && (!phases.contains(&canonical_digest(1, &run.phase)?)
                             || run.phase == reference.phase && run.attempt > reference.attempt)

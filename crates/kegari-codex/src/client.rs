@@ -1,630 +1,15 @@
-//! Codex session, authorization and owned-process integration. Protocol I/O is
-//! supplied by `kegari-codex`; provider messages are data, never authority.
-use crate::isolation::ValidatedIsolation;
-use kegari_codex::{
-    CodexConnectionMetadata, EventKind, PROTOCOL_PROFILE, PermissionConfiguration,
-    ProviderIntervention, RpcMessage, RpcTransport, SUPPORTED_CODEX_VERSION, SessionBinding,
-    SessionEvent, ToolCall, TransportRead, UsageLedger,
-};
-use kegari_digest::canonical_digest;
-use kegari_types::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::future::Future;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::process::Stdio;
-use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
-use tokio::process::{Child, Command};
-use tokio::time::{Instant, timeout_at};
+//! Stream RPC client and protocol policy; native ownership stays with the host.
+use super::*;
 
-#[path = "codex_history.rs"]
-mod history;
-pub use history::RecordedThreadHistory;
-#[path = "codex_observation.rs"]
-mod observation;
-#[path = "codex_transport_observation.rs"]
-mod transport_observation;
-pub use observation::{
-    DeclaredProtocolObservation, ProtocolCaptureIssue, ProtocolCaptureState, ProtocolObservation,
-    ProtocolRecordReference, ProtocolTransportEndDiagnostic,
-};
-pub(crate) use observation::{ProtocolCapture, ProtocolOperationBinding};
-use transport_observation::ObservationOnlyDeny;
-pub use transport_observation::ProtocolTransportEnd;
-#[path = "codex_resume.rs"]
-mod resume;
-pub use resume::{
-    RetainedResumeSession, SessionResumeOrigin, SubmissionHistory, TransientTurnFailure,
-    VerifiedThreadRecovery,
-};
-
-/// The installed binary that actually returned the pinned version. Construction
-/// is read-only metadata probing; native session launch still needs a host gate.
-pub struct VerifiedCodexExecutable(kegari_platform::BinaryIdentity);
-const MAX_PENDING_EVENTS: usize = 4096;
-
-pub fn permission_configuration(
-    isolation: &ValidatedIsolation,
-    codex_home: &Path,
-) -> Result<PermissionConfiguration> {
-    isolation.revalidate()?;
-    let p = isolation.plan();
-    let home = codex_home
-        .canonicalize()
-        .map_err(|e| Error::io("resolve isolated Codex home", e))?;
-    if p.repository.starts_with(&home)
-        || home.starts_with(&p.repository)
-        || home.starts_with(&p.scratch)
-        || p.read_roots
-            .iter()
-            .chain(p.source_writes.iter())
-            .chain(p.resource_writes.iter())
-            .any(|g| g.path.starts_with(&home) || home.starts_with(&g.path))
-    {
-        return Err(Error::new(
-            "scope_violation",
-            "Codex authentication home must be outside worker access",
-        ));
-    }
-    let profile_id = format!(
-        "kegari_{}",
-        isolation.digest().rsplit(':').next().unwrap_or_default()
-    );
-    let mut fs = BTreeMap::<String, Value>::from([
-        (":root".into(), json!("deny")),
-        (":minimal".into(), json!("read")),
-        (":slash_tmp".into(), json!("deny")),
-        (":tmpdir".into(), json!("deny")),
-    ]);
-    fs.insert(p.repository.to_string_lossy().into_owned(), json!("read"));
-    fs.insert(p.scratch.to_string_lossy().into_owned(), json!("write"));
-    for grant in &p.read_roots {
-        fs.insert(grant.path.to_string_lossy().into_owned(), json!("read"));
-    }
-    for grant in p.source_writes.iter().chain(p.resource_writes.iter()) {
-        fs.insert(grant.path.to_string_lossy().into_owned(), json!("write"));
-    }
-    // Scope grants cannot reopen privileged roots because IsolationPlan rejects overlap.
-    for forbidden in p.forbidden_roots.iter().chain(std::iter::once(&home)) {
-        fs.insert(forbidden.to_string_lossy().into_owned(), json!("deny"));
-    }
-    for folder in [".git", ".codex", ".agents"] {
-        fs.insert(
-            p.repository.join(folder).to_string_lossy().into_owned(),
-            json!("read"),
-        );
-    }
-    fs.insert(
-        p.repository.join(".aws").to_string_lossy().into_owned(),
-        json!("deny"),
-    );
-    let mut permissions = BTreeMap::new();
-    permissions.insert(
-        profile_id.clone(),
-        json!({"filesystem":fs,"network":{"enabled":false}}),
-    );
-    Ok(PermissionConfiguration {
-        profile_id: profile_id.clone(),
-        isolation_digest: isolation.digest().into(),
-        settings: json!({
-            "default_permissions":profile_id, "permissions":permissions,
-            "approval_policy":"never", "approvals_reviewer":"user", "web_search":"disabled", "forced_login_method":"chatgpt",
-            "apps":{"_default":{"enabled":false,"default_tools_enabled":false}},
-            "features":{"apps":false,"plugins":false,"browser_use":false,"browser_use_external":false,
-                "computer_use":false,"in_app_browser":false,"image_generation":false,"multi_agent":false,
-                "shell_tool":false,"code_mode":false,"memories":false,"hooks":false,
-                "skill_mcp_dependency_install":false,"request_permissions_tool":false},
-            "shell_environment_policy":{"inherit":"none","include_only":[],"set":{"HOME":p.scratch,"TMPDIR":p.scratch,"PATH":"/usr/bin:/bin:/usr/sbin:/sbin"}}
-        }),
-    })
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SessionState {
-    pub schema_version: u32,
-    pub binding: SessionBinding,
-    pub thread_id: Option<String>,
-    pub turn_id: Option<String>,
-    /// Known acknowledged turn whose terminal provider outcome was not
-    /// observed before interruption. Process exit cannot erase its identity.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unresolved_turn: Option<String>,
-    pub turns_started: u32,
-    pub max_turns: u32,
-    pub correction_required: u64,
-    pub correction_consumed: u64,
-    pub intervention: Option<ProviderIntervention>,
-    pub input_required: bool,
-    pub terminal: Option<String>,
-    pub completed_turns: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_completed_turn: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_history: Option<RecordedThreadHistory>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub submissions: Option<SubmissionHistory>,
-    /// Immutable predecessor provenance; historical turns and totals stay in
-    /// their original protected session rather than being relabelled here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resume_origin: Option<resume::SessionResumeOrigin>,
-    pub provider_instruction_sources: Vec<String>,
-    pub advertised_tools: BTreeSet<String>,
-    pub reconciliation_digest: Option<String>,
-    pub usage: UsageLedger,
-}
-impl SessionState {
-    pub fn new(binding: SessionBinding, max_turns: u32) -> Result<Self> {
-        binding.validate()?;
-        if max_turns == 0 {
-            return Err(Error::invalid("max_turns must be positive"));
-        }
-        Ok(Self {
-            schema_version: 1,
-            binding,
-            thread_id: None,
-            turn_id: None,
-            unresolved_turn: None,
-            turns_started: 0,
-            max_turns,
-            correction_required: 0,
-            correction_consumed: 0,
-            intervention: None,
-            input_required: false,
-            terminal: None,
-            completed_turns: BTreeMap::new(),
-            last_completed_turn: None,
-            provider_history: Some(RecordedThreadHistory::default()),
-            submissions: Some(SubmissionHistory::default()),
-            resume_origin: None,
-            provider_instruction_sources: Vec::new(),
-            advertised_tools: BTreeSet::new(),
-            reconciliation_digest: None,
-            usage: UsageLedger::default(),
-        })
-    }
-    pub fn restore(bytes: &[u8]) -> Result<Self> {
-        let state: Self = serde_json::from_slice(bytes)
-            .map_err(|_| Error::new("corrupt_receipt", "invalid provider recovery state"))?;
-        state.binding.validate()?;
-        if state.schema_version != 1
-            || state.max_turns == 0
-            || state.turns_started > state.max_turns
-            || state.correction_consumed > state.correction_required
-            || state.unresolved_turn.as_ref().is_some_and(|id| {
-                id.is_empty()
-                    || state.completed_turns.contains_key(id)
-                    || state.turn_id.as_ref().is_some_and(|active| active != id)
-            })
-            || state.completed_turns.len() > state.max_turns as usize
-            || state
-                .last_completed_turn
-                .as_ref()
-                .is_some_and(|id| !state.completed_turns.contains_key(id))
-        {
-            return Err(Error::new(
-                "corrupt_receipt",
-                "inconsistent provider recovery state",
-            ));
-        }
-        if let Some(history) = &state.provider_history {
-            history.validate(&state.completed_turns, state.last_completed_turn.as_deref())?;
-        }
-        if let Some(submissions) = &state.submissions {
-            submissions.validate(&state)?;
-        }
-        if let Some(origin) = &state.resume_origin {
-            origin.validate(&state)?;
-        }
-        Ok(state)
-    }
-    pub fn next_turn_allowed(&self) -> Result<()> {
-        if self.intervention.is_some() {
-            return Err(Error::new(
-                "provider_intervention",
-                "provider resolution required before any retry, new turn or replacement session",
-            ));
-        }
-        if self.input_required {
-            return Err(Error::new(
-                "input_required",
-                "work requires planning resolution",
-            ));
-        }
-        if self.turn_id.is_some() {
-            return Err(Error::new(
-                "turn_active",
-                "an existing turn must finish or be interrupted",
-            ));
-        }
-        if self.unresolved_turn.is_some() {
-            return Err(Error::new(
-                "reconciliation_required",
-                "known interrupted provider turn has no terminal reconciliation",
-            ));
-        }
-        if self.turns_started >= self.max_turns {
-            return Err(Error::new(
-                "turn_budget_exhausted",
-                "session turn bound reached",
-            ));
-        }
-        Ok(())
-    }
-    pub fn observe_correction(&mut self, watermark: u64) {
-        self.correction_required = self.correction_required.max(watermark);
-    }
-    pub fn acknowledge_correction(&mut self, watermark: u64) -> Result<()> {
-        if watermark > self.correction_required {
-            return Err(Error::new(
-                "stale_result",
-                "worker claims an unknown correction watermark",
-            ));
-        }
-        self.correction_consumed = self.correction_consumed.max(watermark);
-        Ok(())
-    }
-    pub fn completion_is_current(&self) -> bool {
-        self.terminal.as_deref() == Some("completed")
-            && self.unresolved_turn.is_none()
-            && self.correction_consumed == self.correction_required
-            && self.intervention.is_none()
-            && !self.input_required
-    }
-    pub fn interruption(&mut self, reason: &str) -> SessionEvent {
-        if self.intervention.is_none() {
-            self.terminal = Some("interrupted".into());
-        }
-        if let Some(turn) = self.turn_id.take() {
-            self.unresolved_turn = Some(turn);
-        }
-        SessionEvent::new(
-            if self.intervention.is_some() {
-                EventKind::ProviderIntervention
-            } else {
-                EventKind::ProcessExit
-            },
-            reason,
-            self.thread_id.clone(),
-            self.unresolved_turn.clone(),
-            json!({"outcome":if self.intervention.is_some(){"blocked"}else{"interrupted"}}),
-        )
-    }
-    fn block_provider(&mut self, method: &str, params: &Value, reason: &str) -> Result<()> {
-        let thread = required_str(params, "threadId")?;
-        let turn = required_str(params, "turnId")?;
-        if self.thread_id.as_deref() != Some(thread) {
-            return Err(Error::new(
-                "protocol_error",
-                "provider event belongs to another thread",
-            ));
-        }
-        if self.intervention.is_none() {
-            self.intervention=Some(ProviderIntervention{schema_version:1,account_id:self.binding.account_id.clone(),thread_id:thread.into(),turn_id:turn.into(),source_method:method.into(),reason_code:reason.into(),required_resolution:"Resolve through the provider's supported verification/policy process; record verified resolution before readmission. A new thread or account cannot bypass this hold.".into(),observed_at:chrono::Utc::now().to_rfc3339(),source_digest:canonical_digest(1,params)?});
-        }
-        self.terminal = Some("blocked".into());
-        Ok(())
-    }
-    fn require_new_turn_identity(&self, id: &str) -> Result<()> {
-        if self
-            .resume_origin
-            .as_ref()
-            .is_some_and(|origin| origin.historical_turns.contains(id))
-        {
-            return Err(Error::new(
-                "historical_turn_replay",
-                "provider reused a retained historical turn in the new session",
-            ));
-        }
-        Ok(())
-    }
-    /// Provider observation only. Retry authority additionally requires the
-    /// actual joined completion and its unchanged protected admission receipt.
-    pub fn terminal_transient_failure(&self) -> Result<Option<TransientTurnFailure>> {
-        if self.terminal.as_deref() != Some("failed")
-            || self.turn_id.is_some()
-            || self.unresolved_turn.is_some()
-            || self.intervention.is_some()
-            || self.input_required
-        {
-            return Ok(None);
-        }
-        let Some(last) = self.last_completed_turn.as_deref().filter(|last| {
-            self.completed_turns
-                .get(*last)
-                .is_some_and(|status| status == "failed")
-        }) else {
-            return Ok(None);
-        };
-        self.provider_history
-            .as_ref()
-            .map(|history| history.terminal_transient_failure(last))
-            .transpose()
-            .map(Option::flatten)
-    }
-    fn observe_turn_policy(&mut self, method: &str, turn: &Value) -> Result<()> {
-        if let Some(error) = turn.get("error").filter(|v| !v.is_null()) {
-            let code = error
-                .get("codexErrorInfo")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if [
-                "cyberPolicy",
-                "misalignmentPolicyViolation",
-                "tooManyDenials",
-            ]
-            .contains(&code)
-                || error.get("misalignment").is_some_and(|v| !v.is_null())
-            {
-                let params = json!({"threadId":self.thread_id,"turnId":required_str(turn,"id")?,"error":error});
-                self.block_provider(method, &params, code)?;
-            }
-        }
-        Ok(())
-    }
-    pub fn notification(&mut self, method: &str, params: &Value) -> Result<SessionEvent> {
-        let thread = params
-            .get("threadId")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let turn = params
-            .get("turnId")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        if let Some(id) = &thread
-            && self.thread_id.as_ref().is_some_and(|t| t != id)
-        {
-            return Err(Error::new(
-                "protocol_error",
-                "notification crosses bound thread",
-            ));
-        }
-        let mut kind = EventKind::Notification;
-        let mut data = Value::Null;
-        match method {
-            "model/verification" => {
-                let verifications = params
-                    .get("verifications")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| {
-                        Error::new(
-                            "protocol_error",
-                            "verification notification missing classifications",
-                        )
-                    })?;
-                if verifications.is_empty() {
-                    return Err(Error::new(
-                        "protocol_error",
-                        "empty verification does not establish resolution",
-                    ));
-                }
-                if !verifications.iter().all(Value::is_string) {
-                    return Err(Error::new(
-                        "protocol_error",
-                        "invalid verification classifications",
-                    ));
-                }
-                self.block_provider(method, params, "verification_required")?;
-                kind = EventKind::ProviderIntervention;
-            }
-            "error" => {
-                required_str(params, "threadId")?;
-                required_str(params, "turnId")?;
-                if !params.get("willRetry").is_some_and(Value::is_boolean) {
-                    return Err(Error::new(
-                        "protocol_error",
-                        "error event missing willRetry",
-                    ));
-                }
-                let error = params
-                    .get("error")
-                    .ok_or_else(|| Error::new("protocol_error", "error event missing error"))?;
-                required_str(error, "message")?;
-                let code = error
-                    .get("codexErrorInfo")
-                    .and_then(Value::as_str)
-                    .unwrap_or("provider_error");
-                if [
-                    "cyberPolicy",
-                    "misalignmentPolicyViolation",
-                    "tooManyDenials",
-                ]
-                .contains(&code)
-                    || error.get("misalignment").is_some_and(|v| !v.is_null())
-                {
-                    self.block_provider(method, params, code)?;
-                    kind = EventKind::ProviderIntervention;
-                } else {
-                    kind = EventKind::TurnFailed;
-                    data = json!({"code":code,"will_retry":params["willRetry"]});
-                }
-            }
-            "model/safetyBuffering/updated" => {
-                required_str(params, "threadId")?;
-                required_str(params, "turnId")?;
-                required_str(params, "model")?;
-                if !params.get("showBufferingUi").is_some_and(Value::is_boolean)
-                    || !params.get("reasons").is_some_and(Value::is_array)
-                    || !params.get("useCases").is_some_and(Value::is_array)
-                {
-                    return Err(Error::new("protocol_error", "malformed buffering event"));
-                }
-                data = json!({"transient_buffering":params["showBufferingUi"]});
-            }
-            "turn/started" => {
-                let t = params
-                    .get("turn")
-                    .ok_or_else(|| Error::new("protocol_error", "turn event lacks turn"))?;
-                let id = required_str(t, "id")?;
-                self.observe_turn_policy(method, t)?;
-                self.require_new_turn_identity(id)?;
-                if self.completed_turns.contains_key(id) {
-                    return Ok(SessionEvent::new(
-                        EventKind::Notification,
-                        method,
-                        thread,
-                        turn,
-                        json!({"duplicate":true}),
-                    ));
-                }
-                if self.turn_id.as_deref().is_some_and(|old| old != id) {
-                    return Err(Error::new("protocol_error", "unexpected concurrent turn"));
-                }
-                if self.unresolved_turn.as_deref().is_some_and(|old| old != id) {
-                    return Err(Error::new(
-                        "protocol_error",
-                        "new turn cannot replace an unresolved known turn",
-                    ));
-                }
-                self.turn_id = Some(id.into());
-                kind = EventKind::TurnStarted;
-            }
-            "turn/completed" => {
-                let t = params
-                    .get("turn")
-                    .ok_or_else(|| Error::new("protocol_error", "completion lacks turn"))?;
-                let id = required_str(t, "id")?;
-                // Actual same-thread policy signals remain authoritative even
-                // when the surrounding turn is duplicate, late or malformed.
-                // Ordinary outcome/history validation must not erase this hold.
-                self.observe_turn_policy(method, t)?;
-                self.require_new_turn_identity(id)?;
-                let status = required_str(t, "status")?;
-                if let Some(previous) = self.completed_turns.get(id) {
-                    if previous != status {
-                        return Err(Error::new(
-                            "protocol_error",
-                            "duplicate terminal event changed its outcome",
-                        ));
-                    }
-                    if let Some(history) = &mut self.provider_history {
-                        history.observe(t)?;
-                    }
-                    return Ok(SessionEvent::new(
-                        if self.intervention.is_some() {
-                            EventKind::ProviderIntervention
-                        } else {
-                            EventKind::Notification
-                        },
-                        method,
-                        thread,
-                        turn,
-                        json!({"duplicate":true}),
-                    ));
-                }
-                if self.turn_id.as_deref() != Some(id)
-                    && self.unresolved_turn.as_deref() != Some(id)
-                {
-                    return Err(Error::new(
-                        "protocol_error",
-                        "completion is not for the active turn",
-                    ));
-                }
-                let status = required_str(t, "status")?;
-                if !["completed", "failed", "interrupted"].contains(&status) {
-                    return Err(Error::new(
-                        "protocol_error",
-                        "completion has nonterminal status",
-                    ));
-                }
-                if let Some(history) = &mut self.provider_history {
-                    history.observe(t)?;
-                }
-                if self.intervention.is_none() {
-                    self.terminal = Some(status.into());
-                }
-                self.turn_id = None;
-                self.unresolved_turn = None;
-                self.completed_turns.insert(id.into(), status.into());
-                self.last_completed_turn = Some(id.into());
-                kind = if self.intervention.is_some() {
-                    EventKind::ProviderIntervention
-                } else {
-                    match status {
-                        "completed" => EventKind::TurnCompleted,
-                        "interrupted" => EventKind::TurnCancelled,
-                        _ => EventKind::TurnFailed,
-                    }
-                };
-                data = json!({"status":status,"turn_id":id});
-            }
-            "thread/tokenUsage/updated" => {
-                let t = required_str(params, "threadId")?;
-                let usage_turn = required_str(params, "turnId")?;
-                let total = params
-                    .pointer("/tokenUsage/total/totalTokens")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| {
-                        Error::new("protocol_error", "invalid cumulative token counter")
-                    })?;
-                let known_turn = self.turn_id.as_deref() == Some(usage_turn)
-                    || self.unresolved_turn.as_deref() == Some(usage_turn)
-                    || self.completed_turns.contains_key(usage_turn);
-                let key = format!("{}\0{t}", self.binding.account_id);
-                let unqualified_boundary = self.resume_origin.is_some()
-                    && known_turn
-                    && self
-                        .usage
-                        .prior_unattributed_usage
-                        .get(&key)
-                        .is_none_or(|usage| usage.first_new_turn_boundary.is_none());
-                if self.resume_origin.is_some() && (!known_turn || unqualified_boundary) {
-                    let timing_unknown = self.turns_started != 0 || unqualified_boundary;
-                    let monotone = self
-                        .usage
-                        .cumulative_baselines
-                        .get(&key)
-                        .is_none_or(|previous| total >= *previous);
-                    self.usage.observe_resume_baseline(
-                        &self.binding.account_id,
-                        t,
-                        total,
-                        timing_unknown,
-                    );
-                    if unqualified_boundary && monotone {
-                        self.usage
-                            .prior_unattributed_usage
-                            .entry(key.clone())
-                            .or_default()
-                            .first_new_turn_boundary = Some(total);
-                    }
-                    data = json!({"turn_id":usage_turn,"observed_delta":0,"cumulative_total":total,"baseline_only":true,"timing_unknown":timing_unknown,"unqualified_resume_boundary":unqualified_boundary,"prior_unattributed_usage":self.usage.prior_unattributed_usage.get(&key)});
-                } else {
-                    let delta = self
-                        .usage
-                        .observe(&self.binding.account_id, t, total, false);
-                    data = json!({"turn_id":usage_turn,"observed_delta":delta,"cumulative_total":total,"baseline_only":false});
-                }
-            }
-            "model/rerouted" => {
-                self.input_required = true;
-                self.terminal = Some("blocked".into());
-                kind = EventKind::ModelChanged;
-                data = json!({"code":"unsupported_profile","reason":"provider changed the selected model"});
-            }
-            _ => {}
-        }
-        Ok(SessionEvent::new(kind, method, thread, turn, data))
-    }
-}
-
-fn required_str<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
-    v.get(key)
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| Error::new("protocol_error", format!("missing or invalid {key}")))
+/// Trusted-host revalidation callback, not a serialized grant or native proof.
+/// Production host admission continues to require its concrete validated scope.
+pub trait SessionScope: Sync {
+    fn revalidate(&self) -> Result<()>;
+    fn cwd(&self) -> &Path;
+    fn isolation_digest(&self) -> &str;
 }
 
 pub trait ToolBroker: Send {
-    /// Explicit declared-evaluation opt-in only. It grants no permissions.
-    fn begin_evaluation_protocol_observation(
-        &mut self,
-        _declaration: &crate::evaluation::DeclaredProtocolTrial,
-    ) {
-    }
     /// Diagnostic callback before filtering or after terminal validation. No
     /// error return: capture failure cannot change dispatch or erase its hold.
     fn observe_protocol(&mut self, _event: ProtocolObservation<'_>) {}
@@ -638,7 +23,7 @@ pub trait ToolBroker: Send {
         call: &'a ToolCall,
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
 }
-fn checkpoint_notification(
+pub(super) fn checkpoint_notification(
     state: &mut SessionState,
     broker: &mut dyn ToolBroker,
     method: &str,
@@ -731,8 +116,6 @@ impl ToolBroker for DenyTools {
     }
 }
 
-/// The transport accepts injected duplex pipes for deterministic protocol tests.
-/// Production construction is `spawn`, which pins the executable/profile.
 /// Production worker request boundary. Only the bounded pipe write is performed
 /// inside dispatch; provider responses and dynamic tools are handled afterward.
 /// Read-only metadata and owned cancellation do not enter this mutation hook.
@@ -754,25 +137,23 @@ fn changes_session(method: &str) -> bool {
     )
 }
 pub struct RpcClient {
-    transport: RpcTransport,
-    events: VecDeque<SessionEvent>,
-    next_id: u64,
-    server_request_count: u64,
-    tail_observation_started: bool,
-    request_timeout: Duration,
-    child: Option<std::sync::Arc<OwnedProviderProcess>>,
-    diagnostic_task: Option<tokio::task::JoinHandle<()>>,
-    expected_home: Option<PathBuf>,
-    initialized: bool,
-    startup_error: Option<Error>,
-    uncertain_request: Option<u64>,
-    allowed_tools: BTreeSet<String>,
-    account_id: Option<String>,
-    models: Option<Vec<Value>>,
-    verified_permissions: Option<String>,
-    pending_reconciliation: Option<String>,
-    request_gate: Option<std::sync::Arc<dyn RequestGate>>,
-    pub last_semantic_event: Instant,
+    pub(super) transport: RpcTransport,
+    pub(super) events: VecDeque<SessionEvent>,
+    pub(super) next_id: u64,
+    pub(super) server_request_count: u64,
+    pub(super) tail_observation_started: bool,
+    pub(super) request_timeout: Duration,
+    pub(super) expected_home: Option<PathBuf>,
+    pub(super) initialized: bool,
+    pub(super) startup_error: Option<Error>,
+    pub(super) uncertain_request: Option<u64>,
+    pub(super) allowed_tools: BTreeSet<String>,
+    pub(super) account_id: Option<String>,
+    pub(super) models: Option<Vec<Value>>,
+    pub(super) verified_permissions: Option<String>,
+    pub(super) pending_reconciliation: Option<String>,
+    pub(super) request_gate: Option<std::sync::Arc<dyn RequestGate>>,
+    last_semantic_event: Instant,
 }
 impl RpcClient {
     pub fn from_transport<R, W>(reader: R, writer: W, request_timeout: Duration) -> Result<Self>
@@ -790,8 +171,6 @@ impl RpcClient {
             server_request_count: 0,
             tail_observation_started: false,
             request_timeout,
-            child: None,
-            diagnostic_task: None,
             expected_home: None,
             initialized: false,
             startup_error: None,
@@ -804,6 +183,24 @@ impl RpcClient {
             request_gate: None,
             last_semantic_event: Instant::now(),
         })
+    }
+    /// Attach plain expected-home/startup context to caller-supplied streams.
+    /// This constructor performs no native launch, adoption or authorization.
+    pub fn from_host_transport<R, W>(
+        reader: R,
+        writer: W,
+        request_timeout: Duration,
+        expected_home: PathBuf,
+        startup_error: Option<Error>,
+    ) -> Result<Self>
+    where
+        R: AsyncRead + Send + 'static,
+        W: AsyncWrite + Send + 'static,
+    {
+        let mut client = Self::from_transport(reader, writer, request_timeout)?;
+        client.expected_home = Some(expected_home);
+        client.startup_error = startup_error;
+        Ok(client)
     }
     pub fn bind_request_gate(&mut self, gate: std::sync::Arc<dyn RequestGate>) -> Result<()> {
         if self.request_gate.is_some() || !self.allowed_tools.is_empty() {
@@ -846,198 +243,7 @@ impl RpcClient {
         }
     }
 
-    pub async fn verify_version(executable: &Path, deadline: Duration) -> Result<()> {
-        let identity = kegari_platform::BinaryIdentity::inspect(executable, false)?;
-        Self::start_version_probe(&identity, None)?
-            .verify(deadline)
-            .await
-            .map(|_| ())
-    }
-    /// Split metadata probe: spawn/register while serialized, wait outside the gate.
-    pub fn start_version_probe(
-        executable: &kegari_platform::BinaryIdentity,
-        mut guard: Option<crate::process_records::SpawnGuard>,
-    ) -> Result<VersionProbe> {
-        executable.revalidate(false)?;
-        if let Some(guard) = &guard
-            && (guard.binding().executable != *executable
-                || guard.binding().argv_digest
-                    != kegari_digest::canonical_digest(1, &vec!["--version"])?
-                || guard.binding().kind != "codex-version"
-                || !guard.binding().observed_executables.is_empty())
-        {
-            return Err(Error::new(
-                "worker_binding",
-                "version process guard differs from actual pinned launch",
-            ));
-        }
-        let mut command = Command::new(&executable.path);
-        command
-            .arg("--version")
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        if let Some(guard) = &guard {
-            command.current_dir(&guard.binding().cwd);
-            guard.configure_tokio(&mut command)?;
-        }
-        let (mut child, group) = kegari_process::group::OwnedGroup::spawn_tokio(&mut command)?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::new("process_error", "version probe stdout is missing"))?;
-        if let Some(guard) = &mut guard {
-            // A quick metadata process may exit before inspection. Its actual
-            // Child/OwnedGroup must still be joined before bytes qualify a version.
-            let _ = guard.spawned_tokio(&child, &group);
-        }
-        Ok(VersionProbe {
-            identity: executable.clone(),
-            stdout: Some(stdout),
-            child: std::sync::Arc::new(OwnedProviderProcess::new(child, group, guard)),
-        })
-    }
-    pub async fn spawn(
-        executable: &Path,
-        codex_home: &Path,
-        permissions: &PermissionConfiguration,
-        request_timeout: Duration,
-    ) -> Result<Self> {
-        let verified = Self::verify_executable(executable, request_timeout).await?;
-        Self::start_verified(&verified, codex_home, permissions, request_timeout)
-    }
-    pub async fn verify_executable(
-        executable: &Path,
-        deadline: Duration,
-    ) -> Result<VerifiedCodexExecutable> {
-        let identity = kegari_platform::BinaryIdentity::inspect(executable, false)?;
-        Self::verify_version(&identity.path, deadline).await?;
-        identity.revalidate(false)?;
-        Ok(VerifiedCodexExecutable(identity))
-    }
-    /// Synchronous process creation, for use inside the host's serialized fresh
-    /// permit gate. Install the returned owned cancellation handle before release.
-    pub fn start_verified(
-        executable: &VerifiedCodexExecutable,
-        codex_home: &Path,
-        permissions: &PermissionConfiguration,
-        request_timeout: Duration,
-    ) -> Result<Self> {
-        Self::start_inner(executable, codex_home, permissions, request_timeout, None)
-    }
-    /// Native worker startup requires a durable, inherited guard bound before spawn.
-    pub fn start_verified_guarded(
-        executable: &VerifiedCodexExecutable,
-        codex_home: &Path,
-        permissions: &PermissionConfiguration,
-        request_timeout: Duration,
-        guard: crate::process_records::SpawnGuard,
-    ) -> Result<Self> {
-        Self::start_inner(
-            executable,
-            codex_home,
-            permissions,
-            request_timeout,
-            Some(guard),
-        )
-    }
-    fn start_inner(
-        executable: &VerifiedCodexExecutable,
-        codex_home: &Path,
-        permissions: &PermissionConfiguration,
-        request_timeout: Duration,
-        mut guard: Option<crate::process_records::SpawnGuard>,
-    ) -> Result<Self> {
-        executable.0.revalidate(false)?;
-        let args = kegari_codex::app_server_argv(permissions)?;
-        if let Some(guard) = &guard
-            && (guard.binding().executable != executable.0
-                || guard.binding().argv_digest != kegari_digest::canonical_digest(1, &args)?
-                || guard.binding().kind != "codex-app-server"
-                || !guard.binding().observed_executables.is_empty())
-        {
-            return Err(Error::new(
-                "worker_binding",
-                "provider process guard differs from actual pinned launch",
-            ));
-        }
-        if request_timeout.is_zero() {
-            return Err(Error::invalid("request timeout must be positive"));
-        }
-        let home = codex_home
-            .canonicalize()
-            .map_err(|e| Error::io("Codex auth home", e))?;
-        if !home.is_dir() {
-            return Err(Error::invalid(
-                "Codex auth home must be an existing isolated directory",
-            ));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            let m = home
-                .metadata()
-                .map_err(|e| Error::io("Codex auth home metadata", e))?;
-            if m.permissions().mode() & 0o077 != 0 || m.uid() != unsafe { libc::geteuid() } {
-                return Err(Error::new(
-                    "unsafe_permissions",
-                    "Codex auth home must be owner-only and owned by the execution user",
-                ));
-            }
-        }
-        let mut command = Command::new(&executable.0.path);
-        command.args(args);
-        if let Some(guard) = &guard {
-            command.current_dir(&guard.binding().cwd);
-            guard.configure_tokio(&mut command)?;
-        }
-        command
-            .env_clear()
-            .env("CODEX_HOME", &home)
-            .env("HOME", &home)
-            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-            .env("LANG", "C.UTF-8")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let (mut child, group) = kegari_process::group::OwnedGroup::spawn_tokio(&mut command)?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::new("process_error", "app-server stdout unavailable"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| Error::new("process_error", "app-server stdin unavailable"))?;
-        let mut stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| Error::new("process_error", "app-server stderr unavailable"))?;
-        // Diagnostics are drained separately. Arbitrary provider text is not a
-        // protocol frame and cannot leak into status/log output.
-        let diagnostic_task = tokio::spawn(async move {
-            let mut buffer = [0u8; 4096];
-            while matches!(stderr.read(&mut buffer).await,Ok(n) if n>0) {}
-        });
-        // Identity capture can race a quick exit. Retain the actual owned handle
-        // even on capture failure; no protocol is sent and termination still joins it.
-        let startup_error = guard
-            .as_mut()
-            .and_then(|guard| guard.spawned_tokio(&child, &group).err());
-        let mut rpc = Self::from_transport(stdout, stdin, request_timeout)?;
-        rpc.startup_error = startup_error;
-        rpc.child = Some(std::sync::Arc::new(OwnedProviderProcess::new(
-            child, group, guard,
-        )));
-        rpc.diagnostic_task = Some(diagnostic_task);
-        rpc.expected_home = Some(home);
-        Ok(rpc)
-    }
-    async fn send(&mut self, value: &Value) -> Result<()> {
+    pub(super) async fn send(&mut self, value: &Value) -> Result<()> {
         if let Some(error) = &self.startup_error {
             return Err(error.clone());
         }
@@ -1047,7 +253,11 @@ impl RpcClient {
     pub fn last_valid_output(&self) -> Instant {
         self.transport.last_valid_output()
     }
-    async fn read_message(&mut self) -> Result<RpcMessage> {
+    /// Last semantic session progress, independently of valid transport output.
+    pub fn last_semantic_event(&self) -> Instant {
+        self.last_semantic_event
+    }
+    pub(super) async fn read_message(&mut self) -> Result<RpcMessage> {
         match self.read_transport().await? {
             TransportRead::Message(message) => Ok(message),
             TransportRead::CleanEof => Err(Error::new(
@@ -1059,7 +269,7 @@ impl RpcClient {
     async fn read_transport(&mut self) -> Result<TransportRead> {
         self.read_transport_bounded(None).await
     }
-    async fn read_transport_bounded(
+    pub(super) async fn read_transport_bounded(
         &mut self,
         new_byte_bound: Option<u64>,
     ) -> Result<TransportRead> {
@@ -1088,7 +298,7 @@ impl RpcClient {
         Ok(())
     }
     /// Count of processed server requests only; not stdout EOF/tail evidence.
-    pub(crate) fn observed_server_request_count(&self) -> u64 {
+    pub fn observed_server_request_count(&self) -> u64 {
         self.server_request_count
     }
     pub fn drain_events(&mut self) -> Vec<SessionEvent> {
@@ -1397,10 +607,7 @@ impl RpcClient {
     pub async fn initialize(&mut self) -> Result<Value> {
         self.initialize_observed(&mut DenyTools).await
     }
-    pub(crate) async fn initialize_observed(
-        &mut self,
-        observer: &mut dyn ToolBroker,
-    ) -> Result<Value> {
+    pub async fn initialize_observed(&mut self, observer: &mut dyn ToolBroker) -> Result<Value> {
         let mut denied = ObservationOnlyDeny::new(observer);
         if self.initialized {
             return Err(Error::new(
@@ -1430,7 +637,7 @@ impl RpcClient {
     pub async fn verify_account(&mut self, expected: &str) -> Result<Value> {
         self.verify_account_observed(expected, &mut DenyTools).await
     }
-    pub(crate) async fn verify_account_observed(
+    pub async fn verify_account_observed(
         &mut self,
         expected: &str,
         observer: &mut dyn ToolBroker,
@@ -1472,7 +679,7 @@ impl RpcClient {
     pub async fn discover_models(&mut self) -> Result<Vec<Value>> {
         self.discover_models_observed(&mut DenyTools).await
     }
-    pub(crate) async fn discover_models_observed(
+    pub async fn discover_models_observed(
         &mut self,
         observer: &mut dyn ToolBroker,
     ) -> Result<Vec<Value>> {
@@ -1528,10 +735,7 @@ impl RpcClient {
     pub async fn rate_limits(&mut self) -> Result<Value> {
         self.rate_limits_observed(&mut DenyTools).await
     }
-    pub(crate) async fn rate_limits_observed(
-        &mut self,
-        observer: &mut dyn ToolBroker,
-    ) -> Result<Value> {
+    pub async fn rate_limits_observed(&mut self, observer: &mut dyn ToolBroker) -> Result<Value> {
         let mut denied = ObservationOnlyDeny::new(observer);
         let account = self.account_id.clone().ok_or_else(|| {
             Error::new(
@@ -1556,7 +760,7 @@ impl RpcClient {
         self.verify_execution_configuration_observed(permissions, cwd, &mut DenyTools)
             .await
     }
-    pub(crate) async fn verify_execution_configuration_observed(
+    pub async fn verify_execution_configuration_observed(
         &mut self,
         permissions: &PermissionConfiguration,
         cwd: &Path,
@@ -1573,7 +777,7 @@ impl RpcClient {
             .await?;
         self.validate_execution_configuration(permissions, &response)
     }
-    fn validate_execution_configuration(
+    pub(super) fn validate_execution_configuration(
         &mut self,
         permissions: &PermissionConfiguration,
         response: &Value,
@@ -1646,10 +850,10 @@ impl RpcClient {
         self.verified_permissions = Some(permissions.isolation_digest.clone());
         Ok(())
     }
-    fn validate_session(
+    pub fn validate_session(
         &self,
         state: &SessionState,
-        isolation: &ValidatedIsolation,
+        isolation: &dyn SessionScope,
         permissions: &PermissionConfiguration,
     ) -> Result<()> {
         state.binding.validate()?;
@@ -1675,9 +879,9 @@ impl RpcClient {
                 "effective provider configuration must be checked before thread admission",
             ));
         }
-        if state.binding.cwd != isolation.plan().cwd
-            || state.binding.isolation_digest != isolation.digest()
-            || permissions.isolation_digest != isolation.digest()
+        if state.binding.cwd.as_path() != isolation.cwd()
+            || state.binding.isolation_digest != isolation.isolation_digest()
+            || permissions.isolation_digest != isolation.isolation_digest()
         {
             return Err(Error::new(
                 "scope_violation",
@@ -1689,7 +893,7 @@ impl RpcClient {
     pub async fn start_thread(
         &mut self,
         state: &mut SessionState,
-        isolation: &ValidatedIsolation,
+        isolation: &dyn SessionScope,
         permissions: &PermissionConfiguration,
         instructions: &str,
         tools: Vec<Value>,
@@ -1704,10 +908,10 @@ impl RpcClient {
         )
         .await
     }
-    pub(crate) async fn start_thread_observed(
+    pub async fn start_thread_observed(
         &mut self,
         state: &mut SessionState,
-        isolation: &ValidatedIsolation,
+        isolation: &dyn SessionScope,
         permissions: &PermissionConfiguration,
         instructions: &str,
         tools: Vec<Value>,
@@ -1917,7 +1121,7 @@ impl RpcClient {
         &mut self,
         state: &mut SessionState,
         previous: &SessionBinding,
-        isolation: &ValidatedIsolation,
+        isolation: &dyn SessionScope,
         permissions: &PermissionConfiguration,
         reconciliation: &str,
         broker: &mut dyn ToolBroker,
@@ -2146,7 +1350,7 @@ impl RpcClient {
     /// native input. Keep reading intervention/tool messages without applying an
     /// agent-progress watchdog to host work; the original operation deadline is
     /// still absolute and cannot be extended by this wait.
-    pub(crate) async fn pump_waiting(
+    pub async fn pump_waiting(
         &mut self,
         state: &mut SessionState,
         broker: &mut dyn ToolBroker,
@@ -2160,7 +1364,7 @@ impl RpcClient {
         }
         self.pump_until(state, broker, deadline, wake).await
     }
-    async fn pump_until(
+    pub(super) async fn pump_until(
         &mut self,
         state: &mut SessionState,
         broker: &mut dyn ToolBroker,
@@ -2200,216 +1404,9 @@ impl RpcClient {
             )),
         }
     }
-    pub fn cancellation(&self) -> Option<OwnedProviderCancellation> {
-        self.child.as_ref().map(|child| OwnedProviderCancellation {
-            child: child.clone(),
-        })
-    }
-    pub async fn terminate(&mut self) -> Result<()> {
-        if let Some(child) = &self.child {
-            terminate_owned_provider(child).await?;
-        }
-        if let Some(task) = self.diagnostic_task.take() {
-            task.abort();
-        }
-        Ok(())
-    }
 }
 
-/// Owns only the pinned binary's finite metadata query, never a model turn.
-pub struct VersionProbe {
-    identity: kegari_platform::BinaryIdentity,
-    stdout: Option<tokio::process::ChildStdout>,
-    child: std::sync::Arc<OwnedProviderProcess>,
-}
-impl VersionProbe {
-    pub fn cancellation(&self) -> OwnedProviderCancellation {
-        OwnedProviderCancellation {
-            child: self.child.clone(),
-        }
-    }
-    pub async fn verify(mut self, deadline: Duration) -> Result<VerifiedCodexExecutable> {
-        if deadline.is_zero() {
-            return Err(Error::invalid("metadata deadline must be positive"));
-        }
-        let stdout = self.stdout.take().ok_or_else(|| {
-            Error::new("ownership_conflict", "metadata probe was already consumed")
-        })?;
-        let mut bytes = Vec::new();
-        let result = tokio::time::timeout(deadline, async {
-            stdout
-                .take(4097)
-                .read_to_end(&mut bytes)
-                .await
-                .map_err(|error| Error::io("read Codex version", error))?;
-            if bytes.len() > 4096 {
-                return Err(Error::new(
-                    "protocol_error",
-                    "version response exceeds its finite bound",
-                ));
-            }
-            loop {
-                if let Some(status) = self.child.child.lock().await.observe_exit()? {
-                    self.child.record_exit();
-                    break Ok(status);
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .map_err(|_| Error::new("timeout", "Codex version probe timed out"));
-        terminate_owned_provider(&self.child).await?;
-        let status = result??;
-        if !status.success() || String::from_utf8_lossy(&bytes).trim() != SUPPORTED_CODEX_VERSION {
-            return Err(Error::new(
-                "unsupported_codex_version",
-                format!(
-                    "required {SUPPORTED_CODEX_VERSION}; install and qualify a matching executable"
-                ),
-            ));
-        }
-        self.identity.revalidate(false)?;
-        Ok(VerifiedCodexExecutable(self.identity.clone()))
-    }
-}
-impl Drop for VersionProbe {
-    fn drop(&mut self) {
-        let _ = self.cancellation().request_cancel();
-    }
-}
-/// Same-process capability for one unreaped spawned adapter, never a restored PID.
-#[derive(Clone)]
-pub struct OwnedProviderCancellation {
-    child: std::sync::Arc<OwnedProviderProcess>,
-}
-struct OwnedProviderProcess {
-    child: tokio::sync::Mutex<ProviderChild>,
-    exited: std::sync::atomic::AtomicBool,
-}
-impl OwnedProviderProcess {
-    fn new(
-        child: Child,
-        group: kegari_process::group::OwnedGroup,
-        guard: Option<crate::process_records::SpawnGuard>,
-    ) -> Self {
-        Self {
-            child: tokio::sync::Mutex::new(ProviderChild {
-                child,
-                group,
-                guard,
-                reaped: None,
-            }),
-            exited: std::sync::atomic::AtomicBool::new(false),
-        }
-    }
-    fn record_exit(&self) {
-        self.exited.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-impl OwnedProviderCancellation {
-    pub fn exited(&self) -> Result<bool> {
-        if self.child.exited.load(std::sync::atomic::Ordering::SeqCst) {
-            return Ok(true);
-        }
-        let Ok(mut child) = self.child.child.try_lock() else {
-            return Ok(false);
-        };
-        let exited = child.observe_exit()?.is_some();
-        if exited {
-            self.child.record_exit();
-        }
-        Ok(exited)
-    }
-    pub fn request_cancel(&self) -> Result<()> {
-        if self.child.exited.load(std::sync::atomic::Ordering::SeqCst) {
-            return Ok(());
-        }
-        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
-            Error::new(
-                "prerequisite",
-                "owned adapter cancellation needs its running host executor",
-            )
-        })?;
-        let child = self.child.clone();
-        runtime.spawn(async move {
-            let _ = terminate_owned_provider(&child).await;
-        });
-        Ok(())
-    }
-    pub async fn join_termination(&self) -> Result<()> {
-        terminate_owned_provider(&self.child).await
-    }
-}
-struct ProviderChild {
-    child: Child,
-    group: kegari_process::group::OwnedGroup,
-    guard: Option<crate::process_records::SpawnGuard>,
-    reaped: Option<kegari_process::group::OwnedGroupExit>,
-}
-impl ProviderChild {
-    fn observe_exit(&mut self) -> Result<Option<std::process::ExitStatus>> {
-        if self.reaped.is_none() {
-            // Retain the original reaping proof before journal persistence. A
-            // failed write must retry with this token, not reconstruct an exit.
-            self.reaped = self.group.try_reap_tokio(&mut self.child)?;
-        }
-        let Some(reaped) = &self.reaped else {
-            return Ok(None);
-        };
-        if let Some(guard) = &mut self.guard {
-            guard.group_exited(reaped)?;
-        }
-        self.guard.take();
-        Ok(Some(reaped.status()))
-    }
-}
-async fn terminate_owned_provider(process: &std::sync::Arc<OwnedProviderProcess>) -> Result<()> {
-    if process.exited.load(std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
-    }
-    let mut child = process.child.lock().await;
-    if child.observe_exit()?.is_some() {
-        process.record_exit();
-        return Ok(());
-    }
-    child
-        .group
-        .terminate(kegari_process::group::Termination::Terminate)?;
-    let grace = Instant::now() + Duration::from_secs(5);
-    let deadline = grace + Duration::from_secs(5);
-    let mut forced = false;
-    loop {
-        if child.observe_exit()?.is_some() {
-            process.record_exit();
-            return Ok(());
-        }
-        if !forced && Instant::now() >= grace {
-            child
-                .group
-                .terminate(kegari_process::group::Termination::Kill)?;
-            forced = true;
-        }
-        if Instant::now() >= deadline {
-            return Err(Error::new(
-                "operation_uncertain",
-                "owned provider exit remains unconfirmed after termination",
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-impl Drop for RpcClient {
-    fn drop(&mut self) {
-        if let Some(owned) = self.cancellation() {
-            let _ = owned.request_cancel();
-        }
-        if let Some(task) = self.diagnostic_task.take() {
-            task.abort();
-        }
-    }
-}
-fn instruction_sources(response: &Value) -> Result<Vec<String>> {
+pub(super) fn instruction_sources(response: &Value) -> Result<Vec<String>> {
     let values = response
         .get("instructionSources")
         .and_then(Value::as_array)
@@ -2429,7 +1426,7 @@ fn instruction_sources(response: &Value) -> Result<Vec<String>> {
         })
         .collect()
 }
-fn validate_thread_response(
+pub(super) fn validate_thread_response(
     response: &Value,
     state: &SessionState,
     permissions: &PermissionConfiguration,
@@ -2491,41 +1488,7 @@ impl RpcClient {
         })
     }
 }
-/// Explicit native connection/configuration verification, for an operator's
-/// setup/reconnect transaction. No login, token refresh, thread, turn or model
-/// task is started. Do not invoke this merely to qualify an unattended build.
-pub async fn probe_connection(
-    executable: &Path,
-    auth_home: &Path,
-    permissions: &PermissionConfiguration,
-    cwd: &Path,
-    expected_account: &str,
-) -> Result<CodexConnectionMetadata> {
-    let mut client =
-        RpcClient::spawn(executable, auth_home, permissions, Duration::from_secs(5)).await?;
-    let result = tokio::time::timeout(
-        Duration::from_secs(30),
-        client.connection_metadata(expected_account, permissions, cwd),
-    )
-    .await
-    .map_err(|_| {
-        Error::new(
-            "timeout",
-            "Codex metadata verification exceeded its finite deadline",
-        )
-    });
-    let terminated = client.terminate().await;
-    let mut evidence = result??;
-    terminated?;
-    permissions
-        .settings
-        .as_object()
-        .ok_or_else(|| Error::invalid("permission configuration must be an object"))?;
-    let mut argv = vec![executable.to_string_lossy().into_owned()];
-    argv.extend(kegari_codex::app_server_argv(permissions)?);
-    evidence.argument_digest = Some(canonical_digest(
-        1,
-        &json!({"argv":argv,"auth_home":evidence.auth_home,"cwd":cwd,"protocol":PROTOCOL_PROFILE}),
-    )?);
-    Ok(evidence)
-}
+
+#[cfg(test)]
+#[path = "client_boundary_tests.rs"]
+mod boundary_tests;

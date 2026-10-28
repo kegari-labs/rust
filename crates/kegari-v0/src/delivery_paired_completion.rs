@@ -410,7 +410,7 @@ impl VerifiedCompletedPairedResume {
         let mut joined = BTreeMap::new();
         for id in retained.keys() {
             let actual = actual_receipt(&receipts, *id)?;
-            if RunReference::from_receipt(actual)?.is_some() {
+            if crate::control::run_reference_from_receipt(actual)?.is_some() {
                 let completion = (readers.joined)(*id)?.ok_or_else(|| {
                     recovery_blocked("completed pair lost joined original closure")
                 })?;

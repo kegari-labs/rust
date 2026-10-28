@@ -1,9 +1,12 @@
 # Codex protocol and isolation profile
 
-Protocol data and stream framing/I/O live in `kegari-codex`. Backend
-`kegari_v0::codex` retains RPC/session policy, request gates, permission derivation,
-observations and native process/recovery ownership. Stream EOF is not owned
-process-exit or successful-work evidence.
+The protocol client, session/history data, request gates, deadlines, protocol
+recovery, observations and stream framing/I/O live in `kegari-codex`. Backend
+`kegari_v0::codex_host` retains permission derivation, native launch and owned
+process cleanup. Protected journals, actual receipt lineage, joined recovery and
+resume admission stay in the backend. `ResumeCandidate` supplies consistent data;
+it cannot construct `worker_run::RetainedResumeSession` or authorize execution.
+Stream EOF is not owned process-exit or successful-work evidence.
 
 The adapter targets **codex-cli 0.164.0-alpha.11.1**, profile
 `kegari-codex-0.164.0-alpha.11.1-v1`. Its deterministic tests pass; live account,

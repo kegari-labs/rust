@@ -2,6 +2,7 @@
 //! Selection/metadata observation precede this path; no clone or after_create is
 //! repeated, and no cold journal may synthesize the original joined completion.
 use super::*;
+use kegari_types::run::RunReference;
 
 pub async fn prepare_resumed(
     runtime: Arc<RuntimeCoordinator>,

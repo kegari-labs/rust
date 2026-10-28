@@ -1,6 +1,7 @@
 //! Atomic consumption of an unfinished-work trigger. Persisted references are
 //! provenance, not authority to recreate the delivery capability or a permit.
 use super::*;
+use kegari_types::run::RunReference;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,7 +22,7 @@ impl RunContinuationReference {
         let value: Self = serde_json::from_str(encoded)
             .map_err(|_| Error::new("record_corrupt", "invalid continuation reference"))?;
         value.validate()?;
-        let run = RunReference::from_receipt(receipt)?.ok_or_else(|| {
+        let run = crate::control::run_reference_from_receipt(receipt)?.ok_or_else(|| {
             Error::new(
                 "record_corrupt",
                 "continuation is not an admitted worker session",
@@ -109,7 +110,7 @@ impl SourceAdvancedReference {
         let value: Self = serde_json::from_str(encoded)
             .map_err(|_| Error::new("record_corrupt", "invalid source-advanced reference"))?;
         value.validate()?;
-        let run = RunReference::from_receipt(receipt)?.ok_or_else(|| {
+        let run = crate::control::run_reference_from_receipt(receipt)?.ok_or_else(|| {
             Error::new(
                 "record_corrupt",
                 "source-advanced reference is not an admitted run",
@@ -149,7 +150,7 @@ impl ControlHost {
         source: SourceAdvancedReference,
         fresh_gate: impl FnOnce(&ControlSnapshot) -> Result<()>,
     ) -> Result<Permit> {
-        input.reference.validate()?;
+        crate::control::validate_run_reference(&input.reference)?;
         source.validate()?;
         if input.request_id == source.predecessor || input.request_id == source.source_operation {
             return Err(Error::new(
@@ -193,7 +194,7 @@ impl ControlHost {
             ));
         }
         let receipt = self.receipts.get(source.source_operation)?;
-        let original = RunReference::from_receipt(&receipt)?.ok_or_else(|| {
+        let original = crate::control::run_reference_from_receipt(&receipt)?.ok_or_else(|| {
             Error::new(
                 "no_work_trigger",
                 "source has no actual implementation admission",
@@ -221,7 +222,7 @@ impl ControlHost {
             self.receipts.all()?
         };
         for receipt in observed {
-            if let Some(later) = RunReference::from_receipt(&receipt)?
+            if let Some(later) = crate::control::run_reference_from_receipt(&receipt)?
                 && later.phase == original.phase
             {
                 if later.workspace != original.workspace
@@ -260,7 +261,7 @@ impl ControlHost {
         continuation: RunContinuationReference,
         fresh_gate: impl FnOnce(&ControlSnapshot) -> Result<()>,
     ) -> Result<Permit> {
-        input.reference.validate()?;
+        crate::control::validate_run_reference(&input.reference)?;
         continuation.validate()?;
         if input.request_id == continuation.predecessor
             || input.request_id == continuation.failure_operation
@@ -317,7 +318,7 @@ impl ControlHost {
         let mut max_review_rounds = run.max_review_rounds;
         let mut prior_review_rounds = 0;
         for receipt in history.values() {
-            let prior = RunReference::from_receipt(receipt)?.ok_or_else(|| {
+            let prior = crate::control::run_reference_from_receipt(receipt)?.ok_or_else(|| {
                 Error::new(
                     "record_corrupt",
                     "continuation history lacks a run reference",
@@ -370,12 +371,13 @@ impl ControlHost {
             ));
         }
         let failure = self.receipts.get(continuation.failure_operation)?;
-        let failure_run = RunReference::from_receipt(&failure)?.ok_or_else(|| {
-            Error::new(
-                "no_work_trigger",
-                "unfinished obligation lacks an actual worker admission",
-            )
-        })?;
+        let failure_run =
+            crate::control::run_reference_from_receipt(&failure)?.ok_or_else(|| {
+                Error::new(
+                    "no_work_trigger",
+                    "unfinished obligation lacks an actual worker admission",
+                )
+            })?;
         if failure_run.workspace != run.workspace
             || failure_run.phase.work != run.phase.work
             || failure_run.phase.generation != run.phase.generation
@@ -478,7 +480,7 @@ mod tests {
             workspace: Uuid::new_v4(),
             account: "fixture-account".into(),
             normalized_state: None,
-            phase: crate::scheduler::PhaseKey {
+            phase: kegari_types::run::PhaseKey {
                 work: "child".into(),
                 generation: digest("generation"),
                 phase: "implementation".into(),
@@ -572,7 +574,7 @@ mod tests {
             .unwrap();
         let actual = host.operation(permit.operation_id).unwrap();
         assert_eq!(
-            RunReference::from_receipt(&actual)
+            crate::control::run_reference_from_receipt(&actual)
                 .unwrap()
                 .unwrap()
                 .attempt,
@@ -794,7 +796,9 @@ mod tests {
         let source = host
             .retire_local(permit.operation_id, json!({"completed":"repaired-source"}))
             .unwrap();
-        let mut run = RunReference::from_receipt(&validation).unwrap().unwrap();
+        let mut run = crate::control::run_reference_from_receipt(&validation)
+            .unwrap()
+            .unwrap();
         run.attempt = 2;
         let mut reference = SourceAdvancedReference {
             predecessor: validation.operation_id,

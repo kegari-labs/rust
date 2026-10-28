@@ -1,11 +1,11 @@
 //! Component-only actual Control effect gate around the deterministic duplex.
 //! Uses the shared production dispatch boundary; no WorkerHost or joined run.
 use super::*;
-use crate::codex::RequestGate;
 use crate::control::InFlightEffect;
 use crate::control::MutationRequest;
 use crate::control::Permit;
 use crate::control::ReceiptPhase;
+use kegari_codex::RequestGate;
 use kegari_control_api::identity::Actor;
 use std::sync::Mutex;
 
@@ -128,11 +128,12 @@ pub(super) async fn failed_validation(
     failure_code: Option<&str>,
     request_gate: Arc<ValidationProtocol>,
 ) -> Arc<RunCompletion> {
-    use crate::codex::{RpcClient, SessionState};
+    use kegari_codex::RpcClient;
+    use kegari_codex::SessionState;
     use kegari_codex::{CodexProfile, SessionBinding};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     struct Deny;
-    impl crate::codex::ToolBroker for Deny {
+    impl kegari_codex::ToolBroker for Deny {
         fn call<'a>(
             &'a mut self,
             _: &'a kegari_codex::ToolCall,
@@ -152,7 +153,9 @@ pub(super) async fn failed_validation(
         panic!()
     };
     let actual = host.operation(manifest.operation_id).unwrap();
-    let admitted = RunReference::from_receipt(&actual).unwrap().unwrap();
+    let admitted = crate::control::run_reference_from_receipt(&actual)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         admitted.instruction_digest,
         contract.instructions().manifest_digest
@@ -199,7 +202,7 @@ pub(super) async fn failed_validation(
     let mut rpc = RpcClient::from_transport(cr, cw, std::time::Duration::from_secs(2)).unwrap();
     rpc.bind_request_gate(request_gate).unwrap();
     rpc.initialize().await.unwrap();
-    let permissions = crate::codex::permission_configuration(
+    let permissions = crate::codex_host::permission_configuration(
         contract.isolation(),
         &contract.isolation().plan().execution_root.join("auth"),
     )

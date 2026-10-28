@@ -22,7 +22,6 @@ use broker_observation::{BrokerCapture, BrokerJournalReference, BrokerSemantic};
 pub use broker_observation::{BrokerControlBatch, BrokerInventory, IndependentBrokerObservation};
 pub use validation::ValidationHistorySeal;
 
-use crate::codex::{SessionState, ToolBroker};
 use crate::control::ControlHost;
 use crate::control::Lease;
 use crate::control::MutationRequest;
@@ -45,6 +44,8 @@ use crate::providers::{ProviderBroker, ProviderMutation};
 use crate::reconcile::{FreshGate, IndependentReviewGate};
 use crate::workflow::Workflow;
 use chrono::{Duration, Utc};
+use kegari_codex::SessionState;
+use kegari_codex::ToolBroker;
 use kegari_codex::ToolCall;
 use kegari_control_api::identity::Actor;
 use kegari_digest::{bytes_digest, canonical_digest};
@@ -1251,7 +1252,7 @@ pub struct ScopedWorker {
     executions: Arc<ExecutionRegistry>,
     session: Option<SessionState>,
     // Enabled only by the declared evaluator, never ordinary worker creation.
-    protocol_capture: Option<crate::codex::ProtocolCapture>,
+    protocol_capture: Option<kegari_codex::ProtocolCapture>,
     capture_budget: Option<Arc<CaptureBudget>>,
     canary_output: Option<Arc<crate::evaluation::CanaryOutputEnrollment>>,
     broker_capture: Option<BrokerCapture>,
@@ -2545,21 +2546,21 @@ impl ScopedWorker {
         Ok(())
     }
 }
-impl ToolBroker for ScopedWorker {
-    fn begin_evaluation_protocol_observation(
+impl ScopedWorker {
+    pub(crate) fn begin_evaluation_protocol_observation(
         &mut self,
         declaration: &crate::evaluation::DeclaredProtocolTrial,
     ) {
         if let Some(capture) = &mut self.protocol_capture {
-            capture.disable(crate::codex::ProtocolCaptureIssue::ConflictingDuplicate);
+            capture.disable(kegari_codex::ProtocolCaptureIssue::ConflictingDuplicate);
             self.broker_gap(&Error::new(
                 "observation_conflict",
                 "duplicate declaration cannot reset observation",
             ));
             return;
         }
-        let mut capture = crate::codex::ProtocolCapture::new(
-            crate::codex::ProtocolOperationBinding {
+        let mut capture = kegari_codex::ProtocolCapture::new(
+            kegari_codex::ProtocolOperationBinding {
                 operation: self.permit.operation_id,
                 runtime: self.permit.lease.runtime_id,
                 workspace: self.contract.authority.workspace(),
@@ -2573,11 +2574,11 @@ impl ToolBroker for ScopedWorker {
         if declaration.operation() != self.permit.operation_id
             || declaration.instruction_digest() != self.contract.assembled.manifest_digest
         {
-            capture.disable(crate::codex::ProtocolCaptureIssue::BindingChanged);
+            capture.disable(kegari_codex::ProtocolCaptureIssue::BindingChanged);
         } else if !matches!(self.contract.authority, WorkerAuthority::Independent(_)) {
-            capture.disable(crate::codex::ProtocolCaptureIssue::ScopeNotDeclared);
+            capture.disable(kegari_codex::ProtocolCaptureIssue::ScopeNotDeclared);
         } else if declaration.trial_digest().is_none() {
-            capture.disable(crate::codex::ProtocolCaptureIssue::DeclarationUnavailable);
+            capture.disable(kegari_codex::ProtocolCaptureIssue::DeclarationUnavailable);
         }
         if declaration.operation() == self.permit.operation_id
             && declaration.instruction_digest() == self.contract.assembled.manifest_digest
@@ -2596,22 +2597,24 @@ impl ToolBroker for ScopedWorker {
         }
         self.protocol_capture = Some(capture);
     }
-    fn observe_protocol(&mut self, event: crate::codex::ProtocolObservation<'_>) {
+}
+impl ToolBroker for ScopedWorker {
+    fn observe_protocol(&mut self, event: kegari_codex::ProtocolObservation<'_>) {
         if self.protocol_capture.is_none() {
             return;
         }
         let state = match &event {
-            crate::codex::ProtocolObservation::UnboundNotification { .. } => None,
-            crate::codex::ProtocolObservation::Issue { state, .. }
-            | crate::codex::ProtocolObservation::MatchedResponse { state, .. }
-            | crate::codex::ProtocolObservation::ServerRequest { state, .. }
-            | crate::codex::ProtocolObservation::ToolResult { state, .. } => *state,
-            crate::codex::ProtocolObservation::ThreadEstablished { state }
-            | crate::codex::ProtocolObservation::TransportEnd { state, .. }
-            | crate::codex::ProtocolObservation::AdapterInventory { state, .. }
-            | crate::codex::ProtocolObservation::TerminalTurn { state, .. }
-            | crate::codex::ProtocolObservation::CompletedItem { state, .. }
-            | crate::codex::ProtocolObservation::AgentMessageDelta { state, .. } => Some(*state),
+            kegari_codex::ProtocolObservation::UnboundNotification { .. } => None,
+            kegari_codex::ProtocolObservation::Issue { state, .. }
+            | kegari_codex::ProtocolObservation::MatchedResponse { state, .. }
+            | kegari_codex::ProtocolObservation::ServerRequest { state, .. }
+            | kegari_codex::ProtocolObservation::ToolResult { state, .. } => *state,
+            kegari_codex::ProtocolObservation::ThreadEstablished { state }
+            | kegari_codex::ProtocolObservation::TransportEnd { state, .. }
+            | kegari_codex::ProtocolObservation::AdapterInventory { state, .. }
+            | kegari_codex::ProtocolObservation::TerminalTurn { state, .. }
+            | kegari_codex::ProtocolObservation::CompletedItem { state, .. }
+            | kegari_codex::ProtocolObservation::AgentMessageDelta { state, .. } => Some(*state),
         };
         let bound = state.is_none_or(|s| self.verify_session_contract(s).is_ok());
         // Raw attempt/text capture precedes the legacy semantic bound filter;
@@ -2624,7 +2627,7 @@ impl ToolBroker for ScopedWorker {
             .as_mut()
             .expect("checked opted-in capture");
         if !bound {
-            capture.issue(crate::codex::ProtocolCaptureIssue::BindingChanged);
+            capture.issue(kegari_codex::ProtocolCaptureIssue::BindingChanged);
             return;
         }
         capture.observe(event, &mut |value| match &self.capture_budget {
@@ -2982,10 +2985,10 @@ impl TrialHost for ScopedWorker {
             &state.resume_origin,
         ) {
             (Some(reference), Some(origin))
-                if reference.predecessor() == origin.predecessor
-                    && reference.recovery_digest() == origin.recovery_digest
+                if reference.predecessor() == origin.predecessor()
+                    && reference.recovery_digest() == origin.recovery_digest()
                     && reference.instruction_compatibility_digest
-                        == origin.instruction_compatibility_digest => {}
+                        == origin.instruction_compatibility_digest() => {}
             (None, None) => {}
             _ => {
                 return Err(Error::new(
@@ -2994,7 +2997,7 @@ impl TrialHost for ScopedWorker {
                 ));
             }
         }
-        if let Some(admitted) = crate::control::RunReference::from_receipt(
+        if let Some(admitted) = crate::control::run_reference_from_receipt(
             &self.control.operation(self.permit.operation_id)?,
         )? && (state.max_turns > admitted.max_turns || state.turns_started > state.max_turns)
         {
@@ -3270,7 +3273,7 @@ pub struct RecoveredWorkerSession {
 #[derive(Clone, Debug)]
 struct ResumeOrigin {
     admission_digest: String,
-    reference: crate::control::RunReference,
+    reference: kegari_types::run::RunReference,
     journal_digest: String,
     state_digest: String,
     after_hook: Option<crate::worker_run::AfterHookObservation>,
@@ -3279,7 +3282,7 @@ struct ResumeOrigin {
     executable_role: bool,
 }
 impl RecoveredWorkerSession {
-    pub fn resume_candidate(&self) -> Result<crate::codex::RetainedResumeSession> {
+    pub fn resume_candidate(&self) -> Result<crate::worker_run::RetainedResumeSession> {
         let origin = self.resume_origin.as_ref().ok_or_else(|| {
             Error::new(
                 "resume_incompatible",
@@ -3313,7 +3316,7 @@ impl RecoveredWorkerSession {
                 "recovery lacks an unchanged final session and actual inapplicable/absent after-hook observation",
             ));
         }
-        crate::codex::RetainedResumeSession::from_journal(
+        crate::worker_run::RetainedResumeSession::from_journal(
             self.state.clone(),
             origin.admission_digest.clone(),
             origin.reference.clone(),
@@ -3328,7 +3331,7 @@ pub fn recover_session(
     records: &PrivateDir,
     admission: &crate::control::Receipt,
 ) -> Result<Option<RecoveredWorkerSession>> {
-    let run = crate::control::RunReference::from_receipt(admission)?.ok_or_else(|| {
+    let run = crate::control::run_reference_from_receipt(admission)?.ok_or_else(|| {
         Error::new(
             "record_corrupt",
             "session recovery requires an actual run admission",
@@ -3474,10 +3477,10 @@ pub fn recover_session(
             &state.resume_origin,
         ) {
             (Some(reference), Some(origin))
-                if reference.predecessor() == origin.predecessor
-                    && reference.recovery_digest() == origin.recovery_digest
+                if reference.predecessor() == origin.predecessor()
+                    && reference.recovery_digest() == origin.recovery_digest()
                     && reference.instruction_compatibility_digest
-                        == origin.instruction_compatibility_digest => {}
+                        == origin.instruction_compatibility_digest() => {}
             (None, None) => {}
             _ => {
                 return Err(Error::new(
@@ -3598,7 +3601,7 @@ pub fn recover_session(
 /// It cannot invoke tools or revive an old worker permit.
 pub(crate) struct RecoveryJournal {
     journal: Journal,
-    candidate: crate::codex::RetainedResumeSession,
+    candidate: crate::worker_run::RetainedResumeSession,
     host: Arc<dyn WorkerHost>,
     observed: bool,
 }
@@ -3606,7 +3609,7 @@ impl RecoveryJournal {
     pub(crate) fn open(
         records: &PrivateDir,
         admission: &crate::control::Receipt,
-        candidate: &crate::codex::RetainedResumeSession,
+        candidate: &crate::worker_run::RetainedResumeSession,
         contract: &WorkerContract,
         host: Arc<dyn WorkerHost>,
     ) -> Result<Self> {

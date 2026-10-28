@@ -2,6 +2,7 @@
 //! run remains completed; only its genuine retained obligation supplies source.
 use super::*;
 use crate::decisions::VerifiedRetryGrant;
+use kegari_types::run::PhaseKey;
 
 #[derive(Clone)]
 pub struct RetriedUnfinishedWork {
@@ -63,7 +64,7 @@ impl RetriedUnfinishedWork {
         }
         let mut prior = BTreeMap::new();
         for receipt in receipts {
-            if let Some(run) = RunReference::from_receipt(receipt)? {
+            if let Some(run) = crate::control::run_reference_from_receipt(receipt)? {
                 if run.phase == *self.original.phase() {
                     prior.insert(receipt.operation_id, receipt.payload_digest.clone());
                 }
@@ -108,7 +109,7 @@ impl UnfinishedChildWork {
         // budget's mere presence must not exhaust the new budget. Check/review
         // histories still use the complete conservative failure inventory.
         for receipt in receipts {
-            if let Some(run) = RunReference::from_receipt(receipt)?
+            if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
                 && same_phase_group(
                     self.predecessor_receipt().runtime_id,
                     self.reference(),

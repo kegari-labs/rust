@@ -441,7 +441,7 @@ pub(super) fn passed_receipts(
     let mut retained = BTreeMap::new();
     let mut runs = BTreeSet::new();
     for receipt in receipts {
-        if let Some(run) = RunReference::from_receipt(receipt)?
+        if let Some(run) = crate::control::run_reference_from_receipt(receipt)?
             && same_group(
                 completed.basis.receipt.runtime_id,
                 &completed.reference,

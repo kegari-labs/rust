@@ -1,11 +1,11 @@
 //! Component-only actual Control effect gate around the deterministic duplex.
 //! Uses the shared production dispatch boundary; no WorkerHost or joined run.
 use super::*;
-use crate::codex::RequestGate;
 use crate::control::InFlightEffect;
 use crate::control::MutationRequest;
 use crate::control::Permit;
 use crate::control::ReceiptPhase;
+use kegari_codex::RequestGate;
 use kegari_control_api::identity::Actor;
 use std::sync::Mutex;
 

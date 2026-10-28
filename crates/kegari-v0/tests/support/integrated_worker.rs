@@ -6,13 +6,14 @@ use kegari_v0::evaluation::TrialHost;
 #[path = "worker_bundle.rs"]
 #[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
 mod worker_bundle;
+use kegari_codex::*;
 use kegari_codex::{CodexProfile, SessionBinding, ToolCall};
 use kegari_config::Speed;
 use kegari_storage::PrivateDir;
 use kegari_types::error::{Error, Result};
 use kegari_v0::{
-    codex::*, control::*, execution::*, git::Git, instructions::*, isolation::*,
-    providers::ProviderBroker, reconcile::ParentProjection, worker::*, workflow::Workflow,
+    control::*, execution::*, git::Git, instructions::*, isolation::*, providers::ProviderBroker,
+    reconcile::ParentProjection, worker::*, workflow::Workflow,
 };
 use serde_json::{Value, json};
 use std::{

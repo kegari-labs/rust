@@ -45,7 +45,7 @@ pub(crate) fn verify_validation_successor_admission(
         ));
     }
     passed.validate_for_round(&round)?;
-    let run = RunReference::from_receipt(model)?
+    let run = crate::control::run_reference_from_receipt(model)?
         .ok_or_else(|| blocked("review successor is not model admission"))?;
     let preparation = ReviewReceiptReference::preparation_for(model)?;
     let prep = actual_receipt(receipts, preparation.operation)?;
@@ -121,7 +121,7 @@ impl VerifiedReviewRoundPlan {
         // this opaque plan. Structural marker equality alone cannot qualify a
         // live admission with a changed ordinal or raised retained caps.
         let model = actual_receipt(receipts, actual.operation)?;
-        let run = RunReference::from_receipt(model)?
+        let run = crate::control::run_reference_from_receipt(model)?
             .ok_or_else(|| blocked("passed validation successor is not a model run"))?;
         self.verify_run_cause(model)?;
         self.verify_run_bounds(&run)?;
@@ -277,7 +277,7 @@ impl VerifiedReviewRoundPlan {
         let mut prior = BTreeMap::new();
         let mut ordinals = BTreeMap::new();
         for receipt in receipts {
-            if let Some(reference) = RunReference::from_receipt(receipt)?
+            if let Some(reference) = crate::control::run_reference_from_receipt(receipt)?
                 && reference.phase == run.phase
             {
                 let outcome = receipt

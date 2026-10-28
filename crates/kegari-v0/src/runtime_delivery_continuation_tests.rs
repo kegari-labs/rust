@@ -904,7 +904,7 @@ async fn repair_cycle_inner(
         ),
     };
     if let Some(retried) = &retried {
-        let run = RunReference::from_receipt(
+        let run = crate::control::run_reference_from_receipt(
             &built
                 .runtime
                 .control
@@ -1090,7 +1090,7 @@ async fn repair_cycle_inner(
         None,
         Some(&advanced),
     );
-    let admitted = RunReference::from_receipt(
+    let admitted = crate::control::run_reference_from_receipt(
         &built
             .runtime
             .control

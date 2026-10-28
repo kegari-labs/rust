@@ -111,7 +111,7 @@ impl ControlHost {
         let model = get(model)?;
         let prep = PreparationReference::from_receipt(&preparation)?
             .ok_or_else(|| invalid("parent effect history preparation identity is missing"))?;
-        let run = RunReference::from_receipt(&model)?
+        let run = crate::control::run_reference_from_receipt(&model)?
             .ok_or_else(|| invalid("parent effect history model identity is missing"))?;
         if prep.worker_operation != model.operation_id
             || prep.phase != run.phase

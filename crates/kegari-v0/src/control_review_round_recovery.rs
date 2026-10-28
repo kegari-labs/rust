@@ -2,6 +2,7 @@
 //! No decoder creates a permit or opaque recovery/source/ownership capability.
 //! Dedicated atomic admission separately validates actual protected records.
 use super::*;
+use kegari_types::run::RunReference;
 
 const RECOVERY_KEY: &str = "review_round_recovery";
 const RESUME_KEY: &str = "review_round_resume";
@@ -131,7 +132,7 @@ impl ReviewRoundResumeReference {
         let round = round_data(receipt, &value.recovery.round_reference_digest)?;
         let run: RunReference = decode(receipt, "run")?
             .ok_or_else(|| recovery_error("paired resume has no actual run reference"))?;
-        run.validate()?;
+        crate::control::validate_run_reference(&run)?;
         // Direct bounded data decoding avoids recursion between marker readers.
         // The generic reader delegates this exact shape here; this reader
         // must never call it back.

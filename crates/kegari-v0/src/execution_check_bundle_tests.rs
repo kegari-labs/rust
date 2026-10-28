@@ -245,10 +245,10 @@ async fn warm_empty_bundle_uses_original_control_and_registry_owner_cold_records
         use crate::control::ReceiptPhase;
         use crate::control::ReceiptStore;
         use crate::control::RunAdmission;
-        use crate::control::RunReference;
         use crate::worker::ExecutionRegistry;
         use kegari_control_api::identity::Actor;
         use kegari_storage::PrivateDir;
+        use kegari_types::run::RunReference;
         use serde_json::json;
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().canonicalize().unwrap().join("control");
@@ -295,7 +295,7 @@ async fn warm_empty_bundle_uses_original_control_and_registry_owner_cold_records
                         workspace: Uuid::new_v4(),
                         account: "component-account".into(),
                         normalized_state: None,
-                        phase: crate::scheduler::PhaseKey {
+                        phase: kegari_types::run::PhaseKey {
                             work,
                             generation: kegari_digest::bytes_digest(b"generation"),
                             phase: "parent_evidence_review".into(),
