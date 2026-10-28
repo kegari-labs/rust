@@ -900,6 +900,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kegari-process"
+version = "0.2.0-alpha.10"
+dependencies = [
+ "kegari-storage",
+ "kegari-types",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "kegari-providers"
 version = "0.2.0-alpha.10"
 dependencies = [
@@ -955,6 +968,7 @@ dependencies = [
  "hyper-util",
  "kegari-config",
  "kegari-digest",
+ "kegari-process",
  "kegari-providers",
  "kegari-storage",
  "kegari-types",

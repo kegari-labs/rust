@@ -1,6 +1,6 @@
 //! Ordinary disposable process fixtures, not OS sandbox qualification.
 #![cfg(unix)]
-use kegari_v0::process_group::{OwnedGroup, Termination};
+use kegari_process::group::{OwnedGroup, Termination};
 use std::{
     io::Read,
     os::unix::process::CommandExt,

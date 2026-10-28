@@ -303,7 +303,7 @@ mod tests {
             .map(|root| root.join("git"))
             .find(|candidate| candidate.is_file())
             .unwrap();
-        let output = kegari_v0::process_group::OwnedGroup::spawn_std(
+        let output = kegari_process::group::OwnedGroup::spawn_std(
             std::process::Command::new(executable)
                 .current_dir(path)
                 .env_clear()

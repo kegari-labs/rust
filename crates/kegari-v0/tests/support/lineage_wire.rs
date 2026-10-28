@@ -854,7 +854,7 @@ fn git_bytes(binary: &Path, root: &Path, args: &[&str], input: Option<&[u8]>) ->
         io::Write,
         process::{Command, Stdio},
     };
-    let (mut child, _group) = kegari_v0::process_group::OwnedGroup::spawn_std(
+    let (mut child, _group) = kegari_process::group::OwnedGroup::spawn_std(
         Command::new(binary)
             .current_dir(root)
             .args(args)

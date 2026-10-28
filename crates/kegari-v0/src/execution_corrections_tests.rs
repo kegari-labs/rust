@@ -5,7 +5,7 @@ use crate::isolation::{IsolationPlan, PathGrant};
 use std::{fs, os::unix::fs::PermissionsExt, process::Command, sync::Mutex};
 
 fn run(binary: &Path, root: &Path, args: &[&str]) {
-    let result = kegari_v0::process_group::OwnedGroup::spawn_std(
+    let result = kegari_process::group::OwnedGroup::spawn_std(
         Command::new(binary)
             .current_dir(root)
             .env_clear()

@@ -98,7 +98,7 @@ impl TailscaleCommand for InstalledTailscale {
             }
             validate_executable_path(&self.executable)?;
             let cutoff = std::time::Instant::now() + self.timeout;
-            let mut child = crate::process_spawn::spawn_tokio(
+            let mut child = kegari_process::spawn::spawn_tokio(
                 tokio::process::Command::new(&self.executable)
                     .args(args)
                     .env_clear()

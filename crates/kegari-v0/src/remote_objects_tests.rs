@@ -19,7 +19,7 @@ use std::{
     },
 };
 fn fixture_git(binary: &Path, cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Vec<u8> {
-    let (mut child, _group) = crate::process_group::OwnedGroup::spawn_std(
+    let (mut child, _group) = kegari_process::group::OwnedGroup::spawn_std(
         Command::new(binary)
             .current_dir(cwd)
             .env_clear()

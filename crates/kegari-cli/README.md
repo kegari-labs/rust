@@ -18,11 +18,12 @@ Protected filesystem access and target-store storage primitives are imported
 directly from `kegari-storage`.
 
 CLI hash fixtures use `kegari-digest` as a development dependency; the CLI has no
-direct provider-adapter dependency.
+direct provider-adapter or process dependency. Platform operations continue
+through the backend, which uses `kegari-process` for guarded spawning.
 
 All packages share workspace version `0.2.0-alpha.10`. CLI version output and
 internal metadata identify the same assembled application; its build identity
-must cover the application sources in all seven packages.
+must cover the application sources in all eight packages.
 
 From the workspace root:
 
@@ -32,7 +33,7 @@ cargo run --offline --locked -p kegari-cli -- --help
 cargo test --offline --locked -p kegari-cli
 ```
 
-Use `--workspace` for complete test and lint checks across all seven packages. The
+Use `--workspace` for complete test and lint checks across all eight packages. The
 evaluation-inspection binary remains in the backend package. See the [command guide](../kegari-v0/docs/cli.md),
 [backend documentation](../kegari-v0/README.md) and [progress](../kegari-v0/PROGRESS.md).
 The archived alpha.10 package is unchanged by this source refactor; no new

@@ -71,7 +71,7 @@ impl ConfigurationControl for ReadConfiguration {
     }
 }
 fn git_run(binary: &Path, root: &Path, args: &[&str]) {
-    let output = kegari_v0::process_group::OwnedGroup::spawn_std(
+    let output = kegari_process::group::OwnedGroup::spawn_std(
         Command::new(binary)
             .current_dir(root)
             .env_clear()

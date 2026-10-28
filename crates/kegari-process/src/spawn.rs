@@ -38,9 +38,15 @@ struct SpawnState {
 static SPAWN_RETIREMENT: Mutex<SpawnState> = Mutex::new(SpawnState {
     guards: BTreeMap::new(),
 });
-pub(crate) struct SpawnBoundary(MutexGuard<'static, SpawnState>);
+/// Opaque guard for the process-wide spawn/retirement critical section.
+/// Keep it through descriptor release and the caller's existing-lock observation.
+/// Do not spawn, acquire another boundary, or drop a still-registered guard while
+/// holding it: those operations acquire the same non-reentrant mutex.
+pub struct SpawnBoundary(MutexGuard<'static, SpawnState>);
 
-pub(crate) fn retirement() -> Result<SpawnBoundary> {
+/// Exclude launches while retiring registered descriptors and observing their lock.
+/// This is coordination only; callers retain authorization and persistence policy.
+pub fn retirement() -> Result<SpawnBoundary> {
     SPAWN_RETIREMENT.lock().map(SpawnBoundary).map_err(|_| {
         Error::new(
             "operation_uncertain",
@@ -52,14 +58,17 @@ pub(crate) fn retirement() -> Result<SpawnBoundary> {
 /// The registration owns both exact descriptors. Creation, removal and closing
 /// all occur under the same boundary as fork; no snapshot can contain a reused
 /// descriptor or omit a newly created guard. No File/lock is cloned into hooks.
-pub(crate) struct RegisteredGuard {
+pub struct RegisteredGuard {
     descriptors: GuardDescriptors,
     lock: Option<ExclusiveLock>,
     inherited: Option<File>,
     inheritance_active: Arc<AtomicBool>,
 }
 impl RegisteredGuard {
-    pub(crate) fn acquire(acquire: impl FnOnce() -> Result<ExclusiveLock>) -> Result<Self> {
+    /// Acquire and register the exact lock descriptors under the shared interlock.
+    /// The callback must only open/verify the lock; it must not reenter spawning
+    /// or retirement coordination. Failure closes acquired descriptors in order.
+    pub fn acquire(acquire: impl FnOnce() -> Result<ExclusiveLock>) -> Result<Self> {
         let mut boundary = retirement()?;
         if boundary.0.guards.len() >= MAX_GUARDS {
             return Err(Error::new(
@@ -92,10 +101,10 @@ impl RegisteredGuard {
             inheritance_active: Arc::new(AtomicBool::new(true)),
         })
     }
-    pub(crate) fn identity(&self) -> (u64, u64) {
+    pub fn identity(&self) -> (u64, u64) {
         (self.descriptors.device, self.descriptors.inode)
     }
-    pub(crate) fn configure(&self, command: &mut Command) -> Result<()> {
+    pub fn configure(&self, command: &mut Command) -> Result<()> {
         if self.inherited.is_none() {
             return Err(Error::new(
                 "ownership_conflict",
@@ -125,13 +134,13 @@ impl RegisteredGuard {
         }
         Ok(())
     }
-    pub(crate) fn spawned(&self) {
+    pub fn spawned(&self) {
         // The parent has bound the actual Child/OwnedGroup. The completed
         // invocation's child already ran its hook; future invocations must not
         // inherit this owner's guard, including while retirement is pending.
         self.inheritance_active.store(false, Ordering::SeqCst);
     }
-    pub(crate) fn release(&mut self, boundary: &mut SpawnBoundary) -> Result<()> {
+    pub fn release(&mut self, boundary: &mut SpawnBoundary) -> Result<()> {
         if self.lock.is_none() {
             return Ok(());
         }
@@ -257,7 +266,10 @@ fn prepare_hook(
     ActiveHook(active)
 }
 
-pub(crate) fn spawn_std(command: &mut Command, deadline: Option<Instant>) -> io::Result<Child> {
+/// Spawn through the shared descriptor interlock, respecting the original cutoff.
+/// Callers supply command policy, cancellation, output handling and child ownership.
+/// This wrapper does not itself establish an owned process group.
+pub fn spawn_std(command: &mut Command, deadline: Option<Instant>) -> io::Result<Child> {
     let boundary = before(deadline)?;
     let _active = prepare_hook(
         command,
@@ -268,7 +280,8 @@ pub(crate) fn spawn_std(command: &mut Command, deadline: Option<Instant>) -> io:
     check_cutoff(deadline)?;
     command.spawn()
 }
-pub(crate) fn spawn_tokio(
+/// Tokio counterpart of `spawn_std`, using the same registry and interlock.
+pub fn spawn_tokio(
     command: &mut tokio::process::Command,
     deadline: Option<Instant>,
 ) -> io::Result<tokio::process::Child> {

@@ -48,7 +48,7 @@ fn git_path() -> PathBuf {
         .unwrap()
 }
 fn git(path: &Path, args: &[&str]) -> String {
-    let out = kegari_v0::process_group::OwnedGroup::spawn_std(
+    let out = kegari_process::group::OwnedGroup::spawn_std(
         Command::new(git_path())
             .current_dir(path)
             .env_clear()

@@ -1901,7 +1901,7 @@ async fn deployment_environment_is_resolved_by_canonical_id_and_same_name_recrea
 }
 
 fn fixture_git(path: &std::path::Path, args: &[&str]) -> String {
-    let output = kegari_v0::process_group::OwnedGroup::spawn_std(
+    let output = kegari_process::group::OwnedGroup::spawn_std(
         std::process::Command::new("git")
             .current_dir(path)
             .args(args)

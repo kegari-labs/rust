@@ -1,6 +1,37 @@
 # Kegari v0 build progress
 
-**Goal mode cancelled. Storage extraction verified; checkpoint complete.**
+**Goal mode cancelled. Process extraction verified; checkpoint complete.**
+
+Work proceeds through individual prompts. The completed extraction moves guarded
+spawning and owned process-group handling into `kegari-process`, imported directly
+as `kegari_process::{spawn, group}`. It owns the single spawn/retirement interlock
+and descriptor registry. The backend depends directly on it; the process crate
+depends on storage/types without a reverse dependency. The CLI gains no direct
+process dependency. No compatibility modules remain in the backend.
+
+Process journals, control permits, recovery and isolation policy, platform
+registration, service management and the application-level supervisor remain in
+the backend. The retirement boundary still spans guard release and original-lock
+observation; owned exit evidence remains privately constructed and
+non-deserializable. The managed-workload and detached-descendant limitations are
+unchanged.
+
+All eight packages retain `0.2.0-alpha.10`; persisted/API schemas, instruction assets
+and the archived alpha.10 are unchanged. All 239 external lockfile entries are
+unchanged. Verification: 1,275 workspace release tests passed, zero failed, three
+native tests ignored. All 56 focused process/backend checks passed. Formatting,
+strict workspace all-target Clippy, contract inventory and its 11 tests passed.
+One bounded independent review found no material issues. The optimized arm64
+executable passed all five minimal-environment inspections with consistent
+identity/schemas/assets and no runtime state created. See the
+[process boundary](../kegari-process/README.md) and
+[verification report](validation/PROCESS-EXTRACTION.md). No native/live
+qualification, service activation, packaging, commit or remote operation is
+included in this refactor.
+
+## Previous storage extraction checkpoint
+
+**Storage extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. `kegari-storage` now owns protected
 filesystem access, durable records, locks and opaque retained-file identity.

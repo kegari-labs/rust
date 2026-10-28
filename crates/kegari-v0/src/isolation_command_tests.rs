@@ -136,7 +136,7 @@ impl Fixture {
             .kill_on_drop(true);
         guard.configure_tokio(&mut command).unwrap();
         let (mut child, group) =
-            crate::process_group::OwnedGroup::spawn_tokio(&mut command).unwrap();
+            kegari_process::group::OwnedGroup::spawn_tokio(&mut command).unwrap();
         let pid = child.id().unwrap();
         // Only metadata is injected. The opaque exit used by the supervisor is
         // produced later by this exact unreaped Child and OwnedGroup.
@@ -241,7 +241,7 @@ async fn clean_group_and_joined_streams_without_journal_never_release_run_owners
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let (mut child, group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command).unwrap();
+    let (mut child, group) = kegari_process::group::OwnedGroup::spawn_tokio(&mut command).unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let fixture = Fixture::new();

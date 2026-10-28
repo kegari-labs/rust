@@ -3101,8 +3101,8 @@ impl GitLimits {
 }
 struct ActiveGitChild {
     child: std::process::Child,
-    group: crate::process_group::OwnedGroup,
-    terminal: Option<crate::process_group::OwnedGroupExit>,
+    group: kegari_process::group::OwnedGroup,
+    terminal: Option<kegari_process::group::OwnedGroupExit>,
     guard: Option<crate::process_records::SpawnGuard>,
 }
 impl ActiveGitChild {
@@ -3219,7 +3219,7 @@ impl GitOperationState {
         {
             process
                 .group
-                .terminate(crate::process_group::Termination::Kill)?;
+                .terminate(kegari_process::group::Termination::Kill)?;
         }
 
         Ok(())
@@ -3323,7 +3323,7 @@ impl GitOperationState {
             // The start gate and durable guard preparation may consume the
             // remaining budget. Never launch after either deadline has expired.
             check_current()?;
-            let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_std_before(
+            let (mut child, mut group) = kegari_process::group::OwnedGroup::spawn_std_before(
                 &mut command,
                 Some(command_deadline.min(self.deadline)),
             )?;

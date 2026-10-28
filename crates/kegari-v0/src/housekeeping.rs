@@ -2407,7 +2407,7 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
         .process_group(0);
     let cutoff = std::time::Instant::now() + Duration::from_secs(5);
     let mut child =
-        crate::process_spawn::spawn_tokio(&mut command, Some(cutoff)).map_err(|error| {
+        kegari_process::spawn::spawn_tokio(&mut command, Some(cutoff)).map_err(|error| {
             if error.kind() == std::io::ErrorKind::TimedOut {
                 Error::new("timeout", "replacement metadata probe timed out")
             } else {

@@ -1,0 +1,16 @@
+[package]
+name = "kegari-process"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+kegari-storage = { path = "../kegari-storage" }
+kegari-types = { path = "../kegari-types" }
+libc = "=0.2.189"
+serde_json = "=1.0.151"
+uuid = { version = "=1.18.1", features = ["v4"] }
+tokio = { version = "=1.53.1", features = ["process"] }
+
+[dev-dependencies]
+tempfile = "=3.23.0"

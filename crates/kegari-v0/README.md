@@ -18,7 +18,15 @@ dependency remains; application arguments and hidden process modes are unchanged
 
 Protected filesystem access, durable record encoding and locking now belong to
 [`kegari-storage`](../kegari-storage/README.md), imported as `kegari_storage`.
-Domain records, recovery policy and the single process-spawn interlock remain here.
+Domain records and recovery policy remain here.
+
+Guarded spawning and owned process-group handling now belong to
+[`kegari-process`](../kegari-process/README.md). Import the moved interfaces from
+`kegari_process::{spawn, group}`; there are no backend compatibility reexports.
+The process crate owns the single spawn/retirement interlock and descriptor
+registry. This backend retains process journals, control permits, recovery and
+isolation policy, platform registration, service management and application-level
+supervision. The CLI has no direct process dependency.
 
 Configuration models, TOML parsing, validation and path resolution now belong to
 [`kegari-config`](../kegari-config/README.md), imported directly as `kegari_config`.
@@ -40,7 +48,7 @@ from [`kegari-digest`](../kegari-digest/README.md), without compatibility reexpo
 ## Build and deterministic checks
 
 Run from the Rust workspace root with the pinned Rust 1.99.1 toolchain. Workspace
-test and lint commands cover all seven packages:
+test and lint commands cover all eight packages:
 
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
@@ -68,7 +76,8 @@ extraction. Its final release suite passed 1,260 tests, with
 three native qualification tests ignored. See the artifact links, checksums and
 retained results in the [stabilization report](validation/LOCAL-DISCOVERY-ADMISSION.md). The Cargo-specific
 execution design has been removed. The source now separates `kegari-cli`,
-`kegari-types`, `kegari-config`, `kegari-digest` and `kegari-providers`
+`kegari-types`, `kegari-config`, `kegari-digest`, `kegari-providers`,
+`kegari-storage` and `kegari-process`
 from the remaining backend while retaining the
 same workspace version and executable name. Its build identity changes with the refactor; the archived alpha.10 bytes
 and historical evidence remain untouched. This extraction does not package a

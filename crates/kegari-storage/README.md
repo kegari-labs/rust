@@ -7,7 +7,7 @@ Import `PrivateDir`, `WriteBoundary`, `SectionLock`, `SharedLock`, `ExclusiveLoc
 `RetainedPrivateFile` and `decode_record` directly from `kegari_storage`.
 There is no `kegari_v0::storage` compatibility reexport.
 
-CLI and backend depend directly on this crate. It depends on `kegari-types` and
+CLI, backend and `kegari-process` depend directly on this crate. It depends on `kegari-types` and
 `kegari-digest`, with no backend, asynchronous runtime or process-launch dependency.
 Record schema 1, digests, bounds, errors and durability ordering are unchanged.
 
@@ -18,12 +18,13 @@ and record decoding are checks, not execution/admission authority.
 `ExclusiveLock::raw_fd`, `identity` and `inherited_file` are low-level trusted
 integration APIs. A borrowed descriptor must remain live and must not be closed
 or explicitly unlocked. Duplicates share the locked open-file description and
-retain close-on-exec. Backend `RegisteredGuard` continues to acquire, register,
-retire and close process guard descriptors under its single spawn/retirement
-interlock. Storage neither acquires that mutex nor grants spawn authority.
+retain close-on-exec. `kegari_process::spawn::RegisteredGuard` acquires, registers,
+retires and closes process guard descriptors under the process crate's single
+spawn/retirement interlock. Storage neither acquires that mutex nor grants spawn authority.
 `SectionLock` and `SharedLock` keep their lexical unlocking semantics;
 `ExclusiveLock` keeps close-only, last-owner lifetime semantics.
 
-Domain records, recovery and admission policy, process supervision and the spawn
-registry remain backend-owned. Version remains `0.2.0-alpha.10`; this extraction
-is not a new release or native qualification.
+Domain records, recovery and admission policy, and application supervision remain
+backend-owned. Process-group ownership and the spawn registry belong to
+[`kegari-process`](../kegari-process/README.md). Version remains
+`0.2.0-alpha.10`; this extraction is not a new release or native qualification.

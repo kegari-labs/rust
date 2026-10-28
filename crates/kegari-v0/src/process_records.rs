@@ -293,7 +293,7 @@ impl ProcessJournal {
             ));
         }
         let guard_name = format!("{}.guard", binding.effect_id);
-        let files = crate::process_spawn::RegisteredGuard::acquire(|| {
+        let files = kegari_process::spawn::RegisteredGuard::acquire(|| {
             let lock = operation
                 .lock(&guard_name)
                 .map_err(|error| error.detail(serde_json::json!({"stage":"acquire_guard"})))?;
@@ -496,7 +496,7 @@ pub struct SpawnGuard {
     directory: PrivateDir,
     record_name: String,
     record: ProcessRecord,
-    files: Option<crate::process_spawn::RegisteredGuard>,
+    files: Option<kegari_process::spawn::RegisteredGuard>,
     configured: AtomicBool,
     owned_group: Option<(Uuid, u32)>,
     guard_conflict: bool,
@@ -524,14 +524,14 @@ impl SpawnGuard {
     pub fn spawned_std(
         &mut self,
         child: &std::process::Child,
-        group: &crate::process_group::OwnedGroup,
+        group: &kegari_process::group::OwnedGroup,
     ) -> Result<ProcessIdentity> {
         self.record_spawned(child.id(), group)
     }
     pub fn spawned_tokio(
         &mut self,
         child: &tokio::process::Child,
-        group: &crate::process_group::OwnedGroup,
+        group: &kegari_process::group::OwnedGroup,
     ) -> Result<ProcessIdentity> {
         self.record_spawned(
             child.id().ok_or_else(|| {
@@ -543,7 +543,7 @@ impl SpawnGuard {
     fn record_spawned(
         &mut self,
         pid: u32,
-        group: &crate::process_group::OwnedGroup,
+        group: &kegari_process::group::OwnedGroup,
     ) -> Result<ProcessIdentity> {
         if !self.configured.load(Ordering::SeqCst)
             || !matches!(self.record.state, ProcessState::Starting)
@@ -608,7 +608,7 @@ impl SpawnGuard {
     /// Persist only the exit capability from this guard's actual owned spawn.
     /// Retain the capability on errors so journal/guard checks can be retried.
     /// Detached-descendant containment remains explicitly unproven.
-    pub fn group_exited(&mut self, exit: &crate::process_group::OwnedGroupExit) -> Result<()> {
+    pub fn group_exited(&mut self, exit: &kegari_process::group::OwnedGroupExit) -> Result<()> {
         let (group, pid) = exit.binding();
         if self.owned_group != Some((group, pid)) {
             return Err(Error::new(
@@ -672,7 +672,7 @@ impl SpawnGuard {
         // pre-exec hook has closed both registered guard copies explicitly.
         // Release the boundary before persistence; never wait for a child here.
         let released = {
-            let mut boundary = crate::process_spawn::retirement()?;
+            let mut boundary = kegari_process::spawn::retirement()?;
             if let Some(files) = self.files.as_mut() {
                 files.release(&mut boundary)?;
             }

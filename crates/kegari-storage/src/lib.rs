@@ -571,8 +571,8 @@ pub struct ExclusiveLock {
 impl ExclusiveLock {
     /// Borrow the descriptor number while this lock remains alive.
     ///
-    /// Do not close or unlock it. Backend process integration must register and
-    /// retire it under its single spawn/retirement interlock; this method does
+    /// Do not close or unlock it. Process integration must register and
+    /// retire it under the single `kegari-process` spawn/retirement interlock; this method does
     /// not acquire that interlock or authorize spawning.
     pub fn raw_fd(&self) -> std::os::fd::RawFd {
         use std::os::fd::AsRawFd;
@@ -589,8 +589,8 @@ impl ExclusiveLock {
     /// Duplicate the actual locked open-file description for an owned child.
     /// The duplicate retains close-on-exec and shares the lock's open-file
     /// description. Never explicitly unlock it: that would unlock other owners.
-    /// Acquire, register, and close process-guard duplicates under the backend's
-    /// single spawn/retirement interlock. Only its owned child's pre-exec hook
+    /// Acquire, register, and close process-guard duplicates under the single
+    /// `kegari-process` spawn/retirement interlock. Only its owned child's pre-exec hook
     /// may clear close-on-exec. Duplication itself grants no execution authority.
     pub fn inherited_file(&self) -> Result<File> {
         self._file

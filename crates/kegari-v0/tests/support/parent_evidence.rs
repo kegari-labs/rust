@@ -20,7 +20,7 @@ fn git_binary() -> PathBuf {
 }
 
 fn git_run(path: &Path, args: &[&str]) -> String {
-    let output = kegari_v0::process_group::OwnedGroup::spawn_std(
+    let output = kegari_process::group::OwnedGroup::spawn_std(
         Command::new(git_binary())
             .env_clear()
             .env("PATH", "/usr/bin:/bin")

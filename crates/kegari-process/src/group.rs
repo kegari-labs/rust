@@ -40,7 +40,9 @@ impl OwnedGroupExit {
     pub fn status(&self) -> std::process::ExitStatus {
         self.status
     }
-    pub(crate) fn binding(&self) -> (uuid::Uuid, u32) {
+    /// Descriptive binding from actual owned reaping, not a constructor or
+    /// permission to adopt/signal a process using retained identity.
+    pub fn binding(&self) -> (uuid::Uuid, u32) {
         (self.identity, self.pid)
     }
 }
@@ -50,13 +52,13 @@ impl OwnedGroup {
         Self::spawn_std_before(command, None)
     }
     #[cfg(unix)]
-    pub(crate) fn spawn_std_before(
+    pub fn spawn_std_before(
         command: &mut std::process::Command,
         deadline: Option<std::time::Instant>,
     ) -> Result<(std::process::Child, Self)> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
-        let child = crate::process_spawn::spawn_std(command, deadline)
+        let child = crate::spawn::spawn_std(command, deadline)
             .map_err(|error| spawn_error("spawn owned process group", error))?;
         let group = Self::created(child.id());
         Ok((child, group))
@@ -68,12 +70,12 @@ impl OwnedGroup {
         Self::spawn_tokio_before(command, None)
     }
     #[cfg(unix)]
-    pub(crate) fn spawn_tokio_before(
+    pub fn spawn_tokio_before(
         command: &mut tokio::process::Command,
         deadline: Option<std::time::Instant>,
     ) -> Result<(tokio::process::Child, Self)> {
         command.process_group(0);
-        let child = crate::process_spawn::spawn_tokio(command, deadline)
+        let child = crate::spawn::spawn_tokio(command, deadline)
             .map_err(|error| spawn_error("spawn owned async process group", error))?;
         // A freshly spawned, never-waited Tokio Child necessarily has its ID.
         let group = Self::created(child.id().expect("new unreaped Tokio child has an ID"));
@@ -120,7 +122,9 @@ impl OwnedGroup {
         group.verify_group()?;
         Ok(group)
     }
-    pub(crate) fn bind_child(&self, pid: u32) -> Result<(uuid::Uuid, u32)> {
+    /// Match an actual child handle's PID to this original unreaped group.
+    /// The returned identity is descriptive; it cannot construct owned exit evidence.
+    pub fn bind_child(&self, pid: u32) -> Result<(uuid::Uuid, u32)> {
         if self.reaped || pid != self.pid as u32 {
             return Err(Error::new(
                 "ownership_conflict",
@@ -131,7 +135,7 @@ impl OwnedGroup {
     }
     /// Observe this original unreaped leader without treating a terminal leader
     /// with still-draining group members as a live service.
-    pub(crate) fn leader_running_tokio(&self, child: &tokio::process::Child) -> Result<bool> {
+    pub fn leader_running_tokio(&self, child: &tokio::process::Child) -> Result<bool> {
         self.require_group_exit_observation()?;
         let pid = child.id().ok_or_else(|| {
             Error::new(
@@ -318,7 +322,7 @@ impl OwnedGroup {
     /// Wait only for terminal/group closure of the original unreaped Child.
     /// A false result retains the existing owner and grants no live identity.
     /// The callback is local cancellation/deadline checking, not a new admission.
-    pub(crate) fn await_exit_before_reap(
+    pub fn await_exit_before_reap(
         &mut self,
         deadline: std::time::Instant,
         mut current: impl FnMut() -> Result<()>,
@@ -353,7 +357,7 @@ impl OwnedGroup {
         }
         self.signal(signal, terminal)
     }
-    pub(crate) fn forced_kill_requested(&self) -> bool {
+    pub fn forced_kill_requested(&self) -> bool {
         self.forced_kill
     }
     #[cfg(unix)]

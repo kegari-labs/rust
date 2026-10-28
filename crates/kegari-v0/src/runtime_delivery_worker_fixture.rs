@@ -67,7 +67,7 @@ impl CommandBoundary for NoCommands {
     }
 }
 pub(crate) fn git(binary: &Path, cwd: &Path, args: &[&str]) {
-    let output = kegari_v0::process_group::OwnedGroup::spawn_std(
+    let output = kegari_process::group::OwnedGroup::spawn_std(
         Command::new(binary)
             .current_dir(cwd)
             .env_clear()

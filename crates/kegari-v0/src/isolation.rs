@@ -1458,7 +1458,7 @@ fn spawn_command_inner(
     // The original absolute cutoff survives preflight, journal I/O and lock
     // waits. Synchronous spawn itself cannot be preempted by an async timeout.
     let timeout = remaining_bundle_timeout(timeout, started, original_deadline)?;
-    let (mut child, mut group) = crate::process_group::OwnedGroup::spawn_tokio_before(
+    let (mut child, mut group) = kegari_process::group::OwnedGroup::spawn_tokio_before(
         &mut command,
         Some(started + timeout),
     )?;
@@ -1664,8 +1664,8 @@ impl Drop for CommandOutputTasks {
 
 struct CommandProcess {
     child: tokio::process::Child,
-    group: crate::process_group::OwnedGroup,
-    reaped: Option<crate::process_group::OwnedGroupExit>,
+    group: kegari_process::group::OwnedGroup,
+    reaped: Option<kegari_process::group::OwnedGroupExit>,
     outputs: std::sync::Arc<CommandOutputs>,
     guard: Option<crate::process_records::SpawnGuard>,
     journal_retired: bool,
@@ -1679,7 +1679,7 @@ struct CommandProcess {
 impl CommandProcess {
     fn new(
         child: tokio::process::Child,
-        group: crate::process_group::OwnedGroup,
+        group: kegari_process::group::OwnedGroup,
         guard: Option<crate::process_records::SpawnGuard>,
         capture_error: Option<Error>,
     ) -> Self {
@@ -1719,7 +1719,7 @@ impl CommandProcess {
                 .is_some_and(|at| at.elapsed() >= COMMAND_EXIT_GRACE)
         {
             self.group
-                .terminate(crate::process_group::Termination::Kill)?;
+                .terminate(kegari_process::group::Termination::Kill)?;
             self.kill_escalated = true;
         }
         Ok(())
@@ -1748,9 +1748,9 @@ impl CommandProcess {
             // Signalling still requires the original unreaped group identity.
             self.group
                 .terminate(if self.service && !self.kill_escalated {
-                    crate::process_group::Termination::Terminate
+                    kegari_process::group::Termination::Terminate
                 } else {
-                    crate::process_group::Termination::Kill
+                    kegari_process::group::Termination::Kill
                 })?;
         }
         observed.map(|_| ())

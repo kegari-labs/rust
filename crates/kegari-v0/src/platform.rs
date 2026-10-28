@@ -92,7 +92,7 @@ pub async fn launch_client_browser(url: &str) -> Result<()> {
         .kill_on_drop(true);
     let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let result = tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), async {
-        let mut child = crate::process_spawn::spawn_tokio(&mut command, Some(cutoff))?;
+        let mut child = kegari_process::spawn::spawn_tokio(&mut command, Some(cutoff))?;
         child.wait().await
     })
     .await
@@ -969,7 +969,7 @@ impl OwnedChild {
                 }
             });
         }
-        let mut child = crate::process_spawn::spawn_std(&mut command, None)
+        let mut child = kegari_process::spawn::spawn_std(&mut command, None)
             .map_err(|e| Error::io("spawn registered orchestration", e))?;
         let identity = match native::process(child.id()) {
             Ok(Some(identity))
@@ -1366,7 +1366,7 @@ pub async fn verify_installed_build(binary: &BinaryIdentity) -> Result<BuildInfo
         .process_group(0);
     let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut child =
-        crate::process_spawn::spawn_tokio(&mut command, Some(cutoff)).map_err(|error| {
+        kegari_process::spawn::spawn_tokio(&mut command, Some(cutoff)).map_err(|error| {
             if error.kind() == std::io::ErrorKind::TimedOut {
                 Error::new("timeout", "installed build verification timed out")
             } else {
@@ -1655,7 +1655,7 @@ async fn launchctl(args: &[String]) -> Result<bool> {
         .kill_on_drop(true);
     let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let status = tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), async {
-        let mut child = crate::process_spawn::spawn_tokio(&mut command, Some(cutoff))?;
+        let mut child = kegari_process::spawn::spawn_tokio(&mut command, Some(cutoff))?;
         child.wait().await
     })
     .await
@@ -1835,7 +1835,7 @@ mod owned_child_cleanup_tests {
     use super::*;
     #[test]
     fn failed_owned_handshake_drop_kills_and_reaps_only_its_direct_child() {
-        let child = crate::process_spawn::spawn_std(
+        let child = kegari_process::spawn::spawn_std(
             Command::new("/bin/sleep")
                 .arg("30")
                 .stdin(Stdio::null())

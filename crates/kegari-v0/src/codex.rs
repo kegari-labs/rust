@@ -1350,7 +1350,7 @@ impl RpcClient {
             command.current_dir(&guard.binding().cwd);
             guard.configure_tokio(&mut command)?;
         }
-        let (mut child, group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command)?;
+        let (mut child, group) = kegari_process::group::OwnedGroup::spawn_tokio(&mut command)?;
         let stdout = child
             .stdout
             .take()
@@ -1487,7 +1487,7 @@ impl RpcClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let (mut child, group) = crate::process_group::OwnedGroup::spawn_tokio(&mut command)?;
+        let (mut child, group) = kegari_process::group::OwnedGroup::spawn_tokio(&mut command)?;
         let stdout = child
             .stdout
             .take()
@@ -2830,7 +2830,7 @@ struct OwnedProviderProcess {
 impl OwnedProviderProcess {
     fn new(
         child: Child,
-        group: crate::process_group::OwnedGroup,
+        group: kegari_process::group::OwnedGroup,
         guard: Option<crate::process_records::SpawnGuard>,
     ) -> Self {
         Self {
@@ -2883,9 +2883,9 @@ impl OwnedProviderCancellation {
 }
 struct ProviderChild {
     child: Child,
-    group: crate::process_group::OwnedGroup,
+    group: kegari_process::group::OwnedGroup,
     guard: Option<crate::process_records::SpawnGuard>,
-    reaped: Option<crate::process_group::OwnedGroupExit>,
+    reaped: Option<kegari_process::group::OwnedGroupExit>,
 }
 impl ProviderChild {
     fn observe_exit(&mut self) -> Result<Option<std::process::ExitStatus>> {
@@ -2915,7 +2915,7 @@ async fn terminate_owned_provider(process: &std::sync::Arc<OwnedProviderProcess>
     }
     child
         .group
-        .terminate(crate::process_group::Termination::Terminate)?;
+        .terminate(kegari_process::group::Termination::Terminate)?;
     let grace = Instant::now() + Duration::from_secs(5);
     let deadline = grace + Duration::from_secs(5);
     let mut forced = false;
@@ -2927,7 +2927,7 @@ async fn terminate_owned_provider(process: &std::sync::Arc<OwnedProviderProcess>
         if !forced && Instant::now() >= grace {
             child
                 .group
-                .terminate(crate::process_group::Termination::Kill)?;
+                .terminate(kegari_process::group::Termination::Kill)?;
             forced = true;
         }
         if Instant::now() >= deadline {

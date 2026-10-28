@@ -1,10 +1,10 @@
 use kegari_digest::bytes_digest;
+use kegari_process::group::{OwnedGroup, Termination};
 use kegari_storage::PrivateDir;
 use kegari_types::error::Result;
 use kegari_v0::{
     control::Lease,
     platform::{BinaryIdentity, ProcessIdentity, ProcessObservation, ProcessProbe},
-    process_group::{OwnedGroup, Termination},
     process_records::{
         CheckBundleMember, CheckMemberKind, ProcessJournal, ProcessRecord, RecoveryState,
         SpawnBinding,
@@ -112,7 +112,7 @@ fn reap(child: &mut std::process::Child, group: &mut OwnedGroup) -> std::process
 fn reap_evidence(
     child: &mut std::process::Child,
     group: &mut OwnedGroup,
-) -> kegari_v0::process_group::OwnedGroupExit {
+) -> kegari_process::group::OwnedGroupExit {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         if let Some(exit) = group.try_reap_std(child).unwrap() {

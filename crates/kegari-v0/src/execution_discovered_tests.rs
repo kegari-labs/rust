@@ -10,7 +10,7 @@ use std::sync::{
 };
 
 fn git_run(binary: &Path, cwd: &Path, arguments: &[&str]) {
-    let output = crate::process_group::OwnedGroup::spawn_std(
+    let output = kegari_process::group::OwnedGroup::spawn_std(
         std::process::Command::new(binary)
             .current_dir(cwd)
             .env_clear()

@@ -747,7 +747,7 @@ mod tests {
         // This process-free fixture requires an uncontended reopen. Exclude
         // unrelated fork fixtures before opening the ownership descriptor;
         // their pre-exec copies could otherwise extend its actual lifetime.
-        let _spawn_boundary = crate::process_spawn::retirement().unwrap();
+        let _spawn_boundary = kegari_process::spawn::retirement().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().canonicalize().unwrap().join("host");
         let runtime = Uuid::new_v4();
