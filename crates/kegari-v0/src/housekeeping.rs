@@ -7,11 +7,7 @@ use crate::control::Receipt;
 use crate::control::ReceiptPhase;
 use crate::control::ReceiptStore;
 use crate::execution::ExecutionBinding;
-use crate::execution::ExecutionLimits;
-use crate::execution::HookInvocation;
 use crate::execution::HookLedger;
-use crate::execution::HookPhase;
-use crate::execution::LocalExecutor;
 use crate::execution::OwnedDirectory;
 use crate::git::Git;
 use crate::platform::OwnerRecord;
@@ -49,9 +45,19 @@ use uuid::Uuid;
 
 #[path = "housekeeping_families.rs"]
 mod families;
+#[path = "housekeeping_logs.rs"]
+mod logs;
 pub use families::{EnrolledDirectoryReuse, VerifiedDirectoryReuse};
+#[path = "housekeeping_codex.rs"]
+mod codex_cleanup;
 #[path = "housekeeping_hooks.rs"]
 mod hook_locations;
+#[path = "housekeeping_qualification.rs"]
+mod qualification;
+pub use qualification::{
+    HandoverCandidate, RecordedQualification, apply_recorded_handover, inspect_handover_candidate,
+    load_runtime_qualification, record_runtime_qualification,
+};
 
 const LOG_BYTES: u64 = 10 * 1024 * 1024;
 const LOG_FILES: usize = 10;
@@ -398,7 +404,6 @@ pub struct VerifiedCleanupExecution {
     current_actor: CurrentOperator,
     generation: u64,
     parent_command: Option<Uuid>,
-    directory: PrivateDir,
     housekeeping: Arc<Housekeeping>,
 }
 impl VerifiedCleanupExecution {
@@ -407,46 +412,6 @@ impl VerifiedCleanupExecution {
     }
     pub fn receipt(&self) -> &Receipt {
         &self.receipt
-    }
-    pub(crate) fn command_identity(
-        &self,
-    ) -> Result<(kegari_execution::ValidatedIsolation, Vec<String>, Duration)> {
-        let registration: ExecutionRegistration = self
-            .directory
-            .read(&format!("{}.json", self.plan.operation_id))?;
-        if canonical_digest(1, &registration)? != self.plan.registration_digest {
-            return Err(Error::new(
-                "stale_cleanup_plan",
-                "cleanup command registration changed",
-            ));
-        }
-        let workflow = Workflow::load_recorded(
-            registration.workflow_path.as_deref(),
-            registration.workflow_embedded.as_ref(),
-        )?;
-        if workflow.digest != self.plan.workflow_digest {
-            return Err(Error::new(
-                "stale_config",
-                "cleanup command workflow changed",
-            ));
-        }
-        let script = workflow
-            .front_matter
-            .hooks
-            .before_remove
-            .as_ref()
-            .ok_or_else(|| Error::new("scope_violation", "sealed cleanup has no removal hook"))?;
-        let isolation = registration.isolation.validate(crate::BUILD_ID)?;
-        OwnedDirectory::reopen(
-            &registration.marker,
-            &registration.directory_digest,
-            &isolation,
-        )?;
-        Ok((
-            isolation,
-            vec!["/bin/sh".into(), "-c".into(), script.clone()],
-            Duration::from_millis(workflow.front_matter.hooks.timeout_ms),
-        ))
     }
     pub(crate) fn token(&self) -> Arc<crate::control::HostProcessToken> {
         self.token.clone()
@@ -587,6 +552,16 @@ pub type CleanupFuture<'a, T> =
 /// A trusted host adapter. Production uses NativeCleanupProcesses; fixture
 /// adapters are explicit and cannot issue host-local process capabilities.
 pub trait CleanupProcesses: Send + Sync {
+    fn preflight_before_remove(
+        &self,
+        _binding: &ExecutionBinding,
+        _isolation: &IsolationPlan,
+    ) -> Result<()> {
+        Err(Error::new(
+            "unsupported_codex_lifecycle_hook",
+            "cleanup adapter does not provide Codex-backed before_remove",
+        ))
+    }
     fn read<'a>(
         &'a self,
         root: VerifiedCleanupReadRoot,
@@ -1214,9 +1189,15 @@ impl Housekeeping {
         .before_remove
         .is_some()
         {
-            kegari_execution::repository_command_prerequisite(
-                &registration.isolation.validate(crate::BUILD_ID)?,
-            )?;
+            self.processes
+                .get()
+                .ok_or_else(|| {
+                    Error::new(
+                        "process_authority_required",
+                        "cleanup process adapter is absent",
+                    )
+                })?
+                .preflight_before_remove(&registration.binding, &registration.isolation)?;
         }
         let actor = request.actor.clone();
         let state = self.control.snapshot()?;
@@ -1271,6 +1252,7 @@ impl Housekeeping {
             }
             Ok(())
         })?;
+        self.root.child("cleanup")?;
         let proof = Arc::new(VerifiedCleanupExecution {
             plan: initial,
             receipt,
@@ -1280,7 +1262,6 @@ impl Housekeeping {
             current_actor,
             generation,
             parent_command,
-            directory: self.root.child("cleanup")?,
             housekeeping: self.clone(),
         });
         proof.validate_current()?;
@@ -1465,6 +1446,13 @@ impl NativeCleanupProcesses {
     }
 }
 impl CleanupProcesses for NativeCleanupProcesses {
+    fn preflight_before_remove(
+        &self,
+        binding: &ExecutionBinding,
+        isolation: &IsolationPlan,
+    ) -> Result<()> {
+        codex_cleanup::preflight(&self.services, binding, isolation)
+    }
     fn read<'a>(
         &'a self,
         root: VerifiedCleanupReadRoot,
@@ -1495,90 +1483,7 @@ impl CleanupProcesses for NativeCleanupProcesses {
         })
     }
     fn before_remove<'a>(&'a self, request: CleanupHook<'a>) -> CleanupFuture<'a, ()> {
-        Box::pin(async move {
-            let (expected, _, _) = request.proof.command_identity()?;
-            if expected.digest() != request.isolation.digest() {
-                return Err(Error::new(
-                    "scope_violation",
-                    "removal hook isolation differs from its retained execution",
-                ));
-            }
-            // Observe admitted resource contents before entering the host effect gate.
-            expected.revalidate_resource_contents()?;
-            kegari_execution::repository_command_prerequisite(&expected)?;
-            let authority = self.scope(request.root, Some(request.proof.clone()))?;
-            let git = self.git.clone();
-            let scope = authority.clone();
-            let git = tokio::task::spawn_blocking(move || {
-                git.with_host_execution_scope(crate::git::HostGitExecutionScope {
-                    limits: crate::git::GitLimits::default(),
-                    authority: scope,
-                })
-            })
-            .await
-            .map_err(|_| {
-                Error::new("operation_uncertain", "cleanup Git preparation task ended")
-            })??;
-            let boundary = CleanupCommandBoundary {
-                authority: authority.clone(),
-            };
-            let executor = LocalExecutor {
-                isolation: request.isolation,
-                git: &git,
-                boundary: &boundary,
-                limits: ExecutionLimits {
-                    output_bytes: 16 * 1024,
-                    ..Default::default()
-                },
-                ownership: request.ownership,
-            };
-            let name = &request.ledger_name;
-            let mut ledger: HookLedger = request.directory.read(name)?;
-            let outcome = executor
-                .run_hook(
-                    &mut ledger,
-                    HookInvocation {
-                        binding: request.binding,
-                        workflow: request.workflow,
-                        phase: HookPhase::BeforeRemove,
-                        session: None,
-                        eligible_cleanup_plan: Some(request.proof.plan().digest()),
-                    },
-                    |next| request.directory.write(name, next),
-                )
-                .await;
-            authority.finish(json!({"before_remove_observed":outcome.is_ok()}))?;
-            let outcome = outcome?;
-            if !outcome.allows_next_phase || outcome.diagnostic_only {
-                return Err(Error::new(
-                    "cleanup_blocked",
-                    "before_remove hook did not succeed",
-                ));
-            }
-            Ok(())
-        })
-    }
-}
-struct CleanupCommandBoundary {
-    authority: Arc<crate::host_process::LocalProcessPermit>,
-}
-impl crate::execution::CommandBoundary for CleanupCommandBoundary {
-    fn evidence_class(&self) -> crate::execution::ExecutionEvidenceClass {
-        crate::execution::ExecutionEvidenceClass::ConfinedExecution
-    }
-    fn start(
-        &self,
-        isolation: &kegari_execution::ValidatedIsolation,
-        argv: &[String],
-        timeout: Duration,
-        output_limit: usize,
-    ) -> Result<Box<dyn crate::execution::StartedCommand>> {
-        Ok(Box::new(self.authority.start_cleanup_command(
-            isolation,
-            argv,
-            timeout,
-            output_limit,
-        )?))
+        Box::pin(codex_cleanup::run(&self.services, request))
     }
 }
 
@@ -2204,9 +2109,9 @@ pub struct HandoverInfo {
     /// Explicit process journal compatibility, including schema-3 check members.
     /// Older readers must not silently discard retained bundle ancestry.
     pub process_schema: u32,
-    /// The replacement must understand automatic command-domain records.
-    /// Schema support alone does not relax their exact-build policy binding.
-    pub managed_execution_schema: u32,
+    /// Codex-native result records are distinct from the removed custom executor.
+    /// Historical execution records never become native Codex evidence.
+    pub codex_execution_schema: u32,
     /// Optional file selection and embedded origins in config, instructions and
     /// retained cleanup records. Asset names alone are not a reader contract.
     pub workflow_source_schema: u32,
@@ -2221,12 +2126,12 @@ pub struct HandoverInfo {
 }
 pub fn handover_info() -> Result<HandoverInfo> {
     Ok(HandoverInfo {
-        schema_version: 5,
+        schema_version: 6,
         api_version: 1,
         config_schema: 1,
         receipt_schema: 1,
         process_schema: 3,
-        managed_execution_schema: 5,
+        codex_execution_schema: 1,
         workflow_source_schema: 1,
         repository_policy_schema: 1,
         runtime_version: env!("CARGO_PKG_VERSION").into(),
@@ -2461,12 +2366,12 @@ async fn replacement_info(binary: &BinaryIdentity) -> Result<HandoverInfo> {
     let info =
         observed.map_err(|_| Error::new("timeout", "replacement metadata probe timed out"))??;
     binary.revalidate(true)?;
-    if info.schema_version != 5
+    if info.schema_version != 6
         || info.api_version != 1
         || info.config_schema != 1
         || info.receipt_schema != 1
         || info.process_schema != 3
-        || info.managed_execution_schema != 5
+        || info.codex_execution_schema != 1
         || info.workflow_source_schema != 1
         || info.repository_policy_schema != 1
         || info.instruction_schema != kegari_context::instructions::ASSEMBLY_SCHEMA
@@ -2758,7 +2663,6 @@ impl Housekeeping {
             || input.preparation.work_key != input.authority.work_key()?
             || !plan.source_writes.is_empty()
             || !plan.resource_writes.is_empty()
-            || plan.managed_execution.is_some()
             || plan.cwd != plan.repository
             || plan.repository.parent() != Some(plan.execution_root.as_path())
         {

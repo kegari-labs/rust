@@ -15,18 +15,20 @@
     {
       "kind": "state_equals",
       "id": "nochange",
-      "pointer": "/outcome",
+      "pointer": "/evaluation_child_proposal/claim/disposition/kind",
       "expected": "no_change"
     },
     {
       "kind": "state_equals",
-      "id": "commits",
-      "pointer": "/commit_count",
-      "expected": 0
+      "id": "same_source_head",
+      "pointer": "/evaluation_child_proposal/source_head_unchanged",
+      "expected": true
     },
     {
-      "kind": "honest_summary",
-      "id": "truthful_summary"
+      "kind": "state_equals",
+      "id": "completed_turn_proposal",
+      "pointer": "/evaluation_child_proposal/proposed",
+      "expected": true
     },
     {
       "kind": "no_effects",

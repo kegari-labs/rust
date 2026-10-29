@@ -162,7 +162,10 @@ impl OwnedTargetObservationRef {
         Ok(())
     }
 }
-fn same_target(left: &ProductionTargetBaseline, right: &ProductionTargetBaseline) -> bool {
+pub(super) fn same_target(
+    left: &ProductionTargetBaseline,
+    right: &ProductionTargetBaseline,
+) -> bool {
     let mut normalized = left.clone();
     normalized.observed_at = right.observed_at;
     normalized == *right
@@ -187,7 +190,10 @@ impl ProductionObserver {
             ));
         }
         if baseline.baseline.deployment_free {
-            if !baseline.targets.is_empty() || !baseline.owned_targets.is_empty() {
+            if !baseline.targets.is_empty()
+                || !baseline.owned_targets.is_empty()
+                || !baseline.external_targets.is_empty()
+            {
                 return Err(blocked(
                     "deployment-free baseline unexpectedly contains target proofs",
                 ));
@@ -199,7 +205,9 @@ impl ProductionObserver {
                 "owned target baseline lacks configured deployment inventory",
             ));
         };
-        if steps.len() != baseline.targets.len() || steps.len() != baseline.owned_targets.len() {
+        if steps.len() != baseline.targets.len()
+            || steps.len() != baseline.owned_targets.len() + baseline.external_targets.len()
+        {
             return Err(blocked(
                 "owned target baseline provenance inventory is incomplete",
             ));

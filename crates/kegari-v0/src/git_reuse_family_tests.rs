@@ -174,6 +174,9 @@ struct ReuseFixture {
 }
 impl ReuseFixture {
     fn new() -> Self {
+        Self::with_write_scope(false)
+    }
+    fn with_write_scope(writable: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let binary = pinned_git(&root);
@@ -251,16 +254,26 @@ impl ReuseFixture {
             .source = source.to_string_lossy().into();
         registration.complete_setup(&config).unwrap();
         let boundary = IsolationPlan {
-            managed_execution: None,
             schema_version: 1,
-            role: ExecutionRole::Validation,
+            role: if writable {
+                ExecutionRole::Child
+            } else {
+                ExecutionRole::Validation
+            },
             execution_root: execution.path().into(),
             repository: source.clone(),
             cwd: source.clone(),
             scratch: execution.child("scratch").unwrap().path().into(),
             read_roots: vec![],
             resource_writes: vec![],
-            source_writes: vec![],
+            source_writes: if writable {
+                vec![kegari_execution::PathGrant {
+                    path: source.join("file.txt"),
+                    directory: false,
+                }]
+            } else {
+                vec![]
+            },
             forbidden_roots: vec![registration.root().path().into()],
         }
         .validate(crate::BUILD_ID)
@@ -1259,4 +1272,38 @@ fn retained_execution_metadata_uses_protected_family_without_repointing_configur
     );
     assert!(read_root().is_err());
     fs::write(marker, bytes).unwrap();
+}
+
+#[test]
+fn cold_source_reuse_preserves_scoped_dirty_files_and_index() {
+    let fixture = ReuseFixture::with_write_scope(true);
+    let source = &fixture.source;
+    fs::write(source.join("file.txt"), b"staged retained edit\n").unwrap();
+    git_run(&fixture.git.binary.path, source, &["add", "file.txt"]);
+    fs::write(source.join("file.txt"), b"later retained working edit\n").unwrap();
+    let index = fs::read(source.join(".git/index")).unwrap();
+    assert!(fixture.verify().is_err());
+    let proof = fixture
+        .git
+        .verify_resumable_execution(&fixture.ownership, &fixture.binding, &fixture.boundary)
+        .unwrap();
+    proof.revalidate_filesystem().unwrap();
+    assert_eq!(fs::read(source.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        fs::read(source.join("file.txt")).unwrap(),
+        b"later retained working edit\n"
+    );
+    fs::write(source.join("file.txt"), b"changed after observation\n").unwrap();
+    assert!(proof.revalidate_filesystem().is_err());
+    fs::write(source.join("outside.txt"), b"outside grant\n").unwrap();
+    assert!(
+        fixture
+            .git
+            .verify_resumable_execution(&fixture.ownership, &fixture.binding, &fixture.boundary)
+            .is_err()
+    );
+    assert!(
+        source.join("outside.txt").exists(),
+        "refusal preserves files"
+    );
 }

@@ -1,12 +1,21 @@
 # One explicit native evaluation trial
 
-The caller implements one authenticated local trial through the existing runtime,
-Control owner, account limits, worker preparation and native terminal evidence.
-The caller passes the recorded local component and full-suite checks; native
-execution remains **unqualified**. The first independent-review fixture is migrated
-and retains an unresolved profile. Actual provider/sandbox qualification, native
-cleanup and human calibration remain incomplete. See [local validation](../validation/LOCAL-NATIVE-EVALUATION.md)
-and [the current progress](../PROGRESS.md) before planning a run.
+This documents the existing authenticated local one-trial caller, not a completed
+Codex-native workflow or a current execution authorization. Its local evidence is
+recorded in [historical validation](../validation/LOCAL-NATIVE-EVALUATION.md).
+Fresh independent-review and four fresh child contexts are present. The child
+route has focused simulated-provider evidence through actual authorization
+publication and the ordinary admission context. Broader contexts and continuation
+preparation remain incomplete, the profile is unresolved, and no live trial is
+implied.
+
+[SPEC 1.5](../SPEC.md) requires repository execution through native Codex tools.
+Any custom-executor assumptions in the caller/fixtures must migrate with their
+production code and versioned assets. Keep Kegari's workflow authority, account
+limits, actual app-server ownership and protected reports; do not retain a
+competing executor to satisfy older grading projections. Missing evaluation
+functionality follows working core flows in milestone 0.6; live compatibility,
+comprehensive trials and human calibration belong to separately authorized 0.7.
 
 The caller uses one monotonic execution deadline across source preparation and
 final collection, stages the exact declared scorer in private host storage, and
@@ -40,20 +49,23 @@ existing provider, actor, routing, workflow or repository contracts with it.
 
 An evaluation workspace must have:
 
-- `independent_review.enabled = true`, an exact `profiles.independent_review`,
-  and one Codex account matching the suite's resolved profile binding.
+- For schema 1 review trials, `independent_review.enabled = true` and an exact
+  `profiles.independent_review`. Schema 2 child trials use the declared child's
+  routing labels and profile instead. Both require one Codex account matching
+  the suite's resolved profile binding.
 - One selected repository and PR author, no organization selection, no test
   resources, `release.mode = "manual"`, and repository `deployment = "none"`.
 - Exact reserved connection names `evaluation-<WORKSPACE_UUID>-github` and
   `evaluation-<WORKSPACE_UUID>-linear`. Their endpoints are respectively
-  `https://github.<WORKSPACE_UUID>.evaluation.invalid` and
+  `https://github.<WORKSPACE_UUID>.evaluation.invalid/` and
   `https://linear.<WORKSPACE_UUID>.evaluation.invalid/graphql`. The repository
   hostname is the same GitHub hostname. The ordinary configuration schema still
   requires credential references; use isolated fixture values, not product tokens.
 - A positive synthetic GitHub actor distinct from the declared PR author, and
   synthetic Linear actor/workspace UUIDs. These are disclosed fixture identities;
   the Codex account and native execution are real.
-- `evaluation.schema_version = 1`; exact suite manifest path/digest, case, variant,
+- `evaluation.schema_version = 1` for review, or `2` with `child.parent_id` and
+  `child.child_id` for the supported fresh child route; exact suite manifest path/digest, case, variant,
   profile slot, repository/author IDs, starting PR number and full base/head Git OIDs; separate
   private `report_root` and disposable `fixture_root` paths. These roots must not
   overlap each other, the worker execution root or configured repository sources.
@@ -68,8 +80,10 @@ identity and preserving prior reports.
 Reserved connections always receive the strict local synthetic transport. An
 undeclared namespace fails closed; it cannot fall back to real HTTP. Before an
 actual source proof, the wire exposes only declared identity metadata and an
-empty PR list. After activation it serves only the exact derived trial PR/head and
-bounded feedback/readback. Other endpoints and mutations refuse. Ordinary
+empty PR list. After activation schema 1 serves the exact derived trial PR/head
+and bounded feedback/readback. Schema 2 serves the captured issue hierarchy and
+only its bounded authorization-publication comment route; it creates no trial PR.
+Other endpoints and mutations refuse. Ordinary
 selection, product delivery and automatic recovery exclude this workspace, and
 the final preparation/model gates independently require the genuine trial request.
 Omitting `evaluation` preserves ordinary workspace defaults and gives no trial
@@ -80,8 +94,10 @@ permission. Config checks do not activate a source or qualify native execution.
 Supply an already prepared disposable Git repository through the configured
 repository `source`. The first caller reads it through an owned, journaled
 metadata operation; it does not initialize, commit, checkout or fetch it. It
-requires actual distinct full base/head OIDs, a plain changed one-parent head,
-base ancestry, clean HEAD at that head, and exact fixture file bytes and modes.
+requires clean HEAD at the declared full OID and exact fixture file bytes and
+modes. Review trials additionally require distinct full base/head OIDs, a plain
+changed one-parent head and base ancestry. Fresh child trials require base/head
+to be the same actual starting commit; the source need not invent a prior change.
 The model subsequently receives the ordinary owned clone. Missing objects,
 source drift, signed/merge commit forms outside this subset or wrong namespace
 bindings refuse before model work.
@@ -99,7 +115,7 @@ Its complete context requires the workspace name `native_independent` and exact
 declared repository/actor metadata; the fragment uses that name. Profile/account
 selection and source preparation do not follow from this fixture declaration.
 
-The selected suite variant must have role and phase `independent_review`, seed
+For review trials the selected suite variant must have role and phase `independent_review`, seed
 `fresh`, an exact matching profile slot, and declared positive finite turns,
 seconds and repetition count. Existing independent variants still declaring phase
 `review` are incompatible. The version-2 native context binding declares all host
@@ -121,10 +137,45 @@ rejects omission or substitution. Expected pathname comes from the original
 owner, not observed context. The scalar grants no file access, and ordinary
 independent context remains `evidence={}`. Existing version-1/2 serialization is
 unchanged. This code support does not qualify an E07 native trial or its scorer.
-Workflow/scratch substitution, tool schemas, instruction digest, isolated
-read-only source permissions and private scorer/report denial remain exact.
+Fixture substitutions, instruction/tool identities and private scorer/report
+denial remain exact for their declared version. The migrated role also requires
+supported no-repository-code-execution enforcement; a read-only source profile
+alone cannot establish that restriction.
 The scorer must grade native observations and structured review claims without
 promoting a verdict, self-report or replay trace into proof of effects.
+
+### Fresh child trials
+
+Schema 2 currently admits `V0-E01` implementation, testing and documentation,
+and `V0-E02` no-change, all with phase `implementation`, fresh seed and
+repetition `1`. Its `child` declaration selects the exact parent and role-matched
+issue from captured `native-issues.json`.
+The shipped fixture requires workspace name `Kegari evaluation`, repository
+`101`, and its literal issue, selection-state and routing-label metadata. The
+suite profile must match those labels. A different child, missing issue or
+incompatible profile refuses before a model request.
+
+The caller observes the supplied real Git baseline, activates only the reserved
+synthetic namespace, and uses the ordinary `AuthorizationPublisher`, signed
+parent snapshot, observation refresh and `FreshGate` before ordinary child
+preparation. Schema-4 context binding permits named host identity and verified
+authorization-comment slots. All issue text, scope, history and other task facts
+remain literal fixture data; observed context is never copied into the expected
+template. Provider state is synthetic, while actual Codex account/process work
+would remain real and requires separate operator authorization.
+
+The fresh child scorers require actual changed files and source-bound native check
+evidence plus a recorded proposal from the completed turn. That proposal remains
+untrusted: it establishes neither successful delivery nor acceptance. Its typed
+prose summary is retained for the existing human truthfulness rubric instead of
+requiring an invented machine summary. Testing additionally retains its regression-sensitivity check, documentation
+its exact required text, and no-change its zero source delta, unchanged actual
+source HEAD and passing validation. Other cases, repetitions and retained
+continuations still require their own production preparation. Suite version 5
+also enrolls five [E09 discovery cases](evaluations.md#e09-discovery-declarations).
+Their declaration is not an execution authorization or evidence of live
+compatibility; actual source and blocker/bootstrap integrations must be present
+before their routes can be used.
 
 ## Command syntax after the prerequisites are complete
 
@@ -186,7 +237,7 @@ No automatic cold resume or replacement admission is provided.
 `evaluation.pull_request` is the first number of a reserved finite range, not the
 number assigned to every trial. The complete suite plan determines a zero-based
 ordinal for each full case/variant/profile/repetition key. That trial's number is
-`first + ordinal`; all 56 slots reserve the corresponding range, including slots
+`first + ordinal`; all 66 slots reserve the corresponding range, including slots
 this first caller cannot yet run. Changing the selected binding's variant does not
 reallocate the same range for another suite. The protected subject plan, original
 commands and source-read receipts retain that mapping across restart. Missing or
@@ -196,7 +247,7 @@ history for refusal and consistency checks; it grants no model authority.
 
 ## Bounds, reports and interpretation
 
-The shipped suite declares 56 attempts and 10,080 seconds, with two repetitions,
+The shipped suite declares 66 attempts and 11,880 seconds, with two repetitions,
 three turns and 180 seconds per variant. Those are plan ceilings, not permission
 to spend or run them. This command selects one existing slot. Its native session
 uses the declared finite turn/time limits and the existing account limits; it
@@ -218,9 +269,11 @@ Inspect the original command with `operation show COMMAND_OPERATION_UUID` and th
 specific report directory with `kegari-v0-evaluation inspect`. The command ID and
 worker/request ID are distinct; use the returned command receipt for operation
 inspection. Lost client connections do not clear ownership. A joined evaluator
-task alone is not process exit: actual model/provider/hook receipts and the
-execution registry must establish exit; uncertainty retains the hold and synthetic
-namespace. Report or grading failure does not skip native finalization.
+task alone is not process exit. Retain actual Kegari-owned host-process evidence
+and supported Codex terminal/writer outcomes separately; unknown effects retain
+the hold and synthetic namespace. Do not create per-internal-command journals or
+infer full descendant closure from app-server exit. Report or grading failure
+does not skip owned host-process finalization.
 
 A scorer-load or grading error retains the collected report with a structured
 `grading_error` and its exact stage/error. Completed execution without a grade is
@@ -269,7 +322,11 @@ These observations do not establish a full read/effect/output inventory, canary
 non-disclosure, E07 success or native containment. Existing rubric results retain
 their existing scope; no fixture or scoring version changes through capture.
 
-The same declared trials retain an optional `independent_broker` diagnostic.
+The existing declared trials retain an optional `independent_broker` diagnostic.
+Its historical context/source-tool observations are not a requirement to preserve
+those replaced tools. After migration, available Codex observations and the
+remaining workflow/provider calls must retain their distinct provenance; missing
+coverage cannot be filled by relabelling old broker data.
 It binds original host-call IDs to their started and finished journal records,
 records digests from the actual returned context/source bytes, and retains the
 prepared feedback request identity with its observed Control receipt. Collection
@@ -399,5 +456,6 @@ A single actual trial would supply evidence only for that declared condition.
 Synthetic GitHub/Linear feedback is not real-provider qualification. Passing
 predicates still require human review, and neither reports nor this caller grant
 human acceptance, deployment/release permission or product readiness. Full suite
-migration/repetitions, native composition and OS/provider qualification remain
-separate until completed and recorded.
+migration/repetitions and Codex/provider qualification remain separate until
+completed and recorded. They are later qualification requirements, not a barrier
+to independent source implementation during the six-hour goal.

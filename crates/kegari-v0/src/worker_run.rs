@@ -57,6 +57,15 @@ use uuid::Uuid;
 #[path = "worker_recovery_retained.rs"]
 mod retained;
 pub use retained::RetainedResumeSession;
+#[path = "worker_recovery_cold.rs"]
+mod cold;
+pub(crate) use cold::{
+    ColdResumeSession, ResumePredecessor, require_closed_receipt, verify_native_history,
+};
+
+#[path = "worker_recovery_validation.rs"]
+mod cold_validation;
+pub(crate) use cold_validation::ColdValidationCheckpoint;
 
 #[path = "worker_recovery.rs"]
 mod recovery;
@@ -107,6 +116,42 @@ impl PreparedRun {
     }
     pub fn permissions(&self) -> &PermissionConfiguration {
         &self.permissions
+    }
+    pub(crate) fn with_unborn_bootstrap(
+        mut self,
+        bootstrap: crate::worker::UnbornExecution,
+    ) -> Result<Self> {
+        Arc::get_mut(&mut self.contract)
+            .ok_or_else(|| Error::new("worker_binding", "prepared contract already shared"))?
+            .attach_unborn_bootstrap(bootstrap)?;
+        Ok(self)
+    }
+    pub(crate) fn with_validation_prefix(
+        mut self,
+        prefix: crate::validation::ValidationPrefix,
+    ) -> Result<Self> {
+        Arc::get_mut(&mut self.contract)
+            .ok_or_else(|| Error::new("worker_binding", "prepared contract already shared"))?
+            .attach_validation_prefix(prefix)?;
+        Ok(self)
+    }
+    pub(crate) fn with_recovered_validation(
+        mut self,
+        checkpoint: &ColdValidationCheckpoint,
+    ) -> Result<Self> {
+        Arc::get_mut(&mut self.contract)
+            .ok_or_else(|| Error::new("worker_binding", "prepared contract already shared"))?
+            .attach_recovered_validation(checkpoint)?;
+        Ok(self)
+    }
+    pub(crate) fn with_review_archive(
+        mut self,
+        archive: crate::validation_archive::ResolvedValidationArchive,
+    ) -> Result<Self> {
+        Arc::get_mut(&mut self.contract)
+            .ok_or_else(|| Error::new("worker_binding", "prepared contract already shared"))?
+            .attach_review_archive(archive)?;
+        Ok(self)
     }
 }
 /// Preparation reads exact current files and shipped assets; it starts no model,
@@ -261,7 +306,7 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
         provider_discovery: input.provider_discovery,
         known_secrets: &input.known_secrets,
     })?;
-    let contract = Arc::new(WorkerContract::new_configured(
+    let mut contract = WorkerContract::new_configured(
         ContractInput {
             assembled,
             authority: input.authority,
@@ -274,7 +319,9 @@ pub fn prepare(input: Preparation) -> Result<PreparedRun> {
             read_resources: input.read_resources,
         },
         workspace,
-    )?);
+    )?;
+    contract.redact_known_secrets(input.known_secrets);
+    let contract = Arc::new(contract);
     Ok(PreparedRun {
         contract,
         isolation,
@@ -316,6 +363,23 @@ pub type RunFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>
 pub trait RunHooks: Send + Sync {
     fn before<'a>(&'a self, permit: &'a Permit) -> RunFuture<'a, ()>;
     fn launched<'a>(&'a self, permit: &'a Permit) -> RunFuture<'a, ()>;
+    fn codex_before<'a>(
+        &'a self,
+        _permit: &'a Permit,
+        _rpc: &'a mut RpcClient,
+        _permissions: &'a PermissionConfiguration,
+    ) -> RunFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+    fn codex_after<'a>(
+        &'a self,
+        _permit: &'a Permit,
+        _state: &'a SessionState,
+        _rpc: &'a mut RpcClient,
+        _permissions: &'a PermissionConfiguration,
+    ) -> RunFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
     fn after<'a>(
         &'a self,
         permit: &'a Permit,
@@ -722,7 +786,13 @@ impl RequestGate for ProtocolGate {
             &self.permit,
             request,
             self.resume_source.as_ref(),
-            || self.fresh(),
+            || {
+                self.fresh()?;
+                if matches!(method, "turn/start" | "turn/steer" | "review/start") {
+                    self.host.before_model_request(self.permit.operation_id)?;
+                }
+                Ok(())
+            },
             transmit,
         )?;
         self.pending
@@ -1279,7 +1349,13 @@ impl AdmittedTrial {
         // All fallible terminal validation is complete. Preserve the original
         // private observation across errors so owned cleanup can retry safely.
         let observation = terminal.take().expect("validated retained terminal");
-        let (outcome, error, hook_error) = observation.into_result();
+        let (mut outcome, mut error, hook_error) = observation.into_result();
+        if matches!(outcome, RunOutcome::Completed)
+            && let Some(blocker) = session.broker.reported_child_blocker()
+        {
+            outcome = RunOutcome::Blocked;
+            error = Some(blocker);
+        }
         let hook_error = hook_error.or_else(|| after.as_ref().err().cloned());
         drop(terminal);
         let validation_history = Some(session.broker.seal_validation_history());
@@ -1651,7 +1727,6 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
     } = task;
     let start = tokio::time::Instant::now();
     let deadline = start + Duration::from_secs(options.max_seconds);
-    broker.bind_inspection_deadline(deadline.into_std());
     let mut client = None;
     let mut core = Box::pin(async {
         hooks.before(&permit).await?;
@@ -1690,6 +1765,9 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
             .validate_catalog(&rpc.discover_models().await?)?;
         broker.rate_limits(&rpc.rate_limits().await?)?;
         rpc.verify_execution_configuration(&prepared.permissions, &prepared.isolation.plan().cwd)
+            .await?;
+        hooks
+            .codex_before(&permit, rpc, &prepared.permissions)
             .await?;
         if let Some(resume) = &options.resume {
             broker.checkpoint(&state, Some("thread/resume"))?;
@@ -1811,12 +1889,26 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
         result
     };
     drop(core);
-    if result.is_err() {
+    if let Some(rpc) = client.as_mut() {
+        // A known failed session can still run its configured lifecycle hook
+        // while its original authority remains valid. Fenced/interrupted or
+        // uncertain transports cannot gain new authority through this path.
+        if !interrupted && state.turns_started > 0 {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let after = hooks.codex_after(&permit, &state, rpc.client_mut(), &prepared.permissions);
+            if tokio::time::timeout(remaining, after).await.is_err() {
+                control.fence(permit.operation_id)?;
+            }
+        }
+        if result.is_err() {
+            control.fence(permit.operation_id)?;
+            registry.cancel_fenced(&control, permit.operation_id)?;
+        }
+        let _ = rpc.client_mut().terminate_command().await;
+        rpc.terminate().await?;
+    } else if result.is_err() {
         control.fence(permit.operation_id)?;
         registry.cancel_fenced(&control, permit.operation_id)?;
-    }
-    if let Some(rpc) = client.as_mut() {
-        rpc.terminate().await?;
     }
     if interrupted {
         state.interruption("owned_cancellation");
@@ -1848,7 +1940,12 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
     drop(after);
     broker.record_after_hook(hook_result.as_ref())?;
     let hook_error = hook_result.err();
+    let reported_blocker = result
+        .is_ok()
+        .then(|| broker.reported_child_blocker())
+        .flatten();
     let outcome = match &result {
+        Ok(()) if reported_blocker.is_some() => RunOutcome::Blocked,
         Ok(()) => RunOutcome::Completed,
         Err(_) if interrupted => RunOutcome::Interrupted,
         Err(_) if state.turns_started == 0 => RunOutcome::Blocked,
@@ -1860,7 +1957,7 @@ async fn execute(task: ExecutionTask) -> Result<RunCompletion> {
         operation_id: permit.operation_id,
         state,
         outcome,
-        error: result.err(),
+        error: result.err().or(reported_blocker),
         elapsed_ms: start.elapsed().as_millis().min(u64::MAX as u128) as u64,
         hook_error,
         checks: broker.take_verified_checks(),
@@ -1945,352 +2042,10 @@ impl RunHooks for NonExecutingRunHooks {
         })
     }
 }
-pub struct ExecutorHookServices {
-    pub contract: Arc<WorkerContract>,
-    pub control: Arc<ControlHost>,
-    pub host: Arc<dyn WorkerHost>,
-    pub execution: Arc<crate::worker::WorkerExecution>,
-    pub registry: Arc<ExecutionRegistry>,
-    /// Retained private ledger from the owned directory's actual after_create
-    /// phase. An absent/uninitialized ledger never fabricates creation success.
-    pub records: kegari_storage::PrivateDir,
-    pub session_id: Uuid,
-}
-#[derive(Clone)]
-pub struct ExecutorRunHooks {
-    contract: Arc<WorkerContract>,
-    control: Arc<ControlHost>,
-    host: Arc<dyn WorkerHost>,
-    execution: Arc<crate::worker::WorkerExecution>,
-    registry: Arc<ExecutionRegistry>,
-    records: Arc<kegari_storage::PrivateDir>,
-    ledger: Arc<tokio::sync::Mutex<crate::execution::HookLedger>>,
-    session_id: Uuid,
-    _lock: Arc<kegari_storage::ExclusiveLock>,
-}
-impl ExecutorRunHooks {
-    pub(crate) fn new_reused(
-        input: ExecutorHookServices,
-        enrollment: &crate::housekeeping::EnrolledDirectoryReuse,
-    ) -> Result<Self> {
-        if &input.execution.binding != enrollment.binding()
-            || input.contract.instructions().manifest.operation_id != enrollment.operation_id()
-        {
-            return Err(Error::new(
-                "hook_gate",
-                "successor hook ledger differs from actual family enrollment",
-            ));
-        }
-        let ledger = crate::execution::HookLedger::for_reused_execution(
-            enrollment,
-            input.contract.workflow(),
-        )?;
-        let lock = input.records.lock("hooks.lock")?;
-        match input
-            .records
-            .read::<crate::execution::HookLedger>("hooks.json")
-        {
-            Err(error) if error.code == "record_missing" => {
-                input.records.write("hooks.json", &ledger)?
-            }
-            Ok(_) => {
-                return Err(Error::new(
-                    "reconciliation_required",
-                    "successor hooks already have retained history",
-                ));
-            }
-            Err(error) => return Err(error),
-        }
-        drop(lock);
-        Self::new(input)
-    }
-    pub fn new(input: ExecutorHookServices) -> Result<Self> {
-        let contract = &input.contract;
-        let root = input.records.path();
-        if !contract
-            .instructions()
-            .manifest
-            .role
-            .permits_repository_execution()
-            || input.session_id.is_nil()
-            || input.execution.binding.operation_id != contract.instructions().manifest.operation_id
-            || input.execution.binding.isolation_digest != contract.isolation().digest()
-        {
-            return Err(Error::new(
-                "scope_violation",
-                "hook executor requires the exact executable worker binding",
-            ));
-        }
-        for grant in std::iter::once(&contract.isolation().plan().repository)
-            .chain(std::iter::once(&contract.isolation().plan().scratch))
-            .chain(
-                contract
-                    .isolation()
-                    .plan()
-                    .read_roots
-                    .iter()
-                    .map(|grant| &grant.path),
-            )
-        {
-            if root.starts_with(grant) || grant.starts_with(root) {
-                return Err(Error::new(
-                    "scope_violation",
-                    "hook ledger must be outside worker grants",
-                ));
-            }
-        }
-        if !contract
-            .isolation()
-            .plan()
-            .forbidden_roots
-            .iter()
-            .any(|path| root.starts_with(path))
-        {
-            return Err(Error::new(
-                "scope_violation",
-                "hook ledger needs an explicit forbidden root",
-            ));
-        }
-        let lock = input.records.lock("hooks.lock")?;
-        let ledger: crate::execution::HookLedger = input.records.read("hooks.json")?;
-        if ledger.binding_digest != canonical_digest(1, &input.execution.binding)?
-            || !ledger.initialized
-        {
-            return Err(Error::new(
-                "reconciliation_required",
-                "owned directory creation hook is absent, unknown or bound to another operation",
-            ));
-        }
-        Ok(Self {
-            contract: input.contract,
-            control: input.control,
-            host: input.host,
-            execution: input.execution,
-            registry: input.registry,
-            records: Arc::new(input.records),
-            ledger: Arc::new(tokio::sync::Mutex::new(ledger)),
-            session_id: input.session_id,
-            _lock: Arc::new(lock),
-        })
-    }
-    fn fresh(&self, permit: &Permit) -> Result<()> {
-        if permit.operation_id != self.execution.binding.operation_id
-            || permit.scope_digest != self.contract.scope_digest()
-        {
-            return Err(Error::new(
-                "scope_violation",
-                "hook permit differs from current worker",
-            ));
-        }
-        self.host.verify_owner(&permit.lease)?;
-        crate::worker::effective_authority(
-            self.host.as_ref(),
-            permit.operation_id,
-            self.contract.authority(),
-        )
-        .map(|_| ())
-    }
-    fn executor(&self) -> crate::execution::LocalExecutor<'_> {
-        crate::execution::LocalExecutor {
-            isolation: self.contract.isolation(),
-            git: &self.execution.git,
-            boundary: self.execution.boundary.as_ref(),
-            limits: self.execution.limits.clone(),
-            ownership: &self.execution.ownership,
-        }
-    }
-    async fn phase(&self, permit: &Permit, phase: crate::execution::HookPhase) -> Result<()> {
-        let owned = self.clone();
-        let permit = permit.clone();
-        let handle = tokio::runtime::Handle::current();
-        // Scoped Git preflight and source hashing are synchronous. Keep them on
-        // a bounded owned task so local control remains responsive while waiting.
-        tokio::task::spawn_blocking(move || handle.block_on(owned.phase_owned(&permit, phase)))
-            .await
-            .map_err(|_| Error::new("operation_uncertain", "owned hook dispatcher interrupted"))?
-    }
-    async fn phase_owned(&self, permit: &Permit, phase: crate::execution::HookPhase) -> Result<()> {
-        let mut ledger = self.ledger.lock().await;
-        let executor = self.executor();
-        let prepared = executor.prepare_hook(
-            &mut ledger,
-            crate::execution::HookInvocation {
-                binding: &self.execution.binding,
-                workflow: self.contract.workflow(),
-                phase,
-                session: Some(self.session_id),
-                eligible_cleanup_plan: None,
-            },
-            |ledger| self.records.write("hooks.json", ledger),
-        )?;
-        let request = MutationRequest {
-            request_id: Uuid::new_v4(),
-            runtime_id: permit.lease.runtime_id,
-            actor: Actor {
-                identity: format!("owner:{}", permit.lease.owner_id),
-                principal: None,
-                roles: Default::default(),
-            },
-            kind: "worker_hook".into(),
-            canonical_targets: vec![format!("hook:{}:{phase:?}", self.session_id)],
-            expected: BTreeMap::new(),
-            payload: json!({"session":self.session_id,"phase":phase,"workflow":self.contract.workflow().digest}),
-        };
-        let (effect, running) = self.control.begin_effect(
-            request,
-            permit,
-            || self.fresh(permit),
-            |receipt| {
-                executor.preflight_hook(&prepared)?;
-                let reservation = self
-                    .registry
-                    .reserve(permit.operation_id, receipt.operation_id)?;
-                let running = executor.start_hook(prepared)?;
-                if let Some(cancel) = running.cancellation() {
-                    reservation.attach(cancel)?;
-                } else {
-                    reservation.never_started();
-                }
-                Ok(running)
-            },
-        )?;
-        let effect_id = effect.operation_id();
-        let cancellation = running.cancellation();
-        let result = executor
-            .complete_hook(&mut ledger, running, |ledger| {
-                self.records.write("hooks.json", ledger)
-            })
-            .await;
-        if cancellation
-            .as_ref()
-            .map(|owned| owned.exited())
-            .transpose()?
-            .is_some_and(|exited| !exited)
-        {
-            return Err(Error::new(
-                "operation_uncertain",
-                "hook exit is unconfirmed; preserve its owned handle and sent receipt",
-            ));
-        }
-        self.registry.remove(permit.operation_id, effect_id)?;
-        let observed = match &result {
-            Ok(result) => {
-                json!({"hook":phase,"state":result.state,"diagnostic_only":result.diagnostic_only})
-            }
-            Err(error) => json!({"hook":phase,"error":error}),
-        };
-        self.control
-            .complete_effect(effect, permit, || self.fresh(permit), observed)?;
-        let result = result?;
-        if !result.allows_next_phase {
-            return Err(Error::new(
-                "hook_failed",
-                "configured hook failed or remains unknown; retained files require reconciliation",
-            ));
-        }
-        Ok(())
-    }
-}
-impl RunHooks for ExecutorRunHooks {
-    fn before<'a>(&'a self, permit: &'a Permit) -> RunFuture<'a, ()> {
-        Box::pin(async move {
-            self.phase(permit, crate::execution::HookPhase::BeforeRun)
-                .await
-        })
-    }
-    fn launched<'a>(&'a self, permit: &'a Permit) -> RunFuture<'a, ()> {
-        Box::pin(async move {
-            self.control
-                .validate_permit(permit, || self.fresh(permit))?;
-            self.ledger
-                .lock()
-                .await
-                .mark_launched(self.session_id, &mut |ledger| {
-                    self.records.write("hooks.json", ledger)
-                })
-        })
-    }
-    fn after<'a>(
-        &'a self,
-        permit: &'a Permit,
-        state: &'a SessionState,
-    ) -> RunFuture<'a, AfterHookObservation> {
-        Box::pin(async move {
-            verify_after_observation(&self.contract, &self.control, permit, state)?;
-            {
-                let mut ledger = self.ledger.lock().await;
-                if !ledger.sessions.contains_key(&self.session_id) {
-                    return Ok(AfterHookObservation::Skipped {
-                        reason: AfterHookSkip::SessionNotLaunched,
-                    });
-                }
-                ledger.mark_ended(self.session_id, &mut |ledger| {
-                    self.records.write("hooks.json", ledger)
-                })?;
-                if self
-                    .contract
-                    .workflow()
-                    .front_matter
-                    .hooks
-                    .after_run
-                    .is_none()
-                {
-                    self.execution
-                        .ownership
-                        .verify(&self.execution.binding, self.contract.isolation())?;
-                    if ledger.binding_digest != canonical_digest(1, &self.execution.binding)? {
-                        return Err(Error::new(
-                            "execution_identity",
-                            "after-hook ledger binding changed",
-                        ));
-                    }
-                    let key = format!("AfterRun:{}", self.session_id);
-                    if ledger.records.contains_key(&key) {
-                        return Err(Error::new(
-                            "reconciliation_required",
-                            "after-hook observation already exists",
-                        ));
-                    }
-                    let mut next = ledger.clone();
-                    next.records.insert(
-                        key,
-                        crate::execution::HookRecord {
-                            phase: crate::execution::HookPhase::AfterRun,
-                            session: Some(self.session_id),
-                            workflow_digest: self.contract.workflow().digest.clone(),
-                            script_digest: None,
-                            cleanup_plan: None,
-                            state: crate::execution::HookState::Skipped,
-                            exit_code: None,
-                            timed_out: false,
-                            stdout: String::new(),
-                            stderr: String::new(),
-                            error_code: None,
-                            evidence_class: self.execution.boundary.evidence_class(),
-                        },
-                    );
-                    self.records.write("hooks.json", &next)?;
-                    *ledger = next;
-                    return Ok(AfterHookObservation::Skipped {
-                        reason: AfterHookSkip::HookNotConfigured,
-                    });
-                }
-            }
-            self.control
-                .validate_permit(permit, || self.fresh(permit))
-                .map_err(|error| {
-                    Error::new(
-                        "hook_not_run_fenced",
-                        "configured after-run hook was not authorized to start",
-                    )
-                    .detail(json!({"cause":error.code}))
-                })?;
-            self.phase(permit, crate::execution::HookPhase::AfterRun)
-                .await?;
-            Ok(AfterHookObservation::Completed)
-        })
-    }
-}
+#[path = "worker_run_hooks.rs"]
+mod native_hooks;
+pub use native_hooks::CodexRunHooks;
+pub(crate) use native_hooks::prepare_creation_hooks;
 
 fn verify_after_observation(
     contract: &WorkerContract,

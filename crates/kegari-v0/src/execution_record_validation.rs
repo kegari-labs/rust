@@ -36,10 +36,26 @@ impl CheckExecutionRecord {
     /// the private producer and its enclosing original workflow/Control gates.
     pub(crate) fn validate_shape(&self) -> Result<()> {
         let schema_matches = match self.schema_version {
-            1 => self.discovered.is_none() && self.correction.is_none() && self.bundle.is_none(),
-            2 => self.discovered.is_none() && self.correction.is_some() && self.bundle.is_none(),
-            3 => self.discovered.is_none() && self.bundle.is_some(),
-            4 => self.discovered.is_some(),
+            1 => {
+                self.codex.is_none()
+                    && self.discovered.is_none()
+                    && self.correction.is_none()
+                    && self.bundle.is_none()
+            }
+            2 => {
+                self.codex.is_none()
+                    && self.discovered.is_none()
+                    && self.correction.is_some()
+                    && self.bundle.is_none()
+            }
+            3 => self.codex.is_none() && self.discovered.is_none() && self.bundle.is_some(),
+            4 => self.codex.is_none() && self.discovered.is_some(),
+            5 => {
+                self.codex.is_some()
+                    && self.discovered.is_none()
+                    && self.bundle.is_none()
+                    && self.evidence_class == ExecutionEvidenceClass::CodexExecution
+            }
             _ => false,
         };
         if !schema_matches
@@ -55,13 +71,22 @@ impl CheckExecutionRecord {
         crate::evidence::validate_digest(&self.binding.isolation_digest)?;
         crate::evidence::validate_digest(&self.workflow_digest)?;
         let command_isolation = match &self.discovered {
-            Some(discovered) => {
-                discovered.validate_record(self)?;
-                &discovered.observation.isolation_digest
+            Some(_) => {
+                return Err(Error::new(
+                    "legacy_execution_evidence",
+                    "custom-executor discoveries require fresh Codex validation",
+                ));
             }
             None => &self.binding.isolation_digest,
         };
         outcome_shape(&self.command, command_isolation)?;
+        if let Some(codex) = &self.codex {
+            codex.validate_record(self)?;
+        } else if self.evidence_class == ExecutionEvidenceClass::CodexExecution {
+            return Err(malformed(
+                "legacy execution cannot be relabelled as a Codex result",
+            ));
+        }
         if let Some(correction) = &self.correction {
             for digest in [
                 &correction.original_binding_digest,
@@ -149,6 +174,7 @@ mod tests {
             elapsed_ms: 1,
         };
         CheckExecutionRecord {
+            codex: None,
             discovered: None,
             schema_version: schema,
             correction: (schema == 2).then(|| CorrectionExecutionProvenance {

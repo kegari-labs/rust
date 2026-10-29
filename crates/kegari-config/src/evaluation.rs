@@ -15,8 +15,17 @@ pub struct EvaluationBinding {
     pub repository_id: u64,
     pub pull_request: u64,
     pub author_id: u64,
-    pub base_commit: String,
-    pub head_commit: String,
+    pub base_commit: Option<String>,
+    pub head_commit: Option<String>,
+    /// Versions 2/3 declare a fresh child; version 3 has no committed baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child: Option<EvaluationChild>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvaluationChild {
+    pub parent_id: Uuid,
+    pub child_id: Uuid,
 }
 impl EvaluationBinding {
     pub fn connection(workspace: Uuid, provider: &str) -> String {
@@ -33,7 +42,7 @@ impl EvaluationBinding {
         )
     }
     pub fn validate(&self, config: &Config, workspace: &Workspace) -> Result<()> {
-        if self.schema_version != 1
+        if !matches!(self.schema_version, 1 | 2 | 3)
             || self.repository_id == 0
             || self.pull_request == 0
             || self.author_id == 0
@@ -41,12 +50,40 @@ impl EvaluationBinding {
             return Err(Error::invalid("invalid declared evaluation namespace"));
         }
         validate_digest(&self.suite_digest)?;
-        validate_oid(&self.base_commit)?;
-        validate_oid(&self.head_commit)?;
-        if self.base_commit == self.head_commit {
-            return Err(Error::invalid(
-                "evaluation requires an actual distinct PR base/head",
-            ));
+        for revision in [&self.base_commit, &self.head_commit].into_iter().flatten() {
+            validate_oid(revision)?;
+        }
+        match (self.schema_version, &self.child) {
+            (1, None)
+                if self.base_commit.is_some()
+                    && self.head_commit.is_some()
+                    && self.base_commit != self.head_commit =>
+            {
+                ()
+            }
+            (2, Some(child))
+                if self.base_commit.is_some()
+                    && self.base_commit == self.head_commit
+                    && !child.parent_id.is_nil()
+                    && !child.child_id.is_nil()
+                    && child.parent_id != child.child_id =>
+            {
+                ()
+            }
+            (3, Some(child))
+                if self.base_commit.is_none()
+                    && self.head_commit.is_none()
+                    && !child.parent_id.is_nil()
+                    && !child.child_id.is_nil()
+                    && child.parent_id != child.child_id =>
+            {
+                ()
+            }
+            _ => {
+                return Err(Error::invalid(
+                    "evaluation requires distinct PR revisions, a version-2 child baseline, or a version-3 child with no baseline",
+                ));
+            }
         }
         for value in [&self.case, &self.variant, &self.profile] {
             if value.is_empty()
@@ -63,8 +100,9 @@ impl EvaluationBinding {
         for path in [&self.suite_manifest, &self.report_root, &self.fixture_root] {
             path_syntax(path)?;
         }
-        if !workspace.independent_review.enabled
-            || workspace.profiles.independent_review.is_none()
+        if (self.child.is_none()
+            && (!workspace.independent_review.enabled
+                || workspace.profiles.independent_review.is_none()))
             || workspace.release.mode != ReleaseMode::Manual
             || workspace.repositories.len() != 1
             || !workspace
@@ -80,7 +118,7 @@ impl EvaluationBinding {
                 .any(|r| !matches!(&r.deployment, Some(Deployment::None(v)) if v == "none"))
         {
             return Err(Error::invalid(
-                "evaluation workspace must be independent-review-only with one undeployed repository and no test resources",
+                "evaluation workspace requires one undeployed repository, manual release and no test resources",
             ));
         }
         if workspace.repositories.values().any(|repository| {

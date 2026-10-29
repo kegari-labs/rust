@@ -79,6 +79,18 @@ pub fn permission_configuration(
 ) -> Result<PermissionConfiguration> {
     isolation.revalidate()?;
     let p = isolation.plan();
+    if p.role == kegari_execution::ExecutionRole::IndependentReview {
+        return Err(Error::new(
+            "unsupported_codex_review_isolation",
+            "the pinned Codex profile has no established repository-code execution prohibition for independent review",
+        ));
+    }
+    // Native tools are enabled only for roles admitted to execute repository
+    // code. Read-only filesystem grants alone do not prevent execution.
+    let repository_execution = matches!(
+        p.role,
+        kegari_execution::ExecutionRole::Child | kegari_execution::ExecutionRole::Validation
+    );
     let home = codex_home
         .canonicalize()
         .map_err(|e| Error::io("resolve isolated Codex home", e))?;
@@ -96,6 +108,11 @@ pub fn permission_configuration(
             "Codex authentication home must be outside worker access",
         ));
     }
+    let shell_environment = repository_shell_environment(
+        &p.scratch,
+        std::env::var("HOME").ok().as_deref(),
+        std::env::var("PATH").ok().as_deref(),
+    )?;
     let profile_id = format!(
         "kegari_{}",
         isolation.digest().rsplit(':').next().unwrap_or_default()
@@ -138,15 +155,77 @@ pub fn permission_configuration(
         isolation_digest: isolation.digest().into(),
         settings: json!({
             "default_permissions":profile_id, "permissions":permissions,
-            "approval_policy":"never", "approvals_reviewer":"user", "web_search":"disabled", "forced_login_method":"chatgpt",
+            "approval_policy":"never", "approvals_reviewer":"user", "web_search":"disabled", "forced_login_method":"chatgpt", "allow_login_shell":false,
             "apps":{"_default":{"enabled":false,"default_tools_enabled":false}},
             "features":{"apps":false,"plugins":false,"browser_use":false,"browser_use_external":false,
                 "computer_use":false,"in_app_browser":false,"image_generation":false,"multi_agent":false,
-                "shell_tool":false,"code_mode":false,"memories":false,"hooks":false,
+                "shell_tool":repository_execution,"shell_snapshot":false,"code_mode":false,"memories":false,"hooks":false,
                 "skill_mcp_dependency_install":false,"request_permissions_tool":false},
-            "shell_environment_policy":{"inherit":"none","include_only":[],"set":{"HOME":p.scratch,"TMPDIR":p.scratch,"PATH":"/usr/bin:/bin:/usr/sbin:/sbin"}}
+            "shell_environment_policy":shell_environment
         }),
     })
+}
+
+// Use the execution user's existing search path and home rather than inventing
+// per-tool environments. Only these noncredential values cross the host boundary;
+// Codex enforces the independent filesystem grants before commands can read them.
+fn repository_shell_environment(
+    scratch: &Path,
+    host_home: Option<&str>,
+    host_path: Option<&str>,
+) -> Result<Value> {
+    let home = host_home
+        .filter(|value| !value.is_empty() && Path::new(value).is_absolute())
+        .ok_or_else(|| {
+            Error::new(
+                "codex_environment_unavailable",
+                "Codex repository tools require the execution user's absolute HOME",
+            )
+        })?;
+    let path = host_path.filter(|value| !value.is_empty()).ok_or_else(|| {
+        Error::new(
+            "codex_environment_unavailable",
+            "Codex repository tools require the execution user's PATH",
+        )
+    })?;
+    Ok(json!({
+        "inherit":"none",
+        "ignore_default_excludes":false,
+        "exclude":[],
+        "include_only":["HOME","PATH","TMPDIR","LANG"],
+        "set":{"HOME":home,"PATH":path,"TMPDIR":scratch,"LANG":"C.UTF-8"}
+    }))
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+
+    #[test]
+    fn native_shell_policy_uses_generic_host_locations_without_ambient_credentials() {
+        let policy = repository_shell_environment(
+            Path::new("/owned/scratch"),
+            Some("/fixture/user"),
+            Some("/fixture/niche-tools/bin:/usr/bin:/bin"),
+        )
+        .unwrap();
+        assert_eq!(policy["inherit"], "none");
+        assert_eq!(
+            policy["set"]["PATH"],
+            "/fixture/niche-tools/bin:/usr/bin:/bin"
+        );
+        assert_eq!(policy["set"]["HOME"], "/fixture/user");
+        assert_eq!(policy["set"]["TMPDIR"], "/owned/scratch");
+        assert_eq!(policy["set"].as_object().unwrap().len(), 4);
+        assert_eq!(
+            policy["include_only"],
+            json!(["HOME", "PATH", "TMPDIR", "LANG"])
+        );
+        assert!(
+            repository_shell_environment(Path::new("/owned/scratch"), None, Some("/usr/bin"))
+                .is_err()
+        );
+    }
 }
 
 pub async fn verify_version(executable: &Path, deadline: Duration) -> Result<()> {
@@ -301,7 +380,19 @@ fn start_inner(
         .env_clear()
         .env("CODEX_HOME", &home)
         .env("HOME", &home)
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env(
+            "PATH",
+            permissions
+                .settings
+                .pointer("/shell_environment_policy/set/PATH")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    Error::new(
+                        "codex_environment_unavailable",
+                        "Codex launch requires its bound command PATH",
+                    )
+                })?,
+        )
         .env("LANG", "C.UTF-8")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

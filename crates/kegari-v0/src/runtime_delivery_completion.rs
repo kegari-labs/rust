@@ -268,7 +268,7 @@ fn authenticated_completion_attempts(
     }
     if !matches!(
         (record.schema_version, record.dependency_binding.is_some()),
-        (1, false) | (2, true)
+        (1, false) | (2 | 3, true)
     ) || record.attempts.is_empty()
         || record.attempts.len() > MAX_RELEASE_LINKS
         || record.attempts.last().map(|(id, _)| *id) != Some(record.terminal)
@@ -556,8 +556,14 @@ impl VerifiedReleaseCompletion {
             if !targets.insert(&reference.leaf)
                 || !matches!(
                     reference.purpose.as_str(),
-                    "target_deployment" | "deployment_challenge" | "target_deployment_index"
+                    "target_deployment"
+                        | "deployment_challenge"
+                        | "target_deployment_index"
+                        | "external_target_baseline"
                 )
+                || (reference.purpose == "external_target_baseline"
+                    && (self.record.schema_version != 3
+                        || !reference.leaf.starts_with("external-baseline-")))
                 || reference.leaf.starts_with("target-index-")
             {
                 return Err(invalid("completed immutable target reference differs"));
@@ -1385,6 +1391,30 @@ impl RuntimeDelivery {
                         }
                         target_proofs.insert(leaf, reference);
                     }
+                } else if let Some(external) = effect.historical_external() {
+                    if !matches!(
+                        effect.effect(),
+                        Some(domain::ObservedEffect::Verification { .. })
+                    ) {
+                        return Err(invalid(
+                            "external observation cannot establish a deployment effect",
+                        ));
+                    }
+                    let (leaf, purpose, digest) = external.reference().proof_file();
+                    let reference = ProofFile {
+                        leaf: leaf.clone(),
+                        purpose,
+                        digest,
+                    };
+                    if target_proofs
+                        .get(&leaf)
+                        .is_some_and(|prior: &ProofFile| prior.digest != reference.digest)
+                    {
+                        return Err(invalid(
+                            "external observation proof changed during completion",
+                        ));
+                    }
+                    target_proofs.insert(leaf, reference);
                 } else if matches!(
                     effect.effect(),
                     Some(
@@ -1436,7 +1466,14 @@ impl RuntimeDelivery {
                 .collect(),
         )?;
         let record = CompletionRecord {
-            schema_version: 2,
+            schema_version: if target_proofs
+                .values()
+                .any(|proof| proof.purpose == "external_target_baseline")
+            {
+                3
+            } else {
+                2
+            },
             runtime: record.runtime,
             workspace: record.workspace,
             config_revision: crate::config::config_revision(&workspace.configuration)?,

@@ -15,6 +15,7 @@ use std::{collections::BTreeSet, sync::Mutex};
 #[serde(rename_all = "snake_case")]
 enum ParentStage {
     Assemble,
+    Replacement,
     Vector,
     LaunchIntegrated,
     Integrated,
@@ -35,6 +36,8 @@ struct ParentReference {
     contract_digest: String,
     stage: ParentStage,
     phase_operation: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    replacement_operation: Option<Uuid>,
     slices: Vec<Uuid>,
     vector: Option<String>,
     integrated: Option<Uuid>,
@@ -325,19 +328,43 @@ impl RuntimeDelivery {
             ));
         }
         let state = self.runtime.control.snapshot()?;
-        for id in reference
+        let mut operations: BTreeSet<_> = reference
             .phase_operation
             .iter()
             .chain(reference.integrated.iter())
             .chain(reference.adequacy.iter())
             .chain(reference.review.iter())
-        {
+            .copied()
+            .collect();
+        if let Some(original) = reference.replacement_operation {
+            // Validate the unique actual successor chain, then fence every
+            // intermediate admission as well as the original/latest worker.
+            self.runtime.latest_replacement_operation(original)?;
+            let receipts = self.runtime.control.operations()?;
+            let mut chain = BTreeSet::from([original]);
+            loop {
+                let before = chain.len();
+                for receipt in &receipts {
+                    if let Some(resume) = crate::control::RunResumeReference::from_receipt(receipt)?
+                        && chain.contains(&resume.predecessor())
+                    {
+                        chain.insert(receipt.operation_id);
+                    }
+                }
+                if chain.len() == before {
+                    break;
+                }
+            }
+            operations.extend(chain);
+        }
+        for id in &operations {
             for operation in [*id, crate::runtime_workers::preparation_operation(*id)?] {
                 if state
                     .active_operations
                     .iter()
                     .any(|permit| permit.operation_id == operation)
                     || state.unresolved_operations.contains_key(&operation)
+                    || state.pending_local_processes.contains(&operation)
                     || self
                         .runtime
                         .executions
@@ -524,72 +551,66 @@ impl RuntimeDelivery {
                 projection_parent,
                 &workspace.workflow,
             )?;
-            let prepared = self
-                .candidate_children(gate.work(), contract.e2e_child())
-                .await?;
-            let ids: BTreeSet<_> = prepared.iter().map(|child| child.child).collect();
-            if !complete_inventory(&projection_parent.required_children, &ids, prepared.len()) {
-                return Ok(());
-            }
-            let children = prepared
-                .iter()
-                .filter_map(|child| child.published.clone())
-                .collect();
-            let staged = prepared
-                .into_iter()
-                .filter_map(|child| child.staged)
-                .collect();
-            let parent = ParentPipeline {
-                reference: ParentReference {
-                    schema_version: 1,
-                    runtime: lease.runtime_id,
-                    workspace: gate.workspace_id(),
-                    work: gate.work().clone(),
-                    contract_digest: contract.digest()?,
-                    stage: ParentStage::Assemble,
-                    phase_operation: None,
+            let parent = if let Some(restored) = self
+                .restore_completed_pipeline(&workspace, projection_parent, &gate, &contract)
+                .await?
+            {
+                restored
+            } else {
+                let prepared = self
+                    .candidate_children(gate.work(), contract.e2e_child())
+                    .await?;
+                let ids: BTreeSet<_> = prepared.iter().map(|child| child.child).collect();
+                if !complete_inventory(&projection_parent.required_children, &ids, prepared.len()) {
+                    return Ok(());
+                }
+                let children = prepared
+                    .iter()
+                    .filter_map(|child| child.published.clone())
+                    .collect();
+                let staged = prepared
+                    .into_iter()
+                    .filter_map(|child| child.staged)
+                    .collect();
+                let parent = ParentPipeline {
+                    reference: ParentReference {
+                        schema_version: 1,
+                        runtime: lease.runtime_id,
+                        workspace: gate.workspace_id(),
+                        work: gate.work().clone(),
+                        contract_digest: contract.digest()?,
+                        stage: ParentStage::Assemble,
+                        phase_operation: None,
+                        replacement_operation: None,
+                        slices: vec![],
+                        vector: None,
+                        integrated: None,
+                        adequacy: None,
+                        review: None,
+                        publication: None,
+                        error: None,
+                        reassembly: None,
+                        carry_imports: vec![],
+                    },
+                    children,
+                    child_authorities: BTreeMap::new(),
+                    staged,
+                    baselines: vec![],
+                    integrations: vec![],
                     slices: vec![],
                     vector: None,
                     integrated: None,
-                    adequacy: None,
-                    review: None,
-                    publication: None,
-                    error: None,
+                    prepared_validation: None,
+                    adequacy_assignment: None,
+                    assignment: None,
+                    published: None,
+                    phase: None,
                     reassembly: None,
-                    carry_imports: vec![],
-                },
-                children,
-                child_authorities: BTreeMap::new(),
-                staged,
-                baselines: vec![],
-                integrations: vec![],
-                slices: vec![],
-                vector: None,
-                integrated: None,
-                prepared_validation: None,
-                adequacy_assignment: None,
-                assignment: None,
-                published: None,
-                phase: None,
-                reassembly: None,
-                carry_import: None,
+                    carry_import: None,
+                };
+                self.persist_parent(&parent)?;
+                parent
             };
-            let record = canonical_digest(1, &key)?;
-            if self
-                .records
-                .path()
-                .join(format!(
-                    "parent-pipeline-{}.json",
-                    record.rsplit(':').next().unwrap()
-                ))
-                .exists()
-            {
-                return Err(Error::new(
-                    "reconciliation_required",
-                    "parent candidate preparation has retained phase references requiring exact recovery",
-                ));
-            }
-            self.persist_parent(&parent)?;
             let retained = Arc::new(tokio::sync::Mutex::new(parent));
             self.parents
                 .pipelines
@@ -688,6 +709,54 @@ impl RuntimeDelivery {
         gate: &FreshGate,
         parent: &mut ParentPipeline,
     ) -> Result<()> {
+        if parent.reference.stage == ParentStage::Replacement {
+            let operation = parent.reference.replacement_operation.ok_or_else(|| {
+                Error::new(
+                    "record_corrupt",
+                    "replacement wait lacks original operation",
+                )
+            })?;
+            let Some((published, staged)) =
+                self.advance_replacement_worker(lease, operation).await?
+            else {
+                return Ok(());
+            };
+            let mapping = staged
+                .delta()
+                .manifest
+                .replacement
+                .as_ref()
+                .ok_or_else(|| {
+                    Error::new("replacement_mapping", "replacement result lacks mapping")
+                })?;
+            let originals = mapping
+                .originals
+                .iter()
+                .map(|m| m.digest())
+                .collect::<Result<BTreeSet<_>>>()?;
+            let selected = parent
+                .staged
+                .iter()
+                .filter(|s| s.delta().manifest.child_id == staged.delta().manifest.child_id)
+                .map(|s| s.delta().manifest.digest())
+                .collect::<Result<BTreeSet<_>>>()?;
+            if selected != originals {
+                return Err(Error::new(
+                    "replacement_mapping",
+                    "replacement must supersede exactly its selected original child contributions",
+                ));
+            }
+            parent
+                .staged
+                .retain(|s| s.delta().manifest.child_id != staged.delta().manifest.child_id);
+            parent.children.retain(|c| {
+                c.verified().evidence().work.child != Some(staged.delta().manifest.child_id)
+            });
+            parent.staged.push(staged);
+            parent.children.push(published);
+            parent.reference.replacement_operation = None;
+            return self.finish_parent_phase(parent, ParentStage::Assemble);
+        }
         if parent.carry_import.is_some() {
             return self
                 .advance_carry_import(lease, workspace, gate, parent)
@@ -904,7 +973,7 @@ impl RuntimeDelivery {
                 }) {
                     satisfied.insert(contract.e2e_child());
                 }
-                let slice = coordinator
+                let result = coordinator
                     .assemble_remote_isolated_slice(
                         &admission,
                         SliceAssembly {
@@ -917,7 +986,58 @@ impl RuntimeDelivery {
                             identity,
                         },
                     )
-                    .await?;
+                    .await;
+                let slice = match result {
+                    Ok(slice) => slice,
+                    Err(error) if error.code == "isolated_patch_conflict" => {
+                        let delta_id = error
+                            .details
+                            .get("delta_digest")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| {
+                                Error::new(
+                                    "replacement_mapping",
+                                    "candidate conflict did not identify its original contribution",
+                                )
+                            })?;
+                        let selected = parent
+                            .staged
+                            .iter()
+                            .find(|s| s.delta().manifest.digest().as_deref() == Ok(delta_id))
+                            .ok_or_else(|| {
+                                Error::new(
+                                    "replacement_mapping",
+                                    "conflicting contribution is not selected",
+                                )
+                            })?;
+                        let child_id = selected.delta().manifest.child_id;
+                        let published=parent.children.iter().find(|c|c.verified().evidence().work.child==Some(child_id))
+                            .ok_or_else(||Error::new("replacement_gate","conflicting child lacks independent completed staging evidence"))?;
+                        let child_gate = child_gates.get(&child_id).ok_or_else(|| {
+                            Error::new(
+                                "scope_violation",
+                                "replacement child lacks current authority",
+                            )
+                        })?;
+                        let work = coordinator
+                            .prepare_replacement_work(
+                                &admission,
+                                child_gate,
+                                selected,
+                                published,
+                                &workspace.workflow,
+                                &error.message,
+                            )
+                            .await?;
+                        let operation = Uuid::new_v4();
+                        self.retain_replacement_work(operation, work)?;
+                        parent.reference.replacement_operation = Some(operation);
+                        self.finish_parent_phase(parent, ParentStage::Replacement)?;
+                        self.advance_replacement_worker(lease, operation).await?;
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error),
+                };
                 parent.reference.slices.push(slice.operation_id());
                 parent.slices.push(Arc::new(slice));
                 parent.baselines.push(Arc::new(baseline));
@@ -969,7 +1089,7 @@ impl RuntimeDelivery {
                 }
             }
             ParentStage::LaunchIntegrated => {
-                let assignment=coordinator.integrated_worker_assignment(&contract,e2e,required_parent(&parent.vector,"candidate vector")?,observer,&parent.slices.iter().map(Arc::as_ref).collect::<Vec<_>>(),json!({"purpose":"discover, retain and execute sufficient integrated validation obligations against this complete isolated parent vector; preserve any configured required constraints","parent":projection.issue})).await?;
+                let assignment=coordinator.integrated_worker_assignment(&contract,e2e,required_parent(&parent.vector,"candidate vector")?,observer,&parent.slices.iter().map(Arc::as_ref).collect::<Vec<_>>(),json!({"purpose":"discover, retain and execute sufficient integrated validation obligations against this complete isolated parent vector; preserve any configured required constraints","parent":projection.issue,"visual_evidence":DeliveryCoordinator::visual_validation_context(contract.visual())})).await?;
                 self.finish_parent_phase(parent, ParentStage::LaunchIntegrated)?;
                 let operation = parent.reference.integrated.unwrap_or_else(Uuid::new_v4);
                 parent.reference.integrated = Some(operation);
@@ -987,7 +1107,11 @@ impl RuntimeDelivery {
                     .ok_or_else(|| {
                         Error::new("operation_pending", "integrated worker remains owned")
                     })?;
-                self.verify_reassembled_parent_result(parent, &completion, true)?;
+                self.verify_reassembled_parent_result(
+                    parent,
+                    &completion,
+                    "parent_integrated_validation",
+                )?;
                 parent.prepared_validation = Some(
                     coordinator
                         .prepare_integrated_validation(
@@ -1009,7 +1133,7 @@ impl RuntimeDelivery {
                     parent.adequacy_assignment = Some(coordinator.prepare_integrated_review(
                         &contract, e2e, required_parent(&parent.vector, "candidate vector")?, observer,
                         required_parent(&parent.prepared_validation, "prepared integrated validation")?.clone(),
-                        json!({"parent":projection.issue,"purpose":"independently assess complete-parent integrated validation adequacy"}),
+                        json!({"parent":projection.issue,"purpose":"independently assess complete-parent integrated validation adequacy","visual_evidence":DeliveryCoordinator::visual_validation_context(contract.visual())}),
                     ).await?);
                 }
                 let assignment = coordinator
@@ -1096,7 +1220,11 @@ impl RuntimeDelivery {
                     .ok_or_else(|| {
                         Error::new("operation_pending", "parent review remains owned")
                     })?;
-                self.verify_reassembled_parent_result(parent, &completion, false)?;
+                self.verify_reassembled_parent_result(
+                    parent,
+                    &completion,
+                    "parent_evidence_review",
+                )?;
                 let input = ParentPublicationInputs {
                     contract: &contract,
                     observer,
@@ -1124,7 +1252,7 @@ impl RuntimeDelivery {
                 parent.published = Some(published);
                 self.finish_parent_phase(parent, ParentStage::Complete)?;
             }
-            ParentStage::Complete | ParentStage::Blocked => {}
+            ParentStage::Replacement | ParentStage::Complete | ParentStage::Blocked => {}
         }
         Ok(())
     }
@@ -1160,6 +1288,7 @@ mod lifecycle_tests {
             contract_digest: canonical_digest(1, &"contract").unwrap(),
             stage: ParentStage::Complete,
             phase_operation: None,
+            replacement_operation: None,
             slices: vec![],
             vector: None,
             integrated: None,
@@ -1336,6 +1465,43 @@ mod lifecycle_tests {
             .require_prior_parent_generations_clear(&next_key)
             .await
             .unwrap();
+        // A separately admitted replacement is still work for the old parent.
+        // Its preparation/worker cannot be orphaned by a corrected generation.
+        let replacement = Uuid::new_v4();
+        old.lock().await.reference.replacement_operation = Some(replacement);
+        for operation in [
+            replacement,
+            crate::runtime_workers::preparation_operation(replacement).unwrap(),
+        ] {
+            fixture
+                .runtime
+                .control
+                .admit(
+                    &lease,
+                    operation,
+                    "prior-parent-replacement".into(),
+                    canonical_digest(1, &operation).unwrap(),
+                    || Ok(()),
+                )
+                .unwrap();
+            assert_eq!(
+                service
+                    .require_prior_parent_generations_clear(&next_key)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "operation_uncertain"
+            );
+            fixture
+                .runtime
+                .control
+                .retire_local(operation, json!({"fixture":"never spawned"}))
+                .unwrap();
+            service
+                .require_prior_parent_generations_clear(&next_key)
+                .await
+                .unwrap();
+        }
     }
     #[tokio::test]
     async fn running_progression_drains_retained_parent_without_new_admission_after_reload() {
@@ -1813,6 +1979,8 @@ mod lifecycle_tests {
 
 #[path = "runtime_delivery_parent_reassembly.rs"]
 mod reassembly;
+#[path = "runtime_delivery_parent_restore.rs"]
+mod restore;
 
 #[cfg(test)]
 mod reassembly_serialization_tests {

@@ -1,0 +1,1 @@
+Read PROJECT.md for the current project contract. Inspect actual repository files before deriving commands. Only change the assigned child scope; preserve current guidance and report missing capabilities honestly. No network, installation or environment replacement is authorized.

@@ -779,12 +779,17 @@ impl DeliveryCoordinator {
         };
         let receipt_digest = canonical_digest(1, &receipt)?;
         let inventory_digest = validation_inventory(&receipts, receipt.runtime_id, &reference)?;
+        let mut assignment = request.assignment.clone();
+        if let Some(prefix) = crate::validation::ValidationPrefix::from_completion(&request.failed)?
+        {
+            assignment.continue_validation(prefix)?;
+        }
         let digest = canonical_digest(
             1,
-            &json!({"purpose":"exact_source_validation_retry","assignment":request.assignment.digest()?,"failed":receipt_digest,"inventory":inventory_digest,"grant":request.grant.digest(),"previous":previous.as_deref().map(ValidationRetryWork::digest),"source_lineage":source_lineage.as_ref().map(|lineage| lineage.digest()),"transient_failure":transient_failure}),
+            &json!({"purpose":"exact_source_validation_retry","assignment":assignment.digest()?,"failed":receipt_digest,"inventory":inventory_digest,"grant":request.grant.digest(),"previous":previous.as_deref().map(ValidationRetryWork::digest),"source_lineage":source_lineage.as_ref().map(|lineage| lineage.digest()),"transient_failure":transient_failure}),
         )?;
         let result = ValidationRetryWork {
-            assignment: request.assignment.clone(),
+            assignment,
             failed: request.failed,
             transient_failure,
             origin_reference: if same_budget {
@@ -812,7 +817,6 @@ impl DeliveryCoordinator {
     }
 }
 fn failed_validation(completion: &RunCompletion) -> Result<()> {
-    super::discovered_validation::require_legacy_continuation(completion)?;
     if !completion.local_exit_confirmed
         || !matches!(completion.outcome, RunOutcome::Failed)
         || completion.hook_error.is_some()
@@ -840,6 +844,29 @@ fn failed_validation(completion: &RunCompletion) -> Result<()> {
             "reconciliation_required",
             "validation retry requires actual known failed terminal session and joined exit",
         ));
+    }
+    if completion.validation_error.is_some() {
+        return Err(Error::new(
+            "validation_history_uncertain",
+            "failed validation contains unresolved native result evidence",
+        ));
+    }
+    if completion.validation_plan.is_some() || !completion.validation_attempts.is_empty() {
+        completion
+            .validation_history
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    "validation_history_binding",
+                    "failed validation lost its original history seal",
+                )
+            })?
+            .verify(
+                completion.operation_id,
+                completion.validation_plan.as_ref(),
+                &completion.validation_attempts,
+                completion.validation_error.as_ref(),
+            )?;
     }
     Ok(())
 }

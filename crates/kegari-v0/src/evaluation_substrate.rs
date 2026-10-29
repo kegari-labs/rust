@@ -1,8 +1,9 @@
-//! A declared empty fixture substrate, never a runtime admission or source proof.
+//! Declared empty fixture substrates, never runtime admission or source proof.
 use super::*;
 use kegari_context::workflow::Workflow;
 
 pub(super) const WORKFLOW_LEAF: &str = "coordination-workflow.md";
+pub(super) const UNBORN_WORKFLOW_LEAF: &str = "bootstrap-workflow.md";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Declaration {
@@ -15,6 +16,8 @@ pub(super) struct CoordinationSubstrate {
     workflow_path: PathBuf,
     workflow_digest: String,
     workflow_mode: u32,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    unborn: bool,
 }
 fn invalid() -> Error {
     Error::new(
@@ -65,11 +68,21 @@ impl CoordinationSubstrate {
         };
         let declaration: Declaration =
             serde_json::from_slice(file.bytes()).map_err(|_| invalid())?;
+        let unborn = declaration.kind == "child_unborn";
+        let leaf = if unborn {
+            UNBORN_WORKFLOW_LEAF
+        } else {
+            WORKFLOW_LEAF
+        };
+        let role_matches = if unborn {
+            variant.role == AgentRole::Implementation && variant.phase == "implementation"
+        } else {
+            variant.role == AgentRole::Coordination && variant.phase == "coordination"
+        };
         if declaration.schema_version != 1
-            || declaration.kind != "coordination_empty"
-            || declaration.workflow != WORKFLOW_LEAF
-            || variant.role != AgentRole::Coordination
-            || variant.phase != "coordination"
+            || (!unborn && declaration.kind != "coordination_empty")
+            || declaration.workflow != leaf
+            || !role_matches
             || !matches!(variant.seed, Seed::Fresh)
             || variant.canary_diagnostic.is_some()
         {
@@ -80,8 +93,13 @@ impl CoordinationSubstrate {
             "context.json",
             "context-binding.json",
             "substrate.json",
-            WORKFLOW_LEAF,
+            leaf,
             "repository",
+            if unborn {
+                "native-issues.json"
+            } else {
+                "substrate.json"
+            },
         ];
         if captured
             .topology()
@@ -109,23 +127,37 @@ impl CoordinationSubstrate {
             )
             .map_err(|_| invalid())?
         };
-        if !writes.is_empty() {
+        if (!unborn && !writes.is_empty()) || (unborn && writes.is_empty()) {
             return Err(invalid());
         }
-        let workflow_file = captured.file(WORKFLOW_LEAF)?;
+        let workflow_file = captured.file(leaf)?;
         let text = std::str::from_utf8(workflow_file.bytes()).map_err(|_| invalid())?;
         // Fixed workflow cannot be rebound to a future scratch/resource path.
         if text.contains("@KegariScratch@") {
             return Err(invalid());
         }
-        let workflow_path = root.join(WORKFLOW_LEAF);
+        let workflow_path = root.join(leaf);
         let workflow = Workflow::parse(text, &workflow_path)?;
         no_execution(&workflow)?;
+        if unborn && workflow.digest != Workflow::installed_default()?.digest {
+            return Err(invalid());
+        }
         Ok(Some(Self {
             workflow_path,
             workflow_digest: workflow.digest,
-            workflow_mode: captured.snapshot()[WORKFLOW_LEAF].mode,
+            workflow_mode: captured.snapshot()[leaf].mode,
+            unborn,
         }))
+    }
+    pub(super) fn is_unborn(&self) -> bool {
+        self.unborn
+    }
+    pub(super) fn workflow_leaf(&self) -> &str {
+        if self.unborn {
+            UNBORN_WORKFLOW_LEAF
+        } else {
+            WORKFLOW_LEAF
+        }
     }
     pub(super) fn workflow_path(&self) -> &Path {
         &self.workflow_path
@@ -154,16 +186,27 @@ impl CoordinationSubstrate {
         has_repository_identity: bool,
         workflow_digest: &str,
     ) -> Result<()> {
-        if variant.role != AgentRole::Coordination
-            || variant.phase != "coordination"
+        let role_matches = if self.unborn {
+            variant.role == AgentRole::Implementation && variant.phase == "implementation"
+        } else {
+            variant.role == AgentRole::Coordination && variant.phase == "coordination"
+        };
+        if !role_matches
             || !matches!(variant.seed, Seed::Fresh)
-            || has_repository_identity
+            || (!self.unborn && has_repository_identity)
             || workflow_digest != self.workflow_digest
             || self.workflow_path.starts_with(repository)
         {
             return Err(invalid());
         }
         self.verify()?;
-        require_empty(repository)
+        if self.unborn {
+            if !snapshot(repository)?.is_empty() {
+                return Err(invalid());
+            }
+            Ok(())
+        } else {
+            require_empty(repository)
+        }
     }
 }

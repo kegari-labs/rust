@@ -1,6 +1,6 @@
-//! Same-process recovery selection. Durable records identify attempts; only the
-//! actual joined completion and live opaque readback/source proofs authorize
-//! progression. No cold receipt becomes a worker or provider capability.
+//! Recovery selection from actual joined runs or checked protected cold sessions.
+//! Both routes require fresh opaque provider readback and source proofs before
+//! typed admission; neither receipt JSON nor a retained PID is a live capability.
 use super::*;
 use crate::{
     control::{
@@ -26,7 +26,7 @@ use std::path::PathBuf;
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum SessionRecoveryStage {
     Provider { attempt: u32 },
-    Source,
+    Source { preparation: Uuid },
     Resume,
 }
 impl SessionRecoveryStage {
@@ -45,13 +45,14 @@ pub(crate) struct SessionRecoveryAction {
 }
 #[derive(Clone)]
 struct Candidate {
-    previous: Arc<RunCompletion>,
+    previous: crate::worker_run::ResumePredecessor,
     retained: crate::worker_run::RetainedResumeSession,
     config: Arc<Config>,
     records: PathBuf,
     key: String,
     model_operation: Uuid,
     paired: Option<Arc<crate::delivery::VerifiedPairedRecoveryCandidate>>,
+    replacement: Option<crate::delivery::DeliveryWorkerAssignment>,
 }
 pub(super) struct RecoveryEntry {
     candidate: Candidate,
@@ -93,7 +94,10 @@ struct RecoveryStageContext<'a> {
 impl RuntimeCoordinator {
     /// Implementation recovery preserves ordinary or actual registered paired
     /// causes. Validation/review/parent phases require their own stage integration.
-    pub(crate) fn ready_session_recoveries(&self) -> Result<Vec<SessionRecoveryAction>> {
+    pub(crate) fn ready_session_recoveries(
+        &self,
+        lease: &Lease,
+    ) -> Result<Vec<SessionRecoveryAction>> {
         let completed = self
             .state
             .lock()
@@ -104,13 +108,43 @@ impl RuntimeCoordinator {
             .collect::<Vec<_>>();
         let mut actions = Vec::new();
         let mut errors = BTreeMap::new();
-        for previous in completed {
-            if !candidate_shape(&previous) {
+        let live = completed
+            .iter()
+            .map(|run| run.operation_id)
+            .collect::<BTreeSet<_>>();
+        let mut candidates = completed
+            .into_iter()
+            .filter(|previous| candidate_shape(previous))
+            .map(|previous| (previous.operation_id, self.recovery_candidate(previous)))
+            .collect::<Vec<_>>();
+        let receipts = self.control.operations()?;
+        let mut latest_attempts = BTreeMap::new();
+        for receipt in &receipts {
+            if let Some(run) = crate::control::run_reference_from_receipt(receipt)? {
+                let attempt = latest_attempts.entry(run.phase).or_insert(0);
+                *attempt = (*attempt).max(run.attempt);
+            }
+        }
+        for receipt in receipts {
+            if live.contains(&receipt.operation_id)
+                || crate::worker_run::require_closed_receipt(&receipt).is_err()
+            {
                 continue;
             }
-            let predecessor = previous.operation_id;
+            let Some(run) = crate::control::run_reference_from_receipt(&receipt)? else {
+                continue;
+            };
+            if latest_attempts.get(&run.phase) != Some(&run.attempt) {
+                // A successor admission already consumed this predecessor.
+                // Historical failures are not fresh restart candidates.
+                continue;
+            }
+            let candidate = self.cold_recovery_candidate(lease, &receipt);
+            candidates.push((receipt.operation_id, candidate));
+        }
+        for (predecessor, candidate) in candidates {
             let observed = (|| {
-                let candidate = self.recovery_candidate(previous)?;
+                let candidate = candidate?;
                 {
                     let mut state = self.state.lock().map_err(|_| lock_error())?;
                     if state.session_recovery.len() >= 65_536
@@ -118,7 +152,7 @@ impl RuntimeCoordinator {
                     {
                         return Err(Error::new(
                             "record_limit",
-                            "same-process recovery inventory exceeds its bound",
+                            "session recovery inventory exceeds its bound",
                         ));
                     }
                     state
@@ -148,7 +182,13 @@ impl RuntimeCoordinator {
                         attempt: plan.metadata_attempt,
                     }
                 } else if source.is_none() {
-                    SessionRecoveryStage::Source
+                    SessionRecoveryStage::Source {
+                        preparation: provider
+                            .as_ref()
+                            .ok_or_else(|| incompatible("source stage lacks provider readback"))?
+                            .preparation()
+                            .operation_id,
+                    }
                 } else {
                     SessionRecoveryStage::Resume
                 };
@@ -232,11 +272,13 @@ impl RuntimeCoordinator {
         let receipt = self.control.operation(previous.operation_id)?;
         let reference = crate::control::run_reference_from_receipt(&receipt)?
             .ok_or_else(|| incompatible("joined admission missing"))?;
-        if reference.phase.phase != "implementation"
-            || reference.phase.work != contract.work_key()?
+        if !matches!(
+            reference.phase.phase.as_str(),
+            "implementation" | "child_replacement"
+        ) || reference.phase.work != contract.work_key()?
         {
             return Err(incompatible(
-                "automatic recovery is limited to child implementation",
+                "automatic recovery is limited to implementation or retained replacement work",
             ));
         }
         let records = self
@@ -246,9 +288,22 @@ impl RuntimeCoordinator {
             .join("worker-records")
             .join(previous.operation_id.to_string());
         let directory = PrivateDir::open(&records)?;
-        let retained = crate::worker::recover_session(&directory, &receipt)?
-            .ok_or_else(|| incompatible("protected final session missing"))?
-            .resume_candidate()?;
+        let checkpoint = if previous.validation_plan.is_some() {
+            crate::worker_run::ColdValidationCheckpoint::read(
+                &directory,
+                &self.services.key,
+                &receipt,
+            )?
+        } else {
+            None
+        };
+        let retained = crate::worker::recover_session_with_validation(
+            &directory,
+            &receipt,
+            checkpoint.as_ref(),
+        )?
+        .ok_or_else(|| incompatible("protected final session missing"))?
+        .resume_candidate()?;
         if canonical_digest(1, retained.state())? != canonical_digest(1, &previous.state)? {
             return Err(incompatible(
                 "joined state differs from protected final session",
@@ -302,20 +357,96 @@ impl RuntimeCoordinator {
             }
             None
         };
+        let replacement =
+            self.recovery_replacement_assignment(previous.operation_id, &reference.phase.phase)?;
+        if paired.is_some() && replacement.is_some() {
+            return Err(incompatible(
+                "replacement recovery cannot replace a paired review cause",
+            ));
+        }
         let mut identity = json!({"predecessor":previous.operation_id,"candidate":retained.digest(),"receipt":retained.admission_digest(),"config":crate::config::config_revision(&config)?,"contract":contract.scope_digest()});
         if let Some(paired) = &paired {
             identity["paired_recovery"] = json!(paired.digest());
         }
+        if let Some(replacement) = &replacement {
+            identity["replacement"] = json!(replacement.digest()?);
+        }
         let key = canonical_digest(1, &identity)?;
+        Ok(Candidate {
+            previous: crate::worker_run::ResumePredecessor::Joined(previous),
+            retained,
+            config,
+            records,
+            model_operation: recovery_id(&key, "model")?,
+            paired,
+            replacement,
+            key,
+        })
+    }
+
+    fn cold_recovery_candidate(&self, lease: &Lease, receipt: &Receipt) -> Result<Candidate> {
+        let cold = crate::runtime_workers::restore_cold_session(self, lease, receipt)?;
+        let retained = cold.retained().clone();
+        let previous = crate::worker_run::ResumePredecessor::Cold(cold);
+        let config = Arc::new(self.configuration.snapshot()?);
+        let records = self
+            .registration
+            .root()
+            .path()
+            .join("worker-records")
+            .join(receipt.operation_id.to_string());
+        let replacement = self.recovery_replacement_assignment(
+            receipt.operation_id,
+            &retained.reference().phase.phase,
+        )?;
+        let key = canonical_digest(
+            1,
+            &json!({"predecessor":receipt.operation_id,"candidate":retained.digest(),"receipt":retained.admission_digest(),"config":crate::config::config_revision(&config)?,"contract":previous.contract()?.scope_digest(),"replacement":replacement.as_ref().map(crate::delivery::DeliveryWorkerAssignment::digest).transpose()?}),
+        )?;
         Ok(Candidate {
             previous,
             retained,
             config,
             records,
             model_operation: recovery_id(&key, "model")?,
-            paired,
+            paired: None,
+            replacement,
             key,
         })
+    }
+    fn recovery_replacement_assignment(
+        &self,
+        operation: Uuid,
+        phase: &str,
+    ) -> Result<Option<crate::delivery::DeliveryWorkerAssignment>> {
+        if phase != "child_replacement" {
+            return Ok(None);
+        }
+        self.replacement_resume_assignment(operation)?
+            .map(Some)
+            .ok_or_else(|| {
+                incompatible("replacement recovery needs its actual retained source and assignment")
+            })
+    }
+
+    pub(crate) fn resume_predecessor(
+        &self,
+        operation: Uuid,
+    ) -> Result<crate::worker_run::ResumePredecessor> {
+        if let Some(joined) = self.retained_completion(operation)? {
+            return Ok(crate::worker_run::ResumePredecessor::Joined(joined));
+        }
+        let basis = self
+            .state
+            .lock()
+            .map_err(|_| lock_error())?
+            .session_recovery
+            .values()
+            .find(|entry| entry.candidate.previous.operation_id() == operation)
+            .map(|entry| entry.candidate.previous.clone())
+            .ok_or_else(|| incompatible("cold recovery has no checked retained predecessor"))?;
+        basis.verify(None)?;
+        Ok(basis)
     }
 
     fn plan_recovery_candidate(
@@ -324,18 +455,33 @@ impl RuntimeCoordinator {
         provider: Option<&VerifiedProviderRecovery>,
         snapshot: &ControlSnapshot,
     ) -> Result<CandidatePlan> {
-        let previous = self
-            .retained_completion(candidate.previous.operation_id)?
-            .ok_or_else(|| incompatible("actual joined completion was lost"))?;
-        if !Arc::ptr_eq(&previous, &candidate.previous) || !candidate_shape(&previous) {
+        let joined = self.retained_completion(candidate.previous.operation_id())?;
+        candidate.previous.verify(joined.as_ref())?;
+        if joined
+            .as_ref()
+            .is_some_and(|previous| !candidate_shape(previous))
+        {
             return Err(incompatible(
-                "recovery no longer owns its actual joined completion",
+                "joined recovery predecessor is no longer eligible",
             ));
         }
-        let contract = previous
-            .contract
+        let replacement = self.recovery_replacement_assignment(
+            candidate.previous.operation_id(),
+            &candidate.retained.reference().phase.phase,
+        )?;
+        if replacement
             .as_ref()
-            .ok_or_else(|| incompatible("joined contract missing"))?;
+            .map(crate::delivery::DeliveryWorkerAssignment::digest)
+            .transpose()?
+            != candidate
+                .replacement
+                .as_ref()
+                .map(crate::delivery::DeliveryWorkerAssignment::digest)
+                .transpose()?
+        {
+            return Err(incompatible("replacement recovery assignment changed"));
+        }
+        let contract = candidate.previous.contract()?;
         let config = self.configuration.snapshot()?;
         if crate::config::config_revision(&config)?
             != crate::config::config_revision(&candidate.config)?
@@ -417,7 +563,7 @@ impl RuntimeCoordinator {
             self.runtime_id,
             OriginalRecoveryHistory {
                 reference: candidate.retained.reference(),
-                predecessor: candidate.previous.operation_id,
+                predecessor: candidate.previous.operation_id(),
                 receipt_digest: candidate.retained.admission_digest(),
             },
             &receipts,
@@ -427,6 +573,7 @@ impl RuntimeCoordinator {
         let (metadata_attempt, metadata_cap, metadata_time) = metadata_plan(
             &candidate.retained,
             provider,
+            candidate.paired.is_none(),
             &receipts,
             &limits,
             Utc::now(),
@@ -547,7 +694,7 @@ impl RuntimeCoordinator {
         running(&snapshot)?;
         let plan = self.plan_recovery_candidate(candidate, provider, &snapshot)?;
         if stage_operation(candidate, action.stage, plan.metadata_cap)? != action.operation
-            || action.predecessor != candidate.previous.operation_id
+            || action.predecessor != candidate.previous.operation_id()
         {
             return Err(incompatible("recovery action identity changed"));
         }
@@ -557,16 +704,8 @@ impl RuntimeCoordinator {
             &candidate.retained.reference().phase,
             &plan.ready.state,
         )?;
-        let contract = candidate
-            .previous
-            .contract
-            .as_ref()
-            .ok_or_else(|| incompatible("joined contract missing"))?;
-        let execution = candidate
-            .previous
-            .execution
-            .as_ref()
-            .ok_or_else(|| incompatible("joined source missing"))?;
+        let contract = candidate.previous.contract()?;
+        let execution = candidate.previous.execution()?;
         match action.stage {
             SessionRecoveryStage::Provider { attempt } => {
                 if provider.is_some() || attempt != plan.metadata_attempt {
@@ -615,10 +754,10 @@ impl RuntimeCoordinator {
                     .map(Box::new)
                     .map(StageProof::Provider)
             }
-            SessionRecoveryStage::Source => {
+            SessionRecoveryStage::Source { preparation } => {
                 let provider =
                     provider.ok_or_else(|| incompatible("source stage lacks provider readback"))?;
-                if source.is_some() {
+                if source.is_some() || preparation != provider.preparation().operation_id {
                     return Err(incompatible("source stage already has its proof"));
                 }
                 let root = self.services.housekeeping.retained_execution_read_root(
@@ -658,11 +797,23 @@ impl RuntimeCoordinator {
                             limits: GitLimits::default(),
                             authority: scope.clone(),
                         })?;
-                    git.verify_reusable_execution(
-                        &execution.ownership,
-                        &execution.binding,
-                        contract.isolation(),
-                    )
+                    if matches!(
+                        candidate.previous,
+                        crate::worker_run::ResumePredecessor::Cold(_)
+                    ) || candidate.retained.validation().is_some()
+                    {
+                        git.verify_resumable_execution(
+                            &execution.ownership,
+                            &execution.binding,
+                            contract.isolation(),
+                        )
+                    } else {
+                        git.verify_reusable_execution(
+                            &execution.ownership,
+                            &execution.binding,
+                            contract.isolation(),
+                        )
+                    }
                 })();
                 let summary = match &observed {
                     Ok(proof) => json!({"source_reuse":proof.digest()}),
@@ -683,14 +834,15 @@ impl RuntimeCoordinator {
                     operation_id: candidate.model_operation,
                     authority: plan.authority,
                     phase: reference.phase.clone(),
-                    source: Some(SourceSelection {
+                    source: Some(SourceSelection::Committed {
                         repository: execution.binding.repository.id.clone(),
                         revision: execution.binding.revision.clone(),
                     }),
                     delivery: candidate
                         .paired
                         .as_ref()
-                        .map(|paired| paired.plan().assignment().clone()),
+                        .map(|paired| paired.plan().assignment().clone())
+                        .or_else(|| candidate.replacement.clone()),
                     unfinished: None,
                     source_advanced: None,
                     retried_unfinished: None,
@@ -715,7 +867,7 @@ impl RuntimeCoordinator {
                         crate::runtime_workers::prepare_resumed(
                             self.clone(),
                             request,
-                            candidate.previous.operation_id,
+                            candidate.previous.operation_id(),
                             provider.clone(),
                             source.clone(),
                         )
@@ -742,15 +894,16 @@ fn candidate_shape(completion: &RunCompletion) -> bool {
             .as_ref()
             .is_some_and(|error| error.code == "turn_incomplete")
         && completion.hook_error.is_none()
-        && completion.checks.is_empty()
-        && completion.failed_checks.is_empty()
+        && completion.validation_error.is_none()
         && completion.execution.is_some()
         && completion.contract.as_ref().is_some_and(|contract| {
             matches!(
                 contract.instructions().manifest.role,
                 AgentRole::Implementation | AgentRole::Testing | AgentRole::Documentation
-            ) && contract.instructions().manifest.phase == "implementation"
-                && contract.workflow().front_matter.hooks.before_run.is_none()
+            ) && matches!(
+                contract.instructions().manifest.phase.as_str(),
+                "implementation" | "child_replacement"
+            ) && contract.workflow().front_matter.hooks.before_run.is_none()
                 && contract.workflow().front_matter.hooks.after_run.is_none()
         })
 }
@@ -782,7 +935,7 @@ fn require_plan(original: &CandidatePlan, current: &CandidatePlan) -> Result<()>
 fn stage_operation(candidate: &Candidate, stage: SessionRecoveryStage, cap: u32) -> Result<Uuid> {
     match stage {
         SessionRecoveryStage::Provider { attempt } => SessionRecoveryPreparationReference {
-            predecessor: candidate.previous.operation_id,
+            predecessor: candidate.previous.operation_id(),
             predecessor_receipt_digest: candidate.retained.admission_digest().into(),
             candidate_digest: candidate.retained.digest().into(),
             workspace: candidate.retained.reference().workspace,
@@ -792,7 +945,9 @@ fn stage_operation(candidate: &Candidate, stage: SessionRecoveryStage, cap: u32)
             max_attempts: cap,
         }
         .operation_id(),
-        SessionRecoveryStage::Source => recovery_id(&candidate.key, "source"),
+        SessionRecoveryStage::Source { preparation } => {
+            recovery_id(&candidate.key, &format!("source:{preparation}"))
+        }
         SessionRecoveryStage::Resume => Ok(candidate.model_operation),
     }
 }
@@ -939,6 +1094,7 @@ fn recovery_model_plan(
 fn metadata_plan(
     candidate: &crate::worker_run::RetainedResumeSession,
     proof: Option<&VerifiedProviderRecovery>,
+    refresh_verified: bool,
     receipts: &[Receipt],
     limits: &kegari_config::RuntimeConfig,
     now: chrono::DateTime<Utc>,
@@ -999,14 +1155,20 @@ fn metadata_plan(
                     || value["unresolved_effects"]
                         .as_array()
                         .is_none_or(|effects| !effects.is_empty())
-                    || value["observation"]["metadata_recovery"] != "failed_no_effect"
-                    || value["observation"]["retryable"] != true
+                    || !(value["observation"]["metadata_recovery"] == "failed_no_effect"
+                        && value["observation"]["retryable"] == true
+                        || refresh_verified
+                            && crate::control::metadata_readback_refreshable(previous))
             })
         {
             return Err(Error::new(
                 "reconciliation_required",
-                "metadata stage is successful without its live proof, unknown, or not retryable; it cannot be replayed",
+                "metadata stage is unknown, paired without live proof, or not retryable; it cannot be replayed",
             ));
+        }
+        if refresh_verified && crate::control::metadata_readback_refreshable(previous) {
+            not_before = not_before.max(previous.updated_at + Duration::seconds(1));
+            continue;
         }
         not_before = not_before.max(kegari_scheduler::retry_at(
             previous.updated_at,

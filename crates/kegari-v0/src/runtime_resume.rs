@@ -1,5 +1,5 @@
-//! Same-process session recovery retains the actual joined completion. Metadata
-//! and filesystem proofs do not bypass ordinary authority, capacity or budgets.
+//! Session recovery retains actual joined completion or checked cold provenance.
+//! Metadata and filesystem proofs do not bypass authority, capacity or budgets.
 use super::*;
 use crate::{housekeeping::VerifiedDirectoryReuse, worker_run::VerifiedSessionResume};
 
@@ -10,15 +10,8 @@ impl RuntimeCoordinator {
         resume: &crate::worker_run::AdmittedSessionResume,
     ) -> Result<()> {
         self.control.validate_permit(permit, || {
-            let completed = self
-                .retained_completion(resume.bridge().predecessor())?
-                .ok_or_else(|| {
-                    Error::new(
-                        "reconciliation_required",
-                        "resumed registration lost its actual joined predecessor",
-                    )
-                })?;
-            resume.bridge().verify_completion(&completed)?;
+            let completed = self.retained_completion(resume.bridge().predecessor())?;
+            resume.bridge().verify_predecessor(completed.as_ref())?;
             let mut state = self.state.lock().map_err(|_| {
                 Error::new("runtime_unavailable", "resume registration lock failed")
             })?;
@@ -122,18 +115,9 @@ impl RuntimeCoordinator {
     ) -> Result<crate::runtime_schedule::RunSchedule> {
         proof.verify_contract(contract)?;
         directory.revalidate()?;
-        let completed = self
-            .retained_completion(proof.predecessor())?
-            .ok_or_else(|| {
-                Error::new(
-                    "reconciliation_required",
-                    "session resume lost its actual joined worker",
-                )
-            })?;
-        proof.verify_completion(&completed)?;
-        let source = completed.execution.as_ref().ok_or_else(|| {
-            Error::new("resume_incompatible", "joined worker has no owned source")
-        })?;
+        let completed = self.retained_completion(proof.predecessor())?;
+        proof.verify_predecessor(completed.as_ref())?;
+        let source = proof.original_execution()?;
         let old = proof.recovery().observation().retained();
         let original = old.reference();
         if directory.predecessor() != proof.predecessor()

@@ -18,8 +18,8 @@ import pathlib
 import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-APPROVED_VERSION = "1.4"
-APPROVED = "b01064b5238554d2def840cabf6a9e5d555535e35ce4877838a55ade2dd0a6e7"
+APPROVED_VERSION = "1.5"
+APPROVED = "3122f9260f0f6a18412f4f0b8af7faf4f4ae0eba600e309d25c628ecee4cee50"
 LEGACY_UNBOUND_SPEC = "35d4515585fe92350ec1cc8b78a5919c834d559a48d48d071239d39305032fb3"
 
 # H requirements are defined by their normative section as well as the summary

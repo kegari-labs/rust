@@ -17,13 +17,12 @@ fn roles_expose_no_implementation_or_execution_to_parent_or_review() {
         assert!(
             !tools
                 .iter()
-                .any(|(e, _)| e.capability == ToolCapability::SourceWrite
-                    || e.capability == ToolCapability::ValidationResult
+                .any(|(e, _)| e.capability == ToolCapability::ValidationResult
                     || e.capability == ToolCapability::ValidationProposal)
         );
-        assert!(!role.permits(ToolCapability::SourceWrite));
+        assert!(!role.permits_source_writes());
     }
-    assert!(AgentRole::Testing.permits(ToolCapability::SourceWrite));
+    assert!(AgentRole::Testing.permits_source_writes());
 }
 #[tokio::test]
 async fn actual_context_is_bounded_and_tool_schema_is_closed() {
@@ -42,29 +41,12 @@ async fn actual_context_is_bounded_and_tool_schema_is_closed() {
     );
 }
 #[tokio::test]
-async fn source_reader_rejects_control_traversal_links_and_git() {
-    let mut f = Fixture::new(AgentRole::Coordination);
-    let call = f.call("source_read", json!({"path":"a.txt"}));
-    assert_eq!(f.worker.call(&call).await.unwrap()["content"], "original\n");
-    for path in ["../control/intent.json", ".git/config", "/etc/passwd"] {
-        let call = f.call("source_read", json!({"path":path}));
-        assert!(f.worker.call(&call).await.is_err());
-    }
-    let repo = f
-        .contract
-        .instructions()
-        .manifest
-        .repository_root
-        .as_ref()
-        .unwrap();
-    std::os::unix::fs::symlink("/etc/passwd", repo.join("linked")).unwrap();
-    let call = f.call("source_read", json!({"path":"linked"}));
-    assert!(f.worker.call(&call).await.is_err());
-}
-#[tokio::test]
 async fn revoked_owner_fenced_permit_and_stale_turn_prevent_effects() {
     let mut f = Fixture::new(AgentRole::Implementation);
-    let call=f.call("source_write",json!({"path":"a.txt","expected_digest":bytes_digest(b"original\n"),"content":"changed","executable":false}));
+    let call = f.call(
+        "outcome_submit",
+        json!({"claim":{"summary":"pending proposal"},"artifact_refs":[]}),
+    );
     f.host.revoked.store(true, Ordering::SeqCst);
     assert_eq!(
         f.worker.call(&call).await.unwrap_err().code,
@@ -90,33 +72,21 @@ async fn revoked_owner_fenced_permit_and_stale_turn_prevent_effects() {
     );
 }
 #[tokio::test]
-async fn actual_source_write_is_scoped_journaled_and_idempotent() {
-    let mut f = Fixture::new(AgentRole::Implementation);
-    let mut call=f.call("source_write",json!({"path":"a.txt","expected_digest":bytes_digest(b"original\n"),"content":"changed\n","executable":true}));
-    let first = f.worker.call(&call).await.unwrap();
-    assert_eq!(first["completed"], true);
-    assert_eq!(f.worker.call(&call).await.unwrap(), first);
-    let repo = f
-        .contract
-        .instructions()
-        .manifest
-        .repository_root
-        .as_ref()
-        .unwrap();
-    assert_eq!(
-        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
-        "changed\n"
-    );
-    call.arguments["content"] = json!("another");
-    assert_eq!(
-        f.worker.call(&call).await.unwrap_err().code,
-        "request_conflict"
-    );
-}
-#[tokio::test]
 async fn out_of_scope_source_and_operator_tool_names_are_rejected() {
     let mut f = Fixture::new(AgentRole::Implementation);
-    for name in ["approve", "release", "provider_mutate", "shell"] {
+    for name in [
+        "approve",
+        "release",
+        "provider_mutate",
+        "shell",
+        "source_write",
+        "source_read",
+        "resource_read",
+        "resource_list",
+        "command_run",
+        "git_inspect",
+        "validation_run",
+    ] {
         let call = f.call(name, json!({"roles":["release"]}));
         assert_eq!(
             f.worker.call(&call).await.unwrap_err().code,
@@ -182,29 +152,6 @@ async fn correction_proposal_cannot_expand_children_or_claim_consumption() {
         "pending_host_verification"
     );
     assert_eq!(f.state.correction_consumed, 0);
-}
-#[tokio::test]
-async fn configured_check_uses_executor_and_never_mints_fixture_production_proof() {
-    let mut f = Fixture::new(AgentRole::Implementation);
-    let call = f.call("validation_run", json!({"name":"suite","kind":"local"}));
-    let result = f.worker.call(&call).await.unwrap();
-    assert_eq!(result["successful"], true);
-    let checks = f.worker.take_verified_checks();
-    assert_eq!(checks.len(), 1);
-    assert_eq!(
-        checks[0].production_evidence().unwrap_err().code,
-        "unqualified_fixture"
-    );
-    assert_eq!(
-        f.worker.observe().unwrap().checks["suite"].status,
-        kegari_v0::evaluation::CheckStatus::Passed
-    );
-    let call = f.call("validation_run", json!({"name":"suite","kind":"local"}));
-    assert!(
-        f.worker.call(&call).await.unwrap()["successful"]
-            .as_bool()
-            .unwrap()
-    );
 }
 
 #[tokio::test]
@@ -312,6 +259,7 @@ async fn independent_review_has_no_linear_authority_or_execution_and_pins_pr() {
     for name in [
         "source_write",
         "validation_run",
+        "validation_record",
         "correction_propose",
         "git_inspect",
     ] {
@@ -375,74 +323,6 @@ fn changed_tools_profiles_or_authorized_write_paths_cannot_rebind_contract() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn force_is_durable_and_status_remains_responsive_during_long_check() {
-    let mut f = Fixture::new(AgentRole::Implementation);
-    f.boundary.block.store(true, Ordering::SeqCst);
-    let call = f.call("validation_run", json!({"name":"suite","kind":"local"}));
-    let control = f.control.clone();
-    let executions = f.executions.clone();
-    let task = tokio::spawn(async move {
-        let result = f.worker.call(&call).await;
-        (f, result)
-    });
-    tokio::time::timeout(StdDuration::from_secs(10), async {
-        while executions.active_operations().unwrap().is_empty() {
-            tokio::time::sleep(StdDuration::from_millis(5)).await;
-        }
-    })
-    .await
-    .unwrap();
-    let status_control = control.clone();
-    let status = tokio::time::timeout(
-        StdDuration::from_millis(250),
-        tokio::task::spawn_blocking(move || status_control.snapshot()),
-    )
-    .await
-    .unwrap()
-    .unwrap()
-    .unwrap();
-    assert_eq!(
-        executions.cancel_fenced(&control, id(4)).unwrap_err().code,
-        "access_denied"
-    );
-    control
-        .lifecycle(
-            MutationRequest {
-                request_id: Uuid::new_v4(),
-                runtime_id: id(1),
-                actor: Actor {
-                    principal: None,
-                    identity: "fixture-operator".into(),
-                    roles: BTreeSet::from(["lifecycle".into()]),
-                },
-                kind: "force_stop".into(),
-                canonical_targets: vec![id(1).to_string()],
-                expected: BTreeMap::new(),
-                payload: Value::Null,
-            },
-            Lifecycle::ForceStop,
-            status.intent.generation,
-        )
-        .unwrap();
-    assert_eq!(control.snapshot().unwrap().intent.desired, Intent::Stopped);
-    assert_eq!(executions.cancel_fenced(&control, id(4)).unwrap(), 1);
-    let (mut f, result) = tokio::time::timeout(StdDuration::from_secs(2), task)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(result.is_err());
-    assert!(f.worker.take_verified_checks().is_empty());
-    assert!(executions.active_operations().unwrap().is_empty());
-    assert!(
-        f.control
-            .snapshot()
-            .unwrap()
-            .unresolved_operations
-            .is_empty()
-    );
-}
-
 #[tokio::test]
 async fn adapter_observation_binds_interleaved_tool_before_start_response() {
     let mut f = Fixture::new(AgentRole::Coordination);
@@ -496,16 +376,7 @@ fn run_preparation(f: &Fixture) -> kegari_v0::worker_run::Preparation {
             Duration::seconds(30),
         )
         .unwrap();
-    let mut isolation = f.input.isolation.plan().clone();
-    if f.input
-        .assembled
-        .manifest
-        .role
-        .permits_repository_execution()
-    {
-        isolation.managed_execution =
-            Some(BoundManagedExecution::automatic(&isolation, kegari_v0::BUILD_ID).unwrap());
-    }
+    let isolation = f.input.isolation.plan().clone();
     kegari_v0::worker_run::Preparation {
         config: Arc::new(config),
         workflow: f.input.workflow.clone(),
@@ -644,199 +515,6 @@ async fn fenced_nonexecuting_after_hook_records_inapplicability_without_new_auth
     assert_eq!(
         hooks.after(&f.permit, &other).await.unwrap_err().code,
         "worker_binding"
-    );
-}
-
-async fn initialized_hook_records(f: &Fixture) -> PrivateDir {
-    let dir = PrivateDir::open(&f._temp.path().canonicalize().unwrap().join("control"))
-        .unwrap()
-        .child("hooks")
-        .unwrap();
-    let execution = f.execution.as_ref().unwrap();
-    let executor = LocalExecutor {
-        isolation: &f.input.isolation,
-        git: &execution.git,
-        boundary: execution.boundary.as_ref(),
-        limits: execution.limits.clone(),
-        ownership: &execution.ownership,
-    };
-    let mut ledger = HookLedger::new(&execution.binding).unwrap();
-    executor
-        .run_hook(
-            &mut ledger,
-            HookInvocation {
-                binding: &execution.binding,
-                workflow: &f.input.workflow,
-                phase: HookPhase::AfterCreate,
-                session: None,
-                eligible_cleanup_plan: None,
-            },
-            |ledger| dir.write("hooks.json", ledger),
-        )
-        .await
-        .unwrap();
-    assert!(ledger.initialized);
-    dir
-}
-fn executor_hooks(f: &Fixture, records: PrivateDir) -> kegari_v0::worker_run::ExecutorRunHooks {
-    kegari_v0::worker_run::ExecutorRunHooks::new(kegari_v0::worker_run::ExecutorHookServices {
-        contract: f.contract.clone(),
-        control: f.control.clone(),
-        host: f.host.clone(),
-        execution: f.execution.as_ref().unwrap().clone(),
-        registry: f.executions.clone(),
-        records,
-        session_id: id(99),
-    })
-    .unwrap()
-}
-#[tokio::test]
-async fn worker_hooks_require_actual_creation_and_record_actual_session_lifecycle() {
-    use kegari_v0::worker_run::RunHooks;
-    let f = Fixture::with_hooks(
-        AgentRole::Implementation,
-        "hooks:\n  before_run: 'true'\n  after_run: 'true'\n",
-    );
-    let records = initialized_hook_records(&f).await;
-    let path = records.path().to_owned();
-    let hooks = executor_hooks(&f, records);
-    assert_eq!(
-        hooks.launched(&f.permit).await.unwrap_err().code,
-        "hook_gate"
-    );
-    hooks.before(&f.permit).await.unwrap();
-    hooks.launched(&f.permit).await.unwrap();
-    hooks.after(&f.permit, &f.state).await.unwrap();
-    let ledger: HookLedger = PrivateDir::open(&path).unwrap().read("hooks.json").unwrap();
-    assert_eq!(ledger.sessions[&id(99)], SessionLifecycle::Ended);
-    assert_eq!(
-        ledger.records[&format!("BeforeRun:{}", id(99))].state,
-        HookState::Succeeded
-    );
-    assert_eq!(
-        ledger.records[&format!("AfterRun:{}", id(99))].state,
-        HookState::Succeeded
-    );
-    assert_eq!(
-        hooks.before(&f.permit).await.unwrap_err().code,
-        "reconciliation_required"
-    );
-    assert!(f.executions.active_operations().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn failed_worker_before_hook_never_records_launched_session() {
-    use kegari_v0::worker_run::RunHooks;
-    let f = Fixture::with_hooks(AgentRole::Implementation, "hooks:\n  before_run: 'false'\n");
-    let records = initialized_hook_records(&f).await;
-    let path = records.path().to_owned();
-    let hooks = executor_hooks(&f, records);
-    f.boundary.fail.store(true, Ordering::SeqCst);
-    assert_eq!(
-        hooks.before(&f.permit).await.unwrap_err().code,
-        "hook_failed"
-    );
-    assert_eq!(
-        hooks.launched(&f.permit).await.unwrap_err().code,
-        "hook_gate"
-    );
-    hooks.after(&f.permit, &f.state).await.unwrap();
-    let ledger: HookLedger = PrivateDir::open(&path).unwrap().read("hooks.json").unwrap();
-    assert!(ledger.sessions.is_empty());
-    assert!(!ledger.records.keys().any(|key| key.starts_with("AfterRun")));
-}
-
-#[tokio::test]
-async fn fenced_after_hook_preserves_absent_and_configured_distinctions() {
-    use kegari_v0::worker_run::{AfterHookObservation, AfterHookSkip, RunHooks};
-    for configured in [false, true] {
-        let f = Fixture::with_hooks(
-            AgentRole::Implementation,
-            if configured {
-                "hooks:\n  after_run: 'true'\n"
-            } else {
-                ""
-            },
-        );
-        let records = initialized_hook_records(&f).await;
-        let path = records.path().to_owned();
-        let hooks = executor_hooks(&f, records);
-        hooks.before(&f.permit).await.unwrap();
-        hooks.launched(&f.permit).await.unwrap();
-        f.control.fence(f.permit.operation_id).unwrap();
-        let receipts = f.control.operations().unwrap().len();
-        let outcome = hooks.after(&f.permit, &f.state).await;
-        let ledger: HookLedger = PrivateDir::open(&path).unwrap().read("hooks.json").unwrap();
-        assert_eq!(ledger.sessions[&id(99)], SessionLifecycle::Ended);
-        let key = format!("AfterRun:{}", id(99));
-        if configured {
-            assert_eq!(outcome.unwrap_err().code, "hook_not_run_fenced");
-            assert!(!ledger.records.contains_key(&key));
-        } else {
-            assert_eq!(
-                outcome.unwrap(),
-                AfterHookObservation::Skipped {
-                    reason: AfterHookSkip::HookNotConfigured
-                }
-            );
-            assert_eq!(ledger.records[&key].state, HookState::Skipped);
-            assert!(ledger.records[&key].script_digest.is_none());
-            assert!(ledger.records[&key].exit_code.is_none());
-        }
-        assert_eq!(f.control.operations().unwrap().len(), receipts);
-        assert!(f.control.validate_permit(&f.permit, || Ok(())).is_err());
-        assert!(f.executions.active_operations().unwrap().is_empty());
-    }
-}
-
-#[tokio::test]
-async fn unconfirmed_hook_exit_keeps_owned_handle_and_sent_receipt() {
-    use kegari_v0::worker_run::RunHooks;
-    let f = Fixture::with_hooks(AgentRole::Implementation, "hooks:\n  before_run: 'true'\n");
-    let records = initialized_hook_records(&f).await;
-    let path = records.path().to_owned();
-    let hooks = executor_hooks(&f, records);
-    f.boundary.unknown.store(true, Ordering::SeqCst);
-    assert_eq!(
-        hooks.before(&f.permit).await.unwrap_err().code,
-        "operation_uncertain"
-    );
-    assert!(f.executions.active_operations().unwrap().contains(&id(4)));
-    assert_eq!(f.executions.observe_exited(id(4)).unwrap(), 0);
-    let operations = f.control.operations().unwrap();
-    let receipt = operations
-        .iter()
-        .find(|receipt| receipt.kind == "worker_hook")
-        .unwrap();
-    assert_eq!(receipt.phase, ReceiptPhase::Sent);
-    let ledger: HookLedger = PrivateDir::open(&path).unwrap().read("hooks.json").unwrap();
-    assert_eq!(
-        ledger.records[&format!("BeforeRun:{}", id(99))].state,
-        HookState::StartedUnknown
-    );
-    f.boundary
-        .last_cancel
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .exited
-        .store(true, Ordering::SeqCst);
-    assert_eq!(f.executions.observe_exited(id(4)).unwrap(), 1);
-    assert!(f.executions.active_operations().unwrap().is_empty());
-    assert_eq!(
-        f.control
-            .operations()
-            .unwrap()
-            .iter()
-            .find(|item| item.operation_id == receipt.operation_id)
-            .unwrap()
-            .phase,
-        ReceiptPhase::Sent
-    );
-    assert_eq!(
-        hooks.before(&f.permit).await.unwrap_err().code,
-        "reconciliation_required"
     );
 }
 
@@ -1243,7 +921,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
         let source = if role == AgentRole::Coordination {
             None
         } else {
-            Some(SourceSelection {
+            Some(SourceSelection::Committed {
                 repository: "42".into(),
                 revision: f
                     .execution
@@ -1297,7 +975,7 @@ fn runtime_launch_request_binds_canonical_work_generation_and_exact_source_befor
             }
             WorkerAuthority::Independent(gate) => gate.review_identity().into(),
         };
-        request.source = Some(SourceSelection {
+        request.source = Some(SourceSelection::Committed {
             repository: "999".into(),
             revision: kegari_git::Revision {
                 commit: "b".repeat(40),
@@ -1406,11 +1084,6 @@ fn authorized_resource_write_contract_rejects_unconfigured_flags_and_scope_expan
             disposable: true,
         },
     );
-    // Rebind the host-derived domain after the actual admitted resource grants
-    // are final; the domain does not authorize the configured scope itself.
-    preparation.isolation.managed_execution = Some(
-        BoundManagedExecution::automatic(&preparation.isolation, kegari_v0::BUILD_ID).unwrap(),
-    );
     let prepared = kegari_v0::worker_run::prepare(preparation).unwrap();
     assert_eq!(
         prepared
@@ -1451,7 +1124,6 @@ fn repository_free_child_keeps_reasoning_role_without_execution_or_fabricated_gi
     input.repository = None;
     input.repository_id = None;
     input.isolation.source_writes.clear();
-    input.isolation.managed_execution = None;
     let prepared = kegari_v0::worker_run::prepare(input).unwrap();
     let manifest = &prepared.contract().instructions().manifest;
     assert_eq!(manifest.role, AgentRole::Documentation);
@@ -1459,7 +1131,7 @@ fn repository_free_child_keeps_reasoning_role_without_execution_or_fabricated_gi
     assert!(manifest.repository_revision.is_none());
     assert!(!manifest.tools.iter().any(|tool| matches!(
         tool.name.as_str(),
-        "validation_run" | "git_inspect" | "source_write"
+        "validation_record" | "git_inspect" | "source_write"
     )));
     kegari_v0::worker_run::NonExecutingRunHooks::new(
         prepared.contract().clone(),
@@ -1755,7 +1427,7 @@ fn correction_context_contains_exact_native_text_and_rejects_stale_or_missing_re
                 .as_ref()
                 .map(|root| RepositoryContext {
                     root: root.clone(),
-                    revision: manifest.repository_revision.clone().unwrap(),
+                    revision: Some(manifest.repository_revision.clone().unwrap()),
                     scope_paths: vec!["a.txt".into()],
                 }),
             required_context: &[],

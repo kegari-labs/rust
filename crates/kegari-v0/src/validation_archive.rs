@@ -18,6 +18,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const PURPOSE: &str = "kegari/validation-archive/v1";
+const HISTORY_PURPOSE: &str = "kegari/validation-history-archive/v1";
 const CHUNK_BYTES: usize = 4 * 1024 * 1024;
 const MANIFEST_BYTES: usize = 256 * 1024;
 const ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
@@ -82,13 +83,38 @@ impl ResolvedValidationArchive {
         &self.retained_files
     }
     pub(crate) fn read_artifact(&self, proof: &ArtifactProof) -> Result<Vec<u8>> {
+        self.artifact_bytes(proof).map(<[u8]>::to_vec)
+    }
+    pub(crate) fn artifact_bytes(&self, proof: &ArtifactProof) -> Result<&[u8]> {
         let key = canonical_digest(1, proof)?;
         match self.artifacts.get(&key) {
-            Some((original, bytes)) if original == proof => Ok(bytes.clone()),
+            Some((original, bytes)) if original == proof => Ok(bytes),
             _ => Err(invalid(
                 "artifact is not in the authenticated complete inventory",
             )),
         }
+    }
+    pub(crate) fn artifact_index(&self) -> Vec<(&str, &ArtifactProof)> {
+        self.artifacts
+            .iter()
+            .map(|(digest, (proof, _))| (digest.as_str(), proof))
+            .collect()
+    }
+    /// This small prompt manifest binds the complete immutable archive. Original
+    /// histories and artifact bodies remain available through bounded reads.
+    pub(crate) fn review_descriptor(&self) -> Result<serde_json::Value> {
+        let plan = self.evidence.current()?;
+        Ok(serde_json::json!({
+            "schema_version":1,"archive":self.reference,
+            "evidence_digest":self.reference.evidence_digest,
+            "plan_digest":self.evidence.plan_digest,"source_digest":plan.source_digest,
+            "history_count":self.evidence.history_count(),"attempt_count":self.evidence.all_attempts().count(),
+            "artifact_count":self.artifacts.len(),
+            "read":{"tool":"context_read","key":"validation_review",
+                "archive_digest":self.reference.manifest_digest,
+                "resources":["history","index","artifact:<proof_digest>"],"offset":0},
+            "requirement":"Read history and index from offset zero through next_offset=null, then every indexed artifact body the same way. Each page is bound to this archive and exact body digest. A pass/sufficient assessment is refused until all original pages are read. Earlier failed attempts and superseded plans remain part of this review; bytes alone do not establish visual or semantic adequacy."
+        }))
     }
 }
 
@@ -138,23 +164,50 @@ pub(crate) fn retain(
     key: &AttestationKey,
     namespace: ValidationArchiveNamespace,
     evidence: &ValidationEvidence,
-    mut artifact_read: impl FnMut(&ArtifactProof) -> Result<Vec<u8>>,
+    artifact_read: impl FnMut(&ArtifactProof) -> Result<Vec<u8>>,
 ) -> Result<ResolvedValidationArchive> {
+    retain_mode(records, key, namespace, evidence, artifact_read, false)
+}
+/// Authenticated historical observations, including missing/failed current results.
+/// Uses a distinct manifest schema and signing purpose; ordinary delivery reads
+/// cannot load these archives as passing validation.
+pub(crate) fn retain_history(
+    records: &PrivateDir,
+    key: &AttestationKey,
+    namespace: ValidationArchiveNamespace,
+    evidence: &ValidationEvidence,
+    artifact_read: impl FnMut(&ArtifactProof) -> Result<Vec<u8>>,
+) -> Result<ResolvedValidationArchive> {
+    retain_mode(records, key, namespace, evidence, artifact_read, true)
+}
+fn retain_mode(
+    records: &PrivateDir,
+    key: &AttestationKey,
+    namespace: ValidationArchiveNamespace,
+    evidence: &ValidationEvidence,
+    mut artifact_read: impl FnMut(&ArtifactProof) -> Result<Vec<u8>>,
+    history_only: bool,
+) -> Result<ResolvedValidationArchive> {
+    let purpose = if history_only {
+        HISTORY_PURPOSE
+    } else {
+        PURPOSE
+    };
     let evidence_bytes = encode(evidence, MAX_VALIDATION_EVIDENCE_BYTES)?;
-    validate_evidence(&namespace, evidence)?;
+    validate_evidence(&namespace, evidence, history_only)?;
     let proofs = artifact_inventory(evidence)?;
     let artifact_bytes = proofs.values().map(|proof| proof.bytes).sum();
     let current = evidence.current()?;
     let mut manifest = Manifest {
-        schema_version: 1,
+        schema_version: if history_only { 2 } else { 1 },
         namespace: namespace.clone(),
         original_binding: current.original_binding.clone(),
         binding: current.binding.clone(),
         source_digest: current.source_digest.clone(),
         plan_digest: evidence.plan_digest.clone(),
         evidence_digest: evidence.digest()?,
-        history_count: evidence.history.len() as u32,
-        attempt_count: evidence.attempts.len() as u32,
+        history_count: evidence.history_count() as u32,
+        attempt_count: evidence.all_attempts().count() as u32,
         evidence: describe(&evidence_bytes),
         artifacts: Vec::with_capacity(proofs.len()),
         artifact_bytes,
@@ -168,7 +221,7 @@ pub(crate) fn retain(
             blob: placeholder_blob(proof),
         });
     }
-    encode(&key.sign(PURPOSE, &manifest)?, MANIFEST_BYTES)?;
+    encode(&key.sign(purpose, &manifest)?, MANIFEST_BYTES)?;
     store_blob(records, &evidence_bytes)?;
     for artifact in &mut manifest.artifacts {
         let bytes = artifact_read(&artifact.proof)?;
@@ -182,7 +235,7 @@ pub(crate) fn retain(
         artifact.blob = describe(&bytes);
         store_blob(records, &bytes)?;
     }
-    let signed = key.sign(PURPOSE, &manifest)?;
+    let signed = key.sign(purpose, &manifest)?;
     let bytes = encode(&signed, MANIFEST_BYTES)?;
     let reference = ValidationArchiveReference {
         schema_version: 1,
@@ -191,7 +244,7 @@ pub(crate) fn retain(
         evidence_digest: manifest.evidence_digest,
     };
     store_exact(records, &manifest_leaf(&reference.manifest_digest)?, &bytes)?;
-    read(records, key, &namespace, &reference)
+    read_mode(records, key, &namespace, &reference, history_only)
 }
 
 /// Expected identity must be supplied from the actual runtime/workspace owner,
@@ -203,6 +256,28 @@ pub(crate) fn read(
     expected: &ValidationArchiveNamespace,
     reference: &ValidationArchiveReference,
 ) -> Result<ResolvedValidationArchive> {
+    read_mode(records, key, expected, reference, false)
+}
+pub(crate) fn read_history(
+    records: &PrivateDir,
+    key: &AttestationKey,
+    expected: &ValidationArchiveNamespace,
+    reference: &ValidationArchiveReference,
+) -> Result<ResolvedValidationArchive> {
+    read_mode(records, key, expected, reference, true)
+}
+fn read_mode(
+    records: &PrivateDir,
+    key: &AttestationKey,
+    expected: &ValidationArchiveNamespace,
+    reference: &ValidationArchiveReference,
+    history_only: bool,
+) -> Result<ResolvedValidationArchive> {
+    let purpose = if history_only {
+        HISTORY_PURPOSE
+    } else {
+        PURPOSE
+    };
     reference.validate_shape()?;
     validate_namespace(expected)?;
     if &reference.namespace != expected {
@@ -217,10 +292,10 @@ pub(crate) fn read(
     }
     let signed: Signed<Manifest> = serde_json::from_slice(&bytes)
         .map_err(|_| invalid("invalid validation archive manifest"))?;
-    key.verify(PURPOSE, &signed)?;
+    key.verify(purpose, &signed)?;
     let manifest = &signed.payload;
     if encode(&signed, MANIFEST_BYTES)? != bytes
-        || manifest.schema_version != 1
+        || manifest.schema_version != if history_only { 2 } else { 1 }
         || &manifest.namespace != expected
         || manifest.evidence_digest != reference.evidence_digest
     {
@@ -237,15 +312,15 @@ pub(crate) fn read(
             "validation evidence encoding differs from its signed producer",
         ));
     }
-    validate_evidence(expected, &evidence)?;
+    validate_evidence(expected, &evidence, history_only)?;
     let current = evidence.current()?;
     if evidence.digest()? != manifest.evidence_digest
         || evidence.plan_digest != manifest.plan_digest
         || current.original_binding != manifest.original_binding
         || current.binding != manifest.binding
         || current.source_digest != manifest.source_digest
-        || evidence.history.len() != manifest.history_count as usize
-        || evidence.attempts.len() != manifest.attempt_count as usize
+        || evidence.history_count() != manifest.history_count as usize
+        || evidence.all_attempts().count() != manifest.attempt_count as usize
     {
         return Err(invalid(
             "validation manifest differs from complete history or source",
@@ -278,6 +353,7 @@ pub(crate) fn read(
 fn validate_evidence(
     namespace: &ValidationArchiveNamespace,
     evidence: &ValidationEvidence,
+    history_only: bool,
 ) -> Result<()> {
     validate_namespace(namespace)?;
     let current = evidence.current()?;
@@ -287,6 +363,9 @@ fn validate_evidence(
         return Err(invalid(
             "validation archive runtime differs from its original owner",
         ));
+    }
+    if history_only {
+        return evidence.validate_observed_history();
     }
     let revision = RevisionBinding {
         repository: current.binding.repository.clone(),
@@ -314,8 +393,7 @@ fn artifact_inventory(evidence: &ValidationEvidence) -> Result<BTreeMap<String, 
     let mut proofs = BTreeMap::new();
     let mut total = 0u64;
     for proof in evidence
-        .attempts
-        .iter()
+        .all_attempts()
         .flat_map(|attempt| &attempt.artifacts)
     {
         raw_suffix(&proof.digest)?;
@@ -339,7 +417,7 @@ fn artifact_inventory(evidence: &ValidationEvidence) -> Result<BTreeMap<String, 
 fn validate_manifest_inventory(manifest: &Manifest) -> Result<()> {
     if manifest.history_count == 0
         || manifest.history_count > 32
-        || manifest.attempt_count == 0
+        || manifest.attempt_count == 0 && manifest.schema_version != 2
         || manifest.attempt_count > 2048
         || manifest.artifacts.len() > ARTIFACT_COUNT
         || manifest.artifact_bytes > ARTIFACT_BYTES

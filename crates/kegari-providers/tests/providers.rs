@@ -851,3 +851,101 @@ fn pull_request_text_limit_counts_the_existing_serialized_bytes() {
     text.body.as_mut().unwrap().push('x');
     assert_eq!(text.validate().unwrap_err().code, "bounded_input");
 }
+
+#[tokio::test]
+async fn empty_repository_requires_authenticated_complete_refs_or_typed_state() {
+    let wire = Wire::fixture(vec![gh_identity(), gh_repo(), response(json!([]))]);
+    assert!(
+        github(wire.clone())
+            .repository_has_no_refs(&repo())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        wire.requests.lock().unwrap()[2].url.path(),
+        "/api/v3/repos/fixture/repo/git/matching-refs/"
+    );
+    let wire = Wire::fixture(vec![
+        gh_identity(),
+        gh_repo(),
+        response(json!([{"ref":"refs/tags/only"}])),
+    ]);
+    assert!(!github(wire).repository_has_no_refs(&repo()).await.unwrap());
+    let conflict = || {
+        Ok(HttpResponse {
+            status: 409,
+            headers: HeaderMap::new(),
+            body: serde_json::to_vec(&json!({"message":"Git Repository is empty."})).unwrap(),
+        })
+    };
+    let wire = Wire::fixture(vec![
+        gh_identity(),
+        gh_repo(),
+        conflict(),
+        response(
+            json!({"data":{"repository":{"databaseId":42,"name":"repo","owner":{"login":"fixture"},"isEmpty":true}}}),
+        ),
+    ]);
+    assert!(
+        github(wire.clone())
+            .repository_has_no_refs(&repo())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        wire.requests.lock().unwrap()[3].url.as_str(),
+        "https://github.invalid/api/graphql"
+    );
+    assert_eq!(
+        wire.body(3)["variables"],
+        json!({"owner":"fixture","name":"repo"})
+    );
+    let wire = Wire::fixture(vec![
+        gh_identity(),
+        gh_repo(),
+        conflict(),
+        response(json!({"data":{"repository":null},"errors":[{"message":"unavailable"}]})),
+    ]);
+    assert_eq!(
+        github(wire)
+            .repository_has_no_refs(&repo())
+            .await
+            .unwrap_err()
+            .code,
+        "source_unavailable"
+    );
+    let wire = Wire::fixture(vec![
+        gh_identity(),
+        gh_repo(),
+        conflict(),
+        response(
+            json!({"data":{"repository":{"databaseId":99,"name":"repo","owner":{"login":"fixture"},"isEmpty":true}}}),
+        ),
+    ]);
+    assert_eq!(
+        github(wire)
+            .repository_has_no_refs(&repo())
+            .await
+            .unwrap_err()
+            .code,
+        "identity_mismatch"
+    );
+    let wire = Wire::fixture(vec![
+        gh_identity(),
+        gh_repo(),
+        Ok(HttpResponse {
+            status: 404,
+            headers: HeaderMap::new(),
+            body: vec![],
+        }),
+    ]);
+    assert_eq!(
+        github(wire.clone())
+            .repository_has_no_refs(&repo())
+            .await
+            .unwrap_err()
+            .code,
+        "provider_status"
+    );
+    assert_eq!(wire.len(), 3);
+}

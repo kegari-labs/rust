@@ -41,6 +41,36 @@ Each successful proof is immutable and has exact dispatch and digest lookup reco
 
 `recover_historical_target` returns a separate opaque `HistoricalTargetDeployment`. It selects the original immutable proof, rereads its exact deployment, successful status, environment policy, source tree and original workflow attempt/jobs, and rechecks the actual dispatch receipt. A later target replacement or newer run attempt cannot substitute a different proof. The reader does not assert that the original target is still current. The release-lineage consumer additionally requires the exact signed step, expected effect, original or resumed admission, locally retired owner and reconciled successful dispatch. It cannot resolve an unknown effect or grant current readiness. Merge history continues through its separate Git/provider provenance path.
 
-Initial historical targets without retained authenticated evidence remain an explicit preparation blocker. They need a bounded, explicitly authorized run of a configured trusted validation/deployment route. Ordinary observation never dispatches a workflow. Corrected preparation may call `with_successor` only with a sealed `KnownPredecessorBaseline`. The runtime derives it from an exact signed held attempt, actual retired admission and reconciled effects, original native accepted publications, and complete current repository/target reads. It checks that every source/artifact movement is an observed effect of that predecessor. The capability rereads its protected record and actual receipt, expires after 30 seconds, and cannot clear a hold or grant a permit. The bound observer rereads the complete target vector before creating an explicitly declared successor baseline. Ordinary observation still rejects divergence; a caller-supplied recovery UUID is never sufficient.
+## Existing external targets
+
+A deployment step may supply optional `baseline_observation` using the same exact-revision workflow fields as its deployment route. Omission preserves existing configuration serialization and revision values. The configured observation workflow must be reviewed, SHA-pinned and read-only with respect to the target: it measures existing production rather than deploying something to manufacture a baseline. Kegari never dispatches this route implicitly. The operator or existing automation runs it; initial ingestion requires fresh proof, and missing, expired, ambiguous or mismatched evidence remains a concrete preparation blocker.
+
+`ProductionObserver::observe` first authenticates any existing owned deployment proof. A corrupt or dangling owned record cannot select an external fallback. If there is no matching owned proof, it reads the complete configured observation-run inventory and requires one unique artifact named `kegari-baseline-{runtime UUID}-{canonical environment ID}-{current status ID}`. The archive contains exactly `kegari-baseline.json`, with the same safe ZIP and byte bounds as deployment evidence. Its strict schema is:
+
+```json
+{
+  "schema_version": 1,
+  "purpose": "external_target_observation",
+  "runtime_id": "UUID",
+  "repository_id": 42,
+  "step_id": "deploy",
+  "target_id": "service-production",
+  "environment_id": 88,
+  "deployment_id": 91,
+  "status_id": 93,
+  "run_id": 50,
+  "run_attempt": 1,
+  "source": {"commit": "EXACT_CURRENT_MAIN", "tree": "EXACT_TREE"},
+  "outputs": {"CONFIGURED_OBSERVED_SOURCE_OUTPUT": "EXACT_CURRENT_MAIN"},
+  "artifact_digest": "sha256:EXACT_MEASURED_DEPLOYED_BYTES_DIGEST",
+  "proofs": [{"check_run_id": 60, "token": "FRESH_GITHUB_OIDC_JWT"}]
+}
+```
+
+Every successful job of the exact first run attempt supplies its trusted OIDC proof. The audience uses `HostedProofExpectation` with the current runtime UUID, `operation_id = UUID((repository_id << 64) | run_id)`, `challenge = UUID((environment_id << 64) | status_id)`, and `context_digest = external_baseline_context_digest(repository_id, target_id, environment_id, deployment_id, status_id, source, artifact_digest)`. UUID conversion uses the unsigned 128-bit integer's ordinary UUID byte representation. These deterministic IDs correlate observations; they are never control-operation IDs or permits. The purpose-separated context binds the actual deployment/status, source/tree and measured artifact. Workflow caller/reusable pins, selected actor, hosted-runner claim, source, run/attempt/check identities, lifetime and replay checks remain mandatory.
+
+A separate signed `external_target_baseline` record retains proof provenance and native identities without raw bearer tokens. Current observations reread the original run/jobs, complete native environment/deployment/status inventory and current main. Recovery reuses the protected original authentication, never an expired JWT. Public provider references begin `github-external-observation:`. This establishes an initial candidate baseline; it does not create an owned deployment, release admission, historical deployment effect or automatic production permission. Unchanged-target release verification retains only a verification effect for this proof; it cannot become a deployment effect. No-release completion keeps external references separately from owned deployment references, binds the complete current target/source/artifact vector to the accepted candidate, and validates the original signed observation again during cold history reads. Missing or substituted proof files remove historical credit rather than reconstructing it from provider status. Newly sealed no-release records use schema 2 when external references are present; release-chain completion uses schema 3 when it retains external verification provenance. Older owned-only record serialization stays unchanged. Historical external verification checks the original deployment/status and exact workflow attempt, so later target movement does not turn that historical fact into current readiness.
+
+Corrected preparation may call `with_successor` only with a sealed `KnownPredecessorBaseline`. The runtime derives it from an exact signed held attempt, actual retired admission and reconciled effects, original native accepted publications, and complete current repository/target reads. It checks that every source/artifact movement is an observed effect of that predecessor. The capability rereads its protected record and actual receipt, expires after 30 seconds, and cannot clear a hold or grant a permit. The bound observer rereads the complete target vector before creating an explicitly declared successor baseline. Ordinary observation still rejects divergence; a caller-supplied recovery UUID is never sufficient.
 
 The deterministic tests use production parsing, broker receipts, private storage and offline RSA signatures with an injected HTTP boundary. They do not qualify any real GitHub account, deployed target or trusted workflow. Live deployment validation remains unrun and requires separate explicit authorization.

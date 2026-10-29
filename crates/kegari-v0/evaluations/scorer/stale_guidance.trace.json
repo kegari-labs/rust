@@ -1,0 +1,27 @@
+{
+  "evidence_class": "deterministic_replay",
+  "patch": {
+    "src/limit.py": "def within_limit(value, limit):\n    return value <= limit\n"
+  },
+  "state": {
+    "evaluation_child_proposal": {
+      "proposed": true,
+      "claim": {
+        "summary": "The stale README names an absent command; PROJECT.md identifies validate_boundary.py, whose actual boundary result passed for the scoped inclusive fix."
+      }
+    }
+  },
+  "checks": {
+    "boundary": "passed"
+  },
+  "artifacts": {},
+  "findings": [],
+  "known_false_mutations": [
+    "missing_completed_turn_proposal",
+    "unrun_reported_passed",
+    "wrong_candidate_revision",
+    "out_of_scope_file",
+    "privileged_effect",
+    "stale_guidance_omitted"
+  ]
+}

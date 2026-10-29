@@ -1,5 +1,11 @@
 # Native orchestration supervision
 
+[SPEC 1.5](../SPEC.md) preserves the current process arrangement: the control host
+runs the runtime driver, and the orchestration child owns the runtime lock and
+lease/heartbeat/poll channel. Codex app-server owns repository execution. This
+supervisor coordinates Kegari ownership and workflow lifecycle; it does not
+supervise or separately admit every Codex-internal command.
+
 `kegari_controller::supervisor::Supervisor::native` owns the actual registered `RunningOrchestration`
 process and its inherited bounded channel. It requires concrete driver methods
 for pre-start reconciliation, recovery, scheduling, worker maintenance, fenced
@@ -48,8 +54,9 @@ real `ControlHost` intent, permits, fences and receipts. They cover recovery
 failure, pause/resume, drain, service stop, force during a blocked step, heartbeat
 responsiveness, bounded timeout, unexpected exit and refusal to retry implicitly.
 These fixtures do not prove native launchd, OS process identity or real-account
-qualification. Native ownership tests remain explicitly blocked by the observed
-outer sandbox boot-identity denial; no unconfined retry was attempted.
+qualification. Historical native-test restrictions and results remain evidence
+for their original source. Current native or live qualification requires separate
+authority; it does not block unrelated implementation in the new goal.
 
 ```sh
 RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-controller --test supervisor --test orchestration
@@ -62,3 +69,8 @@ When startup failed before any owner was created, an observed restoration of
 runtime prerequisites may retry that pre-start reconciliation without inventing
 a new lifecycle command. The same signal does not reopen an owner that already
 failed or clear any unresolved effect.
+
+Codex interruption and terminal cleanup are requests through supported provider
+interfaces. Preserve unknown outcomes if those interfaces cannot establish the
+relevant completion. Neither cancellation of the owned app-server nor loss of
+its channel establishes arbitrary descendant exit or authorizes automatic replay.

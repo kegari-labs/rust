@@ -36,10 +36,11 @@ pub(super) struct PreparationTrace {
 }
 impl PreparationTrace {
     pub(super) fn new(request: &LaunchRequest) -> Result<Self> {
-        // This trace only accompanies the native evaluator's ordinary independent
-        // admission. A special lane needs its own exact full request identity.
-        if !matches!(&request.authority, WorkerAuthority::Independent(_))
-            || request.phase.phase != "independent_review"
+        // Only the evaluator's ordinary fresh review or scoped child admission.
+        // Continuation/retry lanes need their own original protected identity.
+        let ordinary = matches!(&request.authority, WorkerAuthority::Independent(_) if request.phase.phase == "independent_review")
+            || matches!(&request.authority, WorkerAuthority::Authorized(g) if g.work().child.is_some() && request.phase.phase == "implementation");
+        if !ordinary
             || request.phase.retry_grant.is_some()
             || request.delivery.is_some()
             || request.unfinished.is_some()
@@ -51,7 +52,7 @@ impl PreparationTrace {
         {
             return Err(Error::new(
                 "worker_binding",
-                "evaluation return requires an ordinary independent admission",
+                "evaluation return requires an ordinary fresh review or child admission",
             ));
         }
         Ok(Self {

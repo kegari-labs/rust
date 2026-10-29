@@ -248,7 +248,6 @@ impl DeliveryCoordinator {
                 "passed validation uses another actual control host",
             ));
         }
-        super::super::discovered_validation::require_legacy_continuation(completed.completion())?;
         self.current(source.admission, &[DeliveryPhase::LocalValidation])?;
         local.matches(source.admission)?;
         completed
@@ -267,29 +266,36 @@ impl DeliveryCoordinator {
                 "passed validation belongs to another implementation source",
             ));
         }
-        let required = local_requirements(self.contract(source.admission)?, workflow)?;
         let completion = completed.completion();
-        let checks: Vec<_> = completion
-            .checks
-            .iter()
-            .map(|c| (c.record(), false))
-            .chain(completion.failed_checks.iter().map(|c| (c.record(), true)))
-            .collect();
-        match super::super::continuation::latest_required_failures(&required, &checks) {
-            Ok(_) => {
-                return Err(Error::new(
-                    "validation_failed",
-                    "latest required check remains failed",
-                ));
+        let actual_local = if let Some(plan) = &completion.validation_plan {
+            // Revalidate the original complete history and current-plan execution
+            // capabilities; earlier-source prefix results never satisfy this pass.
+            self.verify_discovered_local(source.admission, workflow, completion, plan)?
+        } else {
+            super::super::discovered_validation::require_legacy_continuation(completion)?;
+            let required = local_requirements(self.contract(source.admission)?, workflow)?;
+            let checks: Vec<_> = completion
+                .checks
+                .iter()
+                .map(|c| (c.record(), false))
+                .chain(completion.failed_checks.iter().map(|c| (c.record(), true)))
+                .collect();
+            match super::super::continuation::latest_required_failures(&required, &checks) {
+                Ok(_) => {
+                    return Err(Error::new(
+                        "validation_failed",
+                        "latest required check remains failed",
+                    ));
+                }
+                Err(error) if error.code == "no_work_trigger" => {}
+                Err(error) => return Err(error),
             }
-            Err(error) if error.code == "no_work_trigger" => {}
-            Err(error) => return Err(error),
-        }
-        let actual_local = self.verify_local_checks(
-            source.admission,
-            workflow,
-            &completion.checks.iter().collect::<Vec<_>>(),
-        )?;
+            self.verify_local_checks(
+                source.admission,
+                workflow,
+                &completion.checks.iter().collect::<Vec<_>>(),
+            )?
+        };
         if local_digest(&actual_local)? != local_digest(local)? {
             return Err(passed_error(
                 "LocalPassed does not match this actual completed retry",
@@ -427,11 +433,12 @@ fn current_inputs(
     Ok((receipts, grants))
 }
 fn local_digest(local: &LocalPassed) -> Result<String> {
-    canonical_digest(
-        1,
-        &json!({"work":local.work, "revision":local.revision,
-        "workflow":local.workflow_digest, "checks":local.checks}),
-    )
+    let mut value = json!({"work":local.work, "revision":local.revision,
+        "workflow":local.workflow_digest, "checks":local.checks});
+    if let Some(validation) = &local.validation {
+        value["validation"] = json!(validation);
+    }
+    canonical_digest(1, &value)
 }
 pub(super) fn passed_receipts(
     completed: &CompletedGrantedValidation,

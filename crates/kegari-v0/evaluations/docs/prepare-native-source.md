@@ -2,7 +2,16 @@
 
 This tool prepares **local data only** for `independent_malicious`. It does not run the evaluator, select an account/model, activate a runtime, execute a fixture program, or qualify a native run.
 
-The input must already be a captured native-ready suite: 28 variants, 56 declared trial slots, E05 phase `independent_review`, and the schema-v2 context binding with the exact nine native scalar slots. Legacy templates are refused. The tool copies the full bounded suite and preserves profile bindings and unresolved-profile text exactly, whether resolved or unresolved. Later production `SuiteManifest`/`Plan`, source admission and all native gates still apply.
+This helper's existing input contract is the older captured native-ready suite:
+28 variants, 56 declared trial slots, E05 phase `independent_review`, and the
+schema-v2 context binding with the exact nine native scalar slots. The current
+suite version 5 enrolls 33 variants and 66 slots; that enrollment does not update
+this helper or make its older output compatible with the current production
+suite. Adapting this data-preparation route remains separate work. Legacy
+templates are refused. The tool copies its accepted bounded input and preserves
+profile bindings and unresolved-profile text exactly, whether resolved or
+unresolved. Production `SuiteManifest`/`Plan`, source admission and all native
+gates still apply; this historical helper provides no qualification claim.
 
 Run from the intended repository directory whose current human Git `user.name` and `user.email` should sign the two disposable fixture commits. The tool reads those values; it never sets global/local human identity configuration. Use canonical absolute paths, including `/private/tmp` rather than a symlink spelling such as `/tmp`.
 

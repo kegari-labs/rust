@@ -60,7 +60,9 @@ Run standalone checks from the workspace root with the pinned toolchain/cache:
 cargo test --offline --locked --release -p kegari-secrets
 ```
 
-Use workspace-wide tests and Clippy for backend and CLI integration. Compatibility
+Use focused checks for changed backend/CLI behavior under the
+[development policy](../../docs/development.md#feature-first-development-policy).
+Comprehensive workspace checks belong to later stabilization. Compatibility
 coverage uses synthetic key material, fixed signed-record vectors and an
 in-memory secret store. Tests must not read, write, initialize, unlock or delete
 real Keychain items. The three existing native qualification ignores remain

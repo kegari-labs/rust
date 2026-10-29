@@ -32,6 +32,9 @@ pub struct VerifiedProviderRecovery {
     digest: String,
 }
 impl VerifiedProviderRecovery {
+    pub(crate) fn retained_session(&self) -> &RetainedResumeSession {
+        &self.retained
+    }
     pub fn observation(&self) -> &VerifiedThreadRecovery {
         &self.observation
     }
@@ -123,14 +126,11 @@ impl RecoveryProviderLaunch {
                 "metadata recovery changed original account, configuration, contract or receipt",
             ));
         }
-        let executable = BinaryIdentity::inspect(
-            std::path::Path::new(
-                connection
-                    .argv
-                    .first()
-                    .ok_or_else(|| Error::new("invalid_config", "recovery executable missing"))?,
-            ),
-            false,
+        let executable = resolve_codex(
+            connection
+                .argv
+                .first()
+                .ok_or_else(|| Error::new("invalid_config", "recovery executable missing"))?,
         )?;
         let auth_home = PathBuf::from(
             connection
@@ -391,11 +391,11 @@ impl Drop for RecoveryDrop {
     }
 }
 
-/// Same-process resume ingredients, before Control admission or directory
-/// enrollment. Runtime must obtain `previous` from its actual joined cache and
-/// recheck pointer identity in the final serialized predicate.
+/// Resume ingredients before Control admission or directory enrollment. Joined
+/// predecessors require pointer identity; cold predecessors recheck protected
+/// session, source ownership and recorded process closure in the final predicate.
 pub struct VerifiedSessionResume {
-    previous: Arc<RunCompletion>,
+    previous: ResumePredecessor,
     recovery: VerifiedProviderRecovery,
     instructions: instructions::VerifiedResumeInstructions,
     next_manifest: String,
@@ -404,42 +404,61 @@ pub struct VerifiedSessionResume {
     digest: String,
 }
 impl VerifiedSessionResume {
-    pub(crate) fn prepare(
-        previous: Arc<RunCompletion>,
+    pub(crate) fn prepare_predecessor(
+        previous: ResumePredecessor,
         recovery: VerifiedProviderRecovery,
         next: &PreparedRun,
     ) -> Result<Self> {
         let candidate = recovery.observation().retained();
-        let old = previous.contract.as_ref().ok_or_else(|| {
-            Error::new(
-                "resume_incompatible",
-                "original complete worker contract is unavailable",
-            )
-        })?;
-        let execution = previous.execution.as_ref().ok_or_else(|| {
-            Error::new(
-                "resume_incompatible",
-                "original owned execution is unavailable",
-            )
-        })?;
+        let old = previous.contract()?;
+        let execution = previous.execution()?;
+        if let ResumePredecessor::Joined(joined) = &previous {
+            if !joined.local_exit_confirmed
+                || !matches!(joined.outcome, RunOutcome::Failed)
+                || joined.hook_error.is_some()
+                || joined
+                    .error
+                    .as_ref()
+                    .is_none_or(|error| error.code != "turn_incomplete")
+                || (!joined.checks.is_empty()
+                    || !joined.failed_checks.is_empty()
+                    || joined.validation_plan.is_some()
+                    || !joined.validation_attempts.is_empty())
+                    && recovery.retained.validation().is_none()
+                || joined.validation_error.is_some()
+            {
+                return Err(Error::new(
+                    "resume_incompatible",
+                    "resume requires a settled joined incomplete session",
+                ));
+            }
+            if let Some(checkpoint) = recovery.retained.validation() {
+                let actual = crate::validation::ValidationPrefix::from_cold_completion(joined)?
+                    .ok_or_else(|| {
+                        Error::new("validation_history_binding", "joined history disappeared")
+                    })?;
+                if actual.digest() != checkpoint.prefix()?.digest() {
+                    return Err(Error::new(
+                        "validation_history_binding",
+                        "joined history changed after its checkpoint",
+                    ));
+                }
+            }
+        } else if let ResumePredecessor::Cold(cold) = &previous {
+            cold.revalidate()?;
+            if cold.retained().digest() != recovery.retained.digest() {
+                return Err(Error::new(
+                    "resume_incompatible",
+                    "cold readback changed its original protected session",
+                ));
+            }
+        }
         let manifest = &next.contract.instructions().manifest;
-        if !previous.local_exit_confirmed
-            || !matches!(previous.outcome, RunOutcome::Failed)
-            || previous.hook_error.is_some()
-            || previous.state.binding.operation_id != previous.operation_id.to_string()
-            || canonical_digest(1, &previous.state)? != canonical_digest(1, candidate.state())?
-            || previous
-                .error
-                .as_ref()
-                .is_none_or(|error| error.code != "turn_incomplete")
-            || !previous.checks.is_empty()
-            || !previous.failed_checks.is_empty()
-            || previous.validation_plan.is_some()
-            || !previous.validation_attempts.is_empty()
-            || previous.validation_error.is_some()
-            || previous.operation_id == manifest.operation_id
+        if previous.state().binding.operation_id != previous.operation_id().to_string()
+            || canonical_digest(1, previous.state())? != canonical_digest(1, candidate.state())?
+            || previous.operation_id() == manifest.operation_id
             || old.account_id() != next.contract.account_id()
-            || execution.binding.operation_id != previous.operation_id
+            || execution.binding.operation_id != previous.operation_id()
             || next.contract.isolation().digest() != old.isolation().digest()
             || old.tools().digest() != next.contract.tools().digest()
             || old.workflow().front_matter.hooks.before_run.is_some()
@@ -449,7 +468,7 @@ impl VerifiedSessionResume {
                 AgentRole::Review | AgentRole::IndependentReview
             )
             || candidate.reference().phase.phase != manifest.phase
-            || previous.state.advertised_tools
+            || previous.state().advertised_tools
                 != next
                     .contract
                     .tools()
@@ -463,6 +482,23 @@ impl VerifiedSessionResume {
                 "resume changed original terminal failure, hooks, execution, role or phase",
             ));
         }
+        match (
+            recovery.retained.validation(),
+            next.contract.validation_prefix.as_ref(),
+        ) {
+            (Some(checkpoint), Some(prefix))
+                if checkpoint.prefix()?.digest() == prefix.digest() =>
+            {
+                ()
+            }
+            (None, None) => (),
+            _ => {
+                return Err(Error::new(
+                    "validation_history_binding",
+                    "resume did not preserve the complete authenticated historical obligations",
+                ));
+            }
+        }
         old.authority().compare(next.contract.authority())?;
         execution
             .ownership
@@ -475,7 +511,7 @@ impl VerifiedSessionResume {
         let prompt = next.contract.instructions().prompt.clone();
         let digest = canonical_digest(
             1,
-            &json!({"predecessor":previous.operation_id,"recovery":recovery.digest(),"instructions":instructions.digest(),"next_operation":next_operation,"next_manifest":next_manifest,"original_execution":execution.binding,"directory":execution.ownership.digest()}),
+            &json!({"predecessor":previous.operation_id(),"recovery":recovery.digest(),"instructions":instructions.digest(),"next_operation":next_operation,"next_manifest":next_manifest,"original_execution":execution.binding,"directory":execution.ownership.digest(),"validation_history":recovery.retained.validation().map(ColdValidationCheckpoint::digest).transpose()?}),
         )?;
         Ok(Self {
             previous,
@@ -488,7 +524,7 @@ impl VerifiedSessionResume {
         })
     }
     pub fn predecessor(&self) -> Uuid {
-        self.previous.operation_id
+        self.previous.operation_id()
     }
     pub fn next_operation(&self) -> Uuid {
         self.next_operation
@@ -513,7 +549,7 @@ impl VerifiedSessionResume {
         binding: SessionBinding,
         max_turns: u32,
     ) -> Result<SessionState> {
-        let old = &self.previous.state;
+        let old = self.previous.state();
         let mut normalized = binding.clone();
         normalized.operation_id = old.binding.operation_id.clone();
         normalized.instruction_digest = old.binding.instruction_digest.clone();
@@ -583,19 +619,16 @@ impl VerifiedSessionResume {
         Ok(())
     }
     pub fn verify_completion(&self, actual: &Arc<RunCompletion>) -> Result<()> {
-        if !Arc::ptr_eq(actual, &self.previous) {
-            return Err(Error::new(
-                "resume_incompatible",
-                "resume lost its actual joined completion identity",
-            ));
-        }
-        Ok(())
+        self.previous.verify(Some(actual))
+    }
+    pub(crate) fn verify_predecessor(&self, actual: Option<&Arc<RunCompletion>>) -> Result<()> {
+        self.previous.verify(actual)
+    }
+    pub(crate) fn original_execution(&self) -> Result<&Arc<WorkerExecution>> {
+        self.previous.execution()
     }
     pub fn verify_contract(&self, current: &WorkerContract) -> Result<()> {
-        let old =
-            self.previous.contract.as_ref().ok_or_else(|| {
-                Error::new("resume_incompatible", "original contract disappeared")
-            })?;
+        let old = self.previous.contract()?;
         if current.instructions().manifest.operation_id != self.next_operation
             || current.instructions().manifest_digest != self.next_manifest
             || old
@@ -673,12 +706,7 @@ impl AdmittedSessionResume {
                     "completed resume lost its typed bridge",
                 )
             })?;
-        let old = self.bridge.previous.execution.as_ref().ok_or_else(|| {
-            Error::new(
-                "resume_incompatible",
-                "original resume execution disappeared",
-            )
-        })?;
+        let old = self.bridge.previous.execution()?;
         let expected = self
             .bridge
             .new_session(completion.state.binding.clone(), completion.state.max_turns)?;
@@ -741,19 +769,7 @@ impl AdmittedSessionResume {
             || execution.ownership.digest() != old.ownership.digest()
             || execution.binding.operation_id != completion.operation_id
             || contract.isolation().digest()
-                != self
-                    .bridge
-                    .previous
-                    .contract
-                    .as_ref()
-                    .ok_or_else(|| {
-                        Error::new(
-                            "resume_incompatible",
-                            "original resume contract disappeared",
-                        )
-                    })?
-                    .isolation()
-                    .digest()
+                != self.bridge.previous.contract()?.isolation().digest()
         {
             return Err(Error::new(
                 "resume_incompatible",
@@ -777,10 +793,7 @@ impl AdmittedSessionResume {
                     "resumed provider requires an actual typed run admission",
                 )
             })?;
-        let old =
-            self.bridge.previous.execution.as_ref().ok_or_else(|| {
-                Error::new("resume_incompatible", "original execution disappeared")
-            })?;
+        let old = self.bridge.previous.execution()?;
         let mut binding = old.binding.clone();
         binding.operation_id = permit.operation_id;
         if permit.operation_id != self.bridge.next_operation
@@ -820,15 +833,7 @@ impl AdmittedSessionResume {
             )
         })?;
         if &execution.binding != self.enrollment.binding()
-            || execution.ownership.digest()
-                != self
-                    .bridge
-                    .previous
-                    .execution
-                    .as_ref()
-                    .unwrap()
-                    .ownership
-                    .digest()
+            || execution.ownership.digest() != self.bridge.previous.execution()?.ownership.digest()
         {
             return Err(Error::new(
                 "resume_incompatible",

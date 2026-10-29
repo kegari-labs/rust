@@ -39,6 +39,10 @@ remain in `kegari_v0::config`; configuration transactions remain in
 
 The application executable remains owned by `kegari-cli`. From the workspace root:
 
+Workspace-wide test/lint commands below are later stabilization references.
+The current [goal](../kegari-v0/GOAL.md) requires only affected compilation and
+minimal focused validation while features are being implemented.
+
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
 cargo run --offline --locked -p kegari-cli -- --help
@@ -47,6 +51,6 @@ cargo clippy --offline --locked --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-The workspace checks cover all six packages. See
+Workspace-wide checks cover all current packages. See
 [current progress](../kegari-v0/PROGRESS.md) for actual validation results and
 remaining limits; these commands are instructions, not evidence of a completed run.

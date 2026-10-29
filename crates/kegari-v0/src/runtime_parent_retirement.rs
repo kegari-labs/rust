@@ -88,6 +88,103 @@ struct ParentRunRetirementRecord {
 struct AuthenticatedParentRunRetirement {
     signed: Signed<ParentRunRetirementRecord>,
 }
+/// Authenticated historical completion, never an owned task or a process handle.
+/// Only the original joined producer can write the seal consumed by this reader.
+#[derive(Clone)]
+pub(crate) struct RetiredParentRun {
+    retirement: AuthenticatedParentRunRetirement,
+    origin: Signed<crate::delivery::ParentOriginRecord>,
+    history: ParentEffectHistoryObservation,
+    runtime: Arc<RuntimeCoordinator>,
+}
+impl RetiredParentRun {
+    pub(crate) fn operation_id(&self) -> Uuid {
+        self.retirement.signed.payload.operation
+    }
+    pub(crate) fn run(&self) -> &RunReference {
+        &self.retirement.signed.payload.run
+    }
+    pub(crate) fn origin(&self) -> &crate::delivery::ParentOriginRecord {
+        &self.origin.payload
+    }
+    pub(crate) fn observation(&self) -> &Value {
+        &self.retirement.signed.payload.observation
+    }
+    pub(crate) fn verify(&self, runtime: &RuntimeCoordinator) -> Result<()> {
+        if runtime.runtime_id != self.runtime.runtime_id {
+            return Err(invalid("retired parent belongs to another runtime"));
+        }
+        self.verify_current(&runtime.control.snapshot()?)
+    }
+    pub(crate) fn verify_current(&self, snapshot: &crate::control::ControlSnapshot) -> Result<()> {
+        let record = &self.retirement.signed.payload;
+        if snapshot.intent.runtime_id != record.runtime
+            || self
+                .runtime
+                .executions
+                .active_operations()?
+                .iter()
+                .any(|id| *id == record.operation || *id == record.preparation)
+        {
+            return Err(invalid("retired parent has current native ownership"));
+        }
+        self.runtime
+            .control
+            .revalidate_parent_effect_history(snapshot, &self.history)?;
+        let directory = PrivateDir::open(
+            &self
+                .runtime
+                .registration
+                .root()
+                .path()
+                .join("parent-run-retirements"),
+        )?;
+        let current = AuthenticatedParentRunRetirement::read_in_gate(
+            &self.runtime,
+            &directory,
+            record.operation,
+            &self.history,
+        )?;
+        if current.signed.digest()? != self.retirement.signed.digest()? {
+            return Err(invalid("completed parent historical seal changed"));
+        }
+        Ok(())
+    }
+    pub(crate) fn verify_assignment(
+        &self,
+        assignment: &crate::delivery::DeliveryWorkerAssignment,
+        reassembly: Option<&crate::control::ParentReassemblyReference>,
+    ) -> Result<()> {
+        let record = &self.retirement.signed.payload;
+        let records = PrivateDir::open(
+            &self
+                .runtime
+                .registration
+                .root()
+                .path()
+                .join("worker-records")
+                .join(record.operation.to_string()),
+        )?;
+        let contract: Value = records.read("contract.json")?;
+        let authority: Signed<Value> = serde_json::from_value(contract["authority"].clone())
+            .map_err(|_| invalid("retired parent has no authenticated original authority"))?;
+        let original = assignment.authority().recover_worker_contract(
+            &self.runtime.services.key,
+            &authority,
+            record.runtime,
+            record.operation,
+            self.history
+                .model()
+                .expected
+                .get("scope")
+                .ok_or_else(|| invalid("retired parent scope is missing"))?,
+        )?;
+        self.origin
+            .payload
+            .verify_assignment(assignment, &original, &record.run, reassembly)?;
+        Ok(())
+    }
+}
 fn invalid(message: &str) -> Error {
     Error::new("parent_retirement", message)
 }
@@ -334,6 +431,71 @@ impl AuthenticatedParentRunRetirement {
     }
 }
 impl RuntimeCoordinator {
+    pub(crate) fn completed_parent_retirement(
+        self: &Arc<Self>,
+        operation: Uuid,
+    ) -> Result<RetiredParentRun> {
+        let records = PrivateDir::open(
+            &self
+                .registration
+                .root()
+                .path()
+                .join("worker-records")
+                .join(operation.to_string()),
+        )?;
+        let origin =
+            crate::delivery::read_parent_run_origin(&records, &self.control, &self.services.key)?;
+        let preparation = origin.payload.preparation.operation;
+        let directory = PrivateDir::open(
+            &self
+                .registration
+                .root()
+                .path()
+                .join("parent-run-retirements"),
+        )?;
+        self.control
+            .with_parent_effect_history(preparation, operation, |snapshot, history| {
+                let active = self.executions.active_operations()?;
+                if [operation, preparation].iter().any(|id| {
+                    active.contains(id)
+                        || snapshot
+                            .active_operations
+                            .iter()
+                            .any(|p| p.operation_id == *id)
+                        || snapshot.unresolved_operations.contains_key(id)
+                }) {
+                    return Err(invalid(
+                        "parent history still has active or uncertain ownership",
+                    ));
+                }
+                let retirement = AuthenticatedParentRunRetirement::read_in_gate(
+                    self, &directory, operation, history,
+                )?;
+                let observed = &retirement.signed.payload.observation;
+                if observed["outcome"] != "completed"
+                    || observed["local_exit_confirmed"] != true
+                    || !observed["error"].is_null()
+                    || !observed["hook_error"].is_null()
+                    || !observed["validation_error"].is_null()
+                    || observed["session"]["terminal"] != "completed"
+                    || !observed["session"]["turn_id"].is_null()
+                    || !observed["session"]["unresolved_turn"].is_null()
+                    || observed["session"]["input_required"] != false
+                    || !observed["session"]["intervention"].is_null()
+                {
+                    return Err(invalid(
+                        "parent historical run is not a known successful completion",
+                    ));
+                }
+                Ok(RetiredParentRun {
+                    retirement,
+                    origin: origin.clone(),
+                    history: history.clone(),
+                    runtime: self.clone(),
+                })
+            })
+    }
+
     pub(crate) fn register_parent_run(
         &self,
         permit: Permit,

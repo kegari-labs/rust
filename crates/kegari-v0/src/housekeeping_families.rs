@@ -862,3 +862,35 @@ impl Housekeeping {
         }))
     }
 }
+
+impl Housekeeping {
+    /// Reopen an original protected directory registration without acquiring any
+    /// process or execution authority. Source reuse still needs fresh guarded Git.
+    pub(crate) fn cold_execution_source(
+        &self,
+        config: &kegari_config::Config,
+        operation: Uuid,
+    ) -> Result<(
+        ExecutionBinding,
+        kegari_execution::ValidatedIsolation,
+        OwnedDirectory,
+        Workflow,
+    )> {
+        let registered = self.registration(operation)?;
+        let boundary = registered.isolation.clone().validate(crate::BUILD_ID)?;
+        let directory =
+            OwnedDirectory::reopen(&registered.marker, &registered.directory_digest, &boundary)?;
+        let workflow = Workflow::load_recorded(
+            registered.workflow_path.as_deref(),
+            registered.workflow_embedded.as_ref(),
+        )?;
+        self.retained_execution_read_root(
+            config,
+            &registered.binding,
+            &boundary,
+            &directory,
+            &workflow,
+        )?;
+        Ok((registered.binding, boundary, directory, workflow))
+    }
+}

@@ -13,13 +13,18 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::{Instant, timeout_at};
 
 mod client;
+mod execution;
 mod history;
 mod observation;
 mod resume;
 mod session;
 mod transport_observation;
-pub use client::{DenyTools, RequestGate, RpcClient, SessionScope, ToolBroker};
+pub use client::{CommandExecResult, DenyTools, RequestGate, RpcClient, SessionScope, ToolBroker};
 use client::{instruction_sources, validate_thread_response};
+pub use execution::{
+    NativeCommandExecution, NativeExecutionItem, NativeExecutionObservation, NativeExecutionStatus,
+    NativeFileChange, NativeFileChanges, NativeItemPhase,
+};
 pub use history::RecordedThreadHistory;
 pub use observation::{
     DeclaredProtocolObservation, ProtocolCapture, ProtocolCaptureIssue, ProtocolCaptureState,

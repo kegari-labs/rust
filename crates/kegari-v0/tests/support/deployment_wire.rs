@@ -619,6 +619,84 @@ impl Fixture {
         state.archive = bytes;
     }
 }
+impl Fixture {
+    pub(crate) fn external_artifact(
+        &self,
+        c: &RepositoryContract,
+        mutate: impl FnOnce(&mut Value),
+    ) {
+        let kegari_config::Deployment::Steps { steps } =
+            c.configuration.deployment.as_ref().unwrap()
+        else {
+            panic!()
+        };
+        let step = &steps[0];
+        let route = step.baseline_observation.as_ref().unwrap();
+        let digest = bytes_digest(b"measured existing deployed bytes");
+        let expected = HostedProofExpectation {
+            context_digest: Some(
+                external_baseline_context_digest(
+                    42,
+                    &step.target_id,
+                    88,
+                    91,
+                    93,
+                    &source(),
+                    &digest,
+                )
+                .unwrap(),
+            ),
+            runtime_id: id(1),
+            operation_id: Uuid::from_u128((42_u128 << 64) | 50),
+            challenge: Uuid::from_u128((88_u128 << 64) | 93),
+            repository_id: 42,
+            repository_owner_id: 7,
+            run_id: 50,
+            run_attempt: 1,
+            check_run_id: 60,
+            actor_id: 7,
+            trigger_sha: "1".repeat(40),
+            tested_source_sha: source().commit,
+            workflow_ref: route.proof.workflow_ref.clone(),
+            workflow_sha: route.proof.workflow_sha.clone(),
+            job_workflow_ref: route.proof.job_workflow_ref.clone(),
+            job_workflow_sha: route.proof.job_workflow_sha.clone(),
+            event_name: "workflow_dispatch".into(),
+        };
+        let at = Utc::now().timestamp();
+        let claims = json!({"iss":GITHUB_OIDC_ISSUER,"aud":expected.audience().unwrap(),"sub":"fixture",
+            "jti":"external-baseline-fixture","iat":at,"nbf":at-1,"exp":at+300,
+            "repository_id":"42","repository_owner_id":"7","run_id":"50","run_attempt":"1",
+            "check_run_id":"60","actor_id":"7","sha":expected.trigger_sha,
+            "workflow_ref":expected.workflow_ref,"workflow_sha":expected.workflow_sha,
+            "job_workflow_ref":expected.job_workflow_ref,"job_workflow_sha":expected.job_workflow_sha,
+            "runner_environment":"github-hosted","event_name":"workflow_dispatch"});
+        let mut manifest = json!({"schema_version":1,"purpose":"external_target_observation",
+            "runtime_id":id(1),"repository_id":42,"step_id":"deploy","target_id":step.target_id,
+            "environment_id":88,"deployment_id":91,"status_id":93,"run_id":50,"run_attempt":1,
+            "source":source(),"outputs":{"source_sha":source().commit},"artifact_digest":digest,
+            "proofs":[{"check_run_id":60,"token":token(claims)}]});
+        mutate(&mut manifest);
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file(
+            "kegari-baseline.json",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(&serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.archive = zip.finish().unwrap().into_inner();
+        state.artifact_name = format!("kegari-baseline-{}-88-93", id(1));
+        state.responses.insert("/repos/fixture/repo/actions/workflows/3/runs".into(), json!({
+            "total_count":1,"workflow_runs":[{"id":50,"repository":{"id":42},"run_attempt":1,
+            "workflow_id":3,"actor":{"id":7},"triggering_actor":{"id":7},"event":"workflow_dispatch",
+            "head_sha":"1".repeat(40),"status":"completed","conclusion":"success",
+            "path":".github/workflows/deploy.yml","html_url":"https://github.invalid/fixture/repo/actions/runs/50"}]
+        }));
+    }
+}
+
 pub(crate) fn request(request_id: Uuid) -> MutationRequest {
     MutationRequest {
         request_id,

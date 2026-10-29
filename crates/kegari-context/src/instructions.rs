@@ -17,7 +17,7 @@ mod resume;
 pub use resume::{ResumeSemantics, VerifiedResumeInstructions};
 
 pub const ASSEMBLY_SCHEMA: u32 = 1;
-pub const ASSET_VERSION: &str = "7";
+pub const ASSET_VERSION: &str = "9";
 pub const MAX_CONTEXT_BYTES: usize = 1_048_576;
 pub const SUPPORTED_CODEX_VERSION: &str = "0.164.0-alpha.11.1";
 pub const STARTER: &str = include_str!("../examples/WORKFLOW.md");
@@ -60,12 +60,10 @@ impl AgentRole {
     pub fn permits(self, capability: ToolCapability) -> bool {
         match capability {
             ToolCapability::ContextRead | ToolCapability::OutcomeSubmit => true,
-            ToolCapability::SourceWrite => self.permits_source_writes(),
             ToolCapability::CorrectionProposal => self == Self::Coordination,
             ToolCapability::ReviewFeedback => {
                 matches!(self, Self::Review | Self::IndependentReview)
             }
-            ToolCapability::CommandExecution => self.permits_repository_execution(),
             ToolCapability::ValidationProposal => self.permits_repository_execution(),
             ToolCapability::ValidationResult => matches!(
                 self,
@@ -90,12 +88,10 @@ impl AgentRole {
 #[serde(rename_all = "snake_case")]
 pub enum ToolCapability {
     ContextRead,
-    SourceWrite,
     OutcomeSubmit,
     CorrectionProposal,
     ReviewFeedback,
     ValidationResult,
-    CommandExecution,
     ValidationProposal,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -199,7 +195,7 @@ pub struct AssembledInstructions {
 #[derive(Clone, Debug)]
 pub struct RepositoryContext {
     pub root: PathBuf,
-    pub revision: String,
+    pub revision: Option<String>,
     /// Explicit write or review paths identify additional scoped guidance. They
     /// do not grant reads/writes and are never inferred from unrelated files.
     pub scope_paths: Vec<String>,
@@ -413,9 +409,9 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
     let mut repository_root = None;
     let mut repository_revision = None;
     if let Some(repository) = &input.repository {
-        if repository.revision.len() != 40
-            || !repository.revision.bytes().all(|b| b.is_ascii_hexdigit())
-        {
+        if repository.revision.as_ref().is_some_and(|revision| {
+            revision.len() != 40 || !revision.bytes().all(|b| b.is_ascii_hexdigit())
+        }) {
             return Err(Error::invalid(
                 "repository instruction context requires an exact Git revision",
             ));
@@ -493,7 +489,7 @@ pub fn assemble(input: AssemblyInput<'_>) -> Result<AssembledInstructions> {
             }
         }
         repository_root = Some(root);
-        repository_revision = Some(repository.revision.clone());
+        repository_revision = repository.revision.clone();
     } else if !permissions.source_write_paths.is_empty() {
         return Err(Error::new(
             "access_denied",

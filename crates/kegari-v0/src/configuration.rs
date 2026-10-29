@@ -107,7 +107,6 @@ impl ConfigurationInputs for NativeConfigurationInputs {
                 resource_writes: vec![],
                 source_writes: vec![],
                 forbidden_roots: vec![auth_home.clone()],
-                managed_execution: None,
             }
             .validate(crate::BUILD_ID)?;
             let permissions = crate::codex_host::permission_configuration(&plan, &auth_home)?;
@@ -122,7 +121,7 @@ impl ConfigurationInputs for NativeConfigurationInputs {
         })
     }
 }
-fn resolve_executable(value: &str) -> Result<PathBuf> {
+pub(crate) fn resolve_executable(value: &str) -> Result<PathBuf> {
     let path = Path::new(value);
     let selected = if path.is_absolute() {
         Some(path.to_owned())
@@ -1079,6 +1078,11 @@ async fn repository_delivery_prerequisites(
                 .iter()
                 .map(|step| (step.workflow.workflow_id, &step.workflow.proof)),
         );
+        routes.extend(steps.iter().filter_map(|step| {
+            step.baseline_observation
+                .as_ref()
+                .map(|route| (route.workflow_id, &route.proof))
+        }));
     }
     let mut pins = BTreeSet::new();
     for (id, proof) in routes {

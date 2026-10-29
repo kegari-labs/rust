@@ -45,10 +45,12 @@ impl VerifiedEvaluationRequest {
             || request.phase.retry_grant.is_some()
             || request.max_seconds != self.variant.bounds.max_seconds
             || request.max_turns != self.variant.bounds.max_turns
-            || &source.revision != prepared.source.head()
-            || source.repository != gate.repository_id().to_string()
-            || gate.pull_request().base_sha != prepared.source.base().commit
-            || gate.pull_request().head_sha != prepared.source.head().commit
+            || source.revision() != prepared.source.head()
+            || source.repository() != gate.repository_id().to_string()
+            || Some(gate.pull_request().base_sha.as_str())
+                != prepared.source.base().map(|r| r.commit.as_str())
+            || Some(gate.pull_request().head_sha.as_str())
+                != prepared.source.head().map(|r| r.commit.as_str())
             || canonical_digest(1, gate.profile())? != canonical_digest(1, &profile.profile)?
         {
             return Err(Error::new(
@@ -77,7 +79,17 @@ impl VerifiedEvaluationRequest {
             authority_digest: request.authority.digest()?,
             phase_digest: canonical_digest(1, &request.phase)?,
             profile: gate.profile().clone(),
-            head_revision: prepared.source.head().commit.clone(),
+            head_revision: prepared
+                .source
+                .head()
+                .ok_or_else(|| {
+                    Error::new(
+                        "canary_binding",
+                        "independent review requires its actual committed source",
+                    )
+                })?
+                .commit
+                .clone(),
             pull_request_digest: canonical_digest(1, gate.pull_request())?,
             max_turns: request.max_turns,
             max_seconds: request.max_seconds,
@@ -255,7 +267,7 @@ impl RuntimeCoordinator {
         let Some(proof) = proof else {
             return Ok(());
         };
-        let required = proof
+        let (required, child_evidence_digest) = proof
             .prepared
             .lock()
             .map_err(|_| {
@@ -265,19 +277,51 @@ impl RuntimeCoordinator {
                 )
             })?
             .as_ref()
-            .is_some_and(|p| p.canary_context_required);
+            .map(|p| (p.canary_context_required, p.child_evidence_digest.clone()))
+            .unwrap_or((false, None));
         let operand = proof
             .context_operand
             .lock()
             .map_err(|_| Error::new("runtime_unavailable", "canary operand lock failed"))?
             .clone();
-        match (required, operand) {
-            (true, Some(operand)) => operand.verify_contract(contract),
-            (false, None) if contract.context().get("evidence") == Some(&json!({})) => Ok(()),
+        match (required, operand, child_evidence_digest) {
+            (true, Some(operand), None) => operand.verify_contract(contract),
+            (false, None, Some(expected))
+                if proof.binding.child.is_some()
+                    && matches!(contract.authority(), WorkerAuthority::Authorized(gate) if gate.work().child.is_some()) =>
+            {
+                Self::check_retained_child_evaluation_evidence(contract.context(), &expected)
+            }
+            (false, None, None)
+                if proof.binding.child.is_none()
+                    && contract.context().get("evidence") == Some(&json!({})) =>
+            {
+                Ok(())
+            }
             _ => Err(Error::new(
                 "canary_binding",
                 "evaluation contract lacks its original declared context operand",
             )),
         }
+    }
+    /// Exact predicate used by the final admission gate. Expected evidence was
+    /// captured from the original authoritative projection outside Control.
+    pub(crate) fn check_retained_child_evaluation_evidence(
+        context: &Value,
+        expected: &str,
+    ) -> Result<()> {
+        let evidence = context
+            .get("evidence")
+            .ok_or_else(|| Error::new("evaluation_fidelity", "child evidence is absent"))?;
+        if evidence.get("native_context").is_none()
+            || evidence.get("forbidden_canary_path").is_some()
+            || canonical_digest(1, evidence)? != expected
+        {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "child evidence differs from its original admitted provider context",
+            ));
+        }
+        Ok(())
     }
 }

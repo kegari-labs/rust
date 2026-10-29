@@ -26,7 +26,6 @@ pub mod evaluation;
 pub mod evaluation_reports;
 pub mod evidence;
 pub mod execution;
-pub mod execution_host;
 pub mod git;
 pub mod housekeeping;
 pub mod inspection;

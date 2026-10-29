@@ -38,6 +38,10 @@ instruction context. These public helpers neither perform I/O nor grant authorit
 
 Use the pinned toolchain from the workspace root:
 
+Workspace-wide test/lint commands below are later stabilization references.
+The current [goal](../kegari-v0/GOAL.md) requires only affected compilation and
+minimal focused validation while features are being implemented.
+
 ```sh
 cargo test --offline --locked -p kegari-providers
 cargo test --offline --locked --workspace --release

@@ -566,6 +566,71 @@ impl PreparedParentRunOrigin {
     }
 }
 impl ParentOriginRecord {
+    pub(crate) fn vector_digest(&self) -> &str {
+        &self.vector
+    }
+
+    pub(crate) fn verify_assignment(
+        &self,
+        assignment: &DeliveryWorkerAssignment,
+        original: &FreshGate,
+        run: &kegari_types::run::RunReference,
+        reassembly: Option<&ParentReassemblyReference>,
+    ) -> Result<()> {
+        original.compare_admitted_authority(assignment.authority())?;
+        if self.manifest.asset_version != kegari_context::instructions::ASSET_VERSION {
+            return Err(Error::new(
+                "recovery_incompatible",
+                "retired parent uses an incompatible instruction/tool contract",
+            ));
+        }
+        if original.digest()? != self.authority
+            || run.instruction_digest
+                != canonical_digest(
+                    kegari_context::instructions::ASSEMBLY_SCHEMA,
+                    &self.manifest,
+                )?
+            || run.account != self.account
+            || self.manifest.operation_id != self.operation
+            || self.manifest.phase != assignment.phase()
+            || self.manifest.role != assignment.role()
+            || self.worker != *assignment.authority().work()
+            || self.phase != run.phase.phase
+            || self.reassembly.as_ref() != reassembly
+        {
+            return Err(invalid(
+                "retired parent assignment differs from original phase, role or authority",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_reassembly_reference(
+        &self,
+        reference: &ParentReassemblyReference,
+    ) -> Result<()> {
+        if self.reassembly.as_ref() != Some(reference)
+            || self.operation != reference.operation
+            || self.vector != reference.vector_digest
+            || self.base_assignment != reference.assignment_digest
+            || self.assignment
+                != canonical_digest(
+                    1,
+                    &json!({
+                        "assignment":self.base_assignment,
+                        "parent_reassembly":reference.digest()?
+                    }),
+                )?
+            || self.parent != reference.parent_work
+            || self.worker != reference.worker_work
+            || self.phase != reference.phase.phase
+        {
+            return Err(invalid(
+                "historical reassembly origin changed assignment or causal identity",
+            ));
+        }
+        Ok(())
+    }
     pub(crate) fn grant_commands(&self, control: &ControlHost) -> Result<BTreeMap<Uuid, String>> {
         let mut commands = BTreeMap::new();
         if let Some(reference) = &self.reassembly {

@@ -1666,6 +1666,42 @@ impl FreshGate {
             expected_digest,
         )
     }
+    /// Recover the original raw provenance only from a host-signed worker
+    /// contract. The receiver is the freshly observed current gate; matching
+    /// immutable authority remains mandatory before historical assembly is used.
+    pub(crate) fn recover_worker_contract(
+        &self,
+        key: &AttestationKey,
+        signed: &Signed<serde_json::Value>,
+        runtime: Uuid,
+        operation: Uuid,
+        scope: &str,
+    ) -> Result<Self> {
+        key.verify("worker_contract_authority", signed)?;
+        let value = &signed.payload;
+        if value.as_object().is_none_or(|v| v.len() != 6)
+            || value["schema_version"] != 1
+            || value["runtime"] != serde_json::json!(runtime)
+            || value["operation"] != serde_json::json!(operation)
+            || value["scope"] != scope
+        {
+            return Err(Error::new(
+                "invalid_attestation",
+                "retained worker authority is bound to another contract",
+            ));
+        }
+        let expected = value["authority_digest"].as_str().ok_or_else(|| {
+            Error::new(
+                "invalid_attestation",
+                "retained authority digest is missing",
+            )
+        })?;
+        // The authority object is deliberately a separate signed payload field;
+        // its digest is checked by the existing private recovery parser.
+        let original = Self::recover_record(value["authority"].clone(), expected)?;
+        original.compare_current(self, Utc::now(), Duration::seconds(30))?;
+        Ok(original)
+    }
     pub(crate) fn recover_correction_record(
         key: &AttestationKey,
         signed: &Signed<serde_json::Value>,
@@ -2957,6 +2993,36 @@ mod historical_authority_tests {
             .compare_current(&observed, Utc::now(), Duration::seconds(30))
             .unwrap();
 
+        let key = AttestationKey::new("cold-contract-fixture".into(), vec![7; 32]).unwrap();
+        let runtime = Uuid::from_u128(1);
+        let operation = Uuid::from_u128(2);
+        let scope = kegari_digest::bytes_digest(b"exact admitted scope");
+        let signed = key
+            .sign(
+                "worker_contract_authority",
+                &serde_json::json!({
+                    "schema_version":1,"runtime":runtime,"operation":operation,"scope":scope,
+                    "authority_digest":original.digest().unwrap(),"authority":original
+                }),
+            )
+            .unwrap();
+        let restored = observed
+            .recover_worker_contract(&key, &signed, runtime, operation, &scope)
+            .unwrap();
+        assert_eq!(restored.digest().unwrap(), original.digest().unwrap());
+        assert!(
+            observed
+                .recover_worker_contract(&key, &signed, runtime, Uuid::from_u128(3), &scope)
+                .is_err()
+        );
+        let mut stale = observed.clone();
+        stale.observed_at = Utc::now() - Duration::minutes(10);
+        assert!(
+            stale
+                .recover_worker_contract(&key, &signed, runtime, operation, &scope)
+                .is_err()
+        );
+
         let mut profile = observed.clone();
         profile.profile.model = "another-model".into();
         profile.profile_digest = canonical_digest(1, &profile.profile).unwrap();
@@ -2972,6 +3038,17 @@ mod historical_authority_tests {
         scope.child_scope_digest =
             Some(canonical_digest(1, scope.child_scope.as_ref().unwrap()).unwrap());
         for changed in [profile, work, scope] {
+            assert!(
+                changed
+                    .recover_worker_contract(
+                        &key,
+                        &signed,
+                        runtime,
+                        operation,
+                        signed.payload["scope"].as_str().unwrap()
+                    )
+                    .is_err()
+            );
             assert!(original.compare_admitted_authority(&changed).is_err());
             assert!(
                 original

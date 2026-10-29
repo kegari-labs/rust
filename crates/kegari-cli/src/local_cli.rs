@@ -5,7 +5,9 @@ use crate::{
     client::{ControlClient, Endpoint, Target, TargetStore},
 };
 use kegari_config::{Config, Connection, ControlRole, Workspace};
-use kegari_platform::{AccountHome, HostIdentity};
+use kegari_control_api::identity::{Actor, Principal};
+use kegari_platform::{AccountHome, BinaryIdentity, HostIdentity, NativeProcessProbe};
+use kegari_secrets::Keychain;
 use kegari_storage::PrivateDir;
 use kegari_types::api::{CommandName, CommandRequest};
 use kegari_types::error::{Error, Result};
@@ -17,6 +19,10 @@ use std::{
     path::PathBuf,
 };
 use uuid::Uuid;
+
+#[path = "local_guidance.rs"]
+mod guidance;
+pub use guidance::{guided_connection, guided_workspace};
 
 pub const UNIX_AUTHORITY: &str = "kegari.local";
 pub const UNIX_SOCKET: &str = "control.sock";
@@ -206,6 +212,67 @@ impl LocalActions for NativeLocalActions {
                     }
                     Ok(output)
                 }
+                LocalCommand::ServiceInspectCandidate { binary } => {
+                    let (owner, actor) = local_operator(&host, &["configure"])?;
+                    let replacement = BinaryIdentity::inspect(&binary, true)?;
+                    let candidate = kegari_v0::housekeeping::inspect_handover_candidate(replacement).await?;
+                    let mut output = OutputEnvelope::success(request_id, Some(owner.runtime_id), json!({
+                        "candidate": candidate,
+                        "reviewer": actor.identity,
+                        "qualified": false,
+                        "next_action": "Collect and review the required qualification evidence for these exact identities; inspection establishes no qualification",
+                    }));
+                    output.state = Some("candidate_inspected".into());
+                    Ok(output)
+                }
+                LocalCommand::ServiceRecordQualification { binary, record } => {
+                    let (owner, actor) = local_operator(&host, &["configure"])?;
+                    let key = Keychain::new(owner.runtime_id)?.load_attestation_key()?;
+                    let replacement = BinaryIdentity::inspect(&binary, true)?;
+                    let recorded = kegari_v0::housekeeping::record_runtime_qualification(
+                        &host, replacement, *record, &key, &NativeProcessProbe, actor, request_id,
+                    ).await?;
+                    let mut output = OutputEnvelope::success(request_id, Some(owner.runtime_id), json!({
+                        "qualification": recorded,
+                        "next_action": "Inspect service handover with this qualification ID; the service remains stopped",
+                    }));
+                    output.state = Some("qualification_recorded".into());
+                    Ok(output)
+                }
+                LocalCommand::ServiceHandover { binary, qualification, apply, plan } => {
+                    let roles: &[&str] = if apply { &["configure", "recover"] } else { &["configure"] };
+                    let (owner, actor) = local_operator(&host, roles)?;
+                    let key = Keychain::new(owner.runtime_id)?.load_attestation_key()?;
+                    let reviewed = kegari_v0::housekeeping::load_runtime_qualification(&host, qualification, &key)?;
+                    let replacement = BinaryIdentity::inspect(&binary, true)?;
+                    if !apply {
+                        let inspected = kegari_v0::housekeeping::inspect_handover(&host, replacement, &reviewed, &NativeProcessProbe).await?;
+                        let mut output = OutputEnvelope::success(request_id, Some(owner.runtime_id), json!({
+                            "plan": inspected,
+                            "qualification_id": qualification,
+                            "next_action": "Review the plan, then repeat with --apply --plan TOKEN and a stable --request-id; activation is separate",
+                        }));
+                        output.state = Some("handover_inspected".into());
+                        return Ok(output);
+                    }
+                    let token = plan.as_deref().ok_or_else(|| Error::invalid("applying handover requires the inspected plan token"))?;
+                    let receipt = kegari_v0::housekeeping::apply_recorded_handover(
+                        &host, replacement, &reviewed, &NativeProcessProbe, actor, request_id, token,
+                    ).await?;
+                    let acknowledged = matches!(receipt.phase, kegari_v0::control::ReceiptPhase::Acknowledged | kegari_v0::control::ReceiptPhase::Reconciled);
+                    let mut output = OutputEnvelope::success(request_id, Some(owner.runtime_id), json!({
+                        "receipt": receipt,
+                        "next_action": if acknowledged { "Inspect the installed replacement; service activation remains a separate action" }
+                            else { "Reconcile the retained handover receipt before activation; do not retry with a new request ID" },
+                    }));
+                    output.operation_id = Some(receipt.operation_id);
+                    output.state = Some(if acknowledged { "handover_applied" } else { "handover_unresolved" }.into());
+                    if !acknowledged {
+                        output.ok = false;
+                        output.error = Some(Error::new("operation_uncertain", "handover receipt does not establish completed replacement"));
+                    }
+                    Ok(output)
+                }
                 LocalCommand::TargetList | LocalCommand::TargetAdd(_) => Err(Error::new(
                     "invalid_input",
                     "target preferences are handled by the invoking client",
@@ -221,7 +288,11 @@ impl LocalActions for NativeLocalActions {
                     "guided input requires an interactive terminal; use --from and --noninteractive",
                 ));
             }
-            guided_document(request, std::io::stdin().lock(), std::io::stderr().lock())
+            match request {
+                GuidanceRequest::ConnectionAdd { kind, .. } => guided_connection(*kind, std::io::stdin().lock(), std::io::stderr().lock()),
+                GuidanceRequest::WorkspaceAdd { .. } => guided_workspace(std::io::stdin().lock(), std::io::stderr().lock()),
+                GuidanceRequest::Setup => guided_document(request, std::io::stdin().lock(), std::io::stderr().lock()),
+            }
         })
     }
     fn guide_initial_setup(&mut self) -> LocalFuture<'_, String> {
@@ -245,6 +316,33 @@ impl LocalActions for NativeLocalActions {
     fn open_browser<'a>(&'a mut self, url: &'a str) -> LocalFuture<'a, ()> {
         Box::pin(crate::cli::open_client_browser(url))
     }
+}
+
+/// Resolve the invoking OS user against the current protected configuration,
+/// before touching the runtime's Keychain identity or a candidate executable.
+fn local_operator(host: &HostIdentity, required: &[&str]) -> Result<(OwnerRecord, Actor)> {
+    let root = PrivateDir::open(&host.state_root())?;
+    let owner: OwnerRecord = root.read("owner.json")?;
+    if owner.uid != host.uid || owner.host_id != host.host_id || owner.root != host.state_root()
+        || owner.runtime_id.is_nil() || !owner.setup_complete
+    {
+        return Err(Error::new("identity_mismatch", "local runtime registration differs from this host"));
+    }
+    let bytes = root.read_bytes("config.toml", 8 * 1024 * 1024)?;
+    let config = Config::parse(std::str::from_utf8(&bytes)
+        .map_err(|_| Error::invalid("persisted configuration is not UTF-8"))?)?;
+    if config.runtime.id != owner.runtime_id || config.runtime.host_id != host.host_id {
+        return Err(Error::new("identity_mismatch", "local configuration differs from this runtime"));
+    }
+    let operator = config.control.local_users.get(&host.uid.to_string())
+        .ok_or_else(|| Error::new("access_denied", "this OS user has no configured operator mapping"))?;
+    let actor = Actor {
+        identity: operator.id.clone(),
+        roles: required.iter().map(|role| (*role).to_owned()).collect(),
+        principal: Some(Principal::Unix { uid: host.uid }),
+    };
+    for role in required { kegari_v0::control_command::verify_current_actor(&config, &actor, role)?; }
+    Ok((owner, actor))
 }
 
 struct SetupPrompt<R, W> {
@@ -376,7 +474,7 @@ pub fn guided_initial_setup(
         .map_err(|_| Error::invalid("guided setup configuration could not be encoded"))?;
     Config::parse(&document)?;
     writeln!(prompt.output,
-        "\nReview the complete initial configuration (no provider credentials):\n{document}\nThe Linear UUID above is supplied by you; a configured Linear connection must verify the provider identity.\nConfirming submits this configuration to the ordinary setup transaction: local registration and a macOS Keychain attestation key, with STOPPED intent. It does not install/start a service or dispatch agents.\nAfter setup: explicitly install/start the registered service, then use connection add with supported authentication and workspace add with exact IDs, selectors, profiles, repository authority, hosted-validation policy and an explicit release policy. Run status and config check before considering orchestration start. No scope or provider qualification is inferred from this draft.")
+        "\nReview the complete initial configuration (no provider credentials):\n{document}\nThe Linear UUID above is supplied by you; a configured Linear connection must verify the provider identity.\nConfirming submits this configuration to the ordinary setup transaction: local registration and a macOS Keychain attestation key, with STOPPED intent. It does not install/start a service or dispatch agents.\nAfter setup: explicitly install/start the registered service, then use connection add with supported authentication and workspace add with exact IDs, selectors, profiles and repository authority. Delivery policy may remain unresolved during discovery; dependent delivery stays blocked until its hosted-validation and release policies are supplied. No command or environment manifest is required. Run status and config check before considering orchestration start. No scope or provider qualification is inferred from this draft.")
         .map_err(|error| Error::io("write setup review", error))?;
     if prompt.ask("Type create to submit this reviewed setup, or /cancel: ")? != "create" {
         return Err(setup_cancelled());

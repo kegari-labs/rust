@@ -577,7 +577,7 @@ fn codex_permissions_preserve_exact_resource_grants() {
             [resource.to_str().unwrap()],
         "write"
     );
-    assert_eq!(permissions.settings["features"]["shell_tool"], false);
+    assert_eq!(permissions.settings["features"]["shell_tool"], true);
 }
 
 #[tokio::test]
@@ -628,4 +628,18 @@ async fn dropping_native_client_cancels_and_reaps_its_owned_fixture() {
     }
     observed.unwrap().unwrap();
     assert!(owned.exited().unwrap());
+}
+
+#[test]
+fn codex_permissions_do_not_treat_read_only_independent_review_as_no_execution() {
+    let (_temp, mut plan) = fixture();
+    plan.role = ExecutionRole::IndependentReview;
+    plan.source_writes.clear();
+    let boundary = plan.validate(kegari_v0::BUILD_ID).unwrap();
+    let error = kegari_v0::codex_host::permission_configuration(
+        &boundary,
+        &plan.execution_root.join("auth"),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "unsupported_codex_review_isolation");
 }

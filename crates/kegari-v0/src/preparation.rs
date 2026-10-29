@@ -30,6 +30,10 @@ use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 use uuid::Uuid;
 
+#[path = "runtime_blockers.rs"]
+mod blockers;
+pub(crate) use blockers::BlockerPublication;
+
 pub type OwnerCheck = Arc<dyn Fn(&Lease) -> Result<()> + Send + Sync>;
 
 pub struct AuthorizationPublisher {
@@ -564,7 +568,10 @@ pub(crate) fn metadata_publication_attempt(
     config: &kegari_config::RuntimeConfig,
     now: chrono::DateTime<Utc>,
 ) -> Result<PublicationAttempt> {
-    if !matches!(purpose, "parent_authorization" | "no_release_required") {
+    if !matches!(
+        purpose,
+        "parent_authorization" | "no_release_required" | "scheduling_blocker"
+    ) {
         return Err(Error::invalid(
             "unknown finite metadata publication purpose",
         ));
@@ -925,59 +932,61 @@ mod tests {
         assert_eq!(planned(&gap, &config).err().unwrap().code, "record_corrupt");
     }
     #[test]
-    fn no_release_metadata_retries_are_separate_bounded_and_never_replay_unknowns() {
-        let mut config = config();
-        let snapshot = canonical_digest(1, &"snapshot").unwrap();
-        let make = |receipts: &[Receipt], config: &kegari_config::RuntimeConfig| {
-            metadata_publication_attempt(
-                "no_release_required",
-                config.id,
-                &snapshot,
-                "work",
-                receipts,
-                config,
-                Utc::now(),
-            )
-        };
-        let initial = make(&[], &config).unwrap();
-        assert_ne!(initial.operation, planned(&[], &config).unwrap().operation);
-        assert_ne!(initial.admission, planned(&[], &config).unwrap().admission);
-        let mut retained = history(1, 2, false);
-        let mut reference = initial.reference.clone();
-        reference.max_attempts = 2;
-        retained[0].operation_id = initial.admission;
-        retained[0].request_id = initial.admission;
-        retained[0].expected.insert(
-            "metadata".into(),
-            serde_json::to_string(&reference).unwrap(),
-        );
-        retained[1].operation_id = initial.operation;
-        retained[1].request_id = initial.operation;
-        retained[1]
-            .expected
-            .insert("admission_operation".into(), initial.admission.to_string());
-        let retry = make(&retained, &config).unwrap();
-        assert_eq!(retry.reference.attempt, 2);
-        assert_eq!(retry.reference.max_attempts, 2);
-        assert_eq!(retry.previous, Some(initial.operation));
-        config.max_attempts_per_phase = 99;
-        assert_eq!(make(&retained, &config).unwrap().reference.max_attempts, 2);
-        retained[1].phase = ReceiptPhase::Sent;
-        retained[1].observed_result = None;
-        assert_eq!(
-            make(&retained, &config).unwrap().operation,
-            initial.operation
-        );
-        retained[1].phase = ReceiptPhase::Acknowledged;
-        retained[1].observed_result = Some(json!({"comment_id":Uuid::new_v4()}));
-        assert_eq!(
-            make(&retained, &config).unwrap().operation,
-            initial.operation
-        );
-        retained[1].phase = ReceiptPhase::Reconciled;
-        retained[1].observed_result =
-            Some(json!({"effect":"not_sent","error":Error::new("timeout", "fixture")}));
-        retained[1].updated_at = Utc::now();
-        assert_eq!(make(&retained, &config).err().unwrap().code, "retry_wait");
+    fn no_release_and_blocker_metadata_retries_are_separate_bounded_and_never_replay_unknowns() {
+        for purpose in ["no_release_required", "scheduling_blocker"] {
+            let mut config = config();
+            let snapshot = canonical_digest(1, &"snapshot").unwrap();
+            let make = |receipts: &[Receipt], config: &kegari_config::RuntimeConfig| {
+                metadata_publication_attempt(
+                    purpose,
+                    config.id,
+                    &snapshot,
+                    "work",
+                    receipts,
+                    config,
+                    Utc::now(),
+                )
+            };
+            let initial = make(&[], &config).unwrap();
+            assert_ne!(initial.operation, planned(&[], &config).unwrap().operation);
+            assert_ne!(initial.admission, planned(&[], &config).unwrap().admission);
+            let mut retained = history(1, 2, false);
+            let mut reference = initial.reference.clone();
+            reference.max_attempts = 2;
+            retained[0].operation_id = initial.admission;
+            retained[0].request_id = initial.admission;
+            retained[0].expected.insert(
+                "metadata".into(),
+                serde_json::to_string(&reference).unwrap(),
+            );
+            retained[1].operation_id = initial.operation;
+            retained[1].request_id = initial.operation;
+            retained[1]
+                .expected
+                .insert("admission_operation".into(), initial.admission.to_string());
+            let retry = make(&retained, &config).unwrap();
+            assert_eq!(retry.reference.attempt, 2);
+            assert_eq!(retry.reference.max_attempts, 2);
+            assert_eq!(retry.previous, Some(initial.operation));
+            config.max_attempts_per_phase = 99;
+            assert_eq!(make(&retained, &config).unwrap().reference.max_attempts, 2);
+            retained[1].phase = ReceiptPhase::Sent;
+            retained[1].observed_result = None;
+            assert_eq!(
+                make(&retained, &config).unwrap().operation,
+                initial.operation
+            );
+            retained[1].phase = ReceiptPhase::Acknowledged;
+            retained[1].observed_result = Some(json!({"comment_id":Uuid::new_v4()}));
+            assert_eq!(
+                make(&retained, &config).unwrap().operation,
+                initial.operation
+            );
+            retained[1].phase = ReceiptPhase::Reconciled;
+            retained[1].observed_result =
+                Some(json!({"effect":"not_sent","error":Error::new("timeout", "fixture")}));
+            retained[1].updated_at = Utc::now();
+            assert_eq!(make(&retained, &config).err().unwrap().code, "retry_wait");
+        }
     }
 }

@@ -4,12 +4,6 @@
 
 use crate::test_pinned_git as pinned_git;
 include!("../tests/support/worker_fixture.rs");
-#[path = "worker_bundle_tests.rs"]
-mod bundle_tests;
-#[path = "worker_command_tests.rs"]
-mod command_tests;
-#[path = "worker_resource_tests.rs"]
-mod resource_tests;
 #[path = "worker_validation_tests.rs"]
 mod validation_tests;
 

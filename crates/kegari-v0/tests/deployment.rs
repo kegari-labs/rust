@@ -996,3 +996,92 @@ async fn recovery_inventory_retains_verified_main_target_divergence_without_asse
     f.state.lock().unwrap().status = "failure".into();
     assert!(f.observer.observe_recovery(&c).await.is_err());
 }
+
+#[tokio::test]
+async fn external_baseline_uses_fresh_trusted_observation_without_owned_deployment() {
+    let f = Fixture::new();
+    let mut c = contract(true);
+    let kegari_config::Deployment::Steps { steps } = c.configuration.deployment.as_mut().unwrap()
+    else {
+        panic!()
+    };
+    steps[0].baseline_observation = Some(steps[0].workflow.clone());
+    let digest = bytes_digest(b"measured existing deployed bytes");
+    f.external_artifact(&c, |manifest| {
+        let jwt = manifest["proofs"][0]["token"].as_str().unwrap();
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(jwt.split('.').nth(1).unwrap())
+            .unwrap();
+        let mut stale: Value = serde_json::from_slice(&payload).unwrap();
+        let at = Utc::now().timestamp();
+        stale["iat"] = json!(at - 1800);
+        stale["nbf"] = json!(at - 1801);
+        stale["exp"] = json!(at - 1500);
+        manifest["proofs"][0]["token"] = json!(token(stale));
+    });
+    assert_eq!(
+        f.observer
+            .establish_external_target(&c, "deploy", &verifier())
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_hosted_proof"
+    );
+    f.external_artifact(&c, |manifest| {
+        manifest["artifact_digest"] = json!(bytes_digest(b"different deployed bytes"))
+    });
+    assert_eq!(
+        f.observer
+            .establish_external_target(&c, "deploy", &verifier())
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_hosted_proof"
+    );
+    f.external_artifact(&c, |_| {});
+    let target = f
+        .observer
+        .establish_external_target(&c, "deploy", &verifier())
+        .await
+        .unwrap();
+    assert_eq!(target.source, source());
+    assert_eq!(target.artifact_digest, digest);
+    assert!(
+        target
+            .provider_record
+            .starts_with("github-external-observation:")
+    );
+    let baseline = f.observer.observe(&c).await.unwrap();
+    assert_eq!(
+        baseline.targets(),
+        std::slice::from_ref(&target)
+            .iter()
+            .map(|t| {
+                let mut t = t.clone();
+                t.observed_at = baseline.targets()[0].observed_at;
+                t
+            })
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        f.observer.recover_target(&c, "deploy").await.is_err(),
+        "external observation is not an owned deployment"
+    );
+    assert!(f.host.snapshot().unwrap().active_operations.is_empty());
+    assert!(
+        f.state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|(url, body)| !url.ends_with("/dispatches") && body.is_null())
+    );
+    // Recovery uses the protected original proof without fetching/reaccepting JWTs.
+    f.state.lock().unwrap().archive.clear();
+    f.observer.reobserve(&c, &baseline).await.unwrap();
+    f.state.lock().unwrap().status = "pending".into();
+    assert_eq!(
+        f.observer.observe(&c).await.unwrap_err().code,
+        "production_baseline"
+    );
+}

@@ -3,12 +3,47 @@
 This guide describes the Rust workspace, package boundaries and local verification.
 For the product introduction and preview instructions, see the [README](../README.md).
 
+## Feature-first development policy
+
+The approved [SPEC 1.5](../crates/kegari-v0/SPEC.md) makes Codex app-server the
+repository execution layer and Kegari its orchestrator. The
+[implementation queue](../crates/kegari-v0/MILESTONES.md) begins with one complete
+Codex-backed production flow, deletion of the superseded harness, then remaining
+user-facing features. The native production path is being integrated; the custom repository executor
+has been removed. PROGRESS.md records the latest completed checks and remaining work.
+
+- Agents **MUST prioritize working features** and use the smallest appropriate
+  compile check, focused test or smoke exercise needed to proceed.
+- Fix observed failures attributable to the change. Add focused coverage only
+  where needed to establish changed behavior or reproduce a concrete defect.
+- Agents **MUST NOT routinely run complete workspace suites, exhaustive failure
+  matrices, repeated independent reviews or broad conformance audits** during
+  feature implementation. Comprehensive regression, end-to-end coverage and
+  qualification belong to the later stabilization phase.
+- Deferred comprehensive testing **MUST NOT block dependency-ready feature
+  implementation**, including later milestones. Keep implementation, focused
+  validation and qualification status distinct; do not claim release readiness.
+- Delete obsolete architecture-specific production code, configuration,
+  instructions, tests and dependencies as their callers migrate. Record the
+  rationale briefly. Do not keep the discarded execution harness behind flags,
+  wrappers or fallback paths; preserve applicable tests and shared host machinery.
+- Keep checkpoints concise. No speculative framework, further crate extraction
+  or validation infrastructure is a prerequisite to delivering the next feature.
+
+This development policy does not waive the checks and acceptance rules Kegari
+must enforce for its target projects. Native/live-operation restrictions remain
+in force. The [goal](../crates/kegari-v0/GOAL.md) retains its original six-hour
+deadline across continuations; consult [PROGRESS.md](../crates/kegari-v0/PROGRESS.md)
+for the current state and absolute timestamps. The final twenty minutes are
+reserved for integration, build and handoff. Reading documentation does not
+activate a goal, restart its clock or authorize restricted operations.
+
 ## Workspace packages
 
 See the [workspace overview](workspace.md) for the crate index and a concise
 summary of responsibilities.
 
-## Package boundaries
+## Current package boundaries
 
 Both CLI and backend depend directly on `kegari-config` and `kegari-types`;
 `kegari-config` depends on `kegari-types`. The CLI also temporarily depends on the
@@ -44,8 +79,11 @@ The controller temporarily depends on the backend and control API. The backend
 depends on control API, with no reverse dependency on controller, including in
 tests. Shared runtime contracts and command-policy helpers remain below the
 controller in `kegari_v0::{runtime_host, control_command}`. Registration, durable
-admission, configuration transactions and the execution/delivery engine remain
-backend-owned. Control-host and child process responsibilities are unchanged.
+admission, configuration transactions and workflow/delivery policy remain
+backend-owned. Repository execution now uses Codex-native observations; remaining integration is tracked in PROGRESS.md. The control host runs the runtime driver; the orchestration child
+owns the runtime lock and exchanges lease, heartbeat and poll messages. SPEC 1.5
+retains that arrangement and its exclusive ownership/admission fencing; moving
+the driver to the child is not part of the execution migration.
 
 The backend depends directly on `kegari-codex` for protocol/session ownership,
 request sequencing, deadlines, protocol recovery and observations. Its production
@@ -80,41 +118,69 @@ retained callers; no compatibility reexports or unchecked proof constructors are
 added. CLI and controller need no direct Git dependency. The extraction does not
 complete the Git adapter or change its pinned executable version.
 
-All packages use workspace version `0.2.0-alpha.10`; the executable name, process
-roles and serialized schemas remain unchanged. This extraction creates no new
-prerelease or qualification claim.
+All packages currently use workspace version `0.2.0-alpha.10`; the executable
+name and process roles are unchanged. Migration-specific persisted and instruction
+identities are recorded in PROGRESS.md; older extraction reports describe their
+original schemas. The original alpha.10 archive stays intact. The next coherent Codex-backed
+candidate is reserved as `0.2.0-alpha.11`; do not bump versions for individual
+edits or checks.
 
-The backend imports environment and native command interfaces from
-`kegari-execution`, which depends on platform/process/storage/digest/types.
-`kegari_execution::journal` owns concrete process guards and journal storage.
-Backend `execution_host` retains worker/bundle admission adapters;
-`process_records::ProcessJournal` retains worker-only and sealed host admission.
-Its lower `ProcessJournalStore` validates and acquires resources, not application
-permission. The one-shot command journal factory is consumed before spawn;
-cleanup retains only the concrete guard. Shared lease data is imported directly
-from `kegari_types::control::Lease`, including controller consumers.
+The custom repository executor in `kegari-execution` and backend adapters has
+been removed. Do not restore its environment construction, per-command journal
+factories or native qualification sequence. The new path uses
+Codex app-server's supported repository tools, sandbox, permissions and lifecycle
+observations; selected-version/capability checks replace the old blanket refusal.
 
-Environment construction still receives the current backend `BUILD_ID`, retained
-privately for revalidation. `codex_host::IsolationSessionScope` preserves protocol
-validation order without a Codex dependency. Command prerequisites remain closed;
-no qualification, process arrangement or workflow behavior changes.
+Kegari retains operation/session admission and workflow result acceptance.
+Preserve shared process/journal code with actual Codex, Git and control callers,
+including the single spawn/retirement interlock, actual child ownership and
+conservative recovery. Shared lease data remains in `kegari_types::control`.
+Do not reconstruct the deleted executor around the Codex event stream.
+
+Runtime-loaded instruction assets change with their tool/caller migration and
+explicit asset identities. Old evidence retains its original meaning; an
+unsupported retained record must refuse safely rather than silently becoming new
+Codex execution evidence. See the [instruction guide](../crates/kegari-context/instructions/README.md).
 
 ## Build and verification
 
 The commands below assume the pinned toolchain and dependencies are already
 cached. For a first build with dependency downloads, follow the root README.
 
-From the workspace root, using the pinned toolchain; `--workspace` checks all seventeen
-packages:
+Select the affected package and an existing focused test. For example, changes
+to the Codex protocol crate can use these commands when appropriate; replace the
+package/filter for other changes rather than running every example by default:
 
 ```sh
-cargo build --offline --locked -p kegari-cli --bin kegari-v0
-cargo run --offline --locked -p kegari-cli -- --help
-cargo test --offline --locked --workspace
+cargo check --offline --locked -p kegari-codex
+cargo test --offline --locked -p kegari-codex --test protocol
+```
+
+For the migration's first production flow, use one simulated Codex-transport
+integration case and one missing/stale-result refusal. Installed Codex and live
+account tests remain separately authorized. Fixtures do not establish native or
+live compatibility.
+
+Build and inspect the application at a coherent handoff, when time permits:
+
+```sh
+cargo build --release --offline --locked -p kegari-cli --bin kegari-v0
+```
+
+Use the existing minimal-environment, state-free help/version/build/handover
+inspections for that binary. A build failure is a reported blocker, not a reason
+to expand testing into a new project.
+
+The following workspace-wide checks are a **later stabilization reference**, not
+the default after each feature. `--workspace` includes all seventeen packages:
+
+```sh
+cargo test --release --offline --locked --workspace
 cargo clippy --offline --locked --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
 See [current progress](../crates/kegari-v0/PROGRESS.md) and
-[version milestones](../crates/kegari-v0/MILESTONES.md). Goal mode remains cancelled;
-native execution and operational qualification remain incomplete.
+[version milestones](../crates/kegari-v0/MILESTONES.md). The previous goal was
+cancelled; the replacement run has its own fixed timestamps in PROGRESS.md.
+Native execution integration and operational qualification remain incomplete.

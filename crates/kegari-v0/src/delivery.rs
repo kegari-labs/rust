@@ -63,6 +63,7 @@ pub enum DeliveryPhase {
     ReviewPublication,
     Staging,
     NoChange,
+    Replacement,
     CandidateAssembly,
     ParentEvidence,
     Release,
@@ -214,7 +215,7 @@ fn require_effect_policy(contract: &RepositoryContract, phase: DeliveryPhase) ->
         | DeliveryPhase::Staging => {
             contract.configuration.staging_ci()?;
         }
-        DeliveryPhase::NoChange => {
+        DeliveryPhase::NoChange | DeliveryPhase::Replacement => {
             exact_requirements(contract)?;
         }
         DeliveryPhase::Release => {
@@ -537,6 +538,7 @@ impl DeliveryCoordinator {
         for execution in executions {
             let record = execution.production_evidence()?;
             if record.discovered.is_some()
+                || record.codex.as_ref().is_some_and(|p| p.plan.is_some())
                 || record.binding.work != admission.scope.work
                 || record.workflow_digest != workflow.digest
                 || record.binding.repository != admission.scope.repository
@@ -560,7 +562,11 @@ impl DeliveryCoordinator {
                 workflow_id: None,
                 run_id: None,
                 attempt: 1,
-                runner: Runner::LocalSandbox,
+                runner: if record.codex.is_some() {
+                    Runner::Codex
+                } else {
+                    Runner::LocalSandbox
+                },
                 command: record.command.argv.clone(),
                 environment_identity: record.binding.isolation_digest.clone(),
                 started_at: Some(record.started_at),
@@ -880,6 +886,7 @@ impl DeliveryCoordinator {
                 DeliveryPhase::HostedValidation,
                 DeliveryPhase::Staging,
                 DeliveryPhase::NoChange,
+                DeliveryPhase::Replacement,
                 DeliveryPhase::Release,
             ],
         )?;
@@ -1241,8 +1248,20 @@ impl DeliveryCoordinator {
         admission: &DeliveryAdmission,
         request: ChildObjectPublication<'_>,
     ) -> Result<PublishedChildBranch> {
+        self.publish_child_objects_inner(admission, request, None)
+            .await
+    }
+    async fn publish_child_objects_inner(
+        &self,
+        admission: &DeliveryAdmission,
+        request: ChildObjectPublication<'_>,
+        replacement: Option<&ReplacementDelta>,
+    ) -> Result<PublishedChildBranch> {
         use base64::Engine as _;
         self.current(admission, &[DeliveryPhase::PublishChild])?;
+        if let Some(replacement) = replacement {
+            replacement.matches(admission)?;
+        }
         request.local.matches(admission)?;
         request.change.matches(admission)?;
         let committed = request.committed;
@@ -1271,9 +1290,12 @@ impl DeliveryCoordinator {
             })?)
             .await?;
         let parent = linear.issue(admission.scope.work.parent).await?;
-        let expected = self
-            .git
-            .branch_name(&child.identifier, &parent.title, 255)?;
+        let expected = match replacement {
+            Some(replacement) => replacement.branch(&self.git, &child.identifier, &parent.title)?,
+            None => self
+                .git
+                .branch_name(&child.identifier, &parent.title, 255)?,
+        };
         if child.parent_id != Some(parent.id)
             || child.workspace_id != admission.scope.work.linear_workspace
             || request.branch != &expected
@@ -1770,6 +1792,7 @@ impl DeliveryCoordinator {
             &[
                 DeliveryPhase::ReviewPublication,
                 DeliveryPhase::NoChange,
+                DeliveryPhase::Replacement,
                 DeliveryPhase::Release,
             ],
         )?;
@@ -2106,7 +2129,10 @@ impl DeliveryCoordinator {
             },
         )?;
         let contract = self.contract(admission)?;
-        let exact = if admission.scope.phase == DeliveryPhase::NoChange {
+        let exact = if matches!(
+            admission.scope.phase,
+            DeliveryPhase::NoChange | DeliveryPhase::Replacement
+        ) {
             let route = contract.configuration.no_change_workflow()?;
             Some([CiSuite {
                 workflow_id: route.workflow_id,
@@ -2474,6 +2500,19 @@ impl DeliveryCoordinator {
         admission: &DeliveryAdmission,
         completion: ChangedChildCompletion<'_>,
     ) -> Result<PublishedChild> {
+        let workflow = completion.workflow;
+        let criteria = completion.criteria;
+        let signed = self
+            .prepare_changed_child_result(admission, completion)
+            .await?;
+        self.publish_child_record(admission, workflow, criteria, signed)
+            .await
+    }
+    pub(super) async fn prepare_changed_child_result(
+        &self,
+        admission: &DeliveryAdmission,
+        completion: ChangedChildCompletion<'_>,
+    ) -> Result<Signed<ChildResultRecord>> {
         self.current(admission, &[DeliveryPhase::Staging])?;
         completion.local.matches(admission)?;
         completion.local.verify_review_adequacy(completion.review)?;
@@ -2554,8 +2593,7 @@ impl DeliveryCoordinator {
                 protection: Some(completion.staged.protection.clone()),
             },
         )?;
-        self.publish_child_record(admission, completion.workflow, completion.criteria, signed)
-            .await
+        Ok(signed)
     }
     async fn publish_child_record(
         &self,
@@ -2688,7 +2726,10 @@ impl DeliveryCoordinator {
         } else {
             local_requirements(contract, workflow)?
         };
-        if matches!(r.evidence.outcome, evidence::ChildOutcome::NoChange { .. }) {
+        if matches!(
+            r.evidence.outcome,
+            evidence::ChildOutcome::NoChange { .. } | evidence::ChildOutcome::Replacement { .. }
+        ) {
             required.extend(exact_requirements(contract)?);
         } else {
             required.extend(hosted_requirements(
@@ -2703,18 +2744,38 @@ impl DeliveryCoordinator {
             .flat_map(|s| s.required_checks.iter().cloned())
             .chain(std::iter::once(evidence::REVIEW_CONTEXT.into()))
             .collect();
-        evidence::validate_child_candidate(
-            &r.evidence,
-            evidence::ChildRequirements {
-                work: &admission.scope.work,
-                criteria,
-                revision: &admission.scope.revision,
-                checks: &required,
-                required_contexts: &contexts,
-            },
-            &review,
-            r.protection.as_ref(),
-        )?;
+        let requirements = evidence::ChildRequirements {
+            work: &admission.scope.work,
+            criteria,
+            revision: &admission.scope.revision,
+            checks: &required,
+            required_contexts: &contexts,
+        };
+        if matches!(
+            r.evidence.outcome,
+            evidence::ChildOutcome::Replacement { .. }
+        ) {
+            self.validate_replacement_draft(
+                admission,
+                workflow,
+                &r.evidence,
+                requirements,
+                &review,
+            )?;
+        } else {
+            evidence::validate_child_candidate(
+                &r.evidence,
+                evidence::ChildRequirements {
+                    work: &admission.scope.work,
+                    criteria,
+                    revision: &admission.scope.revision,
+                    checks: &required,
+                    required_contexts: &contexts,
+                },
+                &review,
+                r.protection.as_ref(),
+            )?;
+        }
         Ok((review, required, contexts))
     }
     fn validate_child_record(
@@ -2731,6 +2792,26 @@ impl DeliveryCoordinator {
         let r = &signed.payload;
         let mut inner = publication.clone();
         inner.payload_digest = canonical_digest(1, &r.evidence)?;
+        if matches!(
+            r.evidence.outcome,
+            evidence::ChildOutcome::Replacement { .. }
+        ) {
+            return self.verify_replacement_record(
+                admission,
+                workflow,
+                &r.evidence,
+                evidence::ChildRequirements {
+                    work: &admission.scope.work,
+                    criteria,
+                    revision: &admission.scope.revision,
+                    checks: &required,
+                    required_contexts: &contexts,
+                },
+                &review,
+                &inner,
+                &publication.writer_account_id,
+            );
+        }
         evidence::verify_child(
             &r.evidence,
             evidence::ChildRequirements {
@@ -2759,6 +2840,7 @@ impl DeliveryCoordinator {
             &[
                 DeliveryPhase::Staging,
                 DeliveryPhase::NoChange,
+                DeliveryPhase::Replacement,
                 DeliveryPhase::Recovery,
             ],
         )?;
@@ -2775,9 +2857,8 @@ impl DeliveryCoordinator {
         }
         let phase = match &result.verified.evidence().outcome {
             evidence::ChildOutcome::NoChange { .. } => DeliveryPhase::NoChange,
-            evidence::ChildOutcome::Changed { .. } | evidence::ChildOutcome::Replacement { .. } => {
-                DeliveryPhase::Staging
-            }
+            evidence::ChildOutcome::Changed { .. } => DeliveryPhase::Staging,
+            evidence::ChildOutcome::Replacement { .. } => DeliveryPhase::Replacement,
         };
         require_effect_policy(self.contract(admission)?, phase)?;
         let child = admission
@@ -2901,6 +2982,7 @@ impl DeliveryCoordinator {
             &[
                 DeliveryPhase::HostedValidation,
                 DeliveryPhase::NoChange,
+                DeliveryPhase::Replacement,
                 DeliveryPhase::Release,
             ],
         )?;
@@ -2959,7 +3041,10 @@ impl DeliveryCoordinator {
         &self,
         admission: &DeliveryAdmission,
     ) -> Result<PendingExactValidation> {
-        self.current(admission, &[DeliveryPhase::NoChange])?;
+        self.current(
+            admission,
+            &[DeliveryPhase::NoChange, DeliveryPhase::Replacement],
+        )?;
         let contract = self.contract(admission)?;
         exact_requirements(contract)?;
         let route = contract.configuration.no_change_workflow()?;
@@ -3021,7 +3106,10 @@ impl DeliveryCoordinator {
         tokens: &[HostedToken],
         verifier: &HostedProofVerifier,
     ) -> Result<ExactValidationPassed> {
-        self.current(admission, &[DeliveryPhase::NoChange])?;
+        self.current(
+            admission,
+            &[DeliveryPhase::NoChange, DeliveryPhase::Replacement],
+        )?;
         if pending.work != admission.scope.work
             || pending.revision != admission.scope.revision
             || pending.challenge.admission_digest != admission.scope.digest()?
@@ -3145,7 +3233,23 @@ impl DeliveryCoordinator {
         admission: &DeliveryAdmission,
         completion: NoChangeCompletion<'_>,
     ) -> Result<PublishedChild> {
-        self.current(admission, &[DeliveryPhase::NoChange])?;
+        let workflow = completion.workflow;
+        let criteria = completion.criteria;
+        let signed = self
+            .prepare_no_change_child_result(admission, completion)
+            .await?;
+        self.publish_child_record(admission, workflow, criteria, signed)
+            .await
+    }
+    pub(super) async fn prepare_no_change_child_result(
+        &self,
+        admission: &DeliveryAdmission,
+        completion: NoChangeCompletion<'_>,
+    ) -> Result<Signed<ChildResultRecord>> {
+        self.current(
+            admission,
+            &[DeliveryPhase::NoChange, DeliveryPhase::Replacement],
+        )?;
         completion.local.matches(admission)?;
         completion.local.verify_review_adequacy(completion.review)?;
         completion
@@ -3232,13 +3336,15 @@ impl DeliveryCoordinator {
                 protection: None,
             },
         )?;
-        self.publish_child_record(admission, completion.workflow, completion.criteria, signed)
-            .await
+        Ok(signed)
     }
     fn retained_delta(
         &self,
         manifest: &kegari_git::DeltaManifest,
     ) -> Result<kegari_git::DeltaArtifact> {
+        if manifest.replacement.is_some() {
+            return self.retained_replacement_delta(manifest);
+        }
         let digest = manifest.digest()?;
         let retained: Signed<Value> = self.records.read(&format!("delta-{}.json", &digest[7..]))?;
         self.key.verify("staged_delta", &retained)?;
@@ -3307,6 +3413,7 @@ impl DeliveryCoordinator {
             &[
                 DeliveryPhase::Recovery,
                 DeliveryPhase::NoChange,
+                DeliveryPhase::Replacement,
                 DeliveryPhase::Staging,
             ],
         )?;
@@ -3339,7 +3446,22 @@ impl DeliveryCoordinator {
             .await?;
         let verified =
             self.validate_child_record(admission, workflow, criteria, &signed, &publication)?;
-        let (review, _, _) = self.validate_child_draft(admission, workflow, criteria, &signed)?;
+        self.reobserve_child_draft(admission, workflow, criteria, &signed)
+            .await?;
+        Ok(PublishedChild {
+            verified,
+            signed,
+            publication,
+        })
+    }
+    pub(super) async fn reobserve_child_draft(
+        &self,
+        admission: &DeliveryObservation,
+        workflow: &Workflow,
+        criteria: &BTreeSet<String>,
+        signed: &Signed<ChildResultRecord>,
+    ) -> Result<()> {
+        let (review, _, _) = self.validate_child_draft(admission, workflow, criteria, signed)?;
         self.reobserve_review(
             admission,
             &PublishedReview {
@@ -3355,9 +3477,8 @@ impl DeliveryCoordinator {
         let mut hosted_observation = admission.clone();
         hosted_observation.scope.phase = match &signed.payload.evidence.outcome {
             evidence::ChildOutcome::NoChange { .. } => DeliveryPhase::NoChange,
-            evidence::ChildOutcome::Changed { .. } | evidence::ChildOutcome::Replacement { .. } => {
-                DeliveryPhase::Staging
-            }
+            evidence::ChildOutcome::Changed { .. } => DeliveryPhase::Staging,
+            evidence::ChildOutcome::Replacement { .. } => DeliveryPhase::Replacement,
         };
         self.reobserve_hosted(
             &hosted_observation,
@@ -3417,12 +3538,13 @@ impl DeliveryCoordinator {
                 &artifact,
             )?;
         }
+        if let evidence::ChildOutcome::Replacement { delta, .. } = &signed.payload.evidence.outcome
+        {
+            self.reobserve_replacement(admission, delta).await?;
+            self.retained_replacement_delta(delta)?;
+        }
         self.current(admission, &[admission.scope.phase])?;
-        Ok(PublishedChild {
-            verified,
-            signed,
-            publication,
-        })
+        Ok(())
     }
 }
 
@@ -3543,10 +3665,16 @@ impl DeliveryCoordinator {
         admission: &DeliveryAdmission,
         validation: &ExactValidationPassed,
     ) -> Result<()> {
-        self.current(admission, &[DeliveryPhase::NoChange])?;
+        self.current(
+            admission,
+            &[DeliveryPhase::NoChange, DeliveryPhase::Replacement],
+        )?;
         exact_requirements(self.contract(admission)?)?;
         self.reobserve_hosted(admission, &validation.hosted).await?;
-        self.current(admission, &[DeliveryPhase::NoChange])
+        self.current(
+            admission,
+            &[DeliveryPhase::NoChange, DeliveryPhase::Replacement],
+        )
     }
     /// Acquire the actual private workflow artifact and derive expectations from
     /// the host nonce plus provider run/job identities, never token fields.
@@ -3556,7 +3684,10 @@ impl DeliveryCoordinator {
         pending: &PendingExactValidation,
         verifier: &HostedProofVerifier,
     ) -> Result<ExactValidationPassed> {
-        self.current(admission, &[DeliveryPhase::NoChange])?;
+        self.current(
+            admission,
+            &[DeliveryPhase::NoChange, DeliveryPhase::Replacement],
+        )?;
         if pending.work != admission.scope.work || pending.revision != admission.scope.revision {
             return Err(Error::new(
                 "stale_result",
@@ -3663,7 +3794,10 @@ impl DeliveryCoordinator {
             &format!("exact-source-{}.json", pending.receipt.request_id),
             &retained,
         )?;
-        self.current(admission, &[DeliveryPhase::NoChange])?;
+        self.current(
+            admission,
+            &[DeliveryPhase::NoChange, DeliveryPhase::Replacement],
+        )?;
         Ok(passed)
     }
 }
@@ -4252,6 +4386,11 @@ impl DeliveryCoordinator {
             }
             // Recheck the signed original patch bytes and live integration.
             let retained = self.retained_delta(delta)?;
+            if delta.replacement.is_some() {
+                self.reobserve_replacement(admission, delta).await?;
+                deltas.push(retained);
+                continue;
+            }
             let pr = self
                 .github()?
                 .pull_request(&self.contract(admission)?.provider, staged.pull_request)
@@ -4825,6 +4964,12 @@ pub use parent::*;
 pub(crate) use parent::{ParentOriginRecord, PreparedParentRunOrigin, read_parent_run_origin};
 #[path = "delivery_child.rs"]
 mod child;
+#[path = "delivery_replacement.rs"]
+mod replacement;
+pub use replacement::ReplacementDelta;
+pub(crate) use replacement::{
+    ReplacementCheckpoint, ReplacementWork, replacement_staging_original,
+};
 #[path = "delivery_discovered_validation.rs"]
 mod discovered_validation;
 pub use child::*;
@@ -4882,3 +5027,7 @@ pub(crate) use review_round::{
     PassedValidationSuccessor, ReviewRoundSource, VerifiedCompletedPairedResume,
     VerifiedPairedRecoveryCandidate, verify_validation_successor_admission,
 };
+
+#[path = "delivery_prepared_child.rs"]
+mod prepared_child;
+pub(crate) use prepared_child::{PreparedChildCandidate, PreparedChildCompletion};

@@ -992,7 +992,6 @@ dependencies = [
 name = "kegari-execution"
 version = "0.2.0-alpha.10"
 dependencies = [
- "hex",
  "kegari-digest",
  "kegari-platform",
  "kegari-process",
@@ -1001,7 +1000,6 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "tokio",
  "uuid",

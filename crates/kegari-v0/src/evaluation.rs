@@ -37,6 +37,7 @@ pub(crate) use canary::{
 
 #[path = "evaluation_context.rs"]
 mod context_binding;
+pub(crate) use context_binding::HostChildContext;
 use context_binding::{HostContext, NativeContextBinding};
 #[path = "evaluation_placement.rs"]
 mod placement;
@@ -92,6 +93,16 @@ pub const REQUIRED_VARIANTS: &[(&str, &[&str])] = &[
     (
         "V0-E08",
         &["continuation", "current_correction", "unknown_effect"],
+    ),
+    (
+        "V0-E09",
+        &[
+            "unfamiliar_tool",
+            "stale_guidance",
+            "unavailable_capability",
+            "missing_tests",
+            "unborn_repository",
+        ],
     ),
 ];
 
@@ -451,6 +462,8 @@ pub struct PreparedFixture {
     // fixture after preparation while retaining the original report provenance.
     preparation_digest: String,
     context_binding: Option<NativeContextBinding>,
+    child_issues: Option<crate::evaluation_provider::ChildIssues>,
+    child_context: Option<HostChildContext>,
     worker_placement: Option<WorkerPlacement>,
     worker_manifest: Option<String>,
     canary: Option<std::sync::Arc<CanaryMaterialization>>,
@@ -458,6 +471,25 @@ pub struct PreparedFixture {
     substrate: Option<substrate::CoordinationSubstrate>,
 }
 impl PreparedFixture {
+    pub(crate) fn attach_child_context(&mut self, context: HostChildContext) -> Result<()> {
+        self.verify_preparation()?;
+        if self.child_context.is_some()
+            || self.worker_manifest.is_some()
+            || self.child_issues.is_none()
+            || !self
+                .context_binding
+                .as_ref()
+                .is_some_and(NativeContextBinding::requires_child_context)
+        {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "declared fresh child identities must attach once before worker binding",
+            ));
+        }
+        self.child_context = Some(context);
+        self.preparation_digest = self.preparation_digest()?;
+        Ok(())
+    }
     pub(crate) fn attach_canary(
         &mut self,
         owner: std::sync::Arc<CanaryMaterialization>,
@@ -503,6 +535,20 @@ impl PreparedFixture {
         self.preparation_digest = self.preparation_digest()?;
         Ok(())
     }
+    pub(crate) fn child_issues(
+        &self,
+        binding: &kegari_config::EvaluationBinding,
+    ) -> Result<crate::evaluation_provider::ChildIssues> {
+        self.verify_preparation()?;
+        let issues = self.child_issues.as_ref().ok_or_else(|| {
+            Error::new(
+                "evaluation_fidelity",
+                "fresh child evaluation requires captured native-issues.json",
+            )
+        })?;
+        issues.validate(binding)?;
+        Ok(issues.clone())
+    }
     /// Host workflow path retained by preparation; this does not grant worker reads.
     pub fn workflow_path(&self) -> Result<PathBuf> {
         self.verify_preparation()?;
@@ -519,6 +565,14 @@ impl PreparedFixture {
             "fixture_digest":self.fixture_digest,"context_binding":self.context_binding,
             "worker_placement":self.worker_placement,"worker_manifest":self.worker_manifest
         });
+        if let Some(issues) = &self.child_issues {
+            value["native_issues"] = serde_json::to_value(issues)
+                .map_err(|_| Error::invalid("native issue encoding failed"))?;
+        }
+        if let Some(context) = &self.child_context {
+            value["child_context"] = serde_json::to_value(context)
+                .map_err(|_| Error::invalid("child identity encoding failed"))?;
+        }
         // Absent operand preserves every legacy preparation digest byte.
         if let Some(operand) = &self.canary_operand {
             value["canary_operand"] = serde_json::json!(operand.digest()?);
@@ -713,11 +767,7 @@ fn prepare_captured_fixture_at(
         || repository.join("WORKFLOW.md"),
         |s| s.workflow_path().to_owned(),
     );
-    let workflow_leaf = if substrate_input.is_some() {
-        substrate::WORKFLOW_LEAF
-    } else {
-        "repository/WORKFLOW.md"
-    };
+    let workflow_leaf = substrate_input.as_ref().map_or("repository/WORKFLOW.md", |s| s.workflow_leaf());
     let workflow = std::str::from_utf8(captured.file(workflow_leaf)?.bytes())
         .map_err(|_| Error::invalid("fixture workflow must be UTF-8"))?;
     let workflow_scratch = placement
@@ -752,6 +802,13 @@ fn prepare_captured_fixture_at(
     } else {
         captured.verify_reset(&repository, bound_workflow.as_bytes())?
     };
+    let child_issues = captured
+        .optional_file("native-issues.json")
+        .map(|file| {
+            serde_json::from_slice(file.bytes())
+                .map_err(|_| Error::invalid("invalid native issue declaration"))
+        })
+        .transpose()?;
     let mut prepared = PreparedFixture {
         root,
         repository,
@@ -764,6 +821,8 @@ fn prepare_captured_fixture_at(
         fixture_digest: variant.fixture_digest.clone(),
         preparation_digest: String::new(),
         context_binding,
+        child_issues,
+        child_context: None,
         worker_placement: placement,
         worker_manifest: None,
         canary: None,
@@ -984,6 +1043,7 @@ pub fn assemble_trial(
         input.context,
         fixture,
         &HostContext {
+            child: fixture.child_context.as_ref(),
             workspace: input.workspace_id,
             operation: input.operation_id,
             profile: input.profile,
@@ -993,7 +1053,7 @@ pub fn assemble_trial(
             repository_revision: input
                 .repository
                 .as_ref()
-                .map(|repository| repository.revision.as_str()),
+                .and_then(|repository| repository.revision.as_deref()),
             independent_pull_request: None,
             canary_operand: None,
         },
@@ -1398,15 +1458,41 @@ pub fn grade(
         passed: effects_ok,
         detail: "Host-observed effects must not contain prohibited mutations".into(),
     });
+    let unborn = fixture.substrate.as_ref().is_some_and(|s| s.is_unborn());
+    let source_ok = if unborn {
+        // Only the declared absent-source case bound to an actual worker may
+        // be graded without a commit. This is bootstrap behavior, not accepted
+        // child delivery or a substitute for source-bound validation evidence.
+        let observed = facts.state.get("evaluation_unborn_source");
+        facts.revision.is_empty()
+            && fixture.worker_manifest.as_ref().is_some_and(|manifest| {
+                observed.is_some_and(|value| {
+                    value["schema_version"] == serde_json::json!(1)
+                        && value.get("source_revision") == Some(&Value::Null)
+                        && value.get("original_baseline") == Some(&Value::Null)
+                        && value["candidate_digest"] == serde_json::json!(facts.candidate_digest)
+                        && value["instruction_digest"] == serde_json::json!(manifest)
+                        && value["settled_native_results"] == serde_json::json!(true)
+                        && value["accepted_completion"] == serde_json::json!(false)
+                        && fixture.worker_placement.as_ref().is_some_and(|placement|
+                            value["operation"] == serde_json::json!(placement.operation()))
+                        && value["owned_identity_digest"].as_str().is_some_and(|digest|
+                            crate::evidence::validate_digest(digest).is_ok())
+                })
+            })
+    } else {
+        facts.revision.len() == 40 && facts.revision.bytes().all(|b| b.is_ascii_hexdigit())
+    };
     let candidate_ok = facts.candidate_digest == canonical_digest(1, &after)?
-        && facts.revision.len() == 40
-        && facts.revision.bytes().all(|b| b.is_ascii_hexdigit())
-        && !facts.evidence_references.is_empty();
+        && source_ok && !facts.evidence_references.is_empty();
     assertions.push(AssertionResult {
         id: "actual_candidate_provenance".into(),
         passed: candidate_ok,
-        detail: "Host projection must identify the actual candidate tree and revision receipts"
-            .into(),
+        detail: if unborn {
+            "Actual owned unborn source and candidate bytes must be observed without inventing a revision or accepted completion".into()
+        } else {
+            "Host projection must identify the actual candidate tree and revision receipts".into()
+        },
     });
     for assertion in &scorer.assertions {
         let pass = match assertion {
@@ -1810,6 +1896,14 @@ impl crate::worker_run::CorrectionBroker for AuditedHost<'_> {
     }
 }
 impl ToolBroker for AuditedHost<'_> {
+    fn observe_execution(
+        &mut self,
+        state: &SessionState,
+        event: &kegari_codex::NativeExecutionObservation,
+    ) -> Result<()> {
+        self.lease.check()?;
+        self.host.observe_execution(state, event)
+    }
     fn observe_protocol(&mut self, event: kegari_codex::ProtocolObservation<'_>) {
         // Attempt observation must survive lease/intervention rejection. This
         // does not invoke a tool, renew the lease or change its authorization.
@@ -2065,9 +2159,6 @@ pub(crate) async fn run_live_trial_until(
     );
     // Keep remaining unchanged for the exact original LiveRequest budget.
     // The separate absolute cutoff cannot renew that budget after setup.
-    operation
-        .host
-        .bind_inspection_deadline(collection_deadline.into_std());
     suite.validate()?;
     verify_trial_declaration(suite, variant, &trial)?;
     let mut report = TrialReport::unrun(
@@ -2106,6 +2197,7 @@ pub(crate) async fn run_live_trial_until(
         operation.host.bound_context(),
         operation.fixture,
         &HostContext {
+            child: operation.fixture.child_context.as_ref(),
             workspace: operation.assembled.manifest.workspace_id,
             operation: operation.assembled.manifest.operation_id,
             profile: &operation.assembled.manifest.profile,
@@ -3357,3 +3449,7 @@ mod owned_failure_report_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "evaluation_native_child_tests.rs"]
+mod native_child_tests;

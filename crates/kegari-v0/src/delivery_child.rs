@@ -10,6 +10,7 @@ use kegari_context::instructions::AgentRole;
 pub enum ChildClaimDisposition {
     Changed,
     NoChange { reason: String },
+    Blocked { reason: String, next_action: String },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,6 +19,44 @@ pub struct ChildResultClaim {
     pub summary: String,
     pub fulfilled_criteria: BTreeSet<String>,
     pub disposition: ChildClaimDisposition,
+}
+impl ChildResultClaim {
+    pub(crate) fn validate(&self) -> Result<()> {
+        let blocked = matches!(self.disposition, ChildClaimDisposition::Blocked { .. });
+        let invalid_disposition = match &self.disposition {
+            ChildClaimDisposition::Changed => false,
+            ChildClaimDisposition::NoChange { reason } => {
+                reason.trim().is_empty() || reason.len() > 65536
+            }
+            ChildClaimDisposition::Blocked {
+                reason,
+                next_action,
+            } => {
+                reason.trim().is_empty()
+                    || reason.len() > 8192
+                    || next_action.trim().is_empty()
+                    || next_action.len() > 8192
+                    || !self.fulfilled_criteria.is_empty()
+            }
+        };
+        if self.schema_version != 1
+            || self.summary.trim().is_empty()
+            || self.summary.len() > 65536
+            || (!blocked && self.fulfilled_criteria.is_empty())
+            || self.fulfilled_criteria.len() > 256
+            || self
+                .fulfilled_criteria
+                .iter()
+                .any(|c| c.trim().is_empty() || c.len() > 8192)
+            || invalid_disposition
+        {
+            return Err(Error::new(
+                "worker_claim",
+                "child result claim is incomplete or exceeds finite bounds",
+            ));
+        }
+        Ok(())
+    }
 }
 /// Pending product assertions from an actual completed authorized child session.
 /// This capability has no completion/CI/review/acceptance semantics.
@@ -182,20 +221,11 @@ impl DeliveryCoordinator {
                     "child result claim has no supported explicit schema",
                 )
             })?;
-        if claim.schema_version != 1
-            || claim.summary.trim().is_empty()
-            || claim.summary.len() > 65536
-            || claim.fulfilled_criteria.is_empty()
-            || claim.fulfilled_criteria.len() > 256
-            || claim
-                .fulfilled_criteria
-                .iter()
-                .any(|c| c.trim().is_empty() || c.len() > 8192)
-            || matches!(&claim.disposition, ChildClaimDisposition::NoChange {reason} if reason.trim().is_empty() || reason.len()>65536)
-        {
+        claim.validate()?;
+        if matches!(claim.disposition, ChildClaimDisposition::Blocked { .. }) {
             return Err(Error::new(
-                "worker_claim",
-                "child result claim is incomplete or exceeds finite bounds",
+                "worker_blocked",
+                "a reported prerequisite blocker cannot supply child completion",
             ));
         }
         Ok(CompletedChildClaim {
@@ -552,6 +582,9 @@ impl SealedChildSource {
     pub fn receipt(&self) -> &Receipt {
         &self.receipt
     }
+    pub(super) fn committed(&self) -> Option<&crate::git::CommittedSource> {
+        self.committed.as_ref()
+    }
     fn matches(&self, admission: &DeliveryAdmission, claim: &CompletedChildClaim) -> Result<()> {
         if self.work != admission.scope.work
             || self.claim_digest != claim.digest()
@@ -795,6 +828,9 @@ pub enum ChildReviewTarget<'a> {
     NoChange {
         source: &'a SealedChildSource,
     },
+    Replacement {
+        replacement: &'a ReplacementDelta,
+    },
 }
 #[derive(Clone, Debug)]
 pub struct ChildReviewAssignment {
@@ -802,13 +838,22 @@ pub struct ChildReviewAssignment {
     revision: RevisionBinding,
     delta_digest: String,
     pull_request: Option<u64>,
+    replacement: bool,
     context: Value,
     config_revision: String,
     workflow_digest: String,
     validation: Option<Box<evidence::ValidationEvidence>>,
     validation_archive: Option<evidence::ValidationArchiveReference>,
+    pub(super) review_pages: Option<crate::validation_archive::ResolvedValidationArchive>,
 }
 impl ChildReviewAssignment {
+    pub(super) fn worker_phase(&self) -> &'static str {
+        if self.replacement {
+            "child_replacement_review"
+        } else {
+            "child_codex_review"
+        }
+    }
     pub(super) fn matches_worker(&self, admission: &DeliveryAdmission) -> Result<()> {
         if self.work != admission.scope.work
             || self.revision != admission.scope.revision
@@ -863,11 +908,13 @@ impl DeliveryCoordinator {
             revision: admission.scope.revision.clone(),
             delta_digest: change.review_digest()?,
             pull_request: Some(1),
+            replacement: false,
             context: json!({"fixture_upstream_pr_assignment":true,"revision":admission.scope.revision,"claim":claim.claim()}),
             config_revision: admission.gate.config_revision().into(),
             workflow_digest: admission.gate.workflow_digest().into(),
             validation: None,
             validation_archive: None,
+            review_pages: None,
         };
         let assignment =
             self.child_review_worker_assignment(admission, claim, source, completion, &review)?;
@@ -882,10 +929,30 @@ impl DeliveryCoordinator {
     ) -> Result<ChildReviewAssignment> {
         self.current(
             admission,
-            &[DeliveryPhase::ReviewPublication, DeliveryPhase::NoChange],
+            &[
+                DeliveryPhase::ReviewPublication,
+                DeliveryPhase::NoChange,
+                DeliveryPhase::Replacement,
+            ],
         )?;
         self.current_child_claim(admission, claim)?;
+        let replacement = matches!(&target, ChildReviewTarget::Replacement { .. });
+        let base_context = if let ChildReviewTarget::Replacement { replacement } = &target {
+            json!({"task":base_context,"replacement_review":replacement.review_context()?})
+        } else {
+            base_context
+        };
         let (delta_digest, pull_request) = match target {
+            ChildReviewTarget::Replacement { replacement } => {
+                replacement.matches(admission)?;
+                if !matches!(claim.claim.disposition, ChildClaimDisposition::Changed) {
+                    return Err(Error::new(
+                        "replacement_mapping",
+                        "replacement must contain an actual changed contribution",
+                    ));
+                }
+                (replacement.delta().manifest.review_digest()?, None)
+            }
             ChildReviewTarget::Changed {
                 change,
                 pull_request,
@@ -945,11 +1012,13 @@ impl DeliveryCoordinator {
             revision: admission.scope.revision.clone(),
             delta_digest,
             pull_request,
+            replacement,
             context,
             config_revision: admission.gate.config_revision().into(),
             workflow_digest: admission.gate.workflow_digest().into(),
             validation: None,
             validation_archive: None,
+            review_pages: None,
         })
     }
     /// Binds the exact original validation inventory before composing the
@@ -995,29 +1064,23 @@ impl DeliveryCoordinator {
                 .and_then(Value::as_object_mut)
                 .ok_or_else(|| Error::invalid("review context is not an object"))?;
             context.insert("schema_version".into(), json!(2));
-            context.insert(
-                "validation".into(),
-                serde_json::to_value(validation)
-                    .map_err(|_| Error::invalid("encode validation review"))?,
-            );
+            let archive = resolved_archive.as_ref().ok_or_else(|| {
+                Error::new(
+                    "validation_archive_required",
+                    "complete review input requires its authenticated retained archive",
+                )
+            })?;
+            context.insert("validation_pages".into(), archive.review_descriptor()?);
             context.insert(
                 "validation_evidence_digest".into(),
                 json!(validation.digest()?),
-            );
-            context.insert(
-                "validation_attempt_references".into(),
-                validation.attempt_references()?,
             );
             context.insert("validation_review_requirement".into(), json!("Assess sufficiency against the task and supporting repository context. Address every obligation, earlier failed attempts and all plan changes. Exit zero is an execution fact, not proof of semantic completeness. Reference actual attempt digests."));
             context.insert("required_result_schema".into(), json!({"schema_version":2,"verdict":"pass | findings | blocked",
                 "unresolved_findings":[],"supporting_links":[],"validation":{"evidence_digest":validation.digest()?,
                     "sufficient":false,"rationale":"assessment of the complete history and validation sufficiency",
                     "requirements":validation.current()?.requirements.iter().map(|r| (r.id.clone(), json!({"sufficient":false,"rationale":"assessment with actual evidence","evidence_digests":[]}))).collect::<BTreeMap<_,_>>()}}));
-            if let Some(archive) = &resolved_archive {
-                let artifacts =
-                    super::discovered_validation::review_artifacts(archive, &assignment.context)?;
-                assignment.context["delivery_review"]["validation_artifacts"] = artifacts;
-            }
+            assignment.review_pages = resolved_archive;
             if serde_json::to_vec(&assignment.context)
                 .map_err(|_| Error::invalid("encode review context"))?
                 .len()
@@ -1081,7 +1144,7 @@ impl DeliveryCoordinator {
         assignment::verify_assignment_contract(
             contract,
             &admission.gate,
-            "child_codex_review",
+            assignment.worker_phase(),
             &assignment.context,
         )?;
         let claim: ReviewResultClaim = serde_json::from_value(worker.claim.clone())
@@ -1142,7 +1205,11 @@ impl DeliveryCoordinator {
     ) -> Result<PublishedReview> {
         self.current(
             admission,
-            &[DeliveryPhase::ReviewPublication, DeliveryPhase::NoChange],
+            &[
+                DeliveryPhase::ReviewPublication,
+                DeliveryPhase::NoChange,
+                DeliveryPhase::Replacement,
+            ],
         )?;
         let claim = Self::completed_review_claim(admission, assignment, outcome, completion)?;
         let worker = outcome.outcome();
@@ -1548,8 +1615,10 @@ mod tests {
         };
         let admission = DeliveryAdmission::bind(permit, gate.clone(), scope).unwrap();
         let assignment = ChildReviewAssignment {
+            replacement: false,
             validation: None,
             validation_archive: None,
+            review_pages: None,
             work: gate.work().clone(),
             revision,
             delta_digest: bytes_digest(b"actual fixture delta identity"),
@@ -1636,5 +1705,66 @@ mod tests {
             )
             .is_err()
         );
+    }
+}
+
+impl DeliveryCoordinator {
+    pub(super) fn verify_prepared_child_source(
+        &self,
+        observation: &DeliveryObservation,
+        receipt_id: Uuid,
+        claim_digest: &str,
+        binding: &crate::execution::ExecutionBinding,
+        source: &std::path::Path,
+    ) -> Result<()> {
+        let receipt = self.host.operation(receipt_id)?;
+        let operation: Uuid = receipt
+            .expected
+            .get("admission_operation")
+            .ok_or_else(|| {
+                Error::new("record_corrupt", "prepared source lacks original admission")
+            })?
+            .parse()
+            .map_err(|_| Error::new("record_corrupt", "prepared source admission is malformed"))?;
+        let signed: Signed<SourceSealRecord> = self
+            .records
+            .read(&format!("source-seal-result-{operation}.json"))?;
+        self.key.verify("child_source_result", &signed)?;
+        let original: Signed<SourceSealIntent> = self
+            .records
+            .read(&format!("source-seal-intent-{operation}.json"))?;
+        self.key.verify("child_source_intent", &original)?;
+        let record = signed.payload;
+        if canonical_digest(1, &record.intent)? != canonical_digest(1, &original.payload)?
+            || record.receipt != receipt_id
+            || record.intent.request_id != receipt_id
+            || record.intent.claim_digest != claim_digest
+            || record.intent.binding != *binding
+            || record.intent.source != source
+            || record.revision != observation.scope.revision
+            || record.intent.scope.work != observation.scope.work
+            || record.intent.scope.runtime_id != observation.scope.runtime_id
+            || record.intent.scope.contract_digest != observation.scope.contract_digest
+            || receipt.phase != crate::control::ReceiptPhase::Acknowledged
+            || receipt.kind != "child_source_sealing"
+            || receipt
+                .observed_result
+                .as_ref()
+                .and_then(|v| v.get("revision"))
+                != Some(&json!(record.revision))
+        {
+            return Err(Error::new(
+                "provenance_mismatch",
+                "prepared child lost its exact acknowledged source seal",
+            ));
+        }
+        self.git.verify_execution_tree(
+            source,
+            &kegari_git::Revision {
+                commit: record.revision.head,
+                tree: record.revision.tested_tree,
+            },
+            &BTreeSet::new(),
+        )
     }
 }

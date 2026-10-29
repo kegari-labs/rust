@@ -250,3 +250,148 @@ fn digest_syntax_preserves_backend_golden_cases() {
         assert_eq!(validate_digest(digest), Err(expected.clone()), "{digest:?}");
     }
 }
+
+#[derive(Default)]
+struct LifecycleGate {
+    dispatched: AtomicUsize,
+    observed: AtomicUsize,
+}
+impl RequestGate for LifecycleGate {
+    fn dispatch(
+        &self,
+        _: u64,
+        method: &str,
+        _: &Value,
+        transmit: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        assert_eq!(method, "command/exec");
+        self.dispatched.fetch_add(1, Ordering::SeqCst);
+        transmit()
+    }
+    fn observed(&self, _: u64, method: &str, result: &Result<Value>) -> Result<()> {
+        assert_eq!(method, "command/exec");
+        assert!(result.is_ok());
+        self.observed.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn uncertain(&self, _: u64, _: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lifecycle_command_uses_verified_sandbox_and_actual_nonzero_result() {
+    let (transport, server) = tokio::io::duplex(8192);
+    let (read, write) = tokio::io::split(transport);
+    let mut client = RpcClient::from_transport(read, write, Duration::from_secs(1)).unwrap();
+    client.initialized = true;
+    client.account_id = Some("account".into());
+    let scope = Scope::new(None);
+    let mut permissions = permissions();
+    permissions.settings = json!({"features":{"shell_tool":true},"shell_environment_policy":{"set":{"HOME":"/Users/component","PATH":"/niche/tool/bin:/usr/bin","TMPDIR":"/private/tmp/component-scratch","LANG":"C.UTF-8"}}});
+    let command = vec!["/bin/sh".into(), "-c".into(), "exit 7".into()];
+    assert_eq!(
+        client
+            .execute_command(
+                &scope,
+                &permissions,
+                &command,
+                "operation:before_run",
+                Duration::from_secs(1),
+                1024
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "isolation_unverified"
+    );
+    client.verified_permissions = Some(scope.digest.clone());
+    let gate = std::sync::Arc::new(LifecycleGate::default());
+    client.bind_request_gate(gate.clone()).unwrap();
+    let server = tokio::spawn(async move {
+        let mut server = BufReader::new(server);
+        let mut line = String::new();
+        server.read_line(&mut line).await.unwrap();
+        let frame: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(frame["method"], "command/exec");
+        assert_eq!(
+            frame["params"]["command"],
+            json!(["/bin/sh", "-c", "exit 7"])
+        );
+        assert_eq!(frame["params"]["cwd"], "/private/tmp/component-repository");
+        assert_eq!(frame["params"]["permissionProfile"], "component-profile");
+        assert_eq!(frame["params"]["processId"], "operation:before_run");
+        assert_eq!(frame["params"]["timeoutMs"], 1000);
+        assert_eq!(frame["params"]["outputBytesCap"], 1024);
+        assert_eq!(frame["params"]["disableTimeout"], false);
+        assert_eq!(frame["params"]["disableOutputCap"], false);
+        assert!(frame["params"].get("sandboxPolicy").is_none());
+        assert_eq!(frame["params"]["env"]["PATH"], "/niche/tool/bin:/usr/bin");
+        assert_eq!(frame["params"]["env"]["HOME"], "/Users/component");
+        assert_eq!(frame["params"]["env"]["CODEX_HOME"], Value::Null);
+        assert_eq!(frame["params"]["env"].as_object().unwrap().len(), 5);
+        server.get_mut().write_all(format!("{}\n", json!({"id":frame["id"],"result":{"exitCode":7,"stdout":"observed stdout","stderr":"observed failure"}})).as_bytes()).await.unwrap();
+    });
+    let result = client
+        .execute_command(
+            &scope,
+            &permissions,
+            &command,
+            "operation:before_run",
+            Duration::from_secs(1),
+            1024,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, 7);
+    assert_eq!(result.stdout, "observed stdout");
+    assert_eq!(result.stderr, "observed failure");
+    assert!(client.active_command.is_none());
+    assert_eq!(gate.dispatched.load(Ordering::SeqCst), 1);
+    assert_eq!(gate.observed.load(Ordering::SeqCst), 1);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_lifecycle_command_keeps_identity_for_supported_termination() {
+    let (transport, server) = tokio::io::duplex(8192);
+    let (read, write) = tokio::io::split(transport);
+    let mut client = RpcClient::from_transport(read, write, Duration::from_secs(1)).unwrap();
+    client.initialized = true;
+    client.account_id = Some("account".into());
+    let scope = Scope::new(None);
+    client.verified_permissions = Some(scope.digest.clone());
+    let mut permissions = permissions();
+    permissions.settings = json!({"features":{"shell_tool":true},"shell_environment_policy":{"set":{"HOME":"/Users/component","PATH":"/niche/tool/bin:/usr/bin","TMPDIR":"/private/tmp/component-scratch","LANG":"C.UTF-8"}}});
+    let command = vec!["/bin/sh".into(), "-c".into(), "sleep 10".into()];
+    let sent = std::sync::Arc::new(tokio::sync::Notify::new());
+    let observed = sent.clone();
+    let server = tokio::spawn(async move {
+        let mut server = BufReader::new(server);
+        let mut line = String::new();
+        server.read_line(&mut line).await.unwrap();
+        let original: Value = serde_json::from_str(&line).unwrap();
+        observed.notify_one();
+        line.clear();
+        server.read_line(&mut line).await.unwrap();
+        let stop: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(stop["method"], "command/exec/terminate");
+        assert_eq!(stop["params"]["processId"], original["params"]["processId"]);
+        server.get_mut().write_all(format!("{}\n{}\n", json!({"id":original["id"],"result":{"exitCode":0,"stdout":"late output","stderr":""}}), json!({"id":stop["id"],"result":{}})).as_bytes()).await.unwrap();
+    });
+    let mut running = Box::pin(client.execute_command(
+        &scope,
+        &permissions,
+        &command,
+        "owned-hook",
+        Duration::from_secs(10),
+        1024,
+    ));
+    tokio::select! { _ = sent.notified() => {}, result = &mut running => panic!("unexpected early result: {result:?}") }
+    drop(running);
+    assert_eq!(client.active_command.as_deref(), Some("owned-hook"));
+    client.uncertain_request = Some(1);
+    client.terminate_command().await.unwrap();
+    assert_eq!(client.uncertain_request, Some(1));
+    server.await.unwrap();
+}

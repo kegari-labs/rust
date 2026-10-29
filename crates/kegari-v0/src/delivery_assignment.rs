@@ -12,6 +12,7 @@ enum SourceOwnership {
         isolation: Box<ValidatedIsolation>,
     },
     Candidate(crate::git::VerifiedHostReadRoot),
+    Objects(Arc<crate::remote_objects::VerifiedObjectSource>),
 }
 #[derive(Clone)]
 pub struct DeliverySource {
@@ -48,11 +49,15 @@ impl DeliverySource {
                 Ok(())
             }
             SourceOwnership::Candidate(root) => root.revalidate_filesystem(),
+            SourceOwnership::Objects(source) => source.revalidate_filesystem(),
         }
     }
     /// Invoke only through the new preparation operation's journaled Git handle.
     pub fn verify_for_clone(&self, git: &Git) -> Result<()> {
         self.revalidate_filesystem()?;
+        if let SourceOwnership::Objects(source) = &self.ownership {
+            return source.verify_for_clone(git);
+        }
         let outputs = match &self.ownership {
             SourceOwnership::Child { execution, .. } => execution
                 .check_outputs
@@ -60,7 +65,7 @@ impl DeliverySource {
                 .flatten()
                 .cloned()
                 .collect(),
-            SourceOwnership::Candidate(_) => BTreeSet::new(),
+            SourceOwnership::Candidate(_) | SourceOwnership::Objects(_) => BTreeSet::new(),
         };
         git.verify_execution_tree(&self.root, &self.revision, &outputs)
     }
@@ -69,6 +74,9 @@ impl DeliverySource {
         let ownership = match &self.ownership {
             SourceOwnership::Candidate(root) => {
                 json!({"kind":"candidate", "identity":root.digest()?})
+            }
+            SourceOwnership::Objects(source) => {
+                json!({"kind":"exact_objects", "identity":source.digest()?})
             }
             SourceOwnership::Child {
                 execution,
@@ -90,6 +98,7 @@ impl DeliverySource {
                 json!({"owned_directory":execution.ownership.digest(),"binding":execution.binding,"isolation":isolation.digest()})
             }
             SourceOwnership::Candidate(root) => json!({"candidate_root":root.digest()?}),
+            SourceOwnership::Objects(source) => json!({"exact_objects":source.digest()?}),
         };
         canonical_digest(
             1,
@@ -103,6 +112,8 @@ pub struct DeliveryWorkerAssignment {
     phase: String,
     role: AgentRole,
     context: Value,
+    review_archive: Option<crate::validation_archive::ResolvedValidationArchive>,
+    validation_prefix: Option<crate::validation::ValidationPrefix>,
     source: Option<DeliverySource>,
     read_sources: Vec<DeliverySource>,
     candidate_vector_digest: Option<String>,
@@ -134,6 +145,46 @@ impl DeliveryWorkerAssignment {
     }
     pub fn context(&self) -> &Value {
         &self.context
+    }
+    pub(crate) fn review_archive(
+        &self,
+    ) -> Option<&crate::validation_archive::ResolvedValidationArchive> {
+        self.review_archive.as_ref()
+    }
+    pub(crate) fn validation_prefix(&self) -> Option<&crate::validation::ValidationPrefix> {
+        self.validation_prefix.as_ref()
+    }
+    pub(crate) fn continue_validation(
+        &mut self,
+        prefix: crate::validation::ValidationPrefix,
+    ) -> Result<()> {
+        if !matches!(
+            self.phase.as_str(),
+            "child_local_validation" | "parent_integrated_validation"
+        ) || self.role != AgentRole::Validation
+            || self
+                .validation_prefix
+                .as_ref()
+                .is_some_and(|prior| !prefix.extends(prior))
+        {
+            return Err(Error::new(
+                "validation_history_binding",
+                "validation continuation must preserve its complete original history",
+            ));
+        }
+        let context = self
+            .context
+            .get_mut("validation_assignment")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                Error::new(
+                    "validation_history_binding",
+                    "validation assignment has no context boundary",
+                )
+            })?;
+        context.insert("continuation".into(), prefix.descriptor()?);
+        self.validation_prefix = Some(prefix);
+        Ok(())
     }
     pub fn source(&self) -> Option<&DeliverySource> {
         self.source.as_ref()
@@ -359,6 +410,8 @@ pub fn repair_worker_assignment(
         candidate_vector_digest: None,
         contract_digest: unfinished.contract_digest().into(),
         parent_reassembly: None,
+        review_archive: None,
+        validation_prefix: None,
         parent_origin: None,
     })
 }
@@ -393,11 +446,19 @@ impl DeliveryCoordinator {
             .ok_or_else(|| Error::invalid("validation base context must be an object"))?;
         object.insert("validation_assignment".into(),json!({"work":admission.scope.work,"revision":admission.scope.revision,"source_claim":claim.digest(),
             "kind":"local","configured_checks":self.contract(admission)?.configuration.local_checks,
-            "discovery":"Read the actual task and repository context, inspect validation_evidence for settled supporting-read references, then validation_propose the complete revision-bound obligations. Configured required names remain exact argv/cwd/service constraints when present; an empty list is not a no-tests conclusion. Preserve prior attempts and explain every plan change. Run each current obligation using validation_run {plan_digest, obligation_id}. Results are execution facts; independent review assesses sufficiency. Generic command_run exit zero cannot satisfy validation.",
+            "discovery":"Read the actual task and repository context, inspect validation_evidence for settled supporting-read references, then validation_propose the complete revision-bound obligations. Configured required names remain exact argv/cwd/service constraints when present; an empty list is not a no-tests conclusion. Preserve prior attempts and explain every plan change. Run each current obligation with Codex native repository tools, inspect execution_results, then validation_record {plan_digest, obligation_id, item_id} for its actual completed command. Missing, stale or unknown results cannot pass. Results are execution facts; independent review assesses sufficiency.",
             "outcome_claim":{"schema_version":1,"kind":"validation","summary":"actual discovered-obligation execution outcome and remaining blockers"}}));
         Ok(DeliveryWorkerAssignment {
             authority: admission.gate.clone(),
-            phase: "child_local_validation".into(),
+            phase: if completion
+                .contract
+                .as_ref()
+                .is_some_and(|c| c.instructions().manifest.phase == "child_replacement")
+            {
+                "child_replacement_validation".into()
+            } else {
+                "child_local_validation".into()
+            },
             role: AgentRole::Validation,
             context,
             source: Some(owned),
@@ -405,6 +466,8 @@ impl DeliveryCoordinator {
             candidate_vector_digest: None,
             contract_digest: admission.scope.contract_digest.clone(),
             parent_reassembly: None,
+            review_archive: None,
+            validation_prefix: None,
             parent_origin: None,
         })
     }
@@ -418,12 +481,16 @@ impl DeliveryCoordinator {
     ) -> Result<DeliveryWorkerAssignment> {
         self.current(
             admission,
-            &[DeliveryPhase::ReviewPublication, DeliveryPhase::NoChange],
+            &[
+                DeliveryPhase::ReviewPublication,
+                DeliveryPhase::NoChange,
+                DeliveryPhase::Replacement,
+            ],
         )?;
         review.matches_worker(admission)?;
         Ok(DeliveryWorkerAssignment {
             authority: admission.gate.clone(),
-            phase: "child_codex_review".into(),
+            phase: review.worker_phase().into(),
             role: AgentRole::Review,
             context: review.context().clone(),
             source: Some(child_source(admission, claim, source, completion)?),
@@ -431,6 +498,8 @@ impl DeliveryCoordinator {
             candidate_vector_digest: None,
             contract_digest: admission.scope.contract_digest.clone(),
             parent_reassembly: None,
+            review_archive: review.review_pages.clone(),
+            validation_prefix: None,
             parent_origin: None,
         })
     }
@@ -451,6 +520,8 @@ impl DeliveryCoordinator {
             candidate_vector_digest: Some(assignment.vector_digest().into()),
             contract_digest: contract.digest()?,
             parent_reassembly: None,
+            review_archive: assignment.review_archive().cloned(),
+            validation_prefix: None,
             parent_origin: Some(super::parent::ParentAssignmentOrigin::capture(
                 self,
                 contract,
@@ -476,6 +547,7 @@ impl DeliveryCoordinator {
         assignment.phase = "parent_integrated_review".into();
         assignment.role = AgentRole::Review;
         assignment.context = review.context().clone();
+        assignment.review_archive = Some(review.review_archive().clone());
         assignment.parent_origin = Some(super::parent::ParentAssignmentOrigin::capture(
             self,
             contract,
@@ -575,6 +647,8 @@ impl DeliveryCoordinator {
             candidate_vector_digest: Some(vector.digest().into()),
             contract_digest: contract.digest()?,
             parent_reassembly: None,
+            review_archive: None,
+            validation_prefix: None,
             parent_origin: Some(super::parent::ParentAssignmentOrigin::capture(
                 self, contract, vector, None, None,
             )?),
@@ -666,5 +740,40 @@ mod context_tests {
                 .unwrap()["api_key"],
             "must still be rejected by assembler"
         );
+    }
+}
+
+impl DeliveryCoordinator {
+    pub(crate) fn replacement_worker_assignment(
+        &self,
+        work: &ReplacementWork,
+    ) -> Result<DeliveryWorkerAssignment> {
+        (self.current_gate)(work.authority())?;
+        DeliveryWorkerAssignment::for_replacement(work)
+    }
+}
+
+impl DeliveryWorkerAssignment {
+    pub(crate) fn for_replacement(work: &ReplacementWork) -> Result<Self> {
+        let source = work.source().clone();
+        Ok(Self {
+            authority: work.authority().clone(),
+            phase: "child_replacement".into(),
+            role: AgentRole::Implementation,
+            context: work.context()?,
+            source: Some(DeliverySource {
+                repository: source.repository().clone(),
+                root: source.root().to_owned(),
+                revision: source.revision().clone(),
+                ownership: SourceOwnership::Objects(source),
+            }),
+            read_sources: vec![],
+            candidate_vector_digest: None,
+            contract_digest: work.contract_digest().into(),
+            parent_reassembly: None,
+            review_archive: None,
+            validation_prefix: None,
+            parent_origin: None,
+        })
     }
 }

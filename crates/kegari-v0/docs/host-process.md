@@ -1,5 +1,9 @@
 # Host metadata process authority
 
+These are narrow Kegari-owned Git/control operations retained by
+[SPEC 1.5](../SPEC.md). They are not a repository shell API or an admission
+requirement for commands launched internally by Codex.
+
 `LocalProcessPermit::metadata` authorizes bounded trusted Git reads while the
 coordinator is STOPPED, without manufacturing an orchestration lease or worker
 permit. Its private token binds the registered control process, owner generation,
@@ -35,7 +39,9 @@ records bind the exact cleanup payload digest. Registered source and retained
 roots are revalidated, and post-admission reads reuse that cleanup token rather
 than fabricating a worker permit. The fixed metadata grammar adds cleanup status,
 local heads and `fsck --full --no-reflogs`; mutating fsck options remain forbidden.
-A configured removal hook additionally binds the exact workflow command and
-validated isolation. The native containment prerequisite currently rejects that
-hook before a cleanup effect is admitted. Generic receipt reconciliation cannot
-clear any active host-local process receipt.
+Repository removal hooks must migrate to the selected Codex profile's supported
+execution interface while retaining the cleanup plan and preservation checks.
+The current custom hook adapter remains pending replacement; it is not a retained
+host-shell fallback. Unavailable hook capabilities or uncertain outcomes preserve
+the directory. Generic receipt reconciliation cannot clear any active host-local
+process receipt.

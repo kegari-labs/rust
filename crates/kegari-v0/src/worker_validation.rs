@@ -118,13 +118,6 @@ pub(super) fn proposal_tool() -> Value {
         "required":["previous","reason","supporting_reads","requirements"]});
     json!({"type":"function","name":"validation_propose","description":"Enroll or revise obligations for the actual host-assigned local or integrated validation scope from actual settled source/context reads. Use context_read validation_evidence for reference IDs. Every prior obligation must remain; changed commands require a reason. Does not grant permissions or pass a gate.","inputSchema":schema})
 }
-pub(super) fn run_tool() -> Value {
-    let schema = json!({"type":"object","additionalProperties":false,"properties":{
-        "name":{"type":"string"},"kind":{"type":"string","enum":["local","integrated"]},
-        "plan_digest":{"type":"string"},"obligation_id":{"type":"string"}},"required":[],
-        "oneOf":[{"required":["name","kind"]},{"required":["plan_digest","obligation_id"]}]});
-    json!({"type":"function","name":"validation_run","description":"Execute one obligation of the current host-enrolled validation plan by plan_digest and obligation_id. Legacy configured callers may use name and kind. Actual process closure, source and artifact observations are required; no self-reported result is accepted.","inputSchema":schema})
-}
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub(super) enum RunArgs {
@@ -303,57 +296,6 @@ impl ScopedWorker {
             },
         )
     }
-    pub(super) fn retain_resource_read(
-        &mut self,
-        call: &ToolCall,
-        id: Uuid,
-        value: &Value,
-        content: DiscoveryReadContent,
-    ) -> Result<()> {
-        if !matches!(
-            content,
-            DiscoveryReadContent::Resource { .. } | DiscoveryReadContent::Directory { .. }
-        ) {
-            return Err(Error::new(
-                "validation_read",
-                "resource callback supplied another content kind",
-            ));
-        }
-        self.retain_read(call, id, value, content)
-    }
-    pub(super) fn retain_source_read(
-        &mut self,
-        call: &ToolCall,
-        id: Uuid,
-        root: &Path,
-        fact: &BrokerSemantic,
-        value: &Value,
-    ) -> Result<()> {
-        let BrokerSemantic::Source {
-            requested_path,
-            path,
-            digest,
-            bytes,
-            ..
-        } = fact
-        else {
-            return Err(Error::new(
-                "validation_read",
-                "source callback did not supply original source bytes",
-            ));
-        };
-        self.retain_read(
-            call,
-            id,
-            value,
-            DiscoveryReadContent::Source {
-                requested_path: requested_path.clone(),
-                path: root.join(path),
-                digest: digest.clone(),
-                bytes: *bytes,
-            },
-        )
-    }
     pub(super) fn settle_validation_call(
         &mut self,
         id: Uuid,
@@ -422,9 +364,27 @@ impl ScopedWorker {
             references = candidate;
         }
         let shown = references.len();
+        let continuation = self.contract.validation_prefix.as_ref().map(|prefix| {
+            let mut prior_results = Vec::new();
+            let total = prefix.history().iter().map(|segment| segment.attempts.len()).sum::<usize>();
+            for record in prefix.history().iter().rev().flat_map(|segment| segment.attempts.iter().rev()).take(16) {
+                let summary = json!({"record_digest":canonical_digest(1, record)?,"operation":record.binding.operation_id,
+                    "source":record.binding.revision,"obligation":record.check_name,"successful":record.successful,
+                    "exit_code":record.command.exit_code,"timed_out":record.command.timed_out,"blocker":record.blocker,
+                    "item_id":record.codex.as_ref().map(|provenance|&provenance.item_id)});
+                let mut next = prior_results.clone(); next.push(summary);
+                if serde_json::to_vec(&next).map_err(|_|Error::invalid("encode historical validation summary"))?.len() > MAX_TOOL_BYTES / 4 { break; }
+                prior_results = next;
+            }
+            Ok::<_, Error>(json!({"history_digest":prefix.digest(),
+                "required_obligations":prefix.history().last().ok_or_else(||Error::invalid("empty validation prefix"))?.current()?.requirements.iter().map(|requirement|&requirement.id).collect::<Vec<_>>(),
+                "total_prior_results":total,"omitted_prior_results":total.saturating_sub(prior_results.len()),"prior_results_newest_first":prior_results,
+                "rule":"These are historical results, not checks for this admission. Discover a fresh source-bound plan, preserve all obligation IDs and record current actual results. The complete original history and artifacts remain retained for acceptance and independent review."}))
+        }).transpose()?;
         bounded_value(
             json!({"schema_version":1,"reads":references,"total_reads":self.validation.reads.len(),
             "omitted_reads":self.validation.reads.len().saturating_sub(shown),
+            "continuation":continuation,
             "current_plan":self.validation.current.as_ref().map(|plan| json!({"digest":plan.digest(),"ordinal":plan.record().ordinal,
                 "source_digest":plan.record().source_digest,"requirements":plan.record().requirements.iter().map(|r|&r.id).collect::<Vec<_>>()})),
             "history":self.validation.current.as_ref().map(|plan| plan.history().iter().map(|record| canonical_digest(1,record)).collect::<Result<Vec<_>>>()).transpose()?}),
@@ -445,6 +405,9 @@ impl ScopedWorker {
                 .ok()
                 .and_then(|artifacts| artifact_inventory_digest(&artifacts).ok()),
         }
+    }
+    pub(super) fn current_validation_plan(&self) -> Option<&ValidationPlan> {
+        self.validation.current.as_ref()
     }
     pub(crate) fn take_validation_plan(&mut self) -> Option<ValidationPlan> {
         self.validation.current.take()
@@ -479,23 +442,6 @@ impl ScopedWorker {
             .map(|mut records| std::mem::take(&mut *records).into_values().collect())
             .unwrap_or_default()
     }
-    pub(super) fn validation_attempt_record(
-        &self,
-        id: Uuid,
-    ) -> Result<crate::execution::CheckExecutionRecord> {
-        self.validation
-            .attempts
-            .lock()
-            .map_err(|_| Error::new("journal_failed", "validation observations lock failed"))?
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| {
-                Error::new(
-                    "validation_history_uncertain",
-                    "settled validation lacks its original observation",
-                )
-            })
-    }
     pub(super) fn start_validation_attempt(
         &mut self,
         id: Uuid,
@@ -520,6 +466,9 @@ impl ScopedWorker {
     pub(super) async fn propose_validation(&mut self, call: &ToolCall, id: Uuid) -> Result<Value> {
         let kind = self.require_discovery()?;
         let proposal: ValidationProposal = parse(&call.arguments)?;
+        if let Some(prefix) = &self.contract.validation_prefix {
+            prefix.require_obligations(&proposal)?;
+        }
         if proposal.supporting_reads.is_empty() || proposal.supporting_reads.len() > 64 {
             return Err(Error::new(
                 "validation_read",
@@ -572,67 +521,65 @@ impl ScopedWorker {
         let host = self.host.clone();
         let permit = self.permit.clone();
         let previous = self.validation.current.clone();
-        let resources = self.resources.clone();
-        // One cutoff for every new resource/environment reread in this proposal;
-        // neither the supporting-reference count nor retries extend the owner.
-        let resource_deadline = if references.iter().any(|reference| matches!(&reference.content,
-            DiscoveryReadContent::Resource{..}|DiscoveryReadContent::Directory{..})
-            || matches!(&reference.content, DiscoveryReadContent::Context{key,..} if key=="execution_environment")) {
-            Some(resources.deadline()?)
-        } else {None};
         self.validation.pending_enrollments.insert(id);
         let write_attempted = Arc::new(AtomicBool::new(false));
         let writing = write_attempted.clone();
         let enrolled = tokio::task::spawn_blocking(move || {
-            let binding = effective.as_ref().map_or(&execution.binding, |effective| effective.binding());
-            if expected.work() != Some(&binding.work) { return Err(Error::new("correction_execution_binding", "validation discovery requires the acknowledged current input")); }
-            for reference in &references {
-                if let Some(deadline)=resource_deadline { resources.check_deadline(deadline)?; }
-                verify_read(&journal, &contract, reference, permit.operation_id, &contract.assembled.manifest_digest, &context_digest, resource_deadline)?;
-                if let Some(deadline)=resource_deadline {
-                    match &reference.content {
-                        DiscoveryReadContent::Resource{..}|DiscoveryReadContent::Directory{..}=>resources.verify(&contract,&reference.content,deadline)?,
-                        DiscoveryReadContent::Context{key,digest,..} if key=="execution_environment"
-                            && canonical_digest(1,&resources.environment(&contract,deadline)?)? != *digest => {
-                            return Err(Error::new("validation_read_changed","original execution environment changed"));
-                        }
-                        _=>{}
-                    }
-                }
-            }
-            let source = execution.executor(&contract.isolation).validation_source(binding, effective.as_ref())?;
-            if let Some(deadline)=resource_deadline {
-                for reference in &references {
-                    if matches!(&reference.content,DiscoveryReadContent::Resource{..}|DiscoveryReadContent::Directory{..}) {resources.verify(&contract,&reference.content,deadline)?;}
-                }
-                if std::time::Instant::now()>=deadline {return Err(Error::new("timeout","original discovery inspection cutoff exhausted"));}
+            let binding = effective
+                .as_ref()
+                .map_or(&execution.binding, |effective| effective.binding());
+            if expected.work() != Some(&binding.work) {
+                return Err(Error::new(
+                    "correction_execution_binding",
+                    "validation discovery requires the acknowledged current input",
+                ));
             }
             for reference in &references {
-                if let DiscoveryReadContent::Source { path, digest, .. } = &reference.content
-                    && path.starts_with(&contract.isolation.plan().repository)
-                    && path.strip_prefix(&contract.isolation.plan().repository).ok().and_then(Path::to_str)
-                        .and_then(|relative| source.files.get(relative)).is_none_or(|file| &file.digest != digest) {
-                    return Err(Error::new("validation_read_changed", "observed source is absent or changed in the current complete source snapshot"));
-                }
+                verify_read(
+                    &journal,
+                    reference,
+                    permit.operation_id,
+                    &contract.assembled.manifest_digest,
+                    &context_digest,
+                )?;
             }
+            let source = execution.observe_source(&contract.isolation)?;
             let enrollment = ValidationEnrollment {
                 kind,
-                original_binding:execution.binding.clone(), binding:binding.clone(), correction:effective.as_ref().map(|e|e.provenance()).transpose()?,
-                workflow_digest:contract.workflow.digest.clone(), instruction_digest:contract.assembled.manifest_digest.clone(),
-                tool_contract_digest:contract.tools.digest().into(), context_digest, source_digest:source.digest()?,
+                original_binding: execution.binding.clone(),
+                binding: binding.clone(),
+                correction: effective.as_ref().map(|e| e.provenance()).transpose()?,
+                workflow_digest: contract.workflow.digest.clone(),
+                instruction_digest: contract.assembled.manifest_digest.clone(),
+                tool_contract_digest: contract.tools.digest().into(),
+                context_digest,
+                source_digest: source.digest()?,
             };
             control.validate_permit_observed(&permit, |_| {
-                if let Some(deadline)=resource_deadline { resources.check_deadline(deadline)?; }
                 host.verify_owner(&permit.lease)?;
-                expected.compare(&effective_authority(host.as_ref(), permit.operation_id, &contract.authority)?)?;
-                if let Some(deadline)=resource_deadline { resources.check_deadline(deadline)?; }
-                let plan = ValidationPlan::enroll(enrollment, proposal, references, previous.as_ref())?;
-                if let Some(deadline)=resource_deadline { resources.check_deadline(deadline)?; }
+                expected.compare(&effective_authority(
+                    host.as_ref(),
+                    permit.operation_id,
+                    &contract.authority,
+                )?)?;
+                let plan =
+                    ValidationPlan::enroll(enrollment, proposal, references, previous.as_ref())?;
                 writing.store(true, Ordering::SeqCst);
-                journal.append("validation_plan", &json!({"call_id":id,"plan_digest":plan.digest(),"record":plan.record()}))?;
+                journal.append(
+                    "validation_plan",
+                    &json!({"call_id":id,"plan_digest":plan.digest(),"record":plan.record()}),
+                )?;
                 Ok(plan)
             })
-        }).await.map_err(|_| Error::new("operation_uncertain", "validation discovery dispatcher interrupted")).and_then(|result| result);
+        })
+        .await
+        .map_err(|_| {
+            Error::new(
+                "operation_uncertain",
+                "validation discovery dispatcher interrupted",
+            )
+        })
+        .and_then(|result| result);
         if enrolled.is_ok() || !write_attempted.load(Ordering::SeqCst) {
             self.validation.pending_enrollments.remove(&id);
         }
@@ -644,14 +591,20 @@ impl ScopedWorker {
 }
 fn verify_read(
     journal: &Journal,
-    contract: &WorkerContract,
     reference: &DiscoveryReadReference,
     operation: Uuid,
     instruction: &str,
     input: &str,
-    inspection_deadline: Option<std::time::Instant>,
 ) -> Result<()> {
     reference.digest()?;
+    // Old read records stay decodable for historical evidence. They cannot
+    // become observations from Codex's native repository tools.
+    if !matches!(reference.content, DiscoveryReadContent::Context { .. }) {
+        return Err(Error::new(
+            "validation_read_legacy",
+            "legacy Kegari source/resource reads cannot support a Codex-native validation plan",
+        ));
+    }
     if reference.operation_id != operation
         || reference.instruction_digest != instruction
         || reference.correction_input_digest != input
@@ -685,97 +638,7 @@ fn verify_read(
             "completed read result differs from original bytes",
         ));
     }
-    if let DiscoveryReadContent::Source {
-        requested_path,
-        path,
-        digest,
-        bytes,
-    } = &reference.content
-    {
-        let (root, repository) = contract.observed_source_root(path)?;
-        let mut observed = None;
-        let observe = |relative: &str, data: &[u8], _: &Value| {
-            observed = Some((root.join(relative), bytes_digest(data), data.len() as u64));
-        };
-        if repository.is_none() {
-            read_source(&contract.isolation, requested_path, observe)?;
-        } else {
-            read_source_at(
-                &contract.isolation,
-                &root,
-                requested_path,
-                repository.as_deref(),
-                observe,
-            )?;
-        }
-        if repository.is_some() {
-            let domain = contract
-                .isolation
-                .plan()
-                .managed_execution
-                .as_ref()
-                .ok_or_else(|| {
-                    Error::new(
-                        "validation_read",
-                        "additional source has no original immutable observation",
-                    )
-                })?;
-            match inspection_deadline {
-                Some(deadline) => domain.verify_resource_file_until(
-                    &root,
-                    path,
-                    digest,
-                    *bytes,
-                    deadline,
-                    crate::BUILD_ID,
-                )?,
-                None => {
-                    domain.verify_resource_file(&root, path, digest, *bytes, crate::BUILD_ID)?
-                }
-            }
-        }
-        if observed.as_ref() != Some(&(path.clone(), digest.clone(), *bytes)) {
-            return Err(Error::new(
-                "validation_read_changed",
-                "supporting source bytes changed after the actual read",
-            ));
-        }
-    }
     Ok(())
-}
-
-// The full record (including output and original plan) is in the bounded
-// protected chunk sequence. Tool replies and Control receipts carry a compact
-// exact reference; they never substitute for the retained execution capability.
-pub(super) fn result_summary(
-    record: &Value,
-    reference: &command::CommandEntryReference,
-) -> Result<Value> {
-    let stdout = record["command"]["stdout"].as_str().ok_or_else(|| {
-        Error::new(
-            "validation_history_binding",
-            "actual validation record has no stdout observation",
-        )
-    })?;
-    let stderr = record["command"]["stderr"].as_str().ok_or_else(|| {
-        Error::new(
-            "validation_history_binding",
-            "actual validation record has no stderr observation",
-        )
-    })?;
-    bounded_value(
-        json!({"schema_version":1,"invocation_id":reference.invocation_id,
-        "plan_digest":record["discovered"]["plan_digest"],"obligation_id":record["check_name"],
-        "successful":record["successful"],"blocker":record["blocker"],"evidence_class":record["evidence_class"],
-        "record_digest":canonical_digest(1,record)?,
-        "completed_entry":{"entry_id":reference.entry_id,"digest":reference.digest,"bytes":reference.bytes},
-        "outcome":{"exit_code":record["command"]["exit_code"],"termination_signal":record["command"]["termination_signal"],
-            "timed_out":record["command"]["timed_out"],"output_truncated":record["command"]["output_truncated"],
-            "elapsed_ms":record["command"]["elapsed_ms"],
-            "stdout_preview":command::preview(stdout),"stderr_preview":command::preview(stderr),
-            "stdout_bytes":stdout.len(),"stderr_bytes":stderr.len(),
-            "stdout_digest":bytes_digest(stdout.as_bytes()),"stderr_digest":bytes_digest(stderr.as_bytes())}}),
-    )
 }
 
 pub(super) fn validate_assignment_requirements(

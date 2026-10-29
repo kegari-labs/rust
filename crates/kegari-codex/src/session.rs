@@ -269,6 +269,21 @@ impl SessionState {
         let mut kind = EventKind::Notification;
         let mut data = Value::Null;
         match method {
+            "item/started" | "item/completed" => {
+                if let Some(event) =
+                    NativeExecutionObservation::from_notification(self, method, params)?
+                {
+                    if event.phase == NativeItemPhase::Completed {
+                        kind = EventKind::ToolResult;
+                    }
+                    data = serde_json::to_value(event).map_err(|_| {
+                        Error::new(
+                            "protocol_error",
+                            "cannot encode native execution observation",
+                        )
+                    })?;
+                }
+            }
             "model/verification" => {
                 let verifications = params
                     .get("verifications")

@@ -2,7 +2,10 @@
 
 Control-service composition and supervision for Kegari. This initial extraction
 retains a temporary dependency on `kegari-v0`; durable admission, registration,
-configuration administration, execution and delivery remain backend-owned.
+configuration administration and workflow/delivery policy remain backend-owned.
+Under [SPEC 1.5](../kegari-v0/SPEC.md), the ordinary child path now uses Codex
+app-server for repository execution. The competing custom executor has been
+removed; remaining integration and qualification are tracked in PROGRESS.md.
 
 | Module | Responsibility |
 | --- | --- |
@@ -33,7 +36,9 @@ platform, secrets, storage and types crates. Backend and control-api have no
 controller dependency, including for tests. There is no second application build
 identity: metadata and orchestration handshakes use the backend's shared identity.
 
-From the workspace root, with the pinned toolchain and dependency cache:
+During feature work, use the smallest affected controller test or compile check.
+The following package-wide and workspace checks are available for later
+stabilization, from the workspace root with the pinned toolchain and cache:
 
 ```sh
 cargo test --offline --locked -p kegari-controller --release
@@ -41,6 +46,7 @@ cargo build --offline --locked -p kegari-cli --bin kegari-v0 --release
 cargo clippy --offline --locked --workspace --all-targets -- -D warnings
 ```
 
-This remains `0.2.0-alpha.10`, with unchanged schemas, assets and executable
-arguments. Fixture verification does not establish native/live qualification.
+Packages remain `0.2.0-alpha.10`; the executable arguments are unchanged. Current
+migration-specific schema and asset identities are recorded in
+[PROGRESS.md](../kegari-v0/PROGRESS.md). Fixture verification does not establish native/live qualification.
 No service activation or Keychain operation is needed to test this boundary.

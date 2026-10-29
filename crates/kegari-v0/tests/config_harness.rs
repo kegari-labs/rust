@@ -55,6 +55,7 @@ fn evaluation_config_for_validation() -> Config {
     workspace.repositories.get_mut("101").unwrap().hostname =
         format!("github.{workspace_id}.evaluation.invalid");
     workspace.evaluation = Some(EvaluationBinding {
+        child: None,
         schema_version: 1,
         suite_manifest: "/private/tmp/evaluation-suite.json".into(),
         suite_digest: bytes_digest(b"declared test data only"),
@@ -66,8 +67,8 @@ fn evaluation_config_for_validation() -> Config {
         repository_id: 101,
         pull_request: 1,
         author_id: 77,
-        base_commit: "1".repeat(40),
-        head_commit: "2".repeat(40),
+        base_commit: Some("1".repeat(40)),
+        head_commit: Some("2".repeat(40)),
     });
     for provider in ["github", "linear"] {
         let mut connection = config.connections.remove(provider).unwrap();
@@ -146,9 +147,9 @@ fn evaluation_oid_validation_matches_backend_revision_grammar_and_errors() {
         for field in ["base_commit", "head_commit"] {
             let mut declaration = workspace.evaluation.clone().unwrap();
             if field == "base_commit" {
-                declaration.base_commit = oid.clone();
+                declaration.base_commit = Some(oid.clone());
             } else {
-                declaration.head_commit = oid.clone();
+                declaration.head_commit = Some(oid.clone());
             }
             assert_eq!(
                 declaration.validate(&config, workspace),

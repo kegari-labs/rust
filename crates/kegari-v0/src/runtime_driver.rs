@@ -35,6 +35,8 @@ use std::{
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+#[path = "runtime_account_refresh.rs"]
+mod account_refresh;
 #[path = "runtime_driver_tasks.rs"]
 mod tasks;
 pub(crate) use tasks::{ObservationMaintenance, ObservationTick};
@@ -156,6 +158,7 @@ struct DriverState {
     // Populated only after awaiting this process's actual metadata task. Loaded
     // dispatch JSON cannot establish that an old task or its children exited.
     joined_recovery: BTreeMap<Uuid, DispatchRecord>,
+    account_refresh_after: BTreeMap<String, chrono::DateTime<Utc>>,
 }
 pub struct RuntimeDriver {
     runtime: Arc<RuntimeCoordinator>,
@@ -246,6 +249,7 @@ impl RuntimeDriver {
                 last_error: None,
                 dispatch_errors: BTreeMap::new(),
                 joined_recovery: BTreeMap::new(),
+                account_refresh_after: BTreeMap::new(),
             })),
             cycle: tokio::sync::Mutex::new(()),
             observations,
@@ -260,8 +264,25 @@ impl RuntimeDriver {
     }
     pub fn diagnostics(&self) -> Result<Value> {
         let state = self.state()?;
+        let mut latest = BTreeMap::<&str, &DispatchRecord>::new();
+        for record in state.records.values() {
+            if latest
+                .get(record.work.as_str())
+                .is_none_or(|old| old.observed_at < record.observed_at)
+            {
+                latest.insert(&record.work, record);
+            }
+        }
+        let work_status = latest.values().map(|record| json!({
+            "work":record.work,"operation_id":record.operation,"phase":record.phase,
+            "state":record.state,"observed_at":record.observed_at,"error":record.error,
+            "next_action":record.error.as_ref().and_then(|error| error.next_action.as_deref()).unwrap_or_else(|| dispatch_next_action(record)),
+            "retry_at":record.error.as_ref().and_then(|error| error.details.get("retry_at")),
+            "preparation_attempt":record.metadata.as_ref().map(|metadata| metadata.attempt),
+            "preparation_attempt_limit":record.metadata.as_ref().map(|metadata| metadata.max_attempts),
+        })).collect::<Vec<_>>();
         Ok(
-            json!({"pending_launches":state.tasks.len(),"allocations":state.scheduler.running(),"dispatches":state.records.values().collect::<Vec<_>>(),"process_recovery":state.recovery,"receipt_recovery":state.recovery_errors,"dispatch_errors":state.dispatch_errors,"error":state.last_error,"progression":self.progression_status()?,"observations":self.observations.status()?,"completion":"dispatch_and_process_observations_are_not_delivery_evidence"}),
+            json!({"pending_launches":state.tasks.len(),"allocations":state.scheduler.running(),"queued":state.scheduler.queued(),"work_status":work_status,"account_refresh_after":state.account_refresh_after,"dispatches":state.records.values().collect::<Vec<_>>(),"process_recovery":state.recovery,"receipt_recovery":state.recovery_errors,"dispatch_errors":state.dispatch_errors,"error":state.last_error,"progression":self.progression_status()?,"observations":self.observations.status()?,"completion":"dispatch_and_process_observations_are_not_delivery_evidence"}),
         )
     }
     fn fresh(&self, lease: &Lease) -> Result<()> {
@@ -359,18 +380,9 @@ impl RuntimeDriver {
             }
             // Compare the emitted attempted inventory even when an entire process
             // directory is missing. Descriptive member rows do not recreate handles.
-            self.runtime.control.verify_live_check_bundle_inventory(
-                &receipts,
-                &bindings,
-                |operation, effect| {
-                    self.runtime
-                        .executions
-                        .retained_check_bundle(operation, effect)
-                },
-            )?;
             self.runtime
-                .executions
-                .observe_settled_check_bundles(&self.runtime.control, &receipts)?;
+                .control
+                .verify_check_bundle_inventory(&receipts, &bindings)?;
             Ok(pending)
         })?;
         self.state()?.recovery = pending;
@@ -398,6 +410,7 @@ impl RuntimeDriver {
         self.state()?
             .records
             .insert(record.action.clone(), record.clone());
+        emit_dispatch(&self.runtime, record);
         Ok(())
     }
     fn launch_worker(&self, lease: &Lease, action: WorkerAction) -> Result<Uuid> {
@@ -549,6 +562,141 @@ impl RuntimeDriver {
         );
         Ok(operation)
     }
+    fn launch_blocker_recovery(
+        &self,
+        lease: &Lease,
+        receipt: &crate::control::Receipt,
+    ) -> Result<()> {
+        let Some(work) = receipt.expected.get("blocker_work") else {
+            return Err(Error::new("record_corrupt", "blocker receipt lacks work"));
+        };
+        let action = canonical_digest(
+            1,
+            &json!({"kind":"scheduling_blocker_recovery","operation":receipt.operation_id}),
+        )?;
+        let state = self.state()?;
+        if state.tasks.values().any(|task| task.record.work == *work)
+            || state.tasks.values().filter(|task| !task.worker).count()
+                >= self.limits.authorization_tasks
+            || state.records.get(&action).is_some_and(|record| {
+                Utc::now() - record.observed_at < chrono::Duration::seconds(10)
+            })
+        {
+            return Ok(());
+        }
+        drop(state);
+        let record = DispatchRecord {
+            schema_version: 1,
+            session_recovery: None,
+            correction: None,
+            metadata: None,
+            runtime: lease.runtime_id,
+            action,
+            operation: receipt.operation_id,
+            work: work.clone(),
+            phase: "scheduling_blocker_recovery".into(),
+            lease: lease.clone(),
+            state: DispatchState::Dispatched,
+            observed_at: Utc::now(),
+            error: None,
+        };
+        self.record(&record)?;
+        let publisher = self.publisher.clone();
+        let lease = lease.clone();
+        let operation = receipt.operation_id;
+        let wake = self.runtime.services.wake.clone();
+        let join = tokio::spawn(async move {
+            let result = publisher.recover_blocker_receipt(&lease, operation).await;
+            wake.notify_one();
+            result
+        });
+        self.state()?.tasks.insert(
+            operation,
+            PendingTask {
+                record,
+                worker: false,
+                join,
+            },
+        );
+        Ok(())
+    }
+    fn launch_blocker_publication(
+        &self,
+        lease: &Lease,
+        notice: crate::preparation::BlockerPublication,
+    ) -> Result<()> {
+        self.fresh(lease)?;
+        let work = notice.work_key().to_owned();
+        let operation = match self.publisher.next_blocker_publication(&notice) {
+            Ok(operation) => operation,
+            Err(error) => {
+                self.state()?
+                    .dispatch_errors
+                    .insert(format!("blocker-publication:{work}"), error);
+                return Ok(());
+            }
+        };
+        let action = canonical_digest(
+            1,
+            &json!({"kind":"scheduling_blocker","publication":operation,"notice":notice.digest()}),
+        )?;
+        let receipts = self.runtime.control.operations()?;
+        let receipt = receipts.iter().find(|r| r.operation_id == operation);
+        let state = self.state()?;
+        if state.tasks.values().any(|task| task.record.work == work)
+            || state.tasks.values().filter(|task| !task.worker).count()
+                >= self.limits.authorization_tasks
+        {
+            return Ok(());
+        }
+        if let Some(previous) = state.records.get(&action) {
+            // Acknowledged/unknown effects are read back using the same ID only.
+            // A pre-admission failure requires changed inputs, not poll churn.
+            if matches!(previous.state, DispatchState::Returned)
+                || receipt.is_none()
+                || Utc::now() - previous.observed_at < chrono::Duration::seconds(10)
+            {
+                return Ok(());
+            }
+        }
+        drop(state);
+        let record = DispatchRecord {
+            schema_version: 1,
+            session_recovery: None,
+            correction: None,
+            metadata: None,
+            runtime: lease.runtime_id,
+            action,
+            operation,
+            work: work.clone(),
+            phase: "scheduling_blocker".into(),
+            lease: lease.clone(),
+            state: DispatchState::Dispatched,
+            observed_at: Utc::now(),
+            error: None,
+        };
+        self.record(&record)?;
+        self.state()?
+            .dispatch_errors
+            .remove(&format!("blocker-publication:{work}"));
+        let publisher = self.publisher.clone();
+        let lease = lease.clone();
+        let wake = self.runtime.services.wake.clone();
+        let join = tokio::spawn(async move {
+            let result = publisher.publish_blocker(&lease, notice).await;
+            wake.notify_one();
+            result
+        });
+        self.state()?.tasks.insert(
+            operation,
+            PendingTask {
+                record,
+                worker: false,
+                join,
+            },
+        );
+        Ok(())
+    }
     fn launch_authorization(
         &self,
         lease: &Lease,
@@ -632,7 +780,10 @@ impl RuntimeDriver {
     }
     fn record_observation(&self, record: &DispatchRecord) -> Result<()> {
         let mut state = self.state()?;
-        persist_observation(&self.records, &mut state.records, record)
+        persist_observation(&self.records, &mut state.records, record)?;
+        drop(state);
+        emit_dispatch(&self.runtime, record);
+        Ok(())
     }
     async fn launch_correction(
         &self,
@@ -1138,6 +1289,16 @@ impl SupervisorDriver for RuntimeDriver {
             self.drain_finished().await?;
             self.fresh(lease)?;
             self.tick_observations(true).await?;
+            self.launch_account_refresh(lease)?;
+            for receipt in self.runtime.control.operations()?.iter().filter(|receipt| {
+                matches!(
+                    receipt.phase,
+                    ReceiptPhase::Sent | ReceiptPhase::Acknowledged
+                ) && receipt.expected.get("preparation").map(String::as_str)
+                    == Some("scheduling_blocker")
+            }) {
+                self.launch_blocker_recovery(lease, receipt)?;
+            }
             self.request_advance(lease).await;
             self.tick_progression(lease, false).await?;
             if !self.take_completed_advance(lease).await {
@@ -1149,6 +1310,9 @@ impl SupervisorDriver for RuntimeDriver {
             }
             let config = self.runtime.configuration.snapshot()?;
             let actions = self.runtime.ready_actions()?;
+            let blocker_notices = self
+                .publisher
+                .blocker_publications(&self.runtime.scheduling_blockers()?)?;
             let mut workers = BTreeMap::new();
             for action in actions {
                 match action {
@@ -1158,8 +1322,11 @@ impl SupervisorDriver for RuntimeDriver {
                     }
                 }
             }
+            for notice in blocker_notices {
+                self.launch_blocker_publication(lease, notice)?;
+            }
             let mut recoveries = BTreeMap::new();
-            for action in self.runtime.ready_session_recoveries()? {
+            for action in self.runtime.ready_session_recoveries(lease)? {
                 if workers.contains_key(&action.ready.canonical_key)
                     || recoveries
                         .insert(action.ready.canonical_key.clone(), action)
@@ -1273,6 +1440,65 @@ impl SupervisorDriver for RuntimeDriver {
         })
     }
 }
+fn dispatch_next_action(record: &DispatchRecord) -> &'static str {
+    if let Some(error) = &record.error {
+        return match error.code.as_str() {
+            "quota_wait" => {
+                "wait for authenticated account quota refresh; inspect account observations"
+            }
+            "retry_backoff" | "retry_wait" => "wait until the recorded retry time",
+            "capacity_wait" | "capacity_exhausted" => "wait for an existing allocation to finish",
+            "stale_config" | "incompletely_observed" | "observation_unavailable" => {
+                "wait for fresh configuration/provider observations; inspect the recorded blocker"
+            }
+            "operation_uncertain" | "reconciliation_required" => {
+                "reconcile the retained operation before replacement work"
+            }
+            "authentication_required" | "missing_secret" | "account_mismatch" => {
+                "repair the selected account connection through explicit setup or configuration"
+            }
+            "unsupported_codex_review_isolation" | "unsupported_codex_capability" => {
+                "resolve the selected Codex profile capability; no fallback execution is permitted"
+            }
+            _ => "resolve the recorded blocker; preserve the existing work and attempt budget",
+        };
+    }
+    match record.state {
+        DispatchState::Dispatched => "wait for owned preparation or metadata observation",
+        DispatchState::ModelOwned => "observe the active Codex session",
+        DispatchState::Returned => "continue the next dependency-ready workflow phase",
+        DispatchState::WorkerJoined => "evaluate source-bound results and remaining workflow gates",
+        DispatchState::Blocked => "inspect the retained operation before retrying",
+    }
+}
+fn emit_dispatch(runtime: &RuntimeCoordinator, record: &DispatchRecord) {
+    use crate::housekeeping::{LogEvent, Severity};
+    runtime.services.logs.emit(&LogEvent {
+        severity: if record.error.is_some() {
+            Severity::Warning
+        } else {
+            Severity::Info
+        },
+        runtime_id: record.runtime,
+        owner_generation: Some(record.lease.owner_generation),
+        workspace_id: None,
+        work: Some(record.work.clone()),
+        operation_id: Some(record.operation),
+        session_id: None,
+        revision: None,
+        event: "runtime_dispatch".into(),
+        outcome: match record.state {
+            DispatchState::Dispatched => "dispatched",
+            DispatchState::ModelOwned => "model_owned",
+            DispatchState::Returned => "returned",
+            DispatchState::Blocked => "blocked",
+            DispatchState::WorkerJoined => "worker_joined",
+        }
+        .into(),
+        // Deliberately omit provider bodies, prompts, command text and error details.
+        reason: record.error.as_ref().map(|error| error.code.clone()),
+    });
+}
 fn record_file(action: &str) -> Result<String> {
     crate::evidence::validate_digest(action)?;
     Ok(format!(
@@ -1348,7 +1574,7 @@ fn recovery_allocation_clear(
                     .is_some_and(Vec::is_empty)
                 && observed["observation"]["local_exit_confirmed"] == true)
         }
-        SessionRecoveryStage::Source => Ok(receipt.kind == "host_metadata"
+        SessionRecoveryStage::Source { .. } => Ok(receipt.kind == "host_metadata"
             && receipt.phase == ReceiptPhase::Acknowledged
             && observed["owned_handles_joined"] == true),
         SessionRecoveryStage::Resume => Ok(false),
@@ -1636,7 +1862,7 @@ mod tests {
             record.session_recovery = Some(SessionRecoveryDispatch {
                 predecessor: id(3),
                 candidate: bytes_digest(b"candidate"),
-                stage: SessionRecoveryStage::Source,
+                stage: SessionRecoveryStage::Source { preparation: id(4) },
             });
             record.error =
                 failed.then(|| Error::new("source_changed", "actual metadata observation failed"));

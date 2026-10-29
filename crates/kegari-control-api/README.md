@@ -37,6 +37,10 @@ process roles, instruction assets or native/live qualification status.
 
 From the workspace root, with the pinned toolchain and dependency cache:
 
+Workspace-wide test/lint commands below are later stabilization references.
+The current [goal](../kegari-v0/GOAL.md) requires only affected compilation and
+minimal focused validation while features are being implemented.
+
 ```sh
 cargo test --offline --locked -p kegari-control-api
 cargo test --offline --locked --workspace --release

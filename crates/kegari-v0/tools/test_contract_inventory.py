@@ -35,7 +35,7 @@ class ContractInventoryTests(unittest.TestCase):
         ids = [item["id"] for item in generated["clauses"]]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(generated["spec_sha256"], inventory.APPROVED)
-        self.assertEqual(generated["spec_version"], "1.4")
+        self.assertEqual(generated["spec_version"], "1.5")
         self.assertEqual(len(generated["requirements"]), 140)
         self.assertTrue({"V0-H04", "V0-T38", "V0-T39", "V0-E09"}.issubset(
             {item["id"] for item in generated["requirements"]}))

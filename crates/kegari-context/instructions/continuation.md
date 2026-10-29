@@ -1,4 +1,4 @@
-# Correction, continuation and recovery — version 3
+# Correction, continuation and recovery — version 4
 
 Use the host's current reconciliation findings, correction revisions and actual
 progress. Earlier thread memory is historical context, not current gate truth.
@@ -16,7 +16,11 @@ has advanced.
 On recovery, inspect preserved files and the host-provided provider observations.
 Do not reset/clean the directory, attach an unrelated thread, repeat a sent/unknown
 comment/PR/merge/job, or claim remembered success establishes the current outcome.
-Unknown effects require provider reconciliation before dependent actions. A
+Unknown effects require reconciliation against actual provider observations
+before dependent actions. A compatible Codex session may continue legitimate
+work; remembered command output is not current execution evidence. Background
+work uses Codex's supported terminal lifecycle. Do not adopt arbitrary processes
+or assume a service survived an app-server interruption. A
 provider verification, safety/policy or manual-intervention blocker persists until
 the supported required resolution is established; changing model/account/thread,
 waiting or asking for retry cannot bypass it. Pause/stop and revoked permissions

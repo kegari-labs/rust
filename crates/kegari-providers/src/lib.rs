@@ -2006,6 +2006,86 @@ impl GithubClient {
         })
         .collect()
     }
+    /// Authenticate the exact repository and inspect every reference namespace.
+    /// Missing/inaccessible repositories and failed reads are never empty proof.
+    pub async fn repository_has_no_refs(&self, repo: &RepositoryIdentity) -> Result<bool> {
+        self.repository(repo).await?;
+        let mut url = self.repo_url(repo, &["git", "matching-refs"])?;
+        url.path_segments_mut()
+            .map_err(|_| Error::invalid("repository URL cannot carry path"))?
+            .push("");
+        let response = self.http.raw(Method::Get, url, None).await?;
+        if response.status == 409 {
+            // GitHub's Git REST API uses 409 for both empty and unavailable.
+            // Ask its typed repository property rather than guessing from status.
+            let mut endpoint = self.http.policy.endpoint.clone();
+            let path = match endpoint.path() {
+                "/" => "/graphql",
+                "/api/v3/" | "/api/v3" => "/api/graphql",
+                _ => {
+                    return Err(Error::new(
+                        "source_unavailable",
+                        "configured GitHub API namespace has no supported empty-repository query",
+                    ));
+                }
+            };
+            endpoint.set_path(path);
+            let (value,_)=self.http.json(Method::Post,endpoint,Some(json!({"query":"query KegariEmptyRepository($owner:String!,$name:String!){repository(owner:$owner,name:$name){databaseId name owner{login} isEmpty}}","variables":{"owner":repo.owner,"name":repo.name}}))).await?;
+            if value.get("errors").is_some_and(|errors| {
+                !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
+            }) {
+                return Err(Error::new(
+                    "source_unavailable",
+                    "provider could not establish empty repository state",
+                ));
+            }
+            let observed = value.pointer("/data/repository").ok_or_else(|| {
+                Error::new("provider_response", "empty repository query lacks identity")
+            })?;
+            if observed.get("databaseId").and_then(Value::as_u64) != Some(repo.id)
+                || observed.get("name").and_then(Value::as_str) != Some(repo.name.as_str())
+                || observed.pointer("/owner/login").and_then(Value::as_str)
+                    != Some(repo.owner.as_str())
+            {
+                return Err(Error::new(
+                    "identity_mismatch",
+                    "empty repository query changed selected repository",
+                ));
+            }
+            return observed
+                .get("isEmpty")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    Error::new(
+                        "provider_response",
+                        "empty repository query lacks explicit state",
+                    )
+                });
+        }
+        if response.status != 200 {
+            return Err(status_error(&response, true));
+        }
+        let value: Value = serde_json::from_slice(&response.body).map_err(|_| {
+            Error::new(
+                "provider_response",
+                "repository references are not valid JSON",
+            )
+        })?;
+        let refs = value.as_array().ok_or_else(|| {
+            Error::new(
+                "provider_response",
+                "complete repository references are not an array",
+            )
+        })?;
+        if refs.is_empty() && next_link(&response.headers)?.is_some() {
+            return Err(Error::new(
+                "incompletely_observed",
+                "empty reference page carries continuation",
+            ));
+        }
+        Ok(refs.is_empty())
+    }
+
     pub async fn reference(&self, repo: &RepositoryIdentity, reference: &str) -> Result<String> {
         self.repository(repo).await?;
         let components = reference_components(reference)?;

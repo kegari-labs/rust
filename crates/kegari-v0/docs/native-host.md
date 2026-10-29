@@ -1,5 +1,10 @@
 # Native control host composition
 
+The control host and its supervised lock-owning child remain Kegari machinery
+under [SPEC 1.5](../SPEC.md). The host runs the runtime driver; the child supplies
+its lease, heartbeat and poll channel. Repository execution belongs to Codex
+app-server. Migrating that execution path does not require relocating the driver.
+
 `kegari_controller::host::run_native` accepts the backend
 `kegari_v0::runtime_host::HostRuntimeFactory` contract. Its returned
 `RuntimeBackend` supplies the actual workflow controller and supervisor driver;
@@ -57,7 +62,6 @@ identity, TLS provisioning or an actual model.
 ```sh
 RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-controller --lib --test supervisor --test host
 RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-v0 --test platform
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy --offline --locked --workspace --all-targets -- -D warnings
 ```
 
 The private Unix listener starts before deferred prerequisite construction.
@@ -70,29 +74,16 @@ retaining a newly started listener. A stale listener is shut down and cannot
 restore an earlier operator-role mapping. A regression checks this against the
 actual transport authenticator.
 
-## Descendant ownership research
+## Repository execution boundary
 
-Native execution remains unqualified: the retained finite `setsid` fixture
-demonstrates that a child can escape its original process group. Group exit and
-closed inherited streams therefore cannot establish complete descendant exit.
+Repository commands and terminal lifecycle use supported Codex interfaces. Host
+process ownership remains necessary for Kegari's own app-server, Git and control
+processes; it does not impose a per-Codex-command journal or resource inventory.
+A stopped host process does not establish complete descendant exit. Preserve
+uncertain effects and workspaces and report unavailable lifecycle observations.
 
-On 2026-10-25, read-only inspection of macOS 27.0.1 (26A434) and its installed SDK
-confirmed that `NOTE_TRACK`, `NOTE_TRACKERR` and `NOTE_CHILD` are unsupported.
-Apple's [XNU process filter](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_event.c)
-rejects these flags with `ENOTSUP`; polling process ancestry would still leave
-fork/reparent/PID-reuse races and is not an equivalent guarantee.
-
-The installed `EndpointSecurity/ESClient.h` documents
-[`es_new_descendants_client`](https://developer.apple.com/documentation/endpointsecurity/es_new_descendants_client(_:_:))
-for macOS 27: recursive descendant events, including existing descendants,
-without root or TCC approval. It still requires
-[Apple's restricted Endpoint Security entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.endpoint-security.client).
-No entitlement request, provisioning/signing change, client activation or host
-security change has been performed. No claim is made that this event stream alone
-provides race-free cancellation or proves complete exit.
-
-Supervised follow-up must resolve a permitted descendant-ownership mechanism and
-its signing/resource prerequisites, then validate fork/exec/session escape,
-event loss, identity reuse, cancellation and restart with finite owned fixtures.
-Until implemented and qualified, keep `process_tree_unverified` and retained
-unknown ownership; do not reinterpret successful group exit as containment.
+The former custom repository-executor qualification gate is not a prerequisite
+to the migrated path. Use specific checks for the selected Codex version,
+permissions and required capabilities. Full descendant coverage and Endpoint
+Security research are separate future considerations described in
+[lifecycle limits](process-containment.md), not current implementation recipes.

@@ -1,0 +1,1 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","properties":{"processId":{"type":"string"}},"required":["processId"],"type":"object","$comment":"Generated from Codex 0.164.0-alpha.11.1. Modified: descriptions/titles omitted and JSON compacted. See PROVENANCE.md."}

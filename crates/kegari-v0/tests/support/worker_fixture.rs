@@ -1,28 +1,25 @@
-#[path = "worker_bundle.rs"]
-#[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
-mod worker_bundle;
-use kegari_types::control::Lease;
 use chrono::{Duration, Utc};
+use kegari_codex::*;
 use kegari_codex::{CodexProfile, SessionBinding, ToolCall};
 use kegari_config::{Profile, ReleaseMode, Speed};
-use kegari_types::error::{Error, Result};
+use kegari_context::instructions::*;
+use kegari_context::workflow::Workflow;
+use kegari_control_api::identity::Actor;
+use kegari_execution::*;
+use kegari_git::RepositoryId;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
+use kegari_types::error::{Error, Result};
 use kegari_v0::authority::*;
-use kegari_codex::*;
 use kegari_v0::control::*;
 use kegari_v0::evaluation::TrialHost;
 use kegari_v0::evidence::Generation;
 use kegari_v0::evidence::WorkIdentity;
 use kegari_v0::execution::*;
 use kegari_v0::git::Git;
-use kegari_git::{RepositoryId};
-use kegari_context::instructions::*;
-use kegari_execution::*;
 use kegari_v0::providers::ProviderBroker;
 use kegari_v0::reconcile::*;
 use kegari_v0::worker::*;
-use kegari_context::workflow::Workflow;
-use kegari_control_api::identity::Actor;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -59,49 +56,32 @@ struct Fixture {
     sink: Arc<Sink>,
     control: Arc<ControlHost>,
     state: SessionState,
-    boundary: Arc<Boundary>,
     input: ContractInput,
     executions: Arc<ExecutionRegistry>,
     parent: ParentProjection,
     permit: Permit,
     execution: Option<Arc<WorkerExecution>>,
 }
-type ConfiguredContract = fn(ContractInput, &kegari_config::Workspace) -> Result<WorkerContract>;
 impl Fixture {
     fn new(role: AgentRole) -> Self {
         Self::with_hooks(role, "")
     }
     fn with_hooks(role: AgentRole, hooks: &str) -> Self {
-        Self::configured(role, hooks, None, None, false, false, false)
-    }
-    #[allow(dead_code)] // Shared prelude also serves the unchanged worker target.
-    fn with_bundle(mode: worker_bundle::Mode, configured: ConfiguredContract) -> Self {
-        Self::configured(
-            AgentRole::Implementation,
-            "",
-            Some(mode),
-            Some(configured),
-            false,
-            false,
-            false,
-        )
+        Self::configured(role, hooks, false, false)
     }
     #[allow(dead_code)]
     fn without_checks(role: AgentRole) -> Self {
-        Self::configured(role, "", None, None, true, false, false)
+        Self::configured(role, "", true, false)
     }
     #[allow(dead_code)]
     fn with_read_repository(role: AgentRole) -> Self {
-        Self::configured(role, "", None, None, true, true, false)
+        Self::configured(role, "", true, true)
     }
     fn configured(
         role: AgentRole,
         hooks: &str,
-        bundle: Option<worker_bundle::Mode>,
-        configured: Option<ConfiguredContract>,
         without_checks: bool,
         read_repository: bool,
-        test_resources: bool,
     ) -> Self {
         let temp = TempDir::new().unwrap();
         let base = temp.path().canonicalize().unwrap();
@@ -124,44 +104,15 @@ impl Fixture {
             )
             .unwrap();
         }
-        let resource_file = base.join("unfamiliar.recipe");
-        let resource_dir = base.join("unfamiliar-resource");
-        if test_resources {
-            std::fs::write(&resource_file, b"custom build instructions\n").unwrap();
-            std::fs::create_dir(&resource_dir).unwrap();
-            std::fs::write(
-                resource_dir.join("custom.rules"),
-                b"generic resource data\n",
-            )
-            .unwrap();
-            std::fs::create_dir(resource_dir.join("empty")).unwrap();
-        }
         git_run(&source, &["init", "-b", "main"]);
         std::fs::write(source.join("a.txt"), "original\n").unwrap();
-        let main = if bundle.is_some() { ", \"check\"" } else { "" };
-        let services = if bundle.is_some() {
-            "      services:\n        - name: database\n          argv: [\"/usr/bin/true\", \"service\"]\n          readiness:\n            argv: [\"/usr/bin/true\", \"readiness\"]\n            timeout_ms: 3000\n          max_lifetime_ms: 10000\n"
-        } else {
-            ""
-        };
-        // The configured workspace requires an integrated obligation too. It is
-        // declared for config/workflow fidelity but is not run by these local
-        // bundle tests; ordinary fixtures retain their exact previous workflow.
-        let integrated = if bundle.is_some() {
-            format!(
-                "  integrated:\n    e2e:\n      argv: [\"/usr/bin/true\"]\n      result_artifact: \"{}/integrated.json\"\n",
-                scratch.display()
-            )
-        } else {
-            String::new()
-        };
         let workflow_text = if without_checks {
             format!(
                 "---\nschema_version: 1\n{hooks}checks: {{}}\n---\nOutcome: {{{{ issue | json }}}}\n"
             )
         } else {
             format!(
-                "---\nschema_version: 1\n{hooks}checks:\n  local:\n    suite:\n      argv: [\"/usr/bin/true\"{main}]\n      result_artifact: \"{}/check.json\"\n{services}{integrated}---\nOutcome: {{{{ issue | json }}}}\n",
+                "---\nschema_version: 1\n{hooks}checks:\n  local:\n    suite:\n      argv: [\"/usr/bin/true\"]\n      result_artifact: \"{}/check.json\"\n---\nOutcome: {{{{ issue | json }}}}\n",
                 scratch.display()
             )
         };
@@ -191,14 +142,6 @@ impl Fixture {
         let git = Arc::new(Git::new(&pinned_git_path).unwrap());
         let revision = git.revision(&repo, "HEAD").unwrap();
         let child = role.permits_source_writes();
-        let configured_workspace = bundle.map(|_| {
-            worker_bundle::configuration(
-                &auth,
-                workflow.path.as_deref().unwrap(),
-                &source,
-                profile(),
-            )
-        });
         let work = WorkIdentity {
             linear_endpoint: "https://linear.invalid/graphql".into(),
             linear_workspace: id(2),
@@ -226,11 +169,7 @@ impl Fixture {
             } else {
                 vec![]
             },
-            test_resources: if test_resources {
-                vec!["recipe".into(), "data".into()]
-            } else {
-                vec![]
-            },
+            test_resources: vec![],
         };
         let parent = ParentProjection {
             workspace_id: id(3),
@@ -265,10 +204,7 @@ impl Fixture {
             blockers: vec![],
             prerequisites: BTreeSet::new(),
             source_digest: kegari_digest::bytes_digest(b"sources"),
-            config_revision: configured_workspace.as_ref().map_or_else(
-                || kegari_digest::bytes_digest(b"config"),
-                |config| kegari_v0::config::config_revision(config).unwrap(),
-            ),
+            config_revision: kegari_digest::bytes_digest(b"config"),
             drain_config_revision: kegari_digest::bytes_digest(b"config-drain"),
             workflow_digest: workflow.digest.clone(),
             coordination_profile: profile(),
@@ -381,7 +317,6 @@ impl Fixture {
             ExecutionRole::Coordination
         };
         let mut plan = IsolationPlan {
-            managed_execution: None,
             schema_version: 1,
             role: execution_role,
             execution_root: run.clone(),
@@ -409,21 +344,6 @@ impl Fixture {
                 directory: true,
             });
         }
-        if test_resources {
-            plan.read_roots.extend([
-                PathGrant {
-                    path: resource_file.clone(),
-                    directory: false,
-                },
-                PathGrant {
-                    path: resource_dir.clone(),
-                    directory: true,
-                },
-            ]);
-        }
-        if role.permits_repository_execution() {
-            plan.managed_execution = Some(BoundManagedExecution::automatic(&plan, kegari_v0::BUILD_ID).unwrap());
-        }
         let isolation = plan.validate(kegari_v0::BUILD_ID).unwrap();
         let context = json!({"issue":{"body":"fixture"},"parent":{},"children":[{"id":id(11)}],"workspace":{"id":id(3)},"scope":{},"dependencies":[],"corrections":[],"evidence":{},"attempt":1,"phase":"work","profile":profile(),"operation":{"id":id(4)}});
         let work_key = authority.work_key().unwrap();
@@ -447,7 +367,7 @@ impl Fixture {
             codex_version: kegari_context::instructions::SUPPORTED_CODEX_VERSION,
             repository: Some(RepositoryContext {
                 root: repo.clone(),
-                revision: revision.commit.clone(),
+                revision: Some(revision.commit.clone()),
                 scope_paths: vec!["a.txt".into()],
             }),
             required_context: &[],
@@ -495,36 +415,11 @@ impl Fixture {
             repository: Some(repository.clone()),
             read_resources: if read_repository {
                 BTreeMap::from([(additional, ReadResource::Repository { id: "43".into() })])
-            } else if test_resources {
-                BTreeMap::from([
-                    (
-                        resource_file,
-                        ReadResource::TestResource {
-                            name: "recipe".into(),
-                            writable: false,
-                            disposable: false,
-                        },
-                    ),
-                    (
-                        resource_dir,
-                        ReadResource::TestResource {
-                            name: "data".into(),
-                            writable: false,
-                            disposable: false,
-                        },
-                    ),
-                ])
             } else {
                 BTreeMap::new()
             },
         };
-        let contract = Arc::new(match (&configured_workspace, configured) {
-            (Some(config), Some(construct)) => {
-                construct(input.clone(), &config.workspaces["fixture"]).unwrap()
-            }
-            (None, None) => WorkerContract::new(input.clone()).unwrap(),
-            _ => panic!("bundle fixture must use the original configured contract constructor"),
-        });
+        let contract = Arc::new(WorkerContract::new(input.clone()).unwrap());
         let dir = PrivateDir::create(&private).unwrap();
         let control = Arc::new(
             ControlHost::setup(dir.child("runtime").unwrap(), id(1), Uuid::new_v4()).unwrap(),
@@ -571,18 +466,10 @@ impl Fixture {
             waiting: AtomicBool::new(false),
         });
         let sink = Arc::new(Sink::default());
-        let boundary = Arc::new(Boundary {
-            fail: AtomicBool::new(false),
-            block: AtomicBool::new(false),
-            unknown: AtomicBool::new(false),
-            last_cancel: Mutex::new(None),
-            bundle: bundle.map(worker_bundle::BundleBoundary::new),
-        });
         let execution = if role.permits_repository_execution() {
             Some(Arc::new(WorkerExecution {
                 git: git.clone(),
                 git_executable: pinned_git_path.clone(),
-                boundary: boundary.clone(),
                 ownership: Arc::new(
                     OwnedDirectory::register(
                         DirectoryIdentity {
@@ -662,7 +549,6 @@ impl Fixture {
             sink,
             control,
             state,
-            boundary,
             input,
             executions,
             parent,

@@ -23,3 +23,8 @@ opinion about all terms of the installed application. Confirm distribution
 terms/source correspondence before redistributing that binary. This package does
 not redistribute it. Original Rust-project MIT and specification notices remain
 unchanged.
+
+The four `CommandExec*` schemas were retained from the same generated cache on
+2026-10-29. Every previously pinned raw schema matched its manifest source hash,
+and the four added definitions matched the complete v2 aggregate in that cache.
+No installed executable was invoked and no newer protocol was substituted.

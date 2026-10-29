@@ -1,12 +1,7 @@
 //! Actual DeliveryCoordinator assignment through the public worker tool path.
-//! Only command execution is injected; no vector, assignment, production
-//! execution class, completed native turn or adequacy review is manufactured.
+//! Native Codex observations are synthetic; no live run, completed turn or
+//! adequacy review is claimed. Admission and result acceptance are real.
 use crate::pinned_git;
-use kegari_types::control::Lease;
-use kegari_v0::evaluation::TrialHost;
-#[path = "worker_bundle.rs"]
-#[allow(dead_code)] // Also included by targets that exercise only ordinary checks.
-mod worker_bundle;
 use kegari_codex::*;
 use kegari_codex::{CodexProfile, SessionBinding, ToolCall};
 use kegari_config::Speed;
@@ -14,7 +9,9 @@ use kegari_context::instructions::*;
 use kegari_context::workflow::Workflow;
 use kegari_execution::*;
 use kegari_storage::PrivateDir;
+use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
+use kegari_v0::evaluation::TrialHost;
 use kegari_v0::{
     control::*, execution::*, git::Git, providers::ProviderBroker, reconcile::ParentProjection,
     worker::*,
@@ -74,7 +71,7 @@ pub(super) async fn exercise_assignment(
     std::fs::create_dir(&scratch).unwrap();
     let private = PrivateDir::create(&root.join("integrated-worker-private")).unwrap();
     let auth = private.child("auth").unwrap();
-    let mut isolation = IsolationPlan {
+    let isolation = IsolationPlan {
         schema_version: 1,
         role: ExecutionRole::Validation,
         execution_root,
@@ -88,10 +85,7 @@ pub(super) async fn exercise_assignment(
         source_writes: vec![],
         resource_writes: vec![],
         forbidden_roots: vec![source.root().into(), private.path().into()],
-        managed_execution: None,
     };
-    isolation.managed_execution =
-        Some(BoundManagedExecution::automatic(&isolation, kegari_v0::BUILD_ID).unwrap());
     let isolation = isolation.validate(kegari_v0::BUILD_ID).unwrap();
     let revision = git.revision(&repository, "HEAD").unwrap();
     assert_eq!(&revision, source.revision());
@@ -128,7 +122,7 @@ pub(super) async fn exercise_assignment(
         codex_version: kegari_context::instructions::SUPPORTED_CODEX_VERSION,
         repository: Some(RepositoryContext {
             root: repository.clone(),
-            revision: revision.commit.clone(),
+            revision: Some(revision.commit.clone()),
             scope_paths: vec![],
         }),
         required_context: &[],
@@ -147,7 +141,7 @@ pub(super) async fn exercise_assignment(
             .map(|(tool, _)| tool)
             .collect(),
         provider_discovery: ProviderDiscovery::Unavailable {
-            reason: "actual assignment with an injected command boundary; no native Codex run"
+            reason: "actual assignment with synthetic native Codex observations; no live run"
                 .into(),
         },
         known_secrets: &[],
@@ -176,17 +170,9 @@ pub(super) async fn exercise_assignment(
             || Ok(()),
         )
         .unwrap();
-    let boundary = Arc::new(Boundary {
-        fail: AtomicBool::new(false),
-        block: AtomicBool::new(false),
-        unknown: AtomicBool::new(false),
-        last_cancel: Mutex::new(None),
-        bundle: None,
-    });
     let execution = Arc::new(WorkerExecution {
         git,
         git_executable: git_path,
-        boundary: boundary.clone(),
         ownership: Arc::new(
             OwnedDirectory::register(
                 DirectoryIdentity {
@@ -274,18 +260,21 @@ pub(super) async fn exercise_assignment(
         name: name.into(),
         arguments,
     };
-    let source_read = worker
-        .call(&call("source_read", json!({"path":"source.txt"})))
+    assert_eq!(
+        std::fs::read_to_string(isolation.plan().repository.join("source.txt")).unwrap(),
+        "production\n"
+    );
+    worker
+        .call(&call("context_read", json!({"key":"evidence"})))
         .await
         .unwrap();
-    assert_eq!(source_read["content"], "production\n");
     let discovered_argv = vec![
         "/bin/sh".to_string(),
         "-c".to_string(),
         "test \"$(cat source.txt)\" = production".to_string(),
     ];
     // The fixture proposer chooses this from the actual observed file/task,
-    // without a configured command. Execution is still explicitly injected.
+    // without a configured command. Codex observations are synthetic in this fixture.
     assert_ne!(
         discovered_argv,
         super::workflow().front_matter.checks.integrated["e2e"].argv
@@ -300,20 +289,53 @@ pub(super) async fn exercise_assignment(
         "previous":null,"reason":"Validate the actual assembled repository against its observed production source",
         "supporting_reads":[read_id],"requirements":[{
             "id":"candidate-source-integrity","statement":"assembled candidate retains the observed production source contents",
-            "rationale":"source_read observed production in source.txt; the task requires validating the exact assembled candidate",
+            "rationale":"the admitted candidate task requires validating the exact assembled source",
             "argv":discovered_argv,"cwd":".","services":[],"artifacts":[],
         }],
     }))).await.unwrap();
     let plan_digest = proposed["plan_digest"].as_str().unwrap();
-    let ran = worker
-        .call(&call(
-            "validation_run",
-            json!({
-                "plan_digest":plan_digest,"obligation_id":"candidate-source-integrity",
-            }),
-        ))
-        .await
-        .unwrap();
+    for (phase, status, exit) in [
+        (
+            NativeItemPhase::Started,
+            NativeExecutionStatus::InProgress,
+            None,
+        ),
+        (
+            NativeItemPhase::Completed,
+            NativeExecutionStatus::Completed,
+            Some(0),
+        ),
+    ] {
+        worker
+            .observe_execution(
+                &state,
+                &NativeExecutionObservation {
+                    operation_id: operation.to_string(),
+                    thread_id: state.thread_id.clone().unwrap(),
+                    turn_id: state.turn_id.clone().unwrap(),
+                    item_id: "integrated-check".into(),
+                    phase,
+                    item: NativeExecutionItem::CommandExecution(NativeCommandExecution {
+                        id: "integrated-check".into(),
+                        command: discovered_argv[2].clone(),
+                        cwd: isolation.plan().cwd.to_string_lossy().into(),
+                        status,
+                        command_actions: vec![],
+                        aggregated_output: Some("actual synthetic result".into()),
+                        exit_code: exit,
+                        duration_ms: Some(1),
+                        process_id: None,
+                        source: "agent".into(),
+                        plugin_id: None,
+                        script_path: None,
+                    }),
+                },
+            )
+            .unwrap();
+    }
+    let ran = worker.call(&call("validation_record", json!({
+        "plan_digest":plan_digest,"obligation_id":"candidate-source-integrity","item_id":"integrated-check",
+    }))).await.unwrap();
     assert_eq!(ran["successful"], true);
     let checks = worker.take_verified_checks();
     assert_eq!(checks.len(), 1);
@@ -331,21 +353,20 @@ pub(super) async fn exercise_assignment(
     assert_eq!(plan.record().supporting_reads[0].digest().unwrap(), read_id);
     let record = checks[0].record();
     assert_eq!(record.command.argv, discovered_argv);
-    assert_eq!(record.schema_version, 4);
+    assert_eq!(record.schema_version, 5);
     assert_eq!(
         record.evidence_class,
-        ExecutionEvidenceClass::DeterministicFixture
+        ExecutionEvidenceClass::CodexExecution
     );
     assert_eq!(record.command.cwd, isolation.plan().repository);
-    assert!(record.discovered.as_ref().unwrap().transcript.is_file());
+    assert!(record.codex.as_ref().unwrap().transcript.is_file());
     assert!(registry.active_operations().unwrap().is_empty());
     assert!(
-        control
+        !control
             .operations()
             .unwrap()
             .iter()
-            .any(|receipt| receipt.kind == "worker_validation"
-                && receipt.phase == ReceiptPhase::Acknowledged)
+            .any(|receipt| receipt.kind == "worker_validation")
     );
     // A model's success claim remains pending. This test deliberately creates
     // no completed native turn, protected accepted outcome or adequacy review.

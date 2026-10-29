@@ -1,6 +1,7 @@
 //! Cleanup follows the actual protected worker hook ledger, including later
 //! session transitions, instead of treating an initial copy as current state.
 use super::*;
+use crate::execution::HookPhase;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

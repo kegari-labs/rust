@@ -72,6 +72,95 @@ fn request(command: CommandName, args: Value) -> CommandRequest {
 }
 
 #[test]
+fn local_qualification_and_handover_require_review_and_an_exact_plan() {
+    let base = [
+        "kegari-v0",
+        "service",
+        "record-qualification",
+        "--binary",
+        "/opt/kegari/candidate",
+        "--from",
+        "-",
+    ];
+    assert!(
+        Cli::try_parse_from(base).is_err(),
+        "recording requires explicit human review"
+    );
+    let artifact = json!({"path":"/reports/review.json","digest":kegari_digest::bytes_digest(b"reviewed evidence")});
+    let record = json!({
+        "schema_version":1, "runtime_id":runtime(),
+        "binary_digest":kegari_digest::bytes_digest(b"candidate"),
+        "runtime_build":"candidate-build", "instruction_digest":kegari_digest::bytes_digest(b"metadata"),
+        "reviewed_by":"operator", "reviewed_at":"2026-01-01T00:00:00Z",
+        "deterministic":artifact, "actual_agents":artifact,
+        "integration":artifact, "human_calibration":artifact,
+    });
+    let mut inputs = Inputs {
+        stdin: serde_json::to_vec(&record).unwrap(),
+        ..Default::default()
+    };
+    let invocation = Cli::try_parse_from(base.into_iter().chain(["--reviewed"]))
+        .unwrap()
+        .prepare(&mut inputs)
+        .unwrap();
+    assert!(
+        matches!(invocation.action, Action::Local(LocalCommand::ServiceRecordQualification { record, .. }) if record.runtime_id == runtime())
+    );
+    assert_eq!(inputs.reads, 1);
+    let mut remote = Inputs::default();
+    assert!(
+        Cli::try_parse_from(base.into_iter().chain(["--reviewed", "--target", "remote"]))
+            .unwrap()
+            .prepare(&mut remote)
+            .is_err()
+    );
+    assert_eq!(
+        remote.reads, 0,
+        "remote refusal precedes reading the review input"
+    );
+
+    let qualification = runtime().to_string();
+    let handover = [
+        "kegari-v0",
+        "service",
+        "handover",
+        "--binary",
+        "/opt/kegari/candidate",
+        "--qualification",
+        qualification.as_str(),
+    ];
+    assert!(matches!(
+        Cli::try_parse_from(handover)
+            .unwrap()
+            .prepare(&mut Inputs::default())
+            .unwrap()
+            .action,
+        Action::Local(LocalCommand::ServiceHandover {
+            apply: false,
+            plan: None,
+            ..
+        })
+    ));
+    assert!(Cli::try_parse_from(handover.into_iter().chain(["--apply"])).is_err());
+    assert!(Cli::try_parse_from(handover.into_iter().chain(["--plan", "token"])).is_err());
+    assert!(
+        matches!(Cli::try_parse_from(handover.into_iter().chain(["--apply", "--plan", "token"]))
+        .unwrap().prepare(&mut Inputs::default()).unwrap().action,
+        Action::Local(LocalCommand::ServiceHandover { apply: true, plan: Some(token), .. }) if token == "token")
+    );
+    assert!(matches!(
+        prepare(&[
+            "service",
+            "inspect-candidate",
+            "--binary",
+            "/opt/kegari/candidate"
+        ])
+        .action,
+        Action::Local(LocalCommand::ServiceInspectCandidate { .. })
+    ));
+}
+
+#[test]
 fn evaluation_cli_preserves_declared_slot_and_requires_observed_revisions() {
     let workspace = Uuid::new_v4().to_string();
     let request_id = Uuid::new_v4();
@@ -842,6 +931,63 @@ fn error_and_observed_operation_exit_codes_match_contract() {
     assert_eq!(output.exit_code(), 0);
     output.state = Some("partial".into());
     assert_eq!(output.exit_code(), 7);
+}
+
+#[test]
+fn human_status_exposes_queue_attempts_next_action_and_actual_quota() {
+    let data = json!({"health": {
+        "driver": {"queued": [{"canonical_key":"child-1","account":"account-1","not_before":"2026-10-29T03:00:00Z"}],
+            "allocations": [], "account_refresh_after":{"account-1":"2026-10-29T02:50:00Z"},
+            "work_status":[{"work":"child-2","phase":"implementation","state":"blocked",
+                "preparation_attempt":2,"preparation_attempt_limit":3,
+                "error":{"code":"quota_wait","message":"Account allowance exhausted"},
+                "next_action":"Wait for a fresh account observation\u{001b}","retry_at":null}]},
+        "accounts":{"quota":{"account-1":{"state":"exhausted","reset_at":null}}}
+    }});
+    let hosted = json!({"health":{"runtime":data["health"],"recent_logs":{
+        "available":true,"truncated":true,"events":[{"at":"2026-10-29T03:01:00Z",
+        "severity":"warning","event":"worker_finished","outcome":"blocked",
+        "work":"child-2","operation_id":"operation-2","reason":"quota_wait\u{001b}"}]}}});
+    for data in [data, hosted] {
+        let output = OutputEnvelope::success(Uuid::new_v4(), Some(runtime()), data.clone());
+        let rendered = render_human(&output, Some("test"));
+        for expected in [
+            "Queued: 1",
+            "Running allocations: 0",
+            "Queued — child-1",
+            "attempt 2/3",
+            "quota_wait",
+            "Next action: Wait for a fresh account observation",
+            "Account account-1: exhausted",
+            "next observation after 2026-10-29T02:50:00Z",
+            "Complete status details",
+        ] {
+            assert!(rendered.contains(expected), "{expected}");
+        }
+        if data.pointer("/health/recent_logs").is_some() {
+            for expected in [
+                "Recent runtime activity",
+                "[warning] worker_finished — blocked",
+                "Earlier activity omitted",
+                "operation-2",
+            ] {
+                assert!(rendered.contains(expected), "{expected}");
+            }
+        }
+        assert!(!rendered.contains('\u{001b}'));
+        assert_eq!(output.data, data);
+    }
+    let unavailable = OutputEnvelope::success(
+        Uuid::new_v4(),
+        Some(runtime()),
+        json!({
+            "health":{"runtime":{"status":"prerequisite_blocked"},"recent_logs":{
+                "available":false,"error":"unsafe_storage","next_action":"Inspect protected logs"}}
+        }),
+    );
+    let rendered = render_human(&unavailable, Some("test"));
+    assert!(rendered.contains("Logs unavailable: unsafe_storage"));
+    assert!(rendered.contains("Next action: Inspect protected logs"));
 }
 
 #[derive(Default)]

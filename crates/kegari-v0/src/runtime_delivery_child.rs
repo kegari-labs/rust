@@ -14,7 +14,13 @@ use kegari_git::SourceCommitMetadata;
 use kegari_types::control::Lease;
 use kegari_types::run::PhaseKey;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use serde_json::Value;
+use std::{collections::BTreeSet, sync::Mutex};
+
+#[path = "runtime_delivery_prepared.rs"]
+mod prepared;
+#[path = "runtime_delivery_replacement.rs"]
+mod replacement_recovery;
 
 pub(super) struct ActivePhase {
     pub(super) admission: DeliveryAdmission,
@@ -134,6 +140,8 @@ struct ValidationRepairBasis {
 }
 struct ChildPipeline {
     reference: ChildReference,
+    replacement_work: Option<Arc<ReplacementWork>>,
+    replacement: Option<ReplacementDelta>,
     claim: Arc<CompletedChildClaim>,
     completion: Arc<RunCompletion>,
     source: Option<SealedChildSource>,
@@ -170,10 +178,100 @@ pub(super) struct CandidateChild {
 }
 #[derive(Default)]
 pub(super) struct Children {
+    prepared: Mutex<BTreeMap<Uuid, Arc<tokio::sync::Mutex<prepared::PreparedState>>>>,
     pipelines: Mutex<BTreeMap<Uuid, Arc<tokio::sync::Mutex<ChildPipeline>>>>,
     advancing: tokio::sync::Mutex<()>,
 }
 impl RuntimeDelivery {
+    pub(super) fn retain_replacement_work(
+        &self,
+        operation: Uuid,
+        work: Arc<ReplacementWork>,
+    ) -> Result<()> {
+        let leaf = format!("replacement-work-{operation}.json");
+        if let Some(existing) = self.runtime.retained_replacement_work(operation)? {
+            if existing.digest() != work.digest() {
+                return Err(Error::new(
+                    "operation_conflict",
+                    "replacement operation changed source or original contribution",
+                ));
+            }
+            return Ok(());
+        }
+        if self.records.path().join(&leaf).exists() {
+            return Err(Error::new(
+                "reconciliation_required",
+                "retained replacement requires original joined source and staged proof; do not replay the worker",
+            ));
+        }
+        let checkpoint = work.checkpoint(
+            self.runtime.control.snapshot()?.intent.runtime_id,
+            operation,
+        )?;
+        self.records.write(
+            &leaf,
+            &self
+                .runtime
+                .services
+                .key
+                .sign("runtime_replacement_work", &checkpoint)?,
+        )?;
+        self.runtime.retain_replacement_work(operation, work)?;
+        Ok(())
+    }
+    pub(super) async fn advance_replacement_worker(
+        &self,
+        lease: &Lease,
+        operation: Uuid,
+    ) -> Result<Option<(PublishedChild, StagedDelta)>> {
+        let operation = self.runtime.latest_replacement_operation(operation)?;
+        let work = self
+            .runtime
+            .retained_replacement_work(operation)?
+            .ok_or_else(|| {
+                Error::new(
+                    "reconciliation_required",
+                    "replacement needs its retained original authority",
+                )
+            })?;
+        let pipeline = self
+            .children
+            .pipelines
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "child registry lock failed"))?
+            .get(&operation)
+            .cloned();
+        if let Some(pipeline) = pipeline {
+            let child = pipeline.lock().await;
+            if child
+                .replacement_work
+                .as_ref()
+                .is_none_or(|w| w.digest() != work.digest())
+            {
+                return Err(Error::new(
+                    "replacement_mapping",
+                    "replacement child pipeline binding changed",
+                ));
+            }
+            if child.reference.stage == Stage::Complete {
+                return Ok(Some((
+                    (**required(&child.published, "published replacement")?).clone(),
+                    required(&child.staged, "replacement contribution")?.clone(),
+                )));
+            }
+            if let Some(error) = &child.reference.error {
+                return Err(error.clone());
+            }
+            return Ok(None);
+        }
+        if !self.worker_launch_admitted(operation)? {
+            let projection = self.runtime.observations.admission_snapshot()?;
+            let workspace = self.workspace(&projection, work.authority().workspace_id())?;
+            let assignment = workspace.coordinator.replacement_worker_assignment(&work)?;
+            self.launch_assignment(lease, operation, assignment).await?;
+        }
+        Ok(None)
+    }
     fn persist_child(&self, child: &ChildPipeline) -> Result<()> {
         self.records.write(
             &format!("child-pipeline-{}.json", child.reference.operation),
@@ -223,18 +321,88 @@ impl RuntimeDelivery {
         }
         Ok(Some((outcome, completion)))
     }
+    fn completed_replacement_is_current(
+        &self,
+        receipt: &crate::control::Receipt,
+        run: &kegari_types::run::RunReference,
+        projection: &RuntimeProjection,
+    ) -> Result<bool> {
+        let Some(workspace) = projection.workspaces.get(&run.workspace) else {
+            return Ok(false);
+        };
+        let Some((parent, child_id)) = workspace.parents.values().find_map(|parent| {
+            parent.children.iter().find_map(|(id, child)| {
+                child
+                    .key
+                    .identity()
+                    .is_ok_and(|key| key == run.phase.work)
+                    .then_some((parent, *id))
+            })
+        }) else {
+            return Ok(false);
+        };
+        let current = self.runtime.current_delivery(&parent.key)?;
+        let Some(verified) = current.verified_children().get(&child_id) else {
+            return Ok(false);
+        };
+        let crate::evidence::ChildOutcome::Replacement { delta, .. } = &verified.evidence().outcome
+        else {
+            return Ok(false);
+        };
+        let leaf = format!("child-pipeline-{}.json", receipt.operation_id);
+        if !self.records.path().join(&leaf).exists() {
+            return Ok(false);
+        }
+        let reference: kegari_secrets::Signed<ChildReference> = self.records.read(&leaf)?;
+        self.runtime
+            .services
+            .key
+            .verify("runtime_child_pipeline", &reference)?;
+        let reference = reference.payload;
+        if reference.schema_version != 1
+            || reference.runtime != receipt.runtime_id
+            || reference.operation != receipt.operation_id
+            || reference.work != verified.evidence().work
+            || reference.stage != Stage::Complete
+            || reference.phase_operation.is_some()
+            || reference.error.is_some()
+        {
+            return Ok(false);
+        }
+        let retained: kegari_secrets::Signed<Value> = self
+            .records
+            .read(&format!("replacement-work-{}.json", receipt.operation_id))?;
+        self.runtime
+            .services
+            .key
+            .verify("runtime_replacement_work", &retained)?;
+        crate::delivery::replacement_staging_original(delta)?;
+        let original = &delta.replacement.as_ref().unwrap().originals[0];
+        let expected_original = original.digest()?;
+        let payload = retained.payload;
+        Ok(matches!(
+            payload.get("schema_version").and_then(Value::as_u64),
+            Some(1 | 2)
+        ) && payload.get("operation") == Some(&json!(receipt.operation_id))
+            && payload.get("original").and_then(Value::as_str) == Some(expected_original.as_str())
+            && payload.pointer("/context/replacement_assignment/originals")
+                == Some(&json!([original]))
+            && payload.pointer("/context/replacement_assignment/production")
+                == Some(&json!(delta.validated_base)))
+    }
     fn discover_children(&self, projection: &RuntimeProjection) -> Result<()> {
         for receipt in self.runtime.control.operations()? {
             let Some(run) = crate::control::run_reference_from_receipt(&receipt)? else {
                 continue;
             };
-            if run.phase.phase != "implementation"
-                || !matches!(
-                    receipt.phase,
-                    crate::control::ReceiptPhase::Reconciled
-                        | crate::control::ReceiptPhase::Acknowledged
-                )
-            {
+            if !matches!(
+                run.phase.phase.as_str(),
+                "implementation" | "child_replacement"
+            ) || !matches!(
+                receipt.phase,
+                crate::control::ReceiptPhase::Reconciled
+                    | crate::control::ReceiptPhase::Acknowledged
+            ) {
                 continue;
             }
             if self
@@ -242,6 +410,25 @@ impl RuntimeDelivery {
                 .pipelines
                 .lock()
                 .map_err(|_| Error::new("runtime_unavailable", "child pipeline lock failed"))?
+                .contains_key(&receipt.operation_id)
+            {
+                continue;
+            }
+            if run.phase.phase == "child_replacement"
+                && self.completed_replacement_is_current(&receipt, &run, projection)?
+            {
+                // This only suppresses replay of an already closed pipeline.
+                // The current verified publication supplies delivery evidence;
+                // no process, original work capability or admission is adopted.
+                continue;
+            }
+            if self
+                .children
+                .prepared
+                .lock()
+                .map_err(|_| {
+                    Error::new("runtime_unavailable", "prepared child registry lock failed")
+                })?
                 .contains_key(&receipt.operation_id)
             {
                 continue;
@@ -273,11 +460,12 @@ impl RuntimeDelivery {
                 Ok(parent) => parent,
                 Err(_) => continue,
             };
-            if self
-                .runtime
-                .current_delivery(&parent.key)?
-                .verified_children()
-                .contains_key(&child)
+            if run.phase.phase != "child_replacement"
+                && self
+                    .runtime
+                    .current_delivery(&parent.key)?
+                    .verified_children()
+                    .contains_key(&child)
             {
                 continue;
             }
@@ -290,6 +478,14 @@ impl RuntimeDelivery {
                     Duration::seconds(30),
                 )?;
                 let workspace = self.workspace(projection, run.workspace)?;
+                let replacement_work = if run.phase.phase == "child_replacement" {
+                    let work = self.runtime.retained_replacement_work(receipt.operation_id)?
+                        .ok_or_else(|| Error::new("reconciliation_required", "retained replacement requires original staged/source authority; JSON cannot recreate it"))?;
+                    work.verify_completion(&completion)?;
+                    Some(work)
+                } else {
+                    None
+                };
                 let transition = self.runtime.completed_correction_transition(&outcome)?;
                 let claim = match transition {
                     Some(transition) => workspace.coordinator.accept_corrected_child_completion(
@@ -353,6 +549,8 @@ impl RuntimeDelivery {
                         None
                     };
                 let pipeline = ChildPipeline {
+                    replacement_work,
+                    replacement: None,
                     reference: ChildReference {
                         schema_version: 1,
                         runtime: receipt.runtime_id,
@@ -1342,6 +1540,12 @@ impl RuntimeDelivery {
         if let Some(proof) = &child.source_advanced
             && proof.phase().phase == assignment.phase()
         {
+            let mut assignment = assignment;
+            if assignment.validation_prefix().is_none()
+                && let Some(prefix) = proof.assignment().validation_prefix()
+            {
+                assignment.continue_validation(prefix.clone())?;
+            }
             proof.verify_assignment(&assignment)?;
             return Ok((proof.assignment().clone(), Some(proof.clone())));
         }
@@ -1373,7 +1577,7 @@ impl RuntimeDelivery {
                     &self.runtime,
                 )
                 .await?;
-            return Ok((assignment, Some(Arc::new(proof))));
+            return Ok((proof.assignment().clone(), Some(Arc::new(proof))));
         }
         if assignment.phase() == "child_codex_review"
             && let Some(repair) = self.granted_review_repair(child).await?
@@ -1410,7 +1614,7 @@ impl RuntimeDelivery {
                     &grants,
                 )
                 .await?;
-            return Ok((assignment, Some(Arc::new(proof))));
+            return Ok((proof.assignment().clone(), Some(Arc::new(proof))));
         }
         let phase = PhaseKey {
             work: assignment.authority().work_key()?,
@@ -1471,7 +1675,7 @@ impl RuntimeDelivery {
         } else {
             coordinator.source_advanced(request).await?
         };
-        Ok((assignment, Some(Arc::new(proof))))
+        Ok((proof.assignment().clone(), Some(Arc::new(proof))))
     }
     /// The exact prior pipeline owns the consumed Findings/validation pair.
     /// Neither a phase label nor a decoded reference can select this lineage.
@@ -1833,6 +2037,27 @@ impl RuntimeDelivery {
                 });
             }
         }
+        if !result.iter().any(|child| child.child == e2e)
+            && let Some(prepared) = self.prepared_e2e_candidate(work, e2e).await?
+        {
+            result.push(CandidateChild {
+                child: e2e,
+                published: None,
+                staged: prepared.staged().cloned(),
+            });
+        }
+        let superseded = result
+            .iter()
+            .filter_map(|c| c.staged.as_ref())
+            .filter_map(|s| s.delta().manifest.replacement.as_ref())
+            .flat_map(|m| m.originals.iter())
+            .map(|m| m.digest())
+            .collect::<Result<BTreeSet<_>>>()?;
+        result.retain(|c| {
+            c.staged.as_ref().is_none_or(|s| {
+                !superseded.contains(&s.delta().manifest.digest().unwrap_or_default())
+            })
+        });
         Ok(result)
     }
     pub(super) async fn delivered_children(
@@ -1857,6 +2082,26 @@ impl RuntimeDelivery {
                 && let Some(published) = &child.published
             {
                 result.push(((**published).clone(), child.staged.clone()));
+            }
+        }
+        let superseded = result
+            .iter()
+            .filter_map(|(_, s)| s.as_ref())
+            .filter_map(|s| s.delta().manifest.replacement.as_ref())
+            .flat_map(|m| m.originals.iter())
+            .map(|m| m.digest())
+            .collect::<Result<BTreeSet<_>>>()?;
+        result.retain(|(_, staged)| {
+            staged.as_ref().is_none_or(|s| {
+                !superseded.contains(&s.delta().manifest.digest().unwrap_or_default())
+            })
+        });
+        for (published, staged) in self.prepared_child_publications(work).await? {
+            if !result.iter().any(|(existing, _)| {
+                existing.verified().evidence().work.child
+                    == published.verified().evidence().work.child
+            }) {
+                result.push((published, staged));
             }
         }
         Ok(result)
@@ -1917,6 +2162,7 @@ impl RuntimeDelivery {
     }
     pub(super) async fn maintain_child_phases(&self, projection: &RuntimeProjection) -> Result<()> {
         let _serial = self.children.advancing.lock().await;
+        self.advance_prepared_children(None, projection).await?;
         let retained: Vec<_> = self
             .children
             .pipelines
@@ -1959,6 +2205,10 @@ impl RuntimeDelivery {
         projection: &RuntimeProjection,
     ) -> Result<()> {
         let _serial = self.children.advancing.lock().await;
+        self.restore_replacement_assignments(projection).await?;
+        self.restore_prepared_children(projection).await?;
+        self.advance_prepared_children(Some(lease), projection)
+            .await?;
         self.discover_children(projection)?;
         let retained: Vec<_> = self
             .children
@@ -2081,6 +2331,7 @@ impl RuntimeDelivery {
             child.claim.claim().disposition,
             ChildClaimDisposition::Changed
         );
+        let replacement = child.replacement_work.is_some();
         let phase = match child.reference.stage {
             Stage::Seal => DeliveryPhase::SourceSealing,
             Stage::LaunchValidation | Stage::Validate | Stage::RetryValidation => {
@@ -2088,21 +2339,27 @@ impl RuntimeDelivery {
             }
             Stage::PublishBranch | Stage::PullRequest => DeliveryPhase::PublishChild,
             Stage::Hosted => {
-                if changed {
+                if replacement {
+                    DeliveryPhase::Replacement
+                } else if changed {
                     DeliveryPhase::HostedValidation
                 } else {
                     DeliveryPhase::NoChange
                 }
             }
             Stage::LaunchReview | Stage::Review | Stage::RetryReview => {
-                if changed {
+                if replacement {
+                    DeliveryPhase::Replacement
+                } else if changed {
                     DeliveryPhase::ReviewPublication
                 } else {
                     DeliveryPhase::NoChange
                 }
             }
             Stage::IntegrateStaging | Stage::ObserveStaging | Stage::Publish | Stage::Close => {
-                if changed {
+                if replacement {
+                    DeliveryPhase::Replacement
+                } else if changed {
                     DeliveryPhase::Staging
                 } else {
                     DeliveryPhase::NoChange
@@ -2132,6 +2389,12 @@ impl RuntimeDelivery {
             if let Some(completion) = self.runtime.retained_completion(operation)?
                 && matches!(completion.outcome, crate::worker_run::RunOutcome::Failed)
             {
+                if child.replacement_work.is_some() {
+                    return Err(Error::new(
+                        "replacement_gate",
+                        "replacement validation or review failed; preserve this attempt and its original staged evidence",
+                    ));
+                }
                 let next = if child.reference.stage == Stage::Validate {
                     Stage::RetryValidation
                 } else {
@@ -2169,6 +2432,8 @@ impl RuntimeDelivery {
                 .integrated_responsibility_ready(&workspace, &parent, &gate)
                 .await?
         {
+            self.checkpoint_e2e_candidate(lease, &workspace, &gate, child, phase)
+                .await?;
             return Ok(());
         }
         let review_grant = if child.reference.stage == Stage::RetryReview {
@@ -2366,6 +2631,9 @@ impl RuntimeDelivery {
                 let result = match result {
                     Ok(result) => result,
                     Err(error) if terminal_gate_failure(&error) => {
+                        if replacement {
+                            return Err(error);
+                        }
                         let request = ValidationRepairRequest {
                             source: RepairSource {
                                 paired_completion: child.paired_completion.clone(),
@@ -2498,6 +2766,50 @@ impl RuntimeDelivery {
                 )?;
             }
             Stage::PublishBranch => {
+                if let Some(work) = &child.replacement_work {
+                    if child.replacement.is_none() {
+                        child.replacement = Some(
+                            coordinator
+                                .capture_replacement_source(
+                                    &admission,
+                                    work.clone(),
+                                    &child.claim,
+                                    required(&child.source, "sealed replacement source")?,
+                                    &child.completion,
+                                )
+                                .await?,
+                        );
+                    }
+                    let issue = parent
+                        .children
+                        .get(&child.reference.work.child.unwrap())
+                        .and_then(|c| c.issue.as_ref())
+                        .ok_or_else(|| {
+                            Error::new("incomplete_snapshot", "replacement child metadata missing")
+                        })?;
+                    let title = &parent
+                        .issue
+                        .as_ref()
+                        .ok_or_else(|| {
+                            Error::new("incomplete_snapshot", "replacement parent missing")
+                        })?
+                        .title;
+                    let actual = required(&child.replacement, "captured replacement")?;
+                    let branch = actual.branch(&current.git, &issue.identifier, title)?;
+                    child.branch = Some(
+                        coordinator
+                            .publish_replacement_branch(
+                                &admission,
+                                actual,
+                                required(&child.source, "sealed replacement")?,
+                                required(&child.local, "replacement validation")?,
+                                &branch,
+                            )
+                            .await?,
+                    );
+                    self.finish_child_phase(child, Stage::Hosted)?;
+                    return Ok(());
+                }
                 let issue = parent
                     .children
                     .get(&child.reference.work.child.unwrap())
@@ -2568,7 +2880,7 @@ impl RuntimeDelivery {
             }
             Stage::Hosted => {
                 let verifier = self.hosted_verifier(&workspace.configuration).await?;
-                let result = if changed {
+                let result = if changed && !replacement {
                     coordinator
                         .acquire_child_validation(&admission, &verifier)
                         .await
@@ -2594,7 +2906,11 @@ impl RuntimeDelivery {
                 }
             }
             Stage::LaunchReview => {
-                let target = if changed {
+                let target = if replacement {
+                    ChildReviewTarget::Replacement {
+                        replacement: required(&child.replacement, "captured replacement")?,
+                    }
+                } else if changed {
                     ChildReviewTarget::Changed {
                         change: required(&child.source, "sealed source")?
                             .change()
@@ -2620,6 +2936,16 @@ impl RuntimeDelivery {
                     &review,
                 )?;
                 child.assignment = Some(review);
+                if replacement {
+                    child.review_worker_assignment = Some(assignment.clone());
+                    let operation = child.reference.review.unwrap_or_else(Uuid::new_v4);
+                    child.reference.review = Some(operation);
+                    self.finish_child_phase(child, Stage::LaunchReview)?;
+                    self.persist_child(child)?;
+                    self.launch_assignment(lease, operation, assignment).await?;
+                    child.reference.stage = Stage::Review;
+                    return self.persist_child(child);
+                }
                 let (assignment, advanced) = self
                     .advanced_assignment(&coordinator, &admission, child, assignment)
                     .await?;
@@ -2816,6 +3142,20 @@ impl RuntimeDelivery {
                 let (outcome, completion) = self
                     .completed_claim(child.reference.review.unwrap())?
                     .ok_or_else(|| Error::new("operation_pending", "Codex review remains owned"))?;
+                if replacement {
+                    child.review = Some(
+                        coordinator
+                            .publish_completed_review(
+                                &admission,
+                                required(&child.assignment, "replacement review assignment")?,
+                                &outcome,
+                                &completion,
+                            )
+                            .await?,
+                    );
+                    self.finish_child_phase(child, Stage::Publish)?;
+                    return Ok(());
+                }
                 let grants = self.current_review_grants(&child.reference.work)?;
                 let completed = Arc::new(
                     coordinator
@@ -2950,6 +3290,22 @@ impl RuntimeDelivery {
                 self.finish_child_phase(child, Stage::Publish)?;
             }
             Stage::Publish => {
+                if replacement {
+                    let (published, staged) = coordinator
+                        .publish_replacement_child(
+                            &admission,
+                            &workspace.workflow,
+                            required(&child.replacement, "captured replacement")?,
+                            required(&child.local, "replacement validation")?,
+                            required(&child.exact, "replacement exact CI")?,
+                            required(&child.review, "replacement review")?,
+                        )
+                        .await?;
+                    child.published = Some(Box::new(published));
+                    child.staged = Some(staged);
+                    self.finish_child_phase(child, Stage::Close)?;
+                    return Ok(());
+                }
                 let action = if changed {
                     ChildDeliveryAction::PublishChanged {
                         local: required(&child.local, "local checks")?,
@@ -3018,6 +3374,7 @@ pub(super) fn terminal_gate_failure(error: &Error) -> bool {
             | "review_failed"
             | "review_gate"
             | "integrated_gate"
+            | "replacement_gate"
     )
 }
 fn required<'a, T>(value: &'a Option<T>, name: &str) -> Result<&'a T> {
@@ -3241,6 +3598,8 @@ mod retention_tests {
         );
         let operation = claim.operation_id();
         let pipeline = Arc::new(tokio::sync::Mutex::new(ChildPipeline {
+            replacement_work: None,
+            replacement: None,
             reference: ChildReference {
                 schema_version: 1,
                 runtime: service.runtime.configuration.snapshot().unwrap().runtime.id,

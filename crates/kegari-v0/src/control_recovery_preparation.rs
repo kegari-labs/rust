@@ -124,6 +124,24 @@ impl SessionRecoveryPreparationReference {
         Ok(Some(value))
     }
 }
+/// A completed read is history, not its lost live proof. A fresh bounded
+/// metadata admission may observe it again after restart without replaying a
+/// model turn or adopting the old provider process.
+pub(crate) fn metadata_readback_refreshable(receipt: &Receipt) -> bool {
+    receipt.phase == ReceiptPhase::Reconciled
+        && receipt.observed_result.as_ref().is_some_and(|value| {
+            value["local_execution"] == "exited"
+                && value["unresolved_effects"]
+                    .as_array()
+                    .is_some_and(Vec::is_empty)
+                && value["observation"]["metadata_recovery"] == "verified"
+                && value["observation"]["local_exit_confirmed"] == true
+                && value["observation"]["proof_digest"]
+                    .as_str()
+                    .is_some_and(|digest| crate::evidence::validate_digest(digest).is_ok())
+        })
+}
+
 impl ControlHost {
     pub(crate) fn admit_session_recovery_preparation(
         &self,
@@ -265,13 +283,14 @@ impl ControlHost {
                         || v["unresolved_effects"]
                             .as_array()
                             .is_none_or(|v| !v.is_empty())
-                        || v["observation"]["metadata_recovery"] != "failed_no_effect"
-                        || v["observation"]["retryable"] != true
+                        || !(v["observation"]["metadata_recovery"] == "failed_no_effect"
+                            && v["observation"]["retryable"] == true
+                            || paired.is_none() && metadata_readback_refreshable(previous))
                 })
             {
                 return Err(Error::new(
                     "reconciliation_required",
-                    "prior metadata recovery is not a known retryable no-effect failure",
+                    "prior metadata recovery is neither retryable nor a confirmed closed ordinary readback",
                 ));
             }
             latest = latest.max(previous.updated_at);
@@ -517,5 +536,54 @@ mod tests {
             "reconciliation_required"
         );
         assert_eq!(host.operation(effect).unwrap().phase, ReceiptPhase::Sent);
+    }
+    #[test]
+    fn verified_metadata_readback_can_refresh_within_original_budget() {
+        let (_temp, host, lease, mut reference) = setup();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let first = host
+            .admit_session_recovery_preparation(&lease, reference.clone(), digest("scope"), |_| {
+                Ok(())
+            })
+            .unwrap();
+        let prior = host.retire_local(first.operation_id, json!({
+            "metadata_recovery":"verified", "proof_digest":digest("old in-memory proof"), "local_exit_confirmed":true
+        })).unwrap();
+        assert!(metadata_readback_refreshable(&prior));
+        let mut unknown = prior.clone();
+        unknown.observed_result.as_mut().unwrap()["observation"]["local_exit_confirmed"] =
+            json!(false);
+        assert!(!metadata_readback_refreshable(&unknown));
+        reference.attempt = 2;
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let next = host
+            .admit_session_recovery_preparation(
+                &lease,
+                reference.clone(),
+                digest("fresh scope"),
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_ne!(next.operation_id, first.operation_id);
+        assert!(
+            !host
+                .operation(next.operation_id)
+                .unwrap()
+                .expected
+                .contains_key("run")
+        );
+        assert_eq!(
+            canonical_digest(1, &prior).unwrap(),
+            canonical_digest(1, &host.operation(first.operation_id).unwrap()).unwrap()
+        );
+        host.retire_local(next.operation_id, json!({"metadata_recovery":"verified", "proof_digest":digest("new actual readback"), "local_exit_confirmed":true})).unwrap();
+        reference.attempt = 3;
+        reference.max_attempts = 3;
+        assert_eq!(
+            host.admit_session_recovery_preparation(&lease, reference, digest("scope"), |_| Ok(()))
+                .unwrap_err()
+                .code,
+            "attempts_exhausted"
+        );
     }
 }

@@ -101,6 +101,7 @@ pub async fn run_native(factory: &dyn HostRuntimeFactory) -> Result<()> {
         json!({"local":"starting","remote":{"enabled":false},"supervisor":"starting"}),
     ));
     let workflow = Arc::new(HostedWorkflow {
+        runtime: config.runtime.id,
         inner: backend.clone(),
         health: health.clone(),
         logs: logs.clone(),
@@ -465,6 +466,7 @@ fn log(logs: &LogSink, runtime_id: Uuid, event: &str, outcome: &str, error: Opti
     });
 }
 struct HostedWorkflow {
+    runtime: Uuid,
     inner: Arc<dyn WorkflowControl>,
     health: Arc<RwLock<Value>>,
     logs: Arc<LogSink>,
@@ -475,7 +477,7 @@ impl WorkflowControl for HostedWorkflow {
     }
     fn health(&self) -> Result<Value> {
         Ok(
-            json!({"runtime":self.inner.health()?,"control_host":self.health.read().map_err(|_|Error::new("control_failed","host health is unavailable"))?.clone(),"logs":self.logs.health()}),
+            json!({"runtime":self.inner.health()?,"control_host":self.health.read().map_err(|_|Error::new("control_failed","host health is unavailable"))?.clone(),"logs":self.logs.health(),"recent_logs":self.logs.recent(self.runtime)}),
         )
     }
     fn command_targets(&self, request: &CommandRequest) -> Result<Vec<String>> {

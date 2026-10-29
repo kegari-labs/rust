@@ -22,7 +22,9 @@ The backend `platform` module retains registration, owner records, runtime locks
 service planning/installation/lifecycle, handover, `BuildInfo` and installed-build
 verification. It does not provide compatibility reexports of moved interfaces.
 Application authorization and the assembled application's build identity remain
-backend-owned.
+backend-owned. These helpers serve Kegari's own Codex/Git/control processes.
+[SPEC 1.5](../kegari-v0/SPEC.md) assigns repository execution and supported terminal
+lifecycle to Codex app-server; native helpers are not a mandate to recreate them.
 
 ## Ownership and native boundaries
 
@@ -50,13 +52,14 @@ Run standalone checks with the pinned toolchain and existing cache:
 cargo test --offline --locked --release -p kegari-platform
 ```
 
-Use workspace-wide tests and Clippy for backend and CLI integration. The owned-child
-cleanup fixture moves with its implementation. The two native platform qualification
-tests retain their names, macOS guard and ignored status; the third native test
-remains ignored in backend isolation. This refactor does not authorize native/live
-qualification or add OS support.
+Use focused checks for changed host/CLI behavior under the
+[development policy](../../docs/development.md#feature-first-development-policy).
+The owned-child cleanup fixture remains with its implementation. The two native
+platform qualification tests retain their macOS guard and ignored status. The
+obsolete custom-command qualification test was removed with that executor. This documentation does not
+authorize native/live qualification or add OS support.
 
-Version remains `0.2.0-alpha.10`; executable behaviour, persisted/API schemas and
-instruction assets are unchanged. No new alpha is packaged. See
+Version remains `0.2.0-alpha.10`. The redesign changes are recorded in current
+progress; the extraction report retains its original schema/asset evidence. No new alpha is packaged. See
 [current progress](../kegari-v0/PROGRESS.md) and the
 [verification report](../kegari-v0/validation/PLATFORM-EXTRACTION.md).

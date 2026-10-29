@@ -22,6 +22,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use uuid::Uuid;
 
+#[path = "git_unborn.rs"]
+mod unborn;
+pub(crate) use unborn::VerifiedUnbornClone;
+
 #[path = "git_acquired_clone.rs"]
 mod acquired_clone;
 #[path = "git_object_import.rs"]
@@ -707,7 +711,23 @@ impl Git {
                 "source changed while finalizing its commit",
             ));
         }
-        self.assert_clean(path)?;
+        // Codex may leave ignored build products beside the source. They are
+        // excluded from the source snapshot above and must not invalidate an
+        // otherwise exact commit. Candidate assembly retains its stricter
+        // ambient-file check; tracked and non-ignored changes still fail here.
+        if !self
+            .run(
+                path,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+                None,
+            )?
+            .is_empty()
+        {
+            return Err(Error::new(
+                "dirty_candidate",
+                "committed source contains untracked or uncommitted changes; preserved for inspection",
+            ));
+        }
         Ok(Some(CommittedSource {
             base: binding.revision.clone(),
             revision,
@@ -771,12 +791,55 @@ impl Git {
         Ok(result)
     }
 
+    /// Paths which can contribute repository source: tracked entries (including
+    /// tracked deletions) and untracked entries not excluded by Git's ignore
+    /// rules. Generated ignored output is not repository source evidence.
+    pub(crate) fn observed_source_paths(
+        &self,
+        path: &Path,
+        limit: usize,
+    ) -> Result<BTreeSet<String>> {
+        let output = self.run(
+            path,
+            &[
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
+            None,
+        )?;
+        let mut names = BTreeSet::new();
+        for name in output
+            .split(|byte| *byte == 0)
+            .filter(|name| !name.is_empty())
+        {
+            let name = std::str::from_utf8(name).map_err(|_| {
+                Error::new("unsupported_repository", "source file paths must be UTF-8")
+            })?;
+            validate_repo_path(name)?;
+            names.insert(name.to_owned());
+            if names.len() > limit {
+                return Err(Error::new(
+                    "source_limit",
+                    "source file inventory exceeds bound",
+                ));
+            }
+        }
+        Ok(names)
+    }
+
     fn raw_source_snapshot(
         &self,
         path: &Path,
         tracked: &BTreeMap<String, (String, String)>,
     ) -> Result<BTreeMap<String, RawSourceFile>> {
-        let others = self.run(path, &["ls-files", "--others", "-z"], None)?;
+        let others = self.run(
+            path,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            None,
+        )?;
         let mut names: BTreeSet<String> = tracked.keys().cloned().collect();
         for name in others
             .split(|byte| *byte == 0)
@@ -788,6 +851,14 @@ impl Git {
             validate_repo_path(name)?;
             names.insert(name.into());
         }
+        self.raw_source_paths_snapshot(path, names)
+    }
+
+    fn raw_source_paths_snapshot(
+        &self,
+        path: &Path,
+        names: BTreeSet<String>,
+    ) -> Result<BTreeMap<String, RawSourceFile>> {
         if names.len() > 100_000 {
             return Err(Error::new("source_limit", "source inventory exceeds bound"));
         }
@@ -1179,67 +1250,6 @@ impl Git {
     }
     pub fn executable(&self) -> &Path {
         &self.executable
-    }
-    /// Structured trusted reads never run repository hooks, filters, shell or
-    /// external diff/textconv drivers. Scoped runtime handles gate and journal
-    /// these commands exactly like all their other metadata subprocesses.
-    pub fn inspect_read_only(
-        &self,
-        cwd: &Path,
-        inspection: &crate::execution::GitInspection,
-    ) -> Result<kegari_execution::CommandOutcome> {
-        let mut args: Vec<String> = Vec::new();
-        match inspection {
-            crate::execution::GitInspection::Status => args
-                .extend(["status", "--porcelain=v1", "--untracked-files=all"].map(str::to_owned)),
-            crate::execution::GitInspection::Diff { staged } => {
-                args.extend(
-                    [
-                        "diff",
-                        "--binary",
-                        "--full-index",
-                        "--no-ext-diff",
-                        "--no-textconv",
-                        "--no-renames",
-                    ]
-                    .map(str::to_owned),
-                );
-                if *staged {
-                    args.push("--cached".into());
-                }
-                args.push("--".into());
-            }
-            crate::execution::GitInspection::ShowFile { commit, path } => {
-                validate_oid(commit)?;
-                validate_repo_path(path)?;
-                args.extend([
-                    "show".into(),
-                    "--no-ext-diff".into(),
-                    "--no-textconv".into(),
-                    format!("{commit}:{path}"),
-                ]);
-            }
-        }
-        let mut command = self.command(cwd);
-        command.args(&args);
-        let argv = std::iter::once(command.get_program().to_string_lossy().into_owned())
-            .chain(command.get_args().map(|a| a.to_string_lossy().into_owned()))
-            .collect();
-        let started = std::time::Instant::now();
-        let output = self.finish_command(command, None)?;
-        Ok(kegari_execution::CommandOutcome {
-            schema_version: 1,
-            argv,
-            cwd: cwd.to_owned(),
-            isolation_digest: String::new(),
-            exit_code: output.status.code(),
-            termination_signal: std::os::unix::process::ExitStatusExt::signal(&output.status),
-            timed_out: false,
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            output_truncated: false,
-            elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-        })
     }
     /// Fixed read-only inventory queries for explicit cleanup eligibility.
     pub fn cleanup_read(&self, root: &Path, query: CleanupRead) -> Result<String> {
@@ -1649,6 +1659,17 @@ impl Git {
             ));
         }
         Ok(sorted.into_iter().collect())
+    }
+
+    /// Actual immutable parent inventory used by the synthetic evaluation DTO.
+    pub(crate) fn observed_commit_parents(&self, repository: &Path, commit: &str) -> Result<Vec<String>> {
+        validate_oid(commit)?;
+        let line = self.text(repository, &["rev-list", "--parents", "-n", "1", commit, "--"])?;
+        let values: Vec<&str> = line.split_whitespace().collect();
+        if values.first().copied() != Some(commit) || values.len() > 65 {
+            return Err(Error::new("provenance_mismatch", "actual commit parent inventory differs"));
+        }
+        values[1..].iter().map(|v| {validate_oid(v)?; Ok((*v).to_owned())}).collect()
     }
 
     fn single_parent(&self, repository: &Path, commit: &str, expected: &str) -> Result<()> {
@@ -2159,8 +2180,9 @@ impl Git {
     }
 
     /// Validation gates must test the recorded commit/tree, not a dirty working
-    /// tree accidentally labelled with HEAD. Only previously declared untracked
-    /// output files may differ; tracked source changes always invalidate it.
+    /// tree accidentally labelled with HEAD. Git-ignored build products are not
+    /// source; other untracked files must be declared outputs. Tracked source
+    /// changes always invalidate the recorded revision.
     pub fn verify_execution_tree(
         &self,
         source: &Path,
@@ -2175,13 +2197,7 @@ impl Git {
         }
         let status = self.run(
             source,
-            &[
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=all",
-                "--ignored=matching",
-            ],
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
             None,
         )?;
         for entry in status.split(|b| *b == 0).filter(|p| !p.is_empty()) {
@@ -2198,7 +2214,7 @@ impl Git {
             if !outputs.contains(&source.join(path)) {
                 return Err(Error::new(
                     "dirty_execution",
-                    "execution contains an undeclared untracked or ignored file",
+                    "execution contains an undeclared untracked file",
                 ));
             }
         }
@@ -2386,7 +2402,8 @@ impl Git {
         self.assert_clean(&path)?;
         for delta in request.deltas {
             self.run(&path, &["apply", "--check", "--index", "--binary", "--whitespace=nowarn", "--"], Some(&delta.patch))
-                .map_err(|_| Error::new("isolated_patch_conflict", "selected patch cannot apply unchanged to production; route to scoped child work or a declared dependency"))?;
+                .map_err(|_| Error::new("isolated_patch_conflict", "selected patch cannot apply unchanged to production; route to scoped child work or a declared dependency")
+                    .detail(serde_json::json!({"delta_digest":delta.manifest.digest().ok(),"child_id":delta.manifest.child_id,"production":production})))?;
             self.run(
                 &path,
                 &["apply", "--index", "--binary", "--whitespace=nowarn", "--"],

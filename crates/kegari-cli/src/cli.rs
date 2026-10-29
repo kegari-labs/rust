@@ -347,6 +347,38 @@ pub enum ServiceCommand {
     },
     Start(Mutation),
     Stop(Mutation),
+    /// Inspect candidate identities without recording qualification or changing the service.
+    InspectCandidate {
+        #[arg(long)]
+        binary: PathBuf,
+        #[command(flatten)]
+        mutation: Mutation,
+    },
+    /// Record explicit human review of qualification evidence for an installed candidate.
+    RecordQualification {
+        #[arg(long)]
+        binary: PathBuf,
+        #[arg(long)]
+        from: PathBuf,
+        /// Confirm that you reviewed the supplied qualification evidence.
+        #[arg(long, required = true)]
+        reviewed: bool,
+        #[command(flatten)]
+        mutation: Mutation,
+    },
+    /// Inspect or explicitly apply a qualified replacement while the service is stopped.
+    Handover {
+        #[arg(long)]
+        binary: PathBuf,
+        #[arg(long)]
+        qualification: Uuid,
+        #[arg(long, requires = "plan")]
+        apply: bool,
+        #[arg(long, requires = "apply")]
+        plan: Option<String>,
+        #[command(flatten)]
+        mutation: Mutation,
+    },
 }
 
 pub trait InputSource {
@@ -480,9 +512,24 @@ impl ServerCommand {
 pub enum LocalCommand {
     TargetList,
     TargetAdd(Target),
-    ServiceInstall { binary: PathBuf },
+    ServiceInstall {
+        binary: PathBuf,
+    },
     ServiceStart,
     ServiceStop,
+    ServiceInspectCandidate {
+        binary: PathBuf,
+    },
+    ServiceRecordQualification {
+        binary: PathBuf,
+        record: Box<kegari_v0::housekeeping::RuntimeQualification>,
+    },
+    ServiceHandover {
+        binary: PathBuf,
+        qualification: Uuid,
+        apply: bool,
+        plan: Option<String>,
+    },
 }
 #[derive(Debug)]
 pub enum GuidanceRequest {
@@ -910,6 +957,65 @@ impl Cli {
                 local_only(&self.target)?;
                 request_id = mutation.request_id;
                 Action::Local(LocalCommand::ServiceStop)
+            }
+            Command::Service(ServiceCommand::RecordQualification {
+                binary,
+                from,
+                reviewed,
+                mutation,
+            }) => {
+                local_only(&self.target)?;
+                if !reviewed || !binary.is_absolute() {
+                    return Err(Error::invalid(
+                        "qualification recording requires --reviewed and an absolute installed binary path",
+                    ));
+                }
+                let document = read_from(source, &from, MAX_CONFIG)?;
+                let record = serde_json::from_str(&document).map_err(|_| {
+                    Error::invalid(
+                        "qualification input must be a complete RuntimeQualification JSON record",
+                    )
+                })?;
+                request_id = mutation.request_id;
+                Action::Local(LocalCommand::ServiceRecordQualification {
+                    binary,
+                    record: Box::new(record),
+                })
+            }
+            Command::Service(ServiceCommand::InspectCandidate { binary, mutation }) => {
+                local_only(&self.target)?;
+                if !binary.is_absolute() {
+                    return Err(Error::invalid(
+                        "candidate inspection needs an absolute installed binary path",
+                    ));
+                }
+                request_id = mutation.request_id;
+                Action::Local(LocalCommand::ServiceInspectCandidate { binary })
+            }
+            Command::Service(ServiceCommand::Handover {
+                binary,
+                qualification,
+                apply,
+                plan,
+                mutation,
+            }) => {
+                local_only(&self.target)?;
+                not_nil(qualification)?;
+                if !binary.is_absolute() {
+                    return Err(Error::invalid(
+                        "handover needs an absolute installed binary path",
+                    ));
+                }
+                if let Some(token) = &plan {
+                    nonempty(token, "handover plan")?;
+                }
+                request_id = mutation.request_id;
+                Action::Local(LocalCommand::ServiceHandover {
+                    binary,
+                    qualification,
+                    apply,
+                    plan,
+                })
             }
         };
         let request_id = request_id.unwrap_or_else(Uuid::new_v4);
@@ -1358,6 +1464,8 @@ pub fn render_human(output: &OutputEnvelope, target: Option<&str>) -> String {
     } else {
         text.push_str("Result: acknowledged; observed state is reported below\n");
     }
+    render_runtime_progress(&mut text, &output.data);
+    render_recent_logs(&mut text, &output.data);
     if let Some(object) = output.data.as_object() {
         let keys = [
             ("ready_for_release", "Ready for release"),
@@ -1408,4 +1516,152 @@ pub fn render_human(output: &OutputEnvelope, target: Option<&str>) -> String {
         ));
     }
     text
+}
+
+fn render_runtime_progress(text: &mut String, data: &Value) {
+    let Some(health) = data
+        .pointer("/health/runtime")
+        .or_else(|| data.get("health"))
+    else {
+        return;
+    };
+    let Some(driver) = health.get("driver").filter(|v| v.is_object()) else {
+        return;
+    };
+    let field = |value: &Value, name: &str| {
+        printable(value.get(name).and_then(Value::as_str).unwrap_or("unknown"))
+    };
+    let queued = driver.get("queued").and_then(Value::as_array);
+    let running = driver.get("allocations").and_then(Value::as_array);
+    text.push_str(&format!(
+        "\nWork progress\nQueued: {} · Running allocations: {}\n",
+        queued.map_or(0, Vec::len),
+        running.map_or(0, Vec::len),
+    ));
+    for work in queued.into_iter().flatten() {
+        text.push_str(&format!(
+            "Queued — {} · account {} · eligible after {}\n",
+            field(work, "canonical_key"),
+            field(work, "account"),
+            field(work, "not_before"),
+        ));
+    }
+    for work in driver
+        .get("work_status")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        text.push_str(&format!(
+            "{} — {} · {}",
+            field(work, "state"),
+            field(work, "work"),
+            field(work, "phase"),
+        ));
+        if let (Some(attempt), Some(limit)) = (
+            work.get("preparation_attempt").and_then(Value::as_u64),
+            work.get("preparation_attempt_limit")
+                .and_then(Value::as_u64),
+        ) {
+            text.push_str(&format!(" · attempt {attempt}/{limit}"));
+        }
+        text.push('\n');
+        if let Some(error) = work.get("error").filter(|error| error.is_object()) {
+            text.push_str(&format!(
+                "  {}: {}\n",
+                field(error, "code"),
+                field(error, "message")
+            ));
+        }
+        if let Some(next) = work.get("next_action").and_then(Value::as_str) {
+            text.push_str(&format!("  Next action: {}\n", printable(next)));
+        }
+        if let Some(at) = work.get("retry_at").and_then(Value::as_str) {
+            text.push_str(&format!("  Retry after: {}\n", printable(at)));
+        }
+    }
+    if let Some(accounts) = health.pointer("/accounts/quota").and_then(Value::as_object) {
+        for (name, quota) in accounts {
+            text.push_str(&format!(
+                "Account {}: {}",
+                printable(name),
+                field(quota, "state")
+            ));
+            if let Some(at) = driver
+                .get("account_refresh_after")
+                .and_then(|v| v.get(name))
+                .and_then(Value::as_str)
+            {
+                text.push_str(&format!(" · next observation after {}", printable(at)));
+            }
+            text.push('\n');
+        }
+    }
+    for hold in health
+        .pointer("/accounts/provider_holds")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        text.push_str(&format!(
+            "Provider hold — account {} · operation {} · work {}\n",
+            field(hold, "account"),
+            field(hold, "operation_id"),
+            field(hold, "work")
+        ));
+        if let Some(reason) = hold
+            .pointer("/intervention/reason_code")
+            .and_then(Value::as_str)
+        {
+            text.push_str(&format!("  Provider reason: {}\n", printable(reason)));
+        }
+        if let Some(next) = hold
+            .pointer("/readmission/next_action")
+            .and_then(Value::as_str)
+        {
+            text.push_str(&format!("  Next action: {}\n", printable(next)));
+        }
+    }
+    text.push_str("\nComplete status details\n");
+}
+
+fn render_recent_logs(text: &mut String, data: &Value) {
+    let Some(logs) = data.pointer("/health/recent_logs") else {
+        return;
+    };
+    text.push_str("\nRecent runtime activity\n");
+    if logs.get("available").and_then(Value::as_bool) != Some(true) {
+        let error = logs
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unavailable");
+        text.push_str(&format!("Logs unavailable: {}\n", printable(error)));
+        if let Some(next) = logs.get("next_action").and_then(Value::as_str) {
+            text.push_str(&format!("Next action: {}\n", printable(next)));
+        }
+        return;
+    }
+    let events = logs.get("events").and_then(Value::as_array);
+    if events.is_none_or(Vec::is_empty) {
+        text.push_str("(no retained diagnostic events)\n");
+    }
+    for event in events.into_iter().flatten() {
+        let field = |name| printable(event.get(name).and_then(Value::as_str).unwrap_or("unknown"));
+        text.push_str(&format!(
+            "{} [{}] {} — {}",
+            field("at"),
+            field("severity"),
+            field("event"),
+            field("outcome")
+        ));
+        for name in ["work", "operation_id", "reason"] {
+            if let Some(value) = event.get(name).and_then(Value::as_str) {
+                text.push_str(&format!(" · {}", printable(value)));
+            }
+        }
+        text.push('\n');
+    }
+    if logs.get("truncated").and_then(Value::as_bool) == Some(true) {
+        text.push_str("Earlier activity omitted from this bounded tail; authoritative receipts are retained separately.\n");
+    }
 }

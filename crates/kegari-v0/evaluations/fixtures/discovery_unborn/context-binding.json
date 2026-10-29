@@ -1,0 +1,148 @@
+{
+  "schema_version": 4,
+  "slots": [
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000065/issue/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000065/issue/workspace_id",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000065/key/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000065/key/workspace",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000065/parent_reference",
+      "source": "parent_reference"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000065/profile",
+      "source": "profile"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000065/work",
+      "source": "child_work"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000066/issue/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000066/issue/workspace_id",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000066/key/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000066/key/workspace",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000066/parent_reference",
+      "source": "parent_reference"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000066/profile",
+      "source": "profile"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000066/work",
+      "source": "child_work"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000067/issue/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000067/issue/workspace_id",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000067/key/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000067/key/workspace",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000067/parent_reference",
+      "source": "parent_reference"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000067/profile",
+      "source": "profile"
+    },
+    {
+      "pointer": "/children/00000000-0000-0000-0000-000000000067/work",
+      "source": "child_work"
+    },
+    {
+      "pointer": "/evidence/native_context/observations/00000000-0000-0000-0000-000000000064/comments/0",
+      "source": "authorization_comment"
+    },
+    {
+      "pointer": "/evidence/native_context/observations/00000000-0000-0000-0000-000000000064/issue/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/evidence/native_context/observations/00000000-0000-0000-0000-000000000064/issue/workspace_id",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/evidence/native_context/observations/00000000-0000-0000-0000-000000000065/issue/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/evidence/native_context/observations/00000000-0000-0000-0000-000000000065/issue/workspace_id",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/issue/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/issue/workspace_id",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/operation/id",
+      "source": "operation_id"
+    },
+    {
+      "pointer": "/operation/work",
+      "source": "authorized_work"
+    },
+    {
+      "pointer": "/parent/endpoint",
+      "source": "linear_endpoint"
+    },
+    {
+      "pointer": "/parent/workspace_id",
+      "source": "linear_workspace"
+    },
+    {
+      "pointer": "/phase",
+      "source": "phase"
+    },
+    {
+      "pointer": "/profile",
+      "source": "profile"
+    },
+    {
+      "pointer": "/workspace/id",
+      "source": "workspace_id"
+    }
+  ],
+  "source_write_paths": [
+    "answer.txt"
+  ]
+}

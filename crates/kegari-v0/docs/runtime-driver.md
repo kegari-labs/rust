@@ -19,9 +19,9 @@ The scheduler reserves capacity for both preparation and model work, rotates
 between workspaces and retains running reservations when configuration lowers
 limits. The control host independently checks actual durable admissions at the
 final serialized admission boundary. Authorization publication is a separate
-bounded metadata task and does not consume a model slot. Long Git metadata,
-hook preflight and validation work run outside the control mutex and the async
-listener's executor threads.
+bounded metadata task and does not consume a model slot. Long Git metadata and provider/session work run outside the control mutex and
+the async listener's executor threads. Repository hooks and validation use the
+selected Codex execution interfaces after migration.
 
 Every action gets a retained dispatch record before execution. A worker action
 binds semantic work, configuration, workflow, profile, scope, dependencies,
@@ -38,7 +38,10 @@ Completed worker/check capabilities remain retained by `RuntimeCoordinator`.
 An empty in-memory registry never proves an earlier native worker exited. The
 driver compares each retained process binding with its exact original admission,
 including runtime, owner generation, owner identity, canonical work and scope.
-Unknown process-tree exit continues to prevent local drain and service shutdown.
+Unresolved ownership of Kegari's own processes prevents their retirement. For
+repository commands the migrated path consumes Codex's supported lifecycle facts;
+it does not reconstruct command-level ownership or claim arbitrary descendant
+closure. Unknown effects retain the affected workspace and block dependent work.
 
 Recovery restores provider intervention holds from exact bound session journals.
 An interrupted parent authorization publication can be reconciled from exactly
@@ -50,15 +53,16 @@ continue. Recovery scans use finite bounds and rotate through pending receipts.
 
 The driver does not manufacture child completion, hosted results, parent evidence,
 human acceptance or release progress. Those phases require their separately
-verified production capabilities. Native process-tree containment remains
-unqualified; recorded group exit and inherited guard release are insufficient to
-claim that detached descendants exited. The remote-object importer is also absent:
-exact missing source objects are an explicit prerequisite failure. This driver is
-not evidence of a live model run, native service installation or operational
-qualification. The native host factory must supply the complete production
-backend before the executable entry point is enabled.
+verified production capabilities. [SPEC 1.5](../SPEC.md) retains the current
+control-host driver and lock/lease child arrangement. The custom repository
+execution path remains pending replacement and deletion; no process relocation
+or new executor qualification project is needed first. The exact-object source
+broker is used by worker preparation, with missing or changed source objects
+remaining explicit blockers. Current source and component evidence do not
+establish live Codex operation, service installation or operational qualification.
 
-Focused checks are `cargo test -p kegari-scheduler`,
+Select the smallest relevant existing check when changing this boundary; do not
+routinely run all of them. Focused references are `cargo test -p kegari-scheduler`,
 `cargo test -p kegari-v0 --lib runtime_driver::tests`,
 `cargo test -p kegari-v0 --test runtime_schedule` and
 `cargo test -p kegari-v0 --test worker`, using the pinned toolchain/cache with

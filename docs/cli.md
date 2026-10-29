@@ -73,7 +73,7 @@ omitted. Preserve that identity when an outcome is uncertain; see
 | [Recovery and cleanup](#recovery-and-cleanup) | [operation show](#operation-show), [operation reconcile](#operation-reconcile), [retry](#retry), [release recover](#release-recover), [cleanup](#cleanup) |
 | [Evaluation](#evaluation) | [evaluation run](#evaluation-run) |
 | [Remote targets](#remote-targets) | [target list](#target-list), [target add](#target-add) |
-| [Local service](#local-service) | [service install](#service-install), [service start](#service-start), [service stop](#service-stop) |
+| [Local service](#local-service) | [service install](#service-install), [service start](#service-start), [service stop](#service-stop), [candidate inspection and handover](#candidate-inspection-and-handover) |
 
 ## Inspection
 
@@ -96,6 +96,16 @@ kegari-v0 --target studio overview --workspace product
 ### status
 
 **Read-only.** Inspect runtime state, control generation, health and blockers.
+Status includes queued work, recent dispatch state, attempt limits, next actions,
+account quota observations and refresh diagnostics. Human output summarizes these
+fields before the complete details; JSON retains the structured response. An
+advertised quota reset is not evidence that allowance has become available.
+
+Status also includes up to 32 recent redacted runtime events from the protected
+rotating logs, including events retained across restart. The tail has a fixed byte
+bound and identifies truncation or unavailable diagnostics explicitly. A busy or
+broken log sink does not hide the rest of status. Diagnostic events do not replace
+authoritative operation receipts, recovery records or delivery evidence.
 This is the place to check whether a requested lifecycle change has taken effect.
 
 ```text
@@ -207,9 +217,11 @@ and must be nonempty UTF-8 without NUL bytes.
 
 Where guidance is supported, omitting `--from` requires an interactive terminal.
 `--noninteractive` requires complete supplied input and never fills in missing
-values. The initial local setup guide asks individual questions and requires
-`create` after review. Other guided configuration accepts a whole TOML document
-terminated by a line containing only `.`; EOF before that terminator cancels.
+values. Initial local setup asks individual questions and requires `create`
+after review. Connection and workspace addition also use individual questions,
+display the generated non-secret TOML and require `submit`. `/cancel` or premature
+EOF submits nothing. Full setup/reconfiguration retains the bounded TOML editor,
+terminated by a line containing only `.`.
 
 ### setup
 
@@ -271,6 +283,11 @@ The runtime verifies the supported provider identity before importing the
 credential. A credential reference on the client is not automatically a
 credential on a remote runtime.
 
+The connection form asks for the actual account identity and explicit credential
+reference/endpoint, or the isolated Codex home and executable. It does not read a
+secret, contact a provider or change an account before the normal submitted
+transaction. Model, scope and provider support are still verified by the runtime.
+
 ```sh
 kegari-v0 connection add github --kind github --from ./github.toml --noninteractive
 ```
@@ -320,6 +337,11 @@ kegari-v0 workspace add NAME [--from PATH] [--noninteractive] [--request-id UUID
 `NAME` is required. `--from` supplies workspace TOML, or omission opens
 interactive guidance. `--noninteractive` requires supplied input. The runtime
 validates the workspace against the complete configuration before applying it.
+The form collects connection names, actual workspace/team/state/label/actor IDs,
+selectors, Codex profiles, repository authority and finite limits. It asks for no
+build commands, toolset inventory or environment manifest. Workflow selection may
+use the installed default. Delivery policies can remain absent during discovery;
+the corresponding delivery steps stay blocked until policy is supplied.
 
 ```sh
 kegari-v0 workspace add product --from ./workspace.toml --noninteractive
@@ -716,6 +738,65 @@ running. This command is not an uninstall command.
 ```sh
 kegari-v0 service stop
 ```
+
+### Candidate inspection and handover
+
+The explicit local upgrade route keeps qualification review, replacement and
+activation separate. These commands reject remote targets. They require the
+current OS user's configured `configure` role; applying a handover also requires
+`recover`. None runs a qualification campaign or starts the replacement.
+
+```text
+kegari-v0 service inspect-candidate --binary PATH [--request-id UUID]
+kegari-v0 service record-qualification --binary PATH --from FILE --reviewed [--request-id UUID]
+kegari-v0 service handover --binary PATH --qualification UUID [--request-id UUID]
+kegari-v0 service handover --binary PATH --qualification UUID --apply --plan TOKEN [--request-id UUID]
+```
+
+1. Place the candidate in its protected, immutable versioned location. Candidate
+   inspection invokes only its bounded metadata entry point. The result supplies
+   exact binary/build/metadata identities and the configured reviewer identity;
+   `qualified:false` is deliberate.
+2. Separately perform the authorized qualification and human review. Supply a
+   `RuntimeQualification` JSON record using those identities, an RFC 3339 review
+   timestamp, and four evidence references: `deterministic`, `actual_agents`,
+   `integration` and `human_calibration`. Each reference contains an absolute
+   `path` and the SHA-256 `digest` of its actual report bytes. `--from -` accepts
+   bounded stdin. The `instruction_digest` is the candidate inspection's digest
+   of complete handover metadata, not a hash of pretty-printed JSON.
+3. Stop orchestration and the control service through their existing commands.
+   Record qualification with explicit `--reviewed`. The record must name the
+   invoking operator and current runtime. This validates exact identities and
+   report bytes, then signs with the runtime's existing Keychain attestation key;
+   it does not create or rotate that key. Keep the returned qualification UUID.
+4. Inspect handover with that UUID. Review the plan, then apply with its exact
+   token and a stable request UUID. Changed state or evidence requires a fresh
+   inspection. If the result is uncertain, preserve the request UUID for exact
+   readback; do not submit a different request to bypass reconciliation.
+5. The service remains stopped after replacement. Service activation is a
+   separate explicit operation, and persisted orchestration intent is preserved.
+
+The qualification input has these fields (all values must describe the actual
+reviewed candidate and reports):
+
+```json
+{
+  "schema_version": 1,
+  "runtime_id": "REGISTERED_RUNTIME_UUID",
+  "binary_digest": "CANDIDATE_BINARY_DIGEST",
+  "runtime_build": "CANDIDATE_RUNTIME_BUILD",
+  "instruction_digest": "CANDIDATE_INSTRUCTION_DIGEST",
+  "reviewed_by": "CONFIGURED_OPERATOR_ID",
+  "reviewed_at": "ACTUAL_REVIEW_TIMESTAMP",
+  "deterministic": {"path": "/absolute/reports/deterministic.json", "digest": "REPORT_DIGEST"},
+  "actual_agents": {"path": "/absolute/reports/agents.json", "digest": "REPORT_DIGEST"},
+  "integration": {"path": "/absolute/reports/integration.json", "digest": "REPORT_DIGEST"},
+  "human_calibration": {"path": "/absolute/reports/human.json", "digest": "REPORT_DIGEST"}
+}
+```
+
+These routes implement operator control over existing mechanisms. Their local
+fixtures do not establish live Keychain, launchd, provider or agent qualification.
 
 ## Output and exit codes
 

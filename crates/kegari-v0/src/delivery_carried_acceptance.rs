@@ -227,109 +227,114 @@ impl PublishedCarry {
         self.verify_native_comments(&observation.comments)
     }
     fn verify_native_comments(&self, comments: &[kegari_providers::Comment]) -> Result<()> {
-        let work = &self.parent().verified().manifest().work;
-        let publications = [
-            (
-                &self.saved.payload.signed.payload.current_publication,
-                evidence::encode_signed_publication(
-                    "parent_result",
-                    &self.saved.payload.signed.payload.current_parent,
-                )?,
-            ),
-            (
-                &self.saved.payload.publication,
-                evidence::encode_signed_publication(PURPOSE, &self.saved.payload.signed)?,
-            ),
-        ];
-        for (publication, body) in publications {
-            if comments
-                .iter()
-                .filter(|c| {
-                    c.id.to_string() == publication.record_id
-                        && c.issue_id == work.parent
-                        && !c.bot
-                        && !c.delegated
-                        && c.user_id.map(|v| v.to_string()).as_deref()
-                            == Some(publication.writer_account_id.as_str())
-                        && c.body == body
-                        && c.body_digest == bytes_digest(body.as_bytes())
-                })
-                .count()
-                != 1
-            {
-                return Err(invalid(
-                    "current parent/carry native publication disappeared or changed",
-                ));
-            }
-        }
-        let selected_parent = comments
-            .iter()
-            .find(|comment| {
-                comment.id.to_string()
-                    == self
-                        .saved
-                        .payload
-                        .signed
-                        .payload
-                        .current_publication
-                        .record_id
-            })
-            .ok_or_else(|| invalid("current parent publication disappeared"))?;
-        DeliveryCoordinator::reject_superseding_parent_publication(
-            &self.key,
-            self.saved.payload.signed.payload.runtime,
-            comments,
-            selected_parent,
-        )?;
-        let original = &self.saved.payload.signed.payload;
-        let (old_parent, old_acceptance) = original.original.publication_ids();
-        for (id, body) in [
-            (
-                old_parent,
-                evidence::encode_signed_publication("parent_result", &original.original_parent)?,
-            ),
-            (
-                old_acceptance,
-                evidence::encode_signed_publication(
-                    "human_acceptance",
-                    &original.original_acceptance,
-                )?,
-            ),
-        ] {
-            if comments
-                .iter()
-                .filter(|c| {
-                    c.id == id
-                        && c.issue_id == work.parent
-                        && !c.bot
-                        && !c.delegated
-                        && c.user_id.map(|v| v.to_string()).as_deref()
-                            == Some(
-                                original
-                                    .original_acceptance
-                                    .payload
-                                    .provider_writer
-                                    .as_str(),
-                            )
-                        && c.body == body
-                        && c.body_digest == bytes_digest(body.as_bytes())
-                })
-                .count()
-                != 1
-            {
-                return Err(invalid(
-                    "original human carry publication disappeared or changed",
-                ));
-            }
-        }
-        require_original_acceptance_selection(
-            comments,
-            &original.original_acceptance,
-            old_acceptance,
-            &self.key,
-        )?;
-        Ok(())
+        verify_saved_native_comments(&self.saved, &self.key, comments)
     }
+}
+
+fn verify_saved_native_comments(
+    saved: &Signed<CarryPublicationRecord>,
+    key: &AttestationKey,
+    comments: &[kegari_providers::Comment],
+) -> Result<()> {
+    let work = &saved
+        .payload
+        .signed
+        .payload
+        .current_parent
+        .payload
+        .evidence
+        .work;
+    let publications = [
+        (
+            &saved.payload.signed.payload.current_publication,
+            evidence::encode_signed_publication(
+                "parent_result",
+                &saved.payload.signed.payload.current_parent,
+            )?,
+        ),
+        (
+            &saved.payload.publication,
+            evidence::encode_signed_publication(PURPOSE, &saved.payload.signed)?,
+        ),
+    ];
+    for (publication, body) in publications {
+        if comments
+            .iter()
+            .filter(|c| {
+                c.id.to_string() == publication.record_id
+                    && c.issue_id == work.parent
+                    && !c.bot
+                    && !c.delegated
+                    && c.user_id.map(|v| v.to_string()).as_deref()
+                        == Some(publication.writer_account_id.as_str())
+                    && c.body == body
+                    && c.body_digest == bytes_digest(body.as_bytes())
+            })
+            .count()
+            != 1
+        {
+            return Err(invalid(
+                "current parent/carry native publication disappeared or changed",
+            ));
+        }
+    }
+    let selected_parent = comments
+        .iter()
+        .find(|comment| {
+            comment.id.to_string() == saved.payload.signed.payload.current_publication.record_id
+        })
+        .ok_or_else(|| invalid("current parent publication disappeared"))?;
+    DeliveryCoordinator::reject_superseding_parent_publication(
+        key,
+        saved.payload.signed.payload.runtime,
+        comments,
+        selected_parent,
+    )?;
+    let original = &saved.payload.signed.payload;
+    let (old_parent, old_acceptance) = original.original.publication_ids();
+    for (id, body) in [
+        (
+            old_parent,
+            evidence::encode_signed_publication("parent_result", &original.original_parent)?,
+        ),
+        (
+            old_acceptance,
+            evidence::encode_signed_publication("human_acceptance", &original.original_acceptance)?,
+        ),
+    ] {
+        if comments
+            .iter()
+            .filter(|c| {
+                c.id == id
+                    && c.issue_id == work.parent
+                    && !c.bot
+                    && !c.delegated
+                    && c.user_id.map(|v| v.to_string()).as_deref()
+                        == Some(
+                            original
+                                .original_acceptance
+                                .payload
+                                .provider_writer
+                                .as_str(),
+                        )
+                    && c.body == body
+                    && c.body_digest == bytes_digest(body.as_bytes())
+            })
+            .count()
+            != 1
+        {
+            return Err(invalid(
+                "original human carry publication disappeared or changed",
+            ));
+        }
+    }
+    require_original_acceptance_selection(
+        comments,
+        &original.original_acceptance,
+        old_acceptance,
+        key,
+    )?;
+    Ok(())
 }
 
 pub(super) fn require_original_acceptance_selection(
@@ -522,11 +527,12 @@ fn validate_saved(
     Ok(())
 }
 
-/// Both exact completed phases are required together before carry can retain
+/// Every applicable completed phase is required together before carry retains
 /// their source, grant and actual joined-result closure.
 pub(crate) struct CompletedParentReassemblyPhases<'a> {
     pub integrated: (&'a ParentReassemblyWork, &'a Arc<RunCompletion>),
     pub review: (&'a ParentReassemblyWork, &'a Arc<RunCompletion>),
+    pub adequacy: Option<(&'a ParentReassemblyWork, &'a Arc<RunCompletion>)>,
 }
 
 impl DeliveryCoordinator {
@@ -539,7 +545,29 @@ impl DeliveryCoordinator {
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
         grants: (ParentGrantObserver, ActiveParentGrantObserver),
     ) -> Result<ReassembledParent> {
-        let CompletedParentReassemblyPhases { integrated, review } = phases;
+        let CompletedParentReassemblyPhases {
+            integrated,
+            review,
+            adequacy,
+        } = phases;
+        let discovered = parent.verified().manifest().integrated_validation.is_some()
+            || parent
+                .verified()
+                .manifest()
+                .archived_integrated_validation
+                .is_some();
+        if discovered != adequacy.is_some()
+            || adequacy.is_some_and(|(proof, _)| proof.phase().phase != "parent_integrated_review")
+        {
+            return Err(invalid(
+                "reassembled discovered validation requires its distinct independent adequacy phase",
+            ));
+        }
+        let mut all_phases = vec![integrated];
+        if let Some(pair) = adequacy {
+            all_phases.push(pair);
+        }
+        all_phases.push(review);
         let (current_grants, active_grants) = grants;
         active_grants.require_configuration(configuration)?;
         source.validate(configuration)?;
@@ -550,7 +578,7 @@ impl DeliveryCoordinator {
             &self.host,
             &self.key,
         )?)?;
-        for (proof, completion) in [integrated, review] {
+        for (proof, completion) in all_phases.iter().copied() {
             if proof.reference().source != *source.source_reference()
                 || retained(completion.operation_id)?
                     .as_ref()
@@ -560,7 +588,7 @@ impl DeliveryCoordinator {
                     "reassembled parent lost actual joined phase/source identity",
                 ));
             }
-            proof.verify_joined(retained)?;
+            proof.verify_joined(retained, &self.host.snapshot()?)?;
             proof.verify_grants(&receipts, &active_grants.observe(proof.authority())?)?;
             proof.verify_result(completion, &receipts)?;
             proof.retain_history(&mut refs, &receipts)?;
@@ -583,7 +611,7 @@ impl DeliveryCoordinator {
             || source.vector().digest() != parent.signed.payload.vector_digest
         {
             return Err(invalid(
-                "current parent did not consume both exact bounded reassembly phases",
+                "current parent did not consume every exact bounded reassembly phase",
             ));
         }
         refs.retain_receipt(&self.host.operation(source.source_reference().operation)?)?;
@@ -636,8 +664,14 @@ impl DeliveryCoordinator {
             source,
             parent,
             references: refs,
-            phases: vec![integrated.0.clone(), review.0.clone()],
-            results: vec![integrated.1.clone(), review.1.clone()],
+            phases: all_phases
+                .iter()
+                .map(|(proof, _)| (*proof).clone())
+                .collect(),
+            results: all_phases
+                .iter()
+                .map(|(_, result)| (*result).clone())
+                .collect(),
             current_grants,
         })
     }

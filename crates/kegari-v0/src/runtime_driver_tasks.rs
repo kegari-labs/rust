@@ -325,7 +325,10 @@ impl RecoveryMaintenance {
     }
     fn record_observation(&self, record: &DispatchRecord) -> Result<()> {
         let mut state = self.state()?;
-        persist_observation(&self.records, &mut state.records, record)
+        persist_observation(&self.records, &mut state.records, record)?;
+        drop(state);
+        emit_dispatch(&self.runtime, record);
+        Ok(())
     }
     pub(super) async fn recover_authorizations(&self) -> Result<()> {
         self.runtime.registration.verify_control_owner()?;

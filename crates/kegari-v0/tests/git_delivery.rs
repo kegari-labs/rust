@@ -2352,11 +2352,17 @@ fn parent_fixture_for_candidates(
 fn v0_t28_reviewed_replacement_isolated_from_b_retains_history_and_requires_complete_mapping() {
     let f = Fixture::new(true);
     let original = f.delta();
+    let conflict = f
+        .candidate(Uuid::new_v4(), std::slice::from_ref(&original))
+        .unwrap_err();
+    assert_eq!(conflict.code, "isolated_patch_conflict");
     assert_eq!(
-        f.candidate(Uuid::new_v4(), std::slice::from_ref(&original))
-            .unwrap_err()
-            .code,
-        "isolated_patch_conflict"
+        conflict.details["delta_digest"],
+        original.manifest.digest().unwrap()
+    );
+    assert_eq!(
+        conflict.details["child_id"],
+        serde_json::json!(original.manifest.child_id)
     );
     let key = AttestationKey::new("replacement-fixture-key".into(), vec![23; 32]).unwrap();
     let (replacement, child, source_review) = replacement_fixture(&f, &key);
@@ -2450,6 +2456,44 @@ fn v0_t28_reviewed_replacement_isolated_from_b_retains_history_and_requires_comp
             .unwrap_err()
             .code,
         "scope_violation"
+    );
+    let successor = f
+        .git
+        .capture_replacement(
+            &f.source,
+            CaptureReplacement {
+                repository: f.repository.clone(),
+                parent_id: f.parent,
+                child_id: f.child,
+                work_generation: &d("definition"),
+                correction_generation: &d("correction"),
+                scope: original.manifest.scope.clone(),
+                production_base: &f.production,
+                head: &replacement.manifest.validated_head.commit,
+                staging_revision: &f.squash,
+                staging_result_digest: &replacement
+                    .manifest
+                    .replacement
+                    .as_ref()
+                    .unwrap()
+                    .staging_result_digest,
+                originals: std::slice::from_ref(&replacement),
+                reason: "retain the reviewed replacement as the exact predecessor",
+            },
+        )
+        .unwrap();
+    f.git.verify_delta(&f.source, &successor).unwrap();
+    assert_eq!(
+        successor.manifest.original_contributions().unwrap(),
+        BTreeSet::from([original.manifest.digest().unwrap()])
+    );
+    assert_eq!(
+        successor.manifest.replacement.as_ref().unwrap().originals,
+        vec![replacement.manifest.clone()]
+    );
+    assert_ne!(
+        successor.manifest.review_digest().unwrap(),
+        replacement.manifest.review_digest().unwrap()
     );
 }
 

@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
-pub const DEFAULT_WORKFLOW_VERSION: u32 = 1;
+pub const DEFAULT_WORKFLOW_VERSION: u32 = 2;
 pub const DEFAULT_WORKFLOW: &str = include_str!("../instructions/default-workflow.md");
 
 pub const MAX_WORKFLOW_BYTES: usize = 1_048_576;

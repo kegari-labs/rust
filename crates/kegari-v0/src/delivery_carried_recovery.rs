@@ -18,6 +18,8 @@ pub(super) struct CarryRecoveryBinding {
     configuration_revision: String,
     vector_digest: String,
     integrated: ReviewReceiptReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adequacy: Option<ReviewReceiptReference>,
     review: ReviewReceiptReference,
     production: Vec<ProductionSelection>,
 }
@@ -28,11 +30,41 @@ impl CarryRecoveryBinding {
         config: &Config,
         host: &ControlHost,
     ) -> Result<Self> {
-        let [integrated, review] = parent.results.as_slice() else {
-            return Err(invalid(
-                "carry recovery requires both actual final parent results",
-            ));
+        let discovered = parent
+            .parent
+            .verified()
+            .manifest()
+            .integrated_validation
+            .is_some()
+            || parent
+                .parent
+                .verified()
+                .manifest()
+                .archived_integrated_validation
+                .is_some();
+        let (integrated, adequacy, review) = match parent.results.as_slice() {
+            [integrated, review] if !discovered => (integrated, None, review),
+            [integrated, adequacy, review] if discovered => (integrated, Some(adequacy), review),
+            _ => {
+                return Err(invalid(
+                    "carry recovery requires its exact integrated, adequacy and synthesis result inventory",
+                ));
+            }
         };
+        for (result, phase) in std::iter::once((integrated, "parent_integrated_validation"))
+            .chain(adequacy.map(|result| (result, "parent_integrated_review")))
+            .chain(std::iter::once((review, "parent_evidence_review")))
+        {
+            if result
+                .contract
+                .as_ref()
+                .is_none_or(|contract| contract.instructions().manifest.phase != phase)
+            {
+                return Err(invalid(
+                    "carry recovery result order changed its actual parent phases",
+                ));
+            }
+        }
         let exact = |id| -> Result<ReviewReceiptReference> {
             let receipt = host.operation(id)?;
             Ok(ReviewReceiptReference {
@@ -41,10 +73,13 @@ impl CarryRecoveryBinding {
             })
         };
         let value = Self {
-            schema_version: 1,
+            schema_version: if adequacy.is_some() { 2 } else { 1 },
             configuration_revision: crate::config::config_revision(config)?,
             vector_digest: parent.source.vector().digest().into(),
             integrated: exact(integrated.operation_id)?,
+            adequacy: adequacy
+                .map(|result| exact(result.operation_id))
+                .transpose()?,
             review: exact(review.operation_id)?,
             production: production
                 .iter()
@@ -61,11 +96,30 @@ impl CarryRecoveryBinding {
         value.validate_shape(&parent.parent.verified().manifest().candidates)?;
         Ok(value)
     }
+    fn phases(&self) -> impl Iterator<Item = (&ReviewReceiptReference, &'static str)> {
+        std::iter::once((&self.integrated, "parent_integrated_validation"))
+            .chain(
+                self.adequacy
+                    .as_ref()
+                    .map(|reference| (reference, "parent_integrated_review")),
+            )
+            .chain(std::iter::once((&self.review, "parent_evidence_review")))
+    }
+    fn validate_parent(&self, parent: &evidence::ParentEvidence) -> Result<()> {
+        let discovered = parent.integrated_validation.is_some()
+            || parent.archived_integrated_validation.is_some();
+        if discovered != self.adequacy.is_some() {
+            return Err(invalid(
+                "carry recovery lacks the exact independent adequacy selection for its parent",
+            ));
+        }
+        Ok(())
+    }
     fn validate_shape(&self, candidates: &[kegari_git::CandidateManifest]) -> Result<()> {
         evidence::validate_digest(&self.configuration_revision)?;
         evidence::validate_digest(&self.vector_digest)?;
         let mut operations = BTreeSet::new();
-        for reference in [&self.integrated, &self.review] {
+        for (reference, _) in self.phases() {
             evidence::validate_digest(&reference.receipt_digest)?;
             if reference.operation.is_nil() || !operations.insert(reference.operation) {
                 return Err(invalid("carry recovery final phase identities overlap"));
@@ -89,8 +143,10 @@ impl CarryRecoveryBinding {
                 ));
             }
         }
-        if self.schema_version != 1
-            || repositories.is_empty()
+        if !matches!(
+            (self.schema_version, self.adequacy.is_some()),
+            (1, false) | (2, true)
+        ) || repositories.is_empty()
             || repositories != candidates.iter().map(|c| c.repository.clone()).collect()
             || self.production.len() != candidates.len()
         {
@@ -133,13 +189,58 @@ impl RetainedCarrySubject {
     pub(crate) fn current_evidence(&self) -> &evidence::ParentEvidence {
         &self.record().current_parent.payload.evidence
     }
+    pub(crate) fn reassembly_baseline_digest(&self) -> &str {
+        &self.record().baseline_digest
+    }
     pub(crate) fn carry_record(&self) -> &CarriedAcceptance {
         &self.record().carry
     }
     pub(crate) fn validate_retained(&self) -> Result<()> {
         self.validate()
     }
+    pub(crate) fn reassembly_history_references(&self) -> Result<CarryReferences> {
+        self.validate_reassembly_history()?;
+        let mut references = self.record().references.clone();
+        references.retain_file(
+            super::super::carry_history::CarryNamespace::Workspace {
+                workspace: self.record().workspace,
+            },
+            &self.records,
+            &leaf(&self.record().carry.current_evidence_token)?,
+            SAVED_PURPOSE,
+            &self.key,
+        )?;
+        Ok(references)
+    }
+    pub(crate) fn reassembly_reference(
+        &self,
+        phase: &str,
+        operation: Uuid,
+    ) -> Result<ParentReassemblyReference> {
+        self.validate_reassembly_history()?;
+        let matches = self
+            .binding()?
+            .phases()
+            .filter(|(selected, name)| *name == phase && selected.operation == operation)
+            .collect::<Vec<_>>();
+        let [(selected, name)] = matches.as_slice() else {
+            return Err(invalid(
+                "retired reassembly phase differs from exact published carry selection",
+            ));
+        };
+        let receipts = self.host.operations()?;
+        let receipt = exact_phase(&receipts, selected, name, self.record(), false)?;
+        ParentReassemblyReference::from_receipt(receipt)?
+            .ok_or_else(|| invalid("retired carry phase has no reassembly cause"))
+    }
+
     fn validate(&self) -> Result<()> {
+        self.validate_history(true)
+    }
+    pub(crate) fn validate_reassembly_history(&self) -> Result<()> {
+        self.validate_history(false)
+    }
+    fn validate_history(&self, require_current_inventory: bool) -> Result<()> {
         let actual: Signed<CarryPublicationRecord> = self
             .records
             .read(&leaf(&self.record().carry.current_evidence_token)?)?;
@@ -151,6 +252,7 @@ impl RetainedCarrySubject {
         closed(&self.host.operation(self.record().publication_operation)?)?;
         self.binding()?
             .validate_shape(&self.current_evidence().candidates)?;
+        self.binding()?.validate_parent(self.current_evidence())?;
         if self.binding()?.vector_digest != self.record().current_parent.payload.vector_digest {
             return Err(invalid("carry recovery vector selection differs"));
         }
@@ -163,11 +265,14 @@ impl RetainedCarrySubject {
             closed(&owner)?;
             self.record().references.require_receipt(&owner)?;
         }
-        for (reference, phase) in [
-            (&self.binding()?.integrated, "parent_integrated_validation"),
-            (&self.binding()?.review, "parent_evidence_review"),
-        ] {
-            let actual = exact_phase(&receipts, reference, phase, self.record())?;
+        for (reference, phase) in self.binding()?.phases() {
+            let actual = exact_phase(
+                &receipts,
+                reference,
+                phase,
+                self.record(),
+                require_current_inventory,
+            )?;
             self.record().references.require_receipt(actual)?;
         }
         Ok(())
@@ -179,6 +284,7 @@ fn exact_phase<'a>(
     selected: &ReviewReceiptReference,
     phase: &str,
     carry: &CarryRecord,
+    require_current_inventory: bool,
 ) -> Result<&'a Receipt> {
     let matches = receipts
         .iter()
@@ -208,15 +314,17 @@ fn exact_phase<'a>(
         || reference.baseline_digest != carry.baseline_digest
         || reference.original_token != carry.carry.original_reviewed_token
         || reference.parent_work != carry.current_parent.payload.evidence.work
-        || (phase == "parent_integrated_validation"
-            && (reference.worker_work.child
-                != Some(carry.current_parent.payload.evidence.e2e_child)
-                || !carry
-                    .current_parent
-                    .payload
-                    .evidence
-                    .required_children
-                    .contains(&carry.current_parent.payload.evidence.e2e_child)))
+        || (matches!(
+            phase,
+            "parent_integrated_validation" | "parent_integrated_review"
+        ) && (reference.worker_work.child
+            != Some(carry.current_parent.payload.evidence.e2e_child)
+            || !carry
+                .current_parent
+                .payload
+                .evidence
+                .required_children
+                .contains(&carry.current_parent.payload.evidence.e2e_child)))
         || reference.workspace != carry.workspace
         || reference.runtime != carry.runtime
         || result["observation"]["operation_id"] != receipt.operation_id.to_string()
@@ -259,8 +367,9 @@ fn exact_phase<'a>(
         .filter(|r| r.operation_id != receipt.operation_id)
         .cloned()
         .collect::<Vec<_>>();
-    if crate::control::parent_reassembly_inventory(&prior, &reference)?
-        != reference.inventory_digest
+    if require_current_inventory
+        && crate::control::parent_reassembly_inventory(&prior, &reference)?
+            != reference.inventory_digest
     {
         return Err(invalid(
             "carry recovery worker was superseded or its complete phase history changed",
@@ -317,13 +426,10 @@ impl ReobservedCarry {
         }
         let receipts = host.operations()?;
         let binding = self.subject.binding()?;
-        if self.phase_gates.len() != 2 {
+        if self.phase_gates.len() != binding.phases().count() {
             return Err(invalid("carry recovery omitted a final phase authority"));
         }
-        for (reference, gate) in [&binding.integrated, &binding.review]
-            .into_iter()
-            .zip(&self.phase_gates)
-        {
+        for ((reference, _), gate) in binding.phases().zip(&self.phase_gates) {
             let receipt = host.operation(reference.operation)?;
             let marker = ParentReassemblyReference::from_receipt(&receipt)?
                 .ok_or_else(|| invalid("carry recovery marker absent"))?;
@@ -433,6 +539,50 @@ impl DeliveryCoordinator {
         }
         Ok(Some(subject))
     }
+    /// Re-read the original human-reviewed publication. Historical carry data
+    /// identifies it; the existing parent and acceptance readers verify it.
+    pub(crate) async fn reobserve_carry_reassembly_origin(
+        &self,
+        subject: &RetainedCarrySubject,
+        input: ParentHydrationInputs<'_>,
+        config: &Config,
+    ) -> Result<AcceptedParentOrigin> {
+        subject.validate()?;
+        let contract = input.contract;
+        if subject.record().workspace != contract.gate.workspace_id()
+            || &subject.current_evidence().work != contract.work()
+        {
+            return Err(invalid(
+                "historical carry differs from current parent authority",
+            ));
+        }
+        let linear = self
+            .broker
+            .linear
+            .as_ref()
+            .ok_or_else(|| invalid("carry native reader unavailable"))?;
+        let comments = linear.comments(contract.work().parent).await?;
+        verify_saved_native_comments(&subject.saved, &subject.key, &comments)?;
+        let (publication, _) = subject.record().original.publication_ids();
+        let original = self
+            .hydrate_historical_release_parent(
+                input,
+                publication,
+                &subject.record().carry.original_reviewed_token,
+            )
+            .await?
+            .into_parent();
+        if original.publication_digest()? != subject.record().original_parent.digest()? {
+            return Err(invalid("original reassembly publication changed"));
+        }
+        let origin = self
+            .capture_parent_acceptance(contract, &original, config)
+            .await?;
+        if origin.signed_acceptance().digest()? != subject.original_acceptance().digest()? {
+            return Err(invalid("original reassembly acceptance changed"));
+        }
+        Ok(origin)
+    }
     pub(crate) async fn reobserve_current_carry(
         &self,
         subject: RetainedCarrySubject,
@@ -523,7 +673,7 @@ impl DeliveryCoordinator {
         }
         let mut phase_gates = Vec::new();
         let receipts = self.host.operations()?;
-        for reference in [&subject.binding()?.integrated, &subject.binding()?.review] {
+        for (reference, _) in subject.binding()?.phases() {
             let receipt = self.host.operation(reference.operation)?;
             let marker = ParentReassemblyReference::from_receipt(&receipt)?
                 .ok_or_else(|| invalid("carry phase marker missing"))?;

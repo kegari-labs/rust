@@ -2127,7 +2127,7 @@ async fn parent_slice_uses_actual_production_and_preserves_dirty_operator_checko
     request.phase.phase = "implementation".into();
     assert!(request.validate_binding().is_err());
     request.phase.phase = assignment.phase().into();
-    request.source = Some(kegari_v0::runtime_workers::SourceSelection {
+    request.source = Some(kegari_v0::runtime_workers::SourceSelection::Committed {
         repository: "42".into(),
         revision: kegari_git::Revision {
             commit: "e".repeat(40),

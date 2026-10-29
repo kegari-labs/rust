@@ -1,0 +1,31 @@
+{
+  "evidence_class": "deterministic_replay",
+  "patch": {},
+  "state": {
+    "evaluation_child_blocker": {
+      "reported": true,
+      "claim": {
+        "schema_version": 1,
+        "summary": "The required audit was not run.",
+        "fulfilled_criteria": [],
+        "disposition": {
+          "kind": "blocked",
+          "reason": "The required .capabilities/boundary-audit executable is absent.",
+          "next_action": "fixture_operator must supply the authorized audit capability."
+        }
+      }
+    }
+  },
+  "checks": {
+    "boundary": "not_run"
+  },
+  "artifacts": {},
+  "findings": [],
+  "known_false_mutations": [
+    "invented_successful_no_change",
+    "missing_observed_blocker",
+    "unrun_reported_passed",
+    "out_of_scope_file",
+    "privileged_effect"
+  ]
+}

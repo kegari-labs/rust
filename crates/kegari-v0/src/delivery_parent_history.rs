@@ -8,11 +8,15 @@ use crate::release::{ObservedEffect, ReleasePlan, ResourceKey};
 pub struct HistoricalReleaseParent {
     parent: PublishedParent,
     vector: ParentCandidateVector,
+    integrated: IntegratedEvidence,
     slices: Vec<IsolatedSlice>,
     children: Vec<PublishedChild>,
     checked_at: DateTime<Utc>,
 }
 impl HistoricalReleaseParent {
+    pub(crate) fn into_parent(self) -> PublishedParent {
+        self.parent
+    }
     pub fn manifest(&self) -> &evidence::ParentEvidence {
         self.parent.verified.manifest()
     }
@@ -248,10 +252,14 @@ impl DeliveryCoordinator {
             ));
         }
         if signed.payload.evidence.visual {
-            return Err(Error::new(
-                "video_gate",
-                "historical visual evidence requires current authenticated asset observation",
-            ));
+            let video = signed.payload.evidence.video.as_ref().ok_or_else(|| {
+                Error::new(
+                    "video_gate",
+                    "historical visual parent has no original recording",
+                )
+            })?;
+            self.reobserve_candidate_video(contract, &integrated, vector.digest(), video)
+                .await?;
         }
         let children = self
             .current_parent_children(
@@ -322,11 +330,304 @@ impl DeliveryCoordinator {
                 publication,
             },
             vector,
+            integrated,
             slices,
             children,
             checked_at: Utc::now(),
         })
     }
+    /// Restore a pre-assembly wait from current signed child publications and
+    /// already acknowledged candidate effects. No worker completion is created.
+    pub(crate) async fn restore_waiting_parent_inputs(
+        &self,
+        input: ParentHydrationInputs<'_>,
+        expected: &BTreeMap<Uuid, evidence::VerifiedChild>,
+        operations: &[Uuid],
+        prepared_e2e: Option<&PreparedChildCandidate>,
+    ) -> Result<RestoredWaitingParent> {
+        let contract = input.contract;
+        (self.current_gate)(&contract.gate)?;
+        if !expected
+            .keys()
+            .all(|id| contract.required_children().contains(id))
+            || input.child_gates.keys().copied().collect::<BTreeSet<_>>()
+                != *contract.required_children()
+            || operations.len() >= contract.repositories().len()
+            || operations.iter().copied().collect::<BTreeSet<_>>().len() != operations.len()
+        {
+            return Err(Error::new(
+                "parent_incomplete",
+                "replacement wait requires every current child and its exact partial candidate inventory",
+            ));
+        }
+        let linear = self
+            .broker
+            .linear
+            .as_ref()
+            .ok_or_else(|| Error::new("prerequisite", "Linear connection unavailable"))?;
+        let mut children = Vec::new();
+        let mut staged = Vec::new();
+        for id in contract.required_children() {
+            let gate = &input.child_gates[id];
+            if *id == contract.e2e_child()
+                && let Some(prepared) = prepared_e2e
+            {
+                if prepared.checkpoint().work() != gate.work()
+                    || prepared.checkpoint().workspace() != gate.workspace_id()
+                {
+                    return Err(Error::new(
+                        "stale_generation",
+                        "prepared E2E input differs from required child",
+                    ));
+                }
+                if let Some(delta) = prepared.staged() {
+                    staged.push(delta.clone());
+                }
+                continue;
+            }
+
+            let mut valid = BTreeMap::new();
+            for comment in linear.comments(*id).await? {
+                if !comment
+                    .body
+                    .starts_with("<!-- kegari:v0:child_result -->\n")
+                {
+                    continue;
+                }
+                let Ok(signed) = evidence::decode_signed_publication::<ChildResultRecord>(
+                    &comment.body,
+                    "child_result",
+                    &self.key,
+                ) else {
+                    continue;
+                };
+                if signed.payload.evidence.work != *gate.work() {
+                    continue;
+                }
+                let observation =
+                    self.observation(gate.clone(), signed.payload.evidence.revision.clone())?;
+                if let Ok(child) = self
+                    .hydrate_child_result(
+                        &observation,
+                        input.workflow,
+                        &signed.payload.evidence.fulfilled_criteria,
+                        comment.id,
+                    )
+                    .await
+                {
+                    if valid
+                        .insert(child.verified.digest().to_owned(), child)
+                        .is_some()
+                    {
+                        return Err(Error::new(
+                            "evidence_ambiguous",
+                            "waiting parent child publication is duplicated",
+                        ));
+                    }
+                }
+            }
+            let superseded: BTreeSet<_> = valid
+                .values()
+                .filter_map(|child| match &child.verified.evidence().outcome {
+                    evidence::ChildOutcome::Replacement { delta, .. } => delta
+                        .replacement
+                        .as_ref()
+                        .map(|mapping| mapping.staging_result_digest.clone()),
+                    _ => None,
+                })
+                .collect();
+            valid.retain(|digest, _| !superseded.contains(digest));
+            if valid.len() != 1 {
+                return Err(Error::new(
+                    "parent_incomplete",
+                    "waiting parent needs one freshly authenticated child input per required child",
+                ));
+            }
+            let child = valid.into_values().next().expect("one current child");
+            if expected
+                .get(id)
+                .is_some_and(|expected| expected.digest() != child.verified.digest())
+            {
+                return Err(Error::new(
+                    "stale_result",
+                    "waiting parent child evidence changed",
+                ));
+            }
+            let observation =
+                self.observation(gate.clone(), child.verified.evidence().revision.clone())?;
+            let selected_delta = match &child.verified.evidence().outcome {
+                evidence::ChildOutcome::NoChange { .. } => None,
+                evidence::ChildOutcome::Changed {
+                    delta,
+                    pull_request,
+                } => Some((delta.as_ref(), *pull_request)),
+                evidence::ChildOutcome::Replacement {
+                    delta,
+                    related_pull_request,
+                } => Some((delta.as_ref(), *related_pull_request)),
+            };
+            if let Some((delta, pull_request)) = selected_delta {
+                let original = crate::delivery::replacement_staging_original(delta)?;
+                let protection = if delta.replacement.is_some() {
+                    Some(self.replacement_staging_protection(
+                        &observation,
+                        input.workflow,
+                        delta,
+                    )?)
+                } else {
+                    child.signed.payload.protection.clone()
+                }
+                .ok_or_else(|| {
+                    Error::new(
+                        "replacement_mapping",
+                        "waiting child lost its original staging protection",
+                    )
+                })?;
+                let signed: Signed<Value> = self
+                    .records
+                    .read(&format!("delta-{}.json", &original.digest()?[7..]))?;
+                self.key.verify("staged_delta", &signed)?;
+                if signed.payload.get("manifest") != Some(&json!(original)) {
+                    return Err(Error::new(
+                        "provenance_mismatch",
+                        "waiting child original contribution changed",
+                    ));
+                }
+                let merge_receipt = serde_json::from_value(
+                    signed
+                        .payload
+                        .get("merge_request")
+                        .cloned()
+                        .ok_or_else(|| {
+                            Error::new("record_corrupt", "waiting child merge receipt is absent")
+                        })?,
+                )
+                .map_err(|_| {
+                    Error::new("record_corrupt", "waiting child merge receipt is malformed")
+                })?;
+                let receipt = self.host.operation(merge_receipt)?;
+                if !matches!(
+                    receipt.phase,
+                    crate::control::ReceiptPhase::Acknowledged
+                        | crate::control::ReceiptPhase::Reconciled
+                ) {
+                    return Err(Error::new(
+                        "operation_uncertain",
+                        "waiting child staging effect remains unresolved",
+                    ));
+                }
+                staged.push(StagedDelta {
+                    delta: self.retained_delta(delta)?,
+                    pull_request,
+                    merge_receipt,
+                    protection,
+                });
+            }
+            children.push(child);
+        }
+        let mut slices = Vec::new();
+        let mut baselines = Vec::new();
+        for (repository, operation) in contract.repositories().iter().zip(operations) {
+            let configured = self.contracts.get(repository).ok_or_else(|| {
+                Error::new("scope_violation", "waiting parent repository disappeared")
+            })?;
+            let baseline = Arc::new(input.observer.observe(configured).await?);
+            let production = &baseline.baseline().production;
+            let observation = self.observation(
+                contract.gate.clone(),
+                RevisionBinding {
+                    repository: repository.clone(),
+                    head: production.commit.clone(),
+                    base: production.commit.clone(),
+                    tested_commit: production.commit.clone(),
+                    tested_tree: production.tree.clone(),
+                },
+            )?;
+            let slice = self
+                .recover_isolated_slice(&observation, *operation)
+                .await?;
+            let selected = staged
+                .iter()
+                .filter(|entry| &entry.delta.manifest.repository == repository)
+                .map(|entry| {
+                    Ok((
+                        entry.delta.manifest.digest()?,
+                        entry.delta.manifest.original_contributions()?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            if slice.manifest().selected_contributions != selected {
+                return Err(Error::new(
+                    "candidate_provenance",
+                    "waiting parent partial candidate differs from current exact child contributions",
+                ));
+            }
+            baselines.push(baseline);
+            slices.push(Arc::new(slice));
+        }
+        (self.current_gate)(&contract.gate)?;
+        Ok(RestoredWaitingParent {
+            children,
+            staged,
+            slices,
+            baselines,
+        })
+    }
+
+    /// Historical workflow restoration is usable only as input to an exact
+    /// authenticated baseline transition. The runtime must not publish it as
+    /// current readiness when production has advanced.
+    pub(crate) async fn restore_historical_completed_parent(
+        &self,
+        input: ParentHydrationInputs<'_>,
+        record_id: Uuid,
+    ) -> Result<RestoredCompletedParent> {
+        let contract = input.contract;
+        let observer = input.observer;
+        (self.current_gate)(&contract.gate)?;
+        let linear = self
+            .broker
+            .linear
+            .as_ref()
+            .ok_or_else(|| Error::new("prerequisite", "Linear connection unavailable"))?;
+        let comments = linear.comments(contract.work().parent).await?;
+        let matching = comments
+            .iter()
+            .filter(|comment| comment.id == record_id)
+            .collect::<Vec<_>>();
+        let [comment] = matching.as_slice() else {
+            return Err(Error::new(
+                "evidence_unpublished",
+                "original parent publication missing or duplicated",
+            ));
+        };
+        let signed: Signed<ParentResultRecord> =
+            evidence::decode_signed_publication(&comment.body, "parent_result", &self.key)?;
+        let token = signed.payload.evidence.token()?;
+        let historical = self
+            .hydrate_historical_release_parent(input, record_id, &token)
+            .await?;
+        let mut baselines = Vec::new();
+        for repository in contract.repositories() {
+            let configured = self.contracts.get(repository).ok_or_else(|| {
+                Error::new(
+                    "candidate_provenance",
+                    "parent repository no longer configured",
+                )
+            })?;
+            baselines.push(Arc::new(observer.observe(configured).await?));
+        }
+        (self.current_gate)(&contract.gate)?;
+        Ok(RestoredCompletedParent {
+            parent: historical.parent,
+            vector: historical.vector,
+            integrated: historical.integrated,
+            children: historical.children,
+            slices: historical.slices.into_iter().map(Arc::new).collect(),
+            baselines,
+        })
+    }
+
     fn historical_release_slice(
         &self,
         observation: &DeliveryObservation,

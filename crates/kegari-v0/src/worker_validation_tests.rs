@@ -1,5 +1,5 @@
-//! Actual ScopedWorker/Control/read/journal components. Execution uses the
-//! shared injected boundary; none of these tests qualifies a native profile.
+//! Actual ScopedWorker/Control/read/journal components and synthetic structured
+//! Codex results. No test invokes repository commands or qualifies native operation.
 use super::*;
 use crate::validation::{DiscoveryReadReference, ValidationPlan};
 
@@ -39,21 +39,79 @@ fn proposal(
         "supporting_reads":reads,"requirements":requirements}))
 }
 async fn enroll(f: &mut Fixture) -> String {
-    let reference = read(f, "source_read", json!({"path":"a.txt"})).await;
+    let reference = read(f, "context_read", json!({"key":"issue"})).await;
     let call = proposal(f, &[reference], None, vec![requirement("behavior")]);
     f.worker.call(&call).await.unwrap()["plan_digest"]
         .as_str()
         .unwrap()
         .into()
 }
-async fn run(f: &mut Fixture, plan: &str, obligation: &str) -> Result<Value> {
+async fn observe_native(
+    f: &mut Fixture,
+    item: &str,
+    completed: bool,
+    exit: Option<i32>,
+) -> Result<()> {
+    let frame = json!({"method":if completed {"item/completed"} else {"item/started"},
+    "params":{"threadId":"thread","turnId":"turn","item":{
+        "type":"commandExecution","id":item,"command":"/usr/bin/true",
+        "cwd":f.input.isolation.plan().cwd,
+        "status":if !completed {"inProgress"} else if exit == Some(0) {"completed"} else {"failed"},
+        "commandActions":[],"exitCode":exit,
+        "aggregatedOutput":if completed {Some("observed synthetic Codex result")} else {None},
+        "durationMs":if completed {Some(4)} else {None},"processId":null,"source":"agent"
+    }}});
+    let mut bytes = serde_json::to_vec(&frame).unwrap();
+    bytes.push(b'\n');
+    let mut rpc = RpcClient::from_transport(
+        std::io::Cursor::new(bytes),
+        tokio::io::sink(),
+        StdDuration::from_secs(2),
+    )?;
+    rpc.pump(
+        &mut f.state,
+        &mut f.worker,
+        StdDuration::from_secs(2),
+        StdDuration::from_secs(2),
+    )
+    .await?;
+    Ok(())
+}
+async fn run_outcome(
+    f: &mut Fixture,
+    plan: &str,
+    obligation: &str,
+    exit: Option<i32>,
+) -> Result<Value> {
+    let item = Uuid::new_v4().to_string();
+    observe_native(f, &item, false, None).await?;
+    // Simulate the external producer between its actual start/completion events.
+    // Only this fixture-owned output is created; absent.json remains absent.
+    if let Some(plan) = f.worker.current_validation_plan()
+        && plan.record().requirements.iter().any(|requirement| {
+            requirement
+                .artifacts
+                .iter()
+                .any(|path| path.ends_with("check.json"))
+        })
+    {
+        std::fs::write(
+            f.input.isolation.plan().scratch.join("check.json"),
+            format!("native observed output {item}: {exit:?}"),
+        )
+        .unwrap();
+    }
+    observe_native(f, &item, true, exit).await?;
     let call = f.call(
-        "validation_run",
-        json!({"plan_digest":plan,"obligation_id":obligation}),
+        "validation_record",
+        json!({"plan_digest":plan,"obligation_id":obligation,"item_id":item}),
     );
     tokio::time::timeout(StdDuration::from_secs(15), f.worker.call(&call))
         .await
-        .expect("bounded injected validation")
+        .expect("bounded native result recording")
+}
+async fn run(f: &mut Fixture, plan: &str, obligation: &str) -> Result<Value> {
+    run_outcome(f, plan, obligation, Some(0)).await
 }
 fn validation_receipts(f: &Fixture) -> Vec<Receipt> {
     f.control
@@ -70,7 +128,7 @@ fn retained_plan(f: &mut Fixture) -> ValidationPlan {
 #[tokio::test]
 async fn successful_original_reads_have_exact_finished_references_and_replay_once() {
     let mut f = Fixture::without_checks(AgentRole::Implementation);
-    let call = f.call("source_read", json!({"path":"a.txt"}));
+    let call = f.call("context_read", json!({"key":"parent"}));
     let original = f.worker.call(&call).await.unwrap();
     assert_eq!(f.worker.call(&call).await.unwrap(), original);
     let index = f.worker.validation_evidence().unwrap();
@@ -104,7 +162,7 @@ async fn successful_original_reads_have_exact_finished_references_and_replay_onc
 async fn read_reply_persistence_failure_never_publishes_supporting_reference() {
     let mut f = Fixture::without_checks(AgentRole::Implementation);
     let next = *f.worker.journal.next.lock().unwrap();
-    // tool_started writes next; real source read succeeds; tool_finished cannot
+    // tool_started writes next; actual context read succeeds; tool_finished cannot
     // replace this directory. Its pending callback is not a usable read fact.
     std::fs::create_dir(
         f.worker
@@ -114,16 +172,16 @@ async fn read_reply_persistence_failure_never_publishes_supporting_reference() {
             .join(format!("event-{:08}.json", next + 1)),
     )
     .unwrap();
-    let call = f.call("source_read", json!({"path":"a.txt"}));
+    let call = f.call("context_read", json!({"key":"issue"}));
     assert!(f.worker.call(&call).await.is_err());
     assert_eq!(f.worker.validation_evidence().unwrap()["total_reads"], 0);
     assert!(f.worker.take_validation_plan().is_none());
     assert!(f.worker.call(&call).await.is_err());
-    assert!(f.boundary.last_cancel.lock().unwrap().is_none());
+    assert!(f.executions.active_operations().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn forged_read_changed_source_and_replaced_finished_record_refuse_enrollment() {
+async fn forged_read_and_replaced_finished_record_refuse_enrollment() {
     let mut f = Fixture::without_checks(AgentRole::Implementation);
     let forged = proposal(
         &f,
@@ -135,32 +193,12 @@ async fn forged_read_changed_source_and_replaced_finished_record_refuse_enrollme
         f.worker.call(&forged).await.unwrap_err().code,
         "validation_read"
     );
-    let id = read(&mut f, "source_read", json!({"path":"a.txt"})).await;
-    std::fs::write(
-        f.input.isolation.plan().repository.join("a.txt"),
-        b"changed after actual read\n",
-    )
-    .unwrap();
-    let changed = proposal(
-        &f,
-        std::slice::from_ref(&id),
-        None,
-        vec![requirement("behavior")],
-    );
-    assert_eq!(
-        f.worker.call(&changed).await.unwrap_err().code,
-        "validation_read_changed"
-    );
-    std::fs::write(
-        f.input.isolation.plan().repository.join("a.txt"),
-        b"original\n",
-    )
-    .unwrap();
+    let id = read(&mut f, "context_read", json!({"key":"issue"})).await;
     let index = f.worker.validation_evidence().unwrap();
     let reference: DiscoveryReadReference =
         serde_json::from_value(index["reads"][0]["reference"].clone()).unwrap();
     let mut event: Value = f.worker.journal.dir.read(&reference.journal.leaf).unwrap();
-    event["record"]["result"] = json!({"Ok":{"path":"a.txt","content":"rewritten"}});
+    event["record"]["result"] = json!({"Ok":{"body":"rewritten"}});
     f.worker
         .journal
         .dir
@@ -173,82 +211,6 @@ async fn forged_read_changed_source_and_replaced_finished_record_refuse_enrollme
     );
     assert!(f.worker.take_validation_plan().is_none());
     assert!(validation_receipts(&f).is_empty());
-}
-
-#[tokio::test]
-async fn empty_configured_checks_use_actual_enrollment_execution_chunks_and_ack() {
-    let mut f = Fixture::without_checks(AgentRole::Implementation);
-    let plan = enroll(&mut f).await;
-    let call = f.call(
-        "validation_run",
-        json!({"plan_digest":plan,"obligation_id":"behavior"}),
-    );
-    let result = f.worker.call(&call).await.unwrap();
-    assert_eq!(result["successful"], true);
-    assert_eq!(result["plan_digest"], plan);
-    assert_eq!(result["outcome"]["stdout_preview"], "deterministic fixture");
-    assert_eq!(
-        result["outcome"]["stdout_digest"],
-        bytes_digest(b"deterministic fixture")
-    );
-    assert!(result.get("before").is_none());
-    assert!(serde_json::to_vec(&result).unwrap().len() < 65_536);
-    assert_eq!(f.worker.call(&call).await.unwrap(), result);
-    assert_eq!(validation_receipts(&f).len(), 1);
-    assert_eq!(validation_receipts(&f)[0].phase, ReceiptPhase::Acknowledged);
-    assert!(f.executions.active_operations().unwrap().is_empty());
-    assert!(f.worker.validation_history_error().is_none());
-    let records = f.worker.take_validation_attempts();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].schema_version, 4);
-    assert_eq!(records[0].discovered.as_ref().unwrap().plan_digest, plan);
-    assert_eq!(records[0].command.stdout, "deterministic fixture");
-    assert_eq!(
-        records[0].evidence_class,
-        ExecutionEvidenceClass::DeterministicFixture
-    );
-    let all = events(&f);
-    let (_, event) = all
-        .iter()
-        .rev()
-        .find(|(_, event)| event["kind"] == "validation_check_entry")
-        .unwrap();
-    let reference: crate::worker::command::CommandEntryReference =
-        serde_json::from_value(event["record"].clone()).unwrap();
-    let bytes: Vec<u8> = reference
-        .chunks
-        .iter()
-        .flat_map(|leaf| {
-            let chunk: Value = f.worker.journal.dir.read(leaf).unwrap();
-            assert_eq!(chunk["kind"], "validation_check_chunk");
-            hex::decode(chunk["record"]["payload_hex"].as_str().unwrap()).unwrap()
-        })
-        .collect();
-    assert_eq!(bytes_digest(&bytes), reference.digest);
-    let finished: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(finished["state"], "finished");
-    assert_eq!(finished["command"]["stdout"], "deterministic fixture");
-    // Pure rendering oracle on a descriptive copy: escaping cannot make the
-    // two previews exceed the public tool budget. No capability is constructed.
-    let mut escaped = finished.clone();
-    escaped["command"]["stdout"] = json!("\u{1}".repeat(6000));
-    escaped["command"]["stderr"] = json!("\u{2}".repeat(6000));
-    let preview = crate::worker::validation::result_summary(&escaped, &reference).unwrap();
-    assert_eq!(preview["outcome"]["stdout_bytes"], 6000);
-    assert_eq!(
-        preview["outcome"]["stdout_preview"].as_str().unwrap().len(),
-        4096
-    );
-    assert!(serde_json::to_vec(&preview).unwrap().len() < 65_536);
-    assert_eq!(escaped["command"]["stdout"].as_str().unwrap().len(), 6000);
-    assert!(
-        all.iter()
-            .any(|(_, event)| event["kind"] == "validation_attempt_ack")
-    );
-    let checks = f.worker.take_verified_checks();
-    assert_eq!(checks.len(), 1);
-    assert_eq!(checks[0].validation_plan().unwrap().digest(), plan);
-    assert!(checks[0].production_evidence().is_err());
 }
 
 #[tokio::test]
@@ -284,7 +246,9 @@ async fn revisions_keep_obligation_history_old_attempts_and_reject_old_plan_exec
         run(&mut f, &old, "behavior").await.unwrap_err().code,
         "validation_plan_changed"
     );
-    assert_eq!(validation_receipts(&f).len(), 1);
+    // Result acceptance retains native provenance without a per-command
+    // durable launch receipt for a Codex-internal command.
+    assert!(validation_receipts(&f).is_empty());
     assert_eq!(f.worker.take_validation_attempts().len(), 1);
     assert_eq!(
         f.worker.take_verified_checks()[0]
@@ -302,28 +266,33 @@ async fn revisions_keep_obligation_history_old_attempts_and_reject_old_plan_exec
 #[tokio::test]
 async fn newer_failed_and_unknown_attempts_cannot_hide_behind_an_earlier_pass() {
     let mut f = Fixture::without_checks(AgentRole::Implementation);
-    let plan = enroll(&mut f).await;
+    let plan = enroll_artifact(&mut f, false).await;
     run(&mut f, &plan, "behavior").await.unwrap();
-    f.boundary.fail.store(true, Ordering::SeqCst);
     assert_eq!(
-        run(&mut f, &plan, "behavior").await.unwrap()["successful"],
+        run_outcome(&mut f, &plan, "behavior", Some(7))
+            .await
+            .unwrap()["successful"],
         false
     );
     let records = f.worker.take_validation_attempts();
     assert_eq!(records.len(), 2);
     assert_eq!(records.iter().filter(|r| !r.successful).count(), 1);
     assert!(f.worker.validation_history_error().is_none());
-    f.boundary.unknown.store(true, Ordering::SeqCst);
     assert_eq!(
-        run(&mut f, &plan, "behavior").await.unwrap_err().code,
-        "operation_uncertain"
+        run_outcome(&mut f, &plan, "behavior", None)
+            .await
+            .unwrap_err()
+            .code,
+        "codex_result_incomplete"
     );
     assert!(f.worker.validation_history_error().is_some());
     assert_eq!(
         f.executions.observe_exited(f.permit.operation_id).unwrap(),
         0
     );
-    assert!(!f.executions.active_operations().unwrap().is_empty());
+    // Codex owns the internal command; unresolved result bookkeeping must not
+    // manufacture an owned host process.
+    assert!(f.executions.active_operations().unwrap().is_empty());
     let read_id = read(&mut f, "context_read", json!({"key":"issue"})).await;
     let revised = proposal(&f, &[read_id], Some(&plan), vec![requirement("behavior")]);
     assert!(f.worker.call(&revised).await.is_err());
@@ -409,7 +378,7 @@ async fn enrolled_history_refuses_cold_resume_and_large_plan_reply_stays_bounded
     run(&mut f, plan, "obligation-0").await.unwrap();
     let record = f.worker.take_validation_attempts().pop().unwrap();
     assert!(
-        serde_json::to_vec(&record.discovered.as_ref().unwrap().plan)
+        serde_json::to_vec(record.codex.as_ref().unwrap().plan.as_ref().unwrap())
             .unwrap()
             .len()
             > 65_536
@@ -427,31 +396,6 @@ async fn enrolled_history_refuses_cold_resume_and_large_plan_reply_stays_bounded
             .code,
         "validation_recovery_pending"
     );
-}
-
-#[tokio::test]
-async fn known_service_failure_is_sticky_even_after_real_cleanup_ack() {
-    let mut f = Fixture::with_bundle(
-        worker_bundle::Mode::ReadinessFailure,
-        WorkerContract::new_configured,
-    );
-    let read_id = read(&mut f, "context_read", json!({"key":"issue"})).await;
-    let configured = &f.input.workflow.front_matter.checks.local["suite"];
-    let mut requirement = requirement("suite");
-    requirement["argv"] = json!(configured.argv);
-    requirement["services"] = json!(configured.services);
-    let proposed = proposal(&f, &[read_id], None, vec![requirement]);
-    let plan = f.worker.call(&proposed).await.unwrap()["plan_digest"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(run(&mut f, &plan, "suite").await.is_err());
-    assert_eq!(validation_receipts(&f)[0].phase, ReceiptPhase::Acknowledged);
-    assert!(f.executions.active_operations().unwrap().is_empty());
-    assert!(f.worker.validation_history_error().is_some());
-    assert!(f.worker.take_validation_attempts().is_empty());
-    assert!(f.worker.take_verified_checks().is_empty());
-    assert!(f.worker.take_failed_checks().is_empty());
 }
 
 #[tokio::test]
@@ -490,8 +434,9 @@ async fn original_worker_seal_refuses_omitted_failure_and_changed_plan_or_uncert
     let mut f = Fixture::without_checks(AgentRole::Implementation);
     let plan_digest = enroll(&mut f).await;
     run(&mut f, &plan_digest, "behavior").await.unwrap();
-    f.boundary.fail.store(true, Ordering::SeqCst);
-    run(&mut f, &plan_digest, "behavior").await.unwrap();
+    run_outcome(&mut f, &plan_digest, "behavior", Some(7))
+        .await
+        .unwrap();
     let seal = f.worker.seal_validation_history();
     let error = f.worker.validation_history_error();
     let plan = retained_plan(&mut f);
@@ -589,97 +534,6 @@ async fn protected_outcome_binds_actual_history_and_old_absence_serializes_uncha
     assert_eq!(serde_json::to_value(decoded).unwrap(), historical);
 }
 
-#[tokio::test]
-async fn read_reference_page_obeys_byte_bound_with_long_actual_paths() {
-    let mut f = Fixture::without_checks(AgentRole::Implementation);
-    let mut relative = PathBuf::new();
-    for index in 0..4 {
-        relative.push(format!("{index}{}", "p".repeat(179)));
-    }
-    let parent = f.input.isolation.plan().repository.join(&relative);
-    std::fs::create_dir_all(&parent).unwrap();
-    std::fs::write(parent.join("read.txt"), b"actual read bytes").unwrap();
-    relative.push("read.txt");
-    for _ in 0..20 {
-        read(&mut f, "source_read", json!({"path":relative})).await;
-    }
-    let index = f.worker.validation_evidence().unwrap();
-    let shown = index["reads"].as_array().unwrap().len();
-    assert!(shown > 0 && shown < 16);
-    assert_eq!(index["total_reads"], 20);
-    assert_eq!(index["omitted_reads"], 20 - shown);
-    assert!(serde_json::to_vec(&index).unwrap().len() <= 65_536);
-}
-
-#[tokio::test]
-async fn discovered_service_bundle_joins_all_writers_before_artifact_and_transcript_capture() {
-    let mut f = Fixture::with_bundle(worker_bundle::Mode::Success, WorkerContract::new_configured);
-    let reference = read(&mut f, "source_read", json!({"path":"a.txt"})).await;
-    let configured = &f.input.workflow.front_matter.checks.local["suite"];
-    let mut obligation = requirement("suite");
-    obligation["argv"] = json!(configured.argv);
-    obligation["services"] = json!(configured.services);
-    obligation["artifacts"] = json!([configured.result_artifact]);
-    let proposed = proposal(&f, &[reference], None, vec![obligation]);
-    let plan = f.worker.call(&proposed).await.unwrap()["plan_digest"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let result = run(&mut f, &plan, "suite").await.unwrap();
-    assert_eq!(result["successful"], true);
-    assert_eq!(
-        f.boundary.bundle.as_ref().unwrap().events(),
-        vec![
-            "service:start",
-            "readiness:start",
-            "readiness:joined",
-            "check:start",
-            "check:joined",
-            "service:stop",
-            "service:joined",
-        ]
-    );
-    assert_eq!(validation_receipts(&f)[0].phase, ReceiptPhase::Acknowledged);
-    assert!(f.executions.active_operations().unwrap().is_empty());
-    assert!(f.worker.validation_history_error().is_none());
-    let records = f.worker.take_validation_attempts();
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
-    record.validate_shape().unwrap();
-    assert_eq!(record.schema_version, 4);
-    let provenance = record.discovered.as_ref().unwrap();
-    assert_eq!(provenance.plan_digest, plan);
-    assert_eq!(provenance.service_observations.len(), 1);
-    assert_eq!(record.bundle.as_ref().unwrap().services.len(), 1);
-    let output = f.input.isolation.plan().scratch.join("check.json");
-    let bytes = std::fs::read(&output).unwrap();
-    assert_eq!(bytes, b"written-during-service-stop\n");
-    assert!(
-        record
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.path == output && artifact.digest == bytes_digest(&bytes))
-    );
-    let transcript = std::fs::read(&provenance.transcript).unwrap();
-    assert!(!transcript.is_empty());
-    assert!(
-        record
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.path == provenance.transcript
-                && artifact.digest == bytes_digest(&transcript))
-    );
-    assert!(
-        events(&f)
-            .iter()
-            .any(|(_, event)| event["kind"] == "validation_attempt_ack")
-    );
-    let checks = f.worker.take_verified_checks();
-    assert_eq!(checks.len(), 1);
-    assert_eq!(checks[0].validation_plan().unwrap().digest(), plan);
-    assert!(checks[0].production_evidence().is_err());
-}
-
 #[test]
 fn integrated_scope_uses_retained_assignment_vector_and_cannot_be_requested_as_a_kind() {
     use crate::worker::validation::classify_discovery_scope;
@@ -741,125 +595,15 @@ fn integrated_scope_uses_retained_assignment_vector_and_cannot_be_requested_as_a
 }
 
 #[tokio::test]
-async fn additional_source_read_uses_actual_host_repository_and_settled_snapshot_reference() {
-    let mut f = Fixture::with_read_repository(AgentRole::Implementation);
-    let sources = f.call("context_read", json!({"key":"read_sources"}));
-    let listed = f.worker.call(&sources).await.unwrap();
-    assert!(
-        listed["repositories"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|source| source["repository_id"] == "43" && source["primary"] == false)
-    );
-    let call = f.call(
-        "source_read",
-        json!({"repository_id":"43","path":"notes.txt"}),
-    );
-    let actual = f.worker.call(&call).await.unwrap();
-    assert_eq!(actual["repository_id"], "43");
-    assert_eq!(actual["content"], "actual additional repository input\n");
-    assert_eq!(
-        actual["digest"],
-        bytes_digest(b"actual additional repository input\n")
-    );
-    let index = f.worker.validation_evidence().unwrap();
-    let reference: DiscoveryReadReference =
-        serde_json::from_value(index["reads"][0]["reference"].clone()).unwrap();
-    let crate::validation::DiscoveryReadContent::Source { path, .. } = &reference.content else {
-        panic!("source callback must retain actual bytes");
-    };
-    assert_eq!(
-        path,
-        &f.input
-            .read_resources
-            .keys()
-            .next()
-            .unwrap()
-            .join("notes.txt")
-    );
-    let proposed = proposal(
-        &f,
-        &[reference.digest().unwrap()],
-        None,
-        vec![requirement("cross-repository-obligation")],
-    );
-    let result = f.worker.call(&proposed).await.unwrap();
-    let plan = retained_plan(&mut f);
-    assert_eq!(plan.digest(), result["plan_digest"]);
-    assert_eq!(plan.record().kind, CheckKind::Local); // no invented integrated capability
-    assert_eq!(
-        plan.record().supporting_reads[0].digest().unwrap(),
-        reference.digest().unwrap()
-    );
-    assert_eq!(
-        plan.record().original_binding,
-        f.execution.as_ref().unwrap().binding
-    );
-}
-
-#[tokio::test]
-async fn additional_read_mutation_and_caller_chosen_roots_cannot_enroll() {
-    let mut f = Fixture::with_read_repository(AgentRole::Implementation);
-    let reference = read(
-        &mut f,
-        "source_read",
-        json!({"repository_id":"43","path":"notes.txt"}),
-    )
-    .await;
-    let root = f.input.read_resources.keys().next().unwrap().clone();
-    let outside = f.call(
-        "source_read",
-        json!({"repository_id":root,"path":"notes.txt"}),
-    );
-    assert_eq!(
-        f.worker.call(&outside).await.unwrap_err().code,
-        "scope_violation"
-    );
-    let traversal = f.call(
-        "source_read",
-        json!({"repository_id":"43","path":"../operator/a.txt"}),
-    );
-    assert_eq!(
-        f.worker.call(&traversal).await.unwrap_err().code,
-        "scope_violation"
-    );
-    std::fs::write(root.join("notes.txt"), b"changed host input\n").unwrap();
-    let proposed = proposal(&f, &[reference], None, vec![requirement("behavior")]);
-    assert!(f.worker.call(&proposed).await.is_err());
-    assert!(f.worker.take_validation_plan().is_none());
-    assert!(validation_receipts(&f).is_empty());
-    assert!(f.boundary.last_cancel.lock().unwrap().is_none());
-}
-
-#[tokio::test]
-async fn readonly_review_can_read_an_original_additional_repository_without_execution() {
-    let mut f = Fixture::with_read_repository(AgentRole::Review);
-    let call = f.call(
-        "source_read",
-        json!({"repository_id":"43","path":"notes.txt"}),
-    );
-    assert_eq!(
-        f.worker.call(&call).await.unwrap()["content"],
-        "actual additional repository input\n"
-    );
-    let command = f.call("command_run", json!({"argv":["/usr/bin/true"],"cwd":"."}));
-    assert_eq!(
-        f.worker.call(&command).await.unwrap_err().code,
-        "unsupported_tool"
-    );
-    let write = f.call("source_write", json!({"path":"notes.txt","expected_digest":null,"content":"must not write","executable":false}));
-    assert_eq!(
-        f.worker.call(&write).await.unwrap_err().code,
-        "unsupported_tool"
-    );
-    assert_eq!(f.worker.validation_evidence().unwrap()["total_reads"], 0);
-    assert!(f.execution.is_none());
-}
-
-#[tokio::test]
 async fn integrated_selected_constraints_use_integrated_table_and_keep_primary_cwd() {
-    let f = Fixture::with_bundle(worker_bundle::Mode::Success, WorkerContract::new_configured);
+    let mut f = Fixture::new(AgentRole::Implementation);
+    let check = f.input.workflow.front_matter.checks.local["suite"].clone();
+    f.input
+        .workflow
+        .front_matter
+        .checks
+        .integrated
+        .insert("e2e".into(), check);
     let mut obligation = requirement("e2e");
     obligation["argv"] = json!(f.input.workflow.front_matter.checks.integrated["e2e"].argv);
     let proposed: crate::validation::ValidationProposal = serde_json::from_value(
@@ -931,7 +675,7 @@ fn take_artifact_completion(f: &mut Fixture) -> crate::worker_run::RunCompletion
     }
 }
 async fn enroll_artifact(f: &mut Fixture, missing: bool) -> String {
-    let reference = read(f, "source_read", json!({"path":"a.txt"})).await;
+    let reference = read(f, "context_read", json!({"key":"issue"})).await;
     let mut obligation = requirement("behavior");
     let mut artifacts = vec![f.input.isolation.plan().scratch.join("check.json")];
     if missing {
@@ -949,8 +693,9 @@ async fn enroll_artifact(f: &mut Fixture, missing: bool) -> String {
 async fn retained_failed_and_superseded_output_bytes_survive_overwrite_and_scratch_removal() {
     let mut f = Fixture::without_checks(AgentRole::Implementation);
     let plan = enroll_artifact(&mut f, false).await;
-    f.boundary.fail.store(true, Ordering::SeqCst);
-    run(&mut f, &plan, "behavior").await.unwrap();
+    run_outcome(&mut f, &plan, "behavior", Some(7))
+        .await
+        .unwrap();
     let path = f.input.isolation.plan().scratch.join("check.json");
     let failed_bytes = std::fs::read(&path).unwrap();
     let reference = read(&mut f, "context_read", json!({"key":"issue"})).await;
@@ -961,7 +706,6 @@ async fn retained_failed_and_superseded_output_bytes_survive_overwrite_and_scrat
         .as_str()
         .unwrap()
         .to_owned();
-    f.boundary.fail.store(false, Ordering::SeqCst);
     run(&mut f, &current, "behavior").await.unwrap();
     let passed_bytes = std::fs::read(&path).unwrap();
     assert_ne!(failed_bytes, passed_bytes);
@@ -1153,4 +897,50 @@ async fn retained_artifacts_survive_ack_persistence_failure_with_sticky_history_
             proof.digest
         );
     }
+}
+
+#[tokio::test]
+async fn overlapping_native_output_preserves_uncertainty_after_an_earlier_pass() {
+    let mut f = Fixture::without_checks(AgentRole::Implementation);
+    let plan = enroll_artifact(&mut f, false).await;
+    run(&mut f, &plan, "behavior").await.unwrap();
+    let missing = f.call(
+        "validation_record",
+        json!({"plan_digest":plan,"obligation_id":"behavior","item_id":"never-observed"}),
+    );
+    assert_eq!(
+        f.worker.call(&missing).await.unwrap_err().code,
+        "execution_result_missing"
+    );
+    assert!(f.worker.validation_history_error().is_none());
+    observe_native(&mut f, "unresolved-writer", false, None)
+        .await
+        .unwrap();
+    observe_native(&mut f, "overlapping-result", false, None)
+        .await
+        .unwrap();
+    std::fs::write(
+        f.input.isolation.plan().scratch.join("check.json"),
+        "new output with ambiguous producer",
+    )
+    .unwrap();
+    observe_native(&mut f, "overlapping-result", true, Some(0))
+        .await
+        .unwrap();
+    let record = f.call(
+        "validation_record",
+        json!({"plan_digest":plan,"obligation_id":"behavior","item_id":"overlapping-result"}),
+    );
+    assert_eq!(
+        f.worker.call(&record).await.unwrap_err().code,
+        "artifact_producer_uncertain"
+    );
+    assert!(f.worker.validation_history_error().is_some());
+    assert_eq!(f.worker.take_validation_attempts().len(), 1);
+    assert!(
+        events(&f)
+            .iter()
+            .any(|(_, event)| event["kind"] == "codex_validation_unresolved")
+    );
+    assert!(f.executions.active_operations().unwrap().is_empty());
 }

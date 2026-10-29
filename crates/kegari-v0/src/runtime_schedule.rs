@@ -109,6 +109,29 @@ pub(crate) fn grant_requires_unfinished(
     }
 }
 
+/// The pinned provider profile has no observed server-side clearing contract.
+/// Local userVerification/status readiness, account metadata and a later ordinary
+/// turn cannot substitute for resolution of the original provider intervention.
+pub(crate) fn intervention_next_action(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("verification_required") => {
+            "Complete the provider's required trusted-access verification through its supported interface. This Codex pin exposes local readiness, not authoritative server resolution; Kegari readmission remains unavailable until a supported resolution observation is implemented and verified. Preserve the original operation; retry or reconnect does not clear it."
+        }
+        Some("cyberPolicy" | "misalignmentPolicyViolation") => {
+            "Follow the provider's supported policy-review or appeal process for this original account and work. This Codex pin does not establish that the stopped task may resume; Kegari keeps it blocked. A new model, account or thread is not a resolution."
+        }
+        Some("tooManyDenials") => {
+            "Inspect the original declined requests and follow the provider's supported resolution process. Do not broaden permissions to bypass the hold. This Codex pin has no authoritative clearing observation, so retry, reconnect and replacement sessions remain blocked."
+        }
+        _ => {
+            "Inspect the retained provider signal and complete its required resolution through a supported provider process. Kegari cannot verify clearing through this pinned profile; retain the hold and original operation rather than retrying or changing accounts."
+        }
+    }
+}
+pub(crate) fn intervention_readmission(signal: &Value) -> Value {
+    json!({"status":"blocked","capability":"resolution_observation_unsupported","protocol_profile":kegari_codex::PROTOCOL_PROFILE,"supported_codex_version":kegari_codex::SUPPORTED_CODEX_VERSION,"next_action":intervention_next_action(signal.get("reason_code").and_then(Value::as_str)),"ordinary_login_or_local_readiness_clears_hold":false})
+}
+
 /// Provider intervention belongs to its observed account/work, not to a phase
 /// budget. A correction, retry grant, account alias or later successful receipt
 /// cannot clear it. Only a separately verified provider resolution may do so;
@@ -147,7 +170,8 @@ pub fn require_provider_clear(
                     "provider_intervention",
                     "recorded provider intervention requires verified provider resolution",
                 )
-                .detail(json!({"operation_id":receipt.operation_id,"account":run.account,"work":run.phase.work,"provider_signal":intervention})));
+                .detail(json!({"operation_id":receipt.operation_id,"account":run.account,"work":run.phase.work,"provider_signal":intervention,"readmission":intervention_readmission(intervention)}))
+                .next(intervention_next_action(intervention.get("reason_code").and_then(Value::as_str))));
             }
             if same_work
                 && observed

@@ -1,15 +1,13 @@
 //! Descriptive schema/predicate tests only. These values do not construct a
 //! ValidationPlan, VerifiedCheckExecution, worker outcome or native capability.
 use super::*;
-use crate::execution::{DiscoveredCheckProvenance, ExecutionBinding, SourceSnapshot};
+use crate::execution::{CodexCheckProvenance, ExecutionBinding, SourceSnapshot};
 use crate::validation::{
     DiscoveryJournalReference, DiscoveryReadContent, DiscoveryReadReference, ValidationRequirement,
 };
 use kegari_digest::bytes_digest;
-use kegari_execution::CommandObservation;
 use kegari_execution::CommandOutcome;
 use kegari_git::{RepositoryId, Revision};
-use kegari_platform::BinaryIdentity;
 use kegari_types::artifact::ArtifactProof;
 use std::path::PathBuf;
 
@@ -73,7 +71,7 @@ fn evidence() -> (ValidationEvidence, RevisionBinding) {
             argv: vec!["unfamiliar-tool".into(), "verify".into()],
             cwd: ".".into(),
             services: vec![],
-            artifacts: vec![],
+            artifacts: vec!["/owned/repository/result.json".into()],
         }],
         supporting_reads: vec![DiscoveryReadReference {
             schema_version: 1,
@@ -100,41 +98,27 @@ fn evidence() -> (ValidationEvidence, RevisionBinding) {
     let transcript = PathBuf::from(format!(
         "/owned/scratch/validation-transcript-{invocation}.json"
     ));
-    let binary = BinaryIdentity {
-        path: "/usr/bin/fixture".into(),
-        digest: digest.clone(),
-        bytes: 1,
-    };
-    let observation = CommandObservation {
-        schema_version: 1,
-        requested_argv: plan.requirements[0].argv.clone(),
-        selected_executable: binary.path.clone(),
-        canonical_executable: binary.clone(),
-        launcher: binary,
-        cwd: "/owned/repository".into(),
-        environment: BTreeMap::from([("HOME".into(), "/owned/scratch".into())]),
-        original_isolation_digest: digest.clone(),
-        isolation_digest: digest.clone(),
-        launch_digest: digest.clone(),
-        backend_policy_digest: format!("sha256:v5:{}", "a".repeat(64)),
-    };
     let plan_digest = canonical_digest(1, &plan).unwrap();
     let attempt = CheckExecutionRecord {
-        schema_version: 4,
-        discovered: Some(DiscoveredCheckProvenance {
-            schema_version: 1,
-            plan: plan.clone(),
-            plan_digest: plan_digest.clone(),
-            invocation_id: invocation,
-            observation: observation.clone(),
-            service_observations: vec![],
-            prepared_at: at(2),
-            deadline_at: at(12),
-            command_timeout_ms: 10_000,
-            output_bytes: 1024,
+        schema_version: 5,
+        codex: Some(CodexCheckProvenance {
+            schema_version: 2,
+            protocol_profile: kegari_codex::PROTOCOL_PROFILE.into(),
+            thread_id: "descriptive-thread".into(),
+            turn_id: "descriptive-turn".into(),
+            item_id: invocation.to_string(),
+            command: "unfamiliar-tool verify".into(),
+            status: kegari_codex::NativeExecutionStatus::Completed,
+            started_item_digest: digest.clone(),
+            completed_item_digest: digest.clone(),
             transcript: transcript.clone(),
-            artifacts: vec![transcript.clone()],
+            plan: Some(plan.clone()),
+            artifact_freshness: vec![serde_json::from_value(serde_json::json!({
+                "path":"/owned/repository/result.json","before":null,
+                "after":{"bytes":10,"digest":digest,"modified":[2,0],"identity":null,"changed":null}
+            })).unwrap()],
         }),
+        discovered: None,
         correction: None,
         bundle: None,
         binding: binding.clone(),
@@ -143,17 +127,26 @@ fn evidence() -> (ValidationEvidence, RevisionBinding) {
         kind: CheckKind::Local,
         before: source.clone(),
         after: source,
-        artifacts: vec![ArtifactProof {
-            path: transcript,
-            digest: digest.clone(),
-            bytes: 10,
-            validation_operation: binding.operation_id,
-            candidate_vector_digest: None,
-        }],
+        artifacts: vec![
+            ArtifactProof {
+                path: transcript,
+                digest: digest.clone(),
+                bytes: 10,
+                validation_operation: binding.operation_id,
+                candidate_vector_digest: None,
+            },
+            ArtifactProof {
+                path: "/owned/repository/result.json".into(),
+                digest: digest.clone(),
+                bytes: 10,
+                validation_operation: binding.operation_id,
+                candidate_vector_digest: None,
+            },
+        ],
         command: CommandOutcome {
             schema_version: 1,
-            argv: observation.requested_argv,
-            cwd: observation.cwd.clone(),
+            argv: plan.requirements[0].argv.clone(),
+            cwd: "/owned/repository".into(),
             isolation_digest: digest,
             exit_code: Some(0),
             termination_signal: None,
@@ -165,7 +158,7 @@ fn evidence() -> (ValidationEvidence, RevisionBinding) {
         },
         started_at: at(2),
         completed_at: at(3),
-        evidence_class: ExecutionEvidenceClass::ConfinedExecution,
+        evidence_class: ExecutionEvidenceClass::CodexExecution,
         successful: true,
         blocker: None,
     };
@@ -178,7 +171,8 @@ fn evidence() -> (ValidationEvidence, RevisionBinding) {
     };
     (
         ValidationEvidence {
-            schema_version: 1,
+            prior_history: vec![],
+            schema_version: 3,
             plan_digest,
             original_cwd: "/owned/repository".into(),
             history: vec![plan],
@@ -235,13 +229,14 @@ fn later_timeout_without_repair_capability_blocks_old_success() {
     timeout.command.exit_code = None;
     timeout.started_at = at(4);
     timeout.completed_at = at(14);
-    let provenance = timeout.discovered.as_mut().unwrap();
-    provenance.invocation_id = Uuid::from_u128(8);
-    provenance.prepared_at = at(4);
-    provenance.deadline_at = at(14);
+    let provenance = timeout.codex.as_mut().unwrap();
+    provenance.item_id = Uuid::from_u128(8).to_string();
+    provenance.status = kegari_codex::NativeExecutionStatus::Failed;
+    // A terminal timeout has an actual provider-observed exit code. A missing
+    // terminal response remains unknown and cannot form a check record at all.
+    timeout.command.exit_code = Some(124);
     provenance.transcript =
         "/owned/scratch/validation-transcript-00000000-0000-0000-0000-000000000008.json".into();
-    provenance.artifacts = vec![provenance.transcript.clone()];
     timeout.artifacts[0].path = provenance.transcript.clone();
     evidence.attempts.push(timeout);
     assert_eq!(
@@ -304,7 +299,14 @@ fn duplicate_substituted_and_fixture_attempts_cannot_form_production_evidence() 
     duplicate.attempts.push(duplicate.attempts[0].clone());
     assert!(duplicate.validate(&work, &revision).is_err());
     let mut changed = valid.clone();
-    changed.attempts[0].discovered.as_mut().unwrap().plan_digest = bytes_digest(b"other plan");
+    changed.attempts[0]
+        .codex
+        .as_mut()
+        .unwrap()
+        .plan
+        .as_mut()
+        .unwrap()
+        .reason = "substituted plan outside retained history".into();
     assert!(changed.validate(&work, &revision).is_err());
     let mut fixture = valid;
     fixture.attempts[0].evidence_class = ExecutionEvidenceClass::DeterministicFixture;
@@ -417,7 +419,7 @@ fn integrated_description() -> (
 ) {
     let (mut validation, revision) = evidence();
     let vector = bytes_digest(b"entire descriptive candidate vector");
-    validation.schema_version = 2;
+    validation.schema_version = 4;
     let plan = &mut validation.history[0];
     plan.kind = CheckKind::Integrated;
     plan.original_binding.candidate_vector_digest = Some(vector.clone());
@@ -426,10 +428,11 @@ fn integrated_description() -> (
     let attempt = &mut validation.attempts[0];
     attempt.kind = CheckKind::Integrated;
     attempt.binding = plan.binding.clone();
-    attempt.artifacts[0].candidate_vector_digest = Some(vector.clone());
-    let provenance = attempt.discovered.as_mut().unwrap();
-    provenance.plan = plan.clone();
-    provenance.plan_digest = validation.plan_digest.clone();
+    for artifact in &mut attempt.artifacts {
+        artifact.candidate_vector_digest = Some(vector.clone());
+    }
+    let provenance = attempt.codex.as_mut().unwrap();
+    provenance.plan = Some(plan.clone());
     let candidate = kegari_git::CandidateManifest {
         schema_version: 1,
         operation_id: Uuid::from_u128(30),
@@ -574,11 +577,6 @@ fn compact_review_resolves_large_complete_history_before_child_predicates() {
     let (namespace, mut history, artifacts) = descriptive_fixture();
     // Larger than both the former remote publication and local leaf bounds.
     history.attempts[0].command.stdout = "retained failed output\n".repeat(16_000);
-    history.attempts[0]
-        .discovered
-        .as_mut()
-        .unwrap()
-        .output_bytes = 1024 * 1024;
     assert!(serde_json::to_vec(&history).unwrap().len() > 256 * 1024);
     let archive = validation_archive::retain(&records, &key, namespace, &history, |proof| {
         Ok(artifacts[&canonical_digest(1, proof)?].clone())
@@ -774,4 +772,170 @@ fn compact_integrated_selection_resolves_original_records_and_rejects_substituti
     let mut changed = compact;
     changed.archive.evidence_digest = bytes_digest(b"substituted full history");
     assert!(changed.runs(&archive).is_err());
+}
+
+#[test]
+fn continued_validation_retains_failed_source_without_reusing_its_result() {
+    let (mut prior, _) = evidence();
+    prior.attempts[0].successful = false;
+    prior.attempts[0].blocker = Some("check_failed".into());
+    prior.attempts[0].command.exit_code = Some(1);
+    prior.attempts[0].codex.as_mut().unwrap().status = kegari_codex::NativeExecutionStatus::Failed;
+    prior.validate_observed_history().unwrap();
+    let original_digest = prior.digest().unwrap();
+
+    let (mut current, mut revision) = evidence();
+    let operation = Uuid::from_u128(55);
+    revision.head = "d".repeat(40);
+    revision.tested_commit = revision.head.clone();
+    revision.tested_tree = "e".repeat(40);
+    let source = SourceSnapshot {
+        revision: Revision {
+            commit: revision.tested_commit.clone(),
+            tree: revision.tested_tree.clone(),
+        },
+        files: BTreeMap::new(),
+    };
+    let plan = &mut current.history[0];
+    plan.binding.operation_id = operation;
+    plan.binding.revision = source.revision.clone();
+    plan.original_binding = plan.binding.clone();
+    plan.source_digest = source.digest().unwrap();
+    plan.created_at = at(5);
+    plan.supporting_reads[0].operation_id = operation;
+    let attempt = &mut current.attempts[0];
+    attempt.binding = plan.binding.clone();
+    attempt.before = source.clone();
+    attempt.after = source;
+    attempt.started_at = at(6);
+    attempt.completed_at = at(7);
+    attempt.codex.as_mut().unwrap().plan = Some(plan.clone());
+    for artifact in &mut attempt.artifacts {
+        artifact.validation_operation = operation;
+    }
+    current.plan_digest = canonical_digest(1, plan).unwrap();
+    current.schema_version = 5;
+    current.prior_history = vec![prior.clone()];
+    let work = plan.binding.work.clone();
+    current.validate(&work, &revision).unwrap();
+    assert_eq!(current.prior_history[0].digest().unwrap(), original_digest);
+    assert_eq!(current.all_attempts().count(), 2);
+    assert_eq!(
+        current
+            .attempt_references()
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        current.selected().unwrap()[0].binding.operation_id,
+        operation
+    );
+    assert!(!current.prior_history[0].attempts[0].successful);
+
+    // A known failed provider session may have enrolled obligations before
+    // producing any settled result. Retain that original plan without inventing
+    // attempts, while requiring actual results from the succeeding admission.
+    let mut no_prior_results = current.clone();
+    no_prior_results.prior_history[0].attempts.clear();
+    no_prior_results.validate(&work, &revision).unwrap();
+    assert_eq!(no_prior_results.all_attempts().count(), 1);
+    let mut missing_current = no_prior_results;
+    missing_current.attempts.clear();
+    assert!(missing_current.validate(&work, &revision).is_err());
+
+    let mut stale = current.clone();
+    stale.attempts = prior.attempts.clone();
+    assert!(stale.validate(&work, &revision).is_err());
+    let mut omitted = current.clone();
+    omitted.history[0].requirements[0].id = "replacement-only".into();
+    omitted.plan_digest = canonical_digest(1, &omitted.history[0]).unwrap();
+    assert!(omitted.validate(&work, &revision).is_err());
+    let mut relabelled = current;
+    relabelled.prior_history[0].history[0].binding.revision =
+        relabelled.history[0].binding.revision.clone();
+    assert!(relabelled.validate(&work, &revision).is_err());
+}
+
+#[test]
+fn parent_reassembly_preserves_prior_vector_without_reusing_its_results() {
+    let (prior, _, prior_vector, _, _) = integrated_description();
+    let prior = prior.validation;
+    let prior_digest = prior.digest().unwrap();
+    let (reviewed, _, _, _, mut revision) = integrated_description();
+    let mut current = reviewed.validation;
+    let operation = Uuid::from_u128(81);
+    let vector = bytes_digest(b"fresh reassembled parent candidate vector");
+    revision.head = "d".repeat(40);
+    revision.tested_commit = revision.head.clone();
+    revision.tested_tree = "e".repeat(40);
+    let source = SourceSnapshot {
+        revision: Revision {
+            commit: revision.tested_commit.clone(),
+            tree: revision.tested_tree.clone(),
+        },
+        files: BTreeMap::new(),
+    };
+    let plan = &mut current.history[0];
+    plan.binding.operation_id = operation;
+    plan.binding.candidate_vector_digest = Some(vector.clone());
+    plan.binding.revision = source.revision.clone();
+    plan.original_binding = plan.binding.clone();
+    plan.source_digest = source.digest().unwrap();
+    plan.created_at = at(5);
+    plan.supporting_reads[0].operation_id = operation;
+    let attempt = &mut current.attempts[0];
+    attempt.binding = plan.binding.clone();
+    attempt.before = source.clone();
+    attempt.after = source;
+    attempt.started_at = at(6);
+    attempt.completed_at = at(7);
+    attempt.codex.as_mut().unwrap().plan = Some(plan.clone());
+    for artifact in &mut attempt.artifacts {
+        artifact.validation_operation = operation;
+        artifact.candidate_vector_digest = Some(vector.clone());
+    }
+    current.plan_digest = canonical_digest(1, plan).unwrap();
+    let work = plan.binding.work.clone();
+    current.schema_version = 6;
+    current.prior_history = vec![prior.clone()];
+    current
+        .validate_integrated(&work, &revision, &vector)
+        .unwrap();
+    assert_eq!(current.prior_history[0].digest().unwrap(), prior_digest);
+    assert_eq!(current.all_attempts().count(), 2);
+    assert_eq!(
+        current.selected().unwrap()[0].binding.operation_id,
+        operation
+    );
+    assert!(
+        current
+            .validate_integrated(&work, &revision, &prior_vector)
+            .is_err()
+    );
+
+    let mut stale = current.clone();
+    stale.attempts = prior.attempts;
+    assert!(
+        stale
+            .validate_integrated(&work, &revision, &vector)
+            .is_err()
+    );
+    let mut missing = current.clone();
+    missing.attempts.clear();
+    assert!(
+        missing
+            .validate_integrated(&work, &revision, &vector)
+            .is_err()
+    );
+    let mut omitted = current;
+    omitted.history[0].requirements[0].id = "new-obligation-only".into();
+    omitted.plan_digest = canonical_digest(1, &omitted.history[0]).unwrap();
+    assert!(
+        omitted
+            .validate_integrated(&work, &revision, &vector)
+            .is_err()
+    );
 }

@@ -35,6 +35,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
+#[path = "runtime_bootstrap.rs"]
+mod bootstrap;
 #[path = "runtime_evaluation.rs"]
 mod evaluation;
 pub(crate) use evaluation::{VerifiedEvaluationExit, VerifiedEvaluationSource};
@@ -44,6 +46,7 @@ mod correction_transitions;
 mod paired_recovery;
 #[path = "runtime_parent_retirement.rs"]
 mod parent_retirement;
+pub(crate) use parent_retirement::RetiredParentRun;
 #[path = "runtime_worker_boundary.rs"]
 mod worker_boundary;
 pub(crate) use parent_retirement::ParentRunRegistrationInput;
@@ -55,6 +58,8 @@ mod released;
 mod session_recovery;
 #[path = "runtime_resume.rs"]
 mod session_resume;
+#[path = "runtime_replacement.rs"]
+mod replacement;
 pub(crate) use session_recovery::recovery_wait as session_recovery_wait;
 pub(crate) use session_recovery::{SessionRecoveryAction, SessionRecoveryStage};
 
@@ -101,6 +106,8 @@ struct State {
     release_details: BTreeMap<(Uuid, IssueKey), Value>,
     quotas: BTreeMap<String, Quota>,
     rate_observations: BTreeMap<String, Value>,
+    quota_refresh_errors: BTreeMap<String, Error>,
+    session_observations: BTreeMap<Uuid, Value>,
     resume_proofs: BTreeMap<Uuid, String>,
     admitted_resumes: BTreeMap<Uuid, Arc<crate::worker_run::AdmittedSessionResume>>,
     admitted_rounds: BTreeMap<Uuid, Arc<crate::delivery::VerifiedReviewRoundPlan>>,
@@ -112,6 +119,7 @@ struct State {
     completions: BTreeMap<Uuid, Arc<RunCompletion>>,
     session_recovery: BTreeMap<String, session_recovery::RecoveryEntry>,
     session_recovery_errors: BTreeMap<Uuid, Error>,
+    replacement_work: BTreeMap<Uuid, Arc<crate::delivery::ReplacementWork>>,
 }
 /// Shared authority and evidence projection for native runtime phases. The
 /// orchestration driver registers exact admitted contracts before launching and
@@ -349,6 +357,14 @@ impl RuntimeCoordinator {
             admission,
             proposal,
         )
+    }
+    pub(crate) fn scheduling_blockers(&self) -> Result<BTreeMap<String, Error>> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "scheduling diagnostics lock failed"))?
+            .schedule_blockers
+            .clone())
     }
     pub fn ready_actions(&self) -> Result<Vec<RuntimeAction>> {
         let config = self.configuration.snapshot()?;
@@ -1553,8 +1569,11 @@ impl RuntimeCoordinator {
             if session.intervention.is_some()
                 && (session.binding.account_id == account || session.binding.work_identity == work)
             {
+                let signal = serde_json::to_value(&session.intervention)
+                    .map_err(|_| Error::invalid("provider hold encoding failed"))?;
                 return Err(Error::new("provider_intervention", "provider resolution remains unverified for this account/work")
-                    .detail(json!({"operation_id":id,"account":session.binding.account_id,"provider_signal":session.intervention})));
+                    .detail(json!({"operation_id":id,"account":session.binding.account_id,"provider_signal":signal,"readmission":crate::runtime_schedule::intervention_readmission(&signal)}))
+                    .next(crate::runtime_schedule::intervention_next_action(session.intervention.as_ref().map(|value|value.reason_code.as_str()))));
             }
             if session.input_required && session.binding.work_identity == work {
                 return Err(Error::new(
@@ -2289,7 +2308,7 @@ impl RuntimeCoordinator {
     /// Join only finished tasks; never hold state/control locks over worker waits.
     /// Retains the actual sealed check handles before returning shared immutable
     /// observations to the driver. No JSON roundtrip can recover these proofs.
-    pub async fn collect_finished(&self) -> Result<Vec<Arc<RunCompletion>>> {
+    pub async fn collect_finished(self: &Arc<Self>) -> Result<Vec<Arc<RunCompletion>>> {
         let finished = {
             let mut workers = self
                 .workers
@@ -2308,8 +2327,52 @@ impl RuntimeCoordinator {
         for mut run in finished {
             let id = run.operation_id();
             match run.join().await {
-                Ok(completion) => {
-                    let observed = completion.observation();
+                Ok(mut completion) => {
+                    let bootstrap_result = self.finish_unborn_bootstrap(&mut completion).await;
+                    if let Err(error) = &bootstrap_result {
+                        completion.error = Some(error.clone());
+                        completion.outcome = crate::worker_run::RunOutcome::Blocked;
+                    }
+                    let checkpoint = if completion.validation_plan.is_some()
+                        && completion.local_exit_confirmed
+                    {
+                        (|| {
+                            let records = kegari_storage::PrivateDir::open(
+                                &self
+                                    .registration
+                                    .root()
+                                    .path()
+                                    .join("worker-records")
+                                    .join(id.to_string()),
+                            )?;
+                            crate::worker_run::ColdValidationCheckpoint::retain(
+                                &records,
+                                &self.services.key,
+                                self.configuration.snapshot()?.runtime.id,
+                                &completion,
+                            )
+                        })()
+                    } else {
+                        Ok(None)
+                    };
+                    let mut observed = completion.observation();
+                    let checkpoint_error = match checkpoint {
+                        Ok(Some(checkpoint)) => match checkpoint.digest() {
+                            Ok(digest) => {
+                                observed["validation_checkpoint"] = json!(digest);
+                                None
+                            }
+                            Err(error) => Some(error),
+                        },
+                        Ok(None) => None,
+                        Err(error) => Some(error),
+                    };
+                    if let Some(error) = &checkpoint_error {
+                        observed["validation_checkpoint_error"] = json!(error);
+                    }
+                    if let Ok(Some(record)) = bootstrap_result {
+                        observed["bootstrap_source"] = record;
+                    }
                     let completion = Arc::new(completion);
                     let mut state = self.state.lock().map_err(|_| {
                         Error::new("runtime_unavailable", "worker state lock failed")
@@ -2343,6 +2406,9 @@ impl RuntimeCoordinator {
                     tracked.last_observation = Some(observed.clone());
                     tracked.joined = true;
                     state.completions.insert(id, completion.clone());
+                    if let Some(error) = checkpoint_error {
+                        state.completion_errors.insert(id, error);
+                    }
                     if let Some(error) = &parent_error {
                         state.parent_retirement_errors.insert(id, error.clone());
                     }
@@ -2747,9 +2813,64 @@ impl RuntimeCoordinator {
             released::effective_outcomes(&state, &config, observed.clone(), &fences);
         let (_, no_release_errors) =
             released::effective_no_release_outcomes(&state, &config, observed, &fences);
-        let holds=state.provider_holds.iter().map(|(id,session)| json!({"operation_id":id,"account":session.binding.account_id,"work":session.binding.work_identity,"intervention":session.intervention,"input_required":session.input_required})).collect::<Vec<_>>();
+        let holds=state.provider_holds.iter().map(|(id,session)| {
+            let signal=json!(session.intervention);
+            json!({"operation_id":id,"account":session.binding.account_id,"work":session.binding.work_identity,"intervention":signal,"input_required":session.input_required,"readmission":if session.intervention.is_some(){crate::runtime_schedule::intervention_readmission(&signal)}else{json!({"status":"blocked","capability":"input_resolution_required","next_action":"Inspect the original unavailable-input request and preserve its work; no replacement session may assume an answer."})}})
+        }).collect::<Vec<_>>();
         Ok(
-            json!({"quota":state.quotas,"observations":state.rate_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"session_recovery":state.session_recovery_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"parent_retirement":state.parent_retirement_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors,"released_dependencies":released_errors,"no_release_dependencies":no_release_errors,"no_release_inventory":state.no_release_inventory_error}),
+            json!({"quota":state.quotas,"observations":state.rate_observations,"quota_refresh_errors":state.quota_refresh_errors,"sessions":state.session_observations,"provider_holds":holds,"retry_recovery":state.retry_errors,"session_recovery":state.session_recovery_errors,"scheduling":state.schedule_blockers,"worker_completion":state.completion_errors,"parent_retirement":state.parent_retirement_errors,"worker_claims":state.claim_errors,"correction_transitions":state.correction_errors,"delivery":state.delivery_errors,"released_dependencies":released_errors,"no_release_dependencies":no_release_errors,"no_release_inventory":state.no_release_inventory_error}),
+        )
+    }
+    pub(crate) fn exhausted_accounts(&self) -> Result<BTreeMap<String, Quota>> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?
+            .quotas
+            .iter()
+            .filter(|(_, quota)| matches!(quota, Quota::Exhausted { .. }))
+            .map(|(account, quota)| (account.clone(), quota.clone()))
+            .collect())
+    }
+    pub(crate) fn record_quota_refresh(&self, account: &str, result: &Result<Value>) -> Result<()> {
+        match result {
+            Ok(observed) => {
+                record_account_limits(&self.control, &self.state, account, observed)?;
+                self.state
+                    .lock()
+                    .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?
+                    .quota_refresh_errors
+                    .remove(account);
+            }
+            Err(error) => {
+                self.state
+                    .lock()
+                    .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?
+                    .quota_refresh_errors
+                    .insert(account.into(), error.clone());
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn quota_observation_digest(&self, account: &str) -> Result<String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
+        canonical_digest(1, &state.rate_observations.get(account))
+    }
+    pub(crate) fn apply_quota_refresh(
+        &self,
+        account: &str,
+        observed: &Value,
+        previous: &str,
+    ) -> Result<()> {
+        record_account_limits_current(
+            &self.control,
+            &self.state,
+            account,
+            observed,
+            Some(previous),
         )
     }
     pub fn execution_registry(&self) -> Arc<ExecutionRegistry> {
@@ -3032,7 +3153,65 @@ impl WorkerHost for RuntimeCoordinator {
                     "provider checkpoint differs from admitted contract",
                 ));
             }
+            let observation = json!({
+                "work":run.permit.work_key,"workspace":run.budget.workspace,
+                "phase":run.budget.phase.phase,"account":run.budget.account,
+                "attempt":run.budget.attempt,"attempt_limit":run.budget.max_attempts,
+                "thread_id":session.thread_id,"turn_id":session.turn_id,
+                "turns_started":session.turns_started,"turn_limit":run.budget.max_turns,
+                "terminal":session.terminal,"input_required":session.input_required,
+                "provider_intervention":session.intervention.is_some(),
+                "unresolved_turn":session.unresolved_turn,
+            });
+            let changed = state
+                .session_observations
+                .get(&operation)
+                .is_none_or(|old| old.get("state") != Some(&observation));
+            let changed_at = if changed {
+                json!(Utc::now())
+            } else {
+                state.session_observations[&operation]["last_state_change_at"].clone()
+            };
+            let workspace = run.budget.workspace;
+            let generation = run.permit.lease.owner_generation;
+            let work = run.permit.work_key.clone();
             retain_provider_hold(&mut state.provider_holds, operation, session)?;
+            state.session_observations.insert(
+                operation,
+                json!({
+                    "state":observation,"usage":session.usage,
+                    "last_observed_at":Utc::now(),"last_state_change_at":changed_at,
+                }),
+            );
+            if changed {
+                use crate::housekeeping::{LogEvent, Severity};
+                self.services.logs.emit(&LogEvent {
+                    severity: if session.input_required || session.intervention.is_some() {
+                        Severity::Warning
+                    } else {
+                        Severity::Info
+                    },
+                    runtime_id: self.runtime_id,
+                    owner_generation: Some(generation),
+                    workspace_id: Some(workspace),
+                    work: Some(work),
+                    operation_id: Some(operation),
+                    session_id: None,
+                    revision: None,
+                    event: "codex_session_state".into(),
+                    outcome: if session.input_required || session.intervention.is_some() {
+                        "blocked"
+                    } else if session.terminal.is_some() {
+                        "terminal"
+                    } else if session.turn_id.is_some() {
+                        "turn_active"
+                    } else {
+                        "ready"
+                    }
+                    .into(),
+                    reason: None,
+                });
+            }
             self.services.wake.notify_one();
             Ok(())
         })
@@ -3109,6 +3288,29 @@ impl WorkerHost for RuntimeCoordinator {
             .account_id()
             .to_owned();
         record_account_limits(&self.control, &self.state, &account, observed)
+    }
+    fn before_model_request(&self, operation: Uuid) -> Result<()> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
+        let run = state.runs.get(&operation).ok_or_else(|| {
+            Error::new(
+                "ownership_conflict",
+                "model request has no registered worker",
+            )
+        })?;
+        if matches!(
+            state.quotas.get(run.contract.account_id()),
+            Some(Quota::Exhausted { .. })
+        ) {
+            return Err(Error::new(
+                "quota_wait",
+                "actual account exhaustion blocks model requests until refreshed",
+            )
+            .next("Wait for independent authenticated account refresh; no paid fallback is used"));
+        }
+        Ok(())
     }
     fn reconcile_prior(&self, operation: Uuid, prior: Option<&Value>) -> Result<()> {
         let state = self
@@ -3336,21 +3538,69 @@ fn record_account_limits(
     account: &str,
     observed: &Value,
 ) -> Result<()> {
+    record_account_limits_current(control, state, account, observed, None)
+}
+fn record_account_limits_current(
+    control: &ControlHost,
+    state: &Mutex<State>,
+    account: &str,
+    observed: &Value,
+    previous: Option<&str>,
+) -> Result<()> {
+    if serde_json::to_vec(observed)
+        .map_err(|_| Error::invalid("rate observation encoding"))?
+        .len()
+        > 65_536
+    {
+        return Err(Error::new(
+            "bounded_input",
+            "account rate observation exceeds 64KiB",
+        ));
+    }
+    if observed
+        .get("account_id")
+        .is_some_and(|id| id.as_str() != Some(account))
+    {
+        return Err(Error::new(
+            "account_mismatch",
+            "quota observation belongs to another account",
+        ));
+    }
     control.serialize_observation(|_| {
         let mut state = state
             .lock()
             .map_err(|_| Error::new("runtime_unavailable", "account metrics lock failed"))?;
-        state
-            .quotas
-            .insert(account.into(), observed_quota(observed, Utc::now()));
+        if let Some(previous) = previous
+            && canonical_digest(1, &state.rate_observations.get(account))? != previous
+        {
+            return Err(Error::new(
+                "stale_observation",
+                "a newer account observation superseded this quota refresh",
+            ));
+        }
+        let quota = observed_quota(observed, Utc::now());
+        let recognized = !matches!(quota, Quota::Unknown);
+        // A missing/malformed refresh cannot erase an actual exhaustion hold.
+        // Previously unknown accounts still retain the scheduler's unknown policy.
+        if !matches!(quota, Quota::Unknown)
+            || !matches!(state.quotas.get(account), Some(Quota::Exhausted { .. }))
+        {
+            state.quotas.insert(account.into(), quota);
+        }
         state.rate_observations.insert(
             account.into(),
             json!({"observed_at":Utc::now(),"limits":observed}),
         );
+        if recognized {
+            state.quota_refresh_errors.remove(account);
+        }
         Ok(())
     })
 }
 fn observed_quota(value: &Value, now: chrono::DateTime<Utc>) -> Quota {
+    // Explicit reads use RpcClient's authenticated-account envelope; pushed
+    // notifications carry the provider snapshot directly.
+    let value = value.get("snapshot").unwrap_or(value);
     let limits = value
         .get("rateLimitsByLimitId")
         .and_then(Value::as_object)
@@ -4106,6 +4356,24 @@ mod tests {
             "worker_binding"
         );
         assert_eq!(holds[&operation].binding.account_id, "account");
+        let readmission = crate::runtime_schedule::intervention_readmission(&json!(
+            holds[&operation].intervention
+        ));
+        assert_eq!(readmission["status"], "blocked");
+        assert_eq!(
+            readmission["capability"],
+            "resolution_observation_unsupported"
+        );
+        assert_eq!(
+            readmission["ordinary_login_or_local_readiness_clears_hold"],
+            false
+        );
+        assert!(
+            readmission["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("trusted-access verification")
+        );
     }
     #[test]
     fn quota_uses_every_observed_window_and_never_invents_a_reset() {
@@ -4131,6 +4399,55 @@ mod tests {
                 &json!({"rateLimits":{"primary":{"usedPercent":99.5},"secondary":null}}),
                 now
             ),
+            Quota::Available { .. }
+        ));
+        assert!(matches!(
+            observed_quota(
+                &json!({"account_id":"account","snapshot":{
+                    "rateLimits":{"primary":{"usedPercent":100,"resetsAt":1800003600}}
+                }}),
+                now
+            ),
+            Quota::Exhausted { .. }
+        ));
+    }
+    #[test]
+    fn quota_refresh_preserves_newer_observations_and_exhaustion_on_unknown() {
+        let (_temp, host, _lease) = admission_host();
+        let state = Mutex::new(State::default());
+        let snapshot = |used| json!({"account_id":"account","snapshot":{"rateLimits":{"primary":{"usedPercent":used}}}});
+        record_account_limits(&host, &state, "account", &snapshot(100)).unwrap();
+        let prior =
+            canonical_digest(1, &state.lock().unwrap().rate_observations.get("account")).unwrap();
+        record_account_limits(
+            &host,
+            &state,
+            "account",
+            &json!({"account_id":"account","snapshot":{}}),
+        )
+        .unwrap();
+        assert!(matches!(
+            state.lock().unwrap().quotas["account"],
+            Quota::Exhausted { .. }
+        ));
+        assert_eq!(
+            record_account_limits_current(&host, &state, "account", &snapshot(20), Some(&prior))
+                .unwrap_err()
+                .code,
+            "stale_observation"
+        );
+        assert_eq!(
+            record_account_limits(&host, &state, "other", &snapshot(20))
+                .unwrap_err()
+                .code,
+            "account_mismatch"
+        );
+        let current =
+            canonical_digest(1, &state.lock().unwrap().rate_observations.get("account")).unwrap();
+        record_account_limits_current(&host, &state, "account", &snapshot(20), Some(&current))
+            .unwrap();
+        assert!(matches!(
+            state.lock().unwrap().quotas["account"],
             Quota::Available { .. }
         ));
     }

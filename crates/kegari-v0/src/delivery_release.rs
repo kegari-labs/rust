@@ -538,8 +538,14 @@ pub struct ObservedReleaseStep {
     effect: Option<ObservedEffect>,
     observed_at: DateTime<Utc>,
     historical_target: Option<crate::deployment::HistoricalTargetDeployment>,
+    historical_external: Option<crate::deployment::HistoricalExternalTarget>,
 }
 impl ObservedReleaseStep {
+    pub(crate) fn historical_external(
+        &self,
+    ) -> Option<&crate::deployment::HistoricalExternalTarget> {
+        self.historical_external.as_ref()
+    }
     pub(crate) fn historical_target(
         &self,
     ) -> Option<&crate::deployment::HistoricalTargetDeployment> {
@@ -1368,6 +1374,7 @@ impl DeliveryCoordinator {
             effect: None,
             observed_at: r.observed_at,
             historical_target: None,
+            historical_external: None,
         }))
     }
     fn read_release_effect(
@@ -1573,75 +1580,90 @@ impl DeliveryCoordinator {
                     "historical target recovery cannot establish a merge",
                 ));
             }
+            StepKind::VerifyExisting { .. } => {
+                let ObservedEffect::Verification {
+                    evidence_digest, ..
+                } = expected
+                else {
+                    return Err(production_error(
+                        "historical existing target has no exact verification digest",
+                    ));
+                };
+                let (effect, owned, external) = if let Some(target) = observer
+                    .historical_external(contract, evidence_digest)
+                    .await?
+                {
+                    check_historical_target(&r, target.target())?;
+                    (target.verification_effect(), None, Some(target))
+                } else {
+                    let target = observer
+                        .historical_digest(contract, evidence_digest)
+                        .await?;
+                    check_historical_target(&r, target.target())?;
+                    (target.verification_effect()?, Some(target), None)
+                };
+                ObservedReleaseStep {
+                    plan_digest: r.plan_digest.clone(),
+                    step_id: r.payload.step_id.clone(),
+                    attempt: r.payload.attempt,
+                    receipt: receipt.clone(),
+                    outcome: ReleaseStepOutcome::Succeeded,
+                    effect: Some(effect),
+                    observed_at: Utc::now(),
+                    historical_target: owned,
+                    historical_external: external,
+                }
+            }
             StepKind::Deploy { .. }
             | StepKind::DeployExisting { .. }
             | StepKind::Verify { .. }
-            | StepKind::VerifyDeployed { .. }
-            | StepKind::VerifyExisting { .. } => {
+            | StepKind::VerifyDeployed { .. } => {
                 let configured = configured_deployment(contract, &r.payload.kind)?;
-                let (target, deployment) = match &r.payload.kind {
-                    StepKind::VerifyExisting { .. } => {
-                        let ObservedEffect::Verification {
-                            evidence_digest, ..
-                        } = expected
-                        else {
-                            return Err(production_error(
-                                "historical existing target has no exact verification digest",
-                            ));
-                        };
-                        (
-                            observer
-                                .historical_digest(contract, evidence_digest)
-                                .await?,
-                            None,
-                        )
-                    }
-                    _ => {
-                        let deployment = match &r.payload.kind {
+                let (target, deployment) = {
+                    let deployment = match &r.payload.kind {
                             StepKind::Verify { deployment_step, .. } | StepKind::VerifyDeployed { deployment_step, .. } => {
                                 self.load_release_effect(plan, deployment_step, *r.payload.prerequisite_attempts.get(deployment_step)
                                     .ok_or_else(|| production_error("historical verification lacks its exact deployment attempt"))?)?
                             }
                             _ => r.clone(),
                         };
-                        let dispatch = deployment.request_id.ok_or_else(|| {
-                            production_error("historical deployment has no dispatch identity")
-                        })?;
-                        let challenge = deployment.challenge.ok_or_else(|| {
-                            production_error("historical deployment has no challenge identity")
-                        })?;
-                        let actual = self.release_record_receipt(&deployment)?;
-                        self.require_retired_release_effect(&deployment, actual.as_ref())?;
-                        let target = observer
-                            .historical_dispatch(contract, &configured.id, challenge, dispatch)
-                            .await?;
-                        if target.operation_id() != deployment.admission_operation
-                            || target.dispatch_request() != dispatch
-                            || target.challenge() != challenge
-                        {
-                            return Err(production_error(
-                                "historical target differs from the original deployment admission",
-                            ));
-                        }
-                        check_historical_target(&deployment, target.target())?;
-                        let recorded = actual
-                            .as_ref()
-                            .and_then(|v| v.observed_result.as_ref())
-                            .ok_or_else(|| {
-                                production_error("historical dispatch has no reconciled effect")
-                            })?;
-                        if recorded["effect"]
-                            != serde_json::to_value(target.deployment_effect(plan.operation_id)?)
-                                .map_err(|_| {
-                                    production_error("historical effect serialization failed")
-                                })?
-                        {
-                            return Err(production_error(
-                                "historical dispatch receipt records another production effect",
-                            ));
-                        }
-                        (target, Some(deployment))
+                    let dispatch = deployment.request_id.ok_or_else(|| {
+                        production_error("historical deployment has no dispatch identity")
+                    })?;
+                    let challenge = deployment.challenge.ok_or_else(|| {
+                        production_error("historical deployment has no challenge identity")
+                    })?;
+                    let actual = self.release_record_receipt(&deployment)?;
+                    self.require_retired_release_effect(&deployment, actual.as_ref())?;
+                    let target = observer
+                        .historical_dispatch(contract, &configured.id, challenge, dispatch)
+                        .await?;
+                    if target.operation_id() != deployment.admission_operation
+                        || target.dispatch_request() != dispatch
+                        || target.challenge() != challenge
+                    {
+                        return Err(production_error(
+                            "historical target differs from the original deployment admission",
+                        ));
                     }
+                    check_historical_target(&deployment, target.target())?;
+                    let recorded = actual
+                        .as_ref()
+                        .and_then(|v| v.observed_result.as_ref())
+                        .ok_or_else(|| {
+                            production_error("historical dispatch has no reconciled effect")
+                        })?;
+                    if recorded["effect"]
+                        != serde_json::to_value(target.deployment_effect(plan.operation_id)?)
+                            .map_err(|_| {
+                                production_error("historical effect serialization failed")
+                            })?
+                    {
+                        return Err(production_error(
+                            "historical dispatch receipt records another production effect",
+                        ));
+                    }
+                    (target, Some(deployment))
                 };
                 check_historical_target(&r, target.target())?;
                 let effect = if matches!(
@@ -1672,6 +1694,7 @@ impl DeliveryCoordinator {
                     effect: Some(effect),
                     observed_at: Utc::now(),
                     historical_target: Some(target),
+                    historical_external: None,
                 }
             }
         };
@@ -1810,6 +1833,7 @@ impl DeliveryCoordinator {
             effect: None,
             observed_at: Utc::now(),
             historical_target: None,
+            historical_external: None,
         };
         if let Some(receipt) = receipt.as_ref().filter(|receipt| {
             receipt.phase == crate::control::ReceiptPhase::Reconciled

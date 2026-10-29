@@ -3,7 +3,7 @@
 use super::*;
 use crate::evidence::{Generation, WorkIdentity};
 use crate::execution::{
-    CheckExecutionRecord, DiscoveredCheckProvenance, ExecutionEvidenceClass, SourceSnapshot,
+    CheckExecutionRecord, CodexCheckProvenance, ExecutionEvidenceClass, SourceSnapshot,
 };
 use crate::validation::{
     DiscoveryJournalReference, DiscoveryReadContent, DiscoveryReadReference, ValidationPlanRecord,
@@ -11,10 +11,8 @@ use crate::validation::{
 };
 use chrono::{DateTime, Utc};
 use kegari_digest::canonical_digest;
-use kegari_execution::CommandObservation;
 use kegari_execution::CommandOutcome;
 use kegari_git::{RepositoryId, Revision};
-use kegari_platform::BinaryIdentity;
 use std::path::PathBuf;
 
 fn at(seconds: i64) -> DateTime<Utc> {
@@ -104,41 +102,24 @@ fn base_fixture() -> (ValidationEvidence, RevisionBinding) {
     let transcript = PathBuf::from(format!(
         "/owned/scratch/validation-transcript-{invocation}.json"
     ));
-    let binary = BinaryIdentity {
-        path: "/usr/bin/fixture".into(),
-        digest: digest.clone(),
-        bytes: 1,
-    };
-    let observation = CommandObservation {
-        schema_version: 1,
-        requested_argv: plan.requirements[0].argv.clone(),
-        selected_executable: binary.path.clone(),
-        canonical_executable: binary.clone(),
-        launcher: binary,
-        cwd: "/owned/repository".into(),
-        environment: BTreeMap::from([("HOME".into(), "/owned/scratch".into())]),
-        original_isolation_digest: digest.clone(),
-        isolation_digest: digest.clone(),
-        launch_digest: digest.clone(),
-        backend_policy_digest: format!("sha256:v5:{}", "a".repeat(64)),
-    };
     let plan_digest = canonical_digest(1, &plan).unwrap();
     let attempt = CheckExecutionRecord {
-        schema_version: 4,
-        discovered: Some(DiscoveredCheckProvenance {
-            schema_version: 1,
-            plan: plan.clone(),
-            plan_digest: plan_digest.clone(),
-            invocation_id: invocation,
-            observation: observation.clone(),
-            service_observations: vec![],
-            prepared_at: at(2),
-            deadline_at: at(12),
-            command_timeout_ms: 10_000,
-            output_bytes: 1024,
+        schema_version: 5,
+        codex: Some(CodexCheckProvenance {
+            schema_version: 2,
+            protocol_profile: kegari_codex::PROTOCOL_PROFILE.into(),
+            thread_id: "descriptive-thread".into(),
+            turn_id: "descriptive-turn".into(),
+            item_id: invocation.to_string(),
+            command: "unfamiliar-tool verify".into(),
+            status: kegari_codex::NativeExecutionStatus::Completed,
+            started_item_digest: digest.clone(),
+            completed_item_digest: digest.clone(),
             transcript: transcript.clone(),
-            artifacts: vec![transcript.clone()],
+            plan: Some(plan.clone()),
+            artifact_freshness: vec![],
         }),
+        discovered: None,
         correction: None,
         bundle: None,
         binding: binding.clone(),
@@ -156,8 +137,8 @@ fn base_fixture() -> (ValidationEvidence, RevisionBinding) {
         }],
         command: CommandOutcome {
             schema_version: 1,
-            argv: observation.requested_argv,
-            cwd: observation.cwd.clone(),
+            argv: plan.requirements[0].argv.clone(),
+            cwd: "/owned/repository".into(),
             isolation_digest: digest,
             exit_code: Some(0),
             termination_signal: None,
@@ -169,7 +150,7 @@ fn base_fixture() -> (ValidationEvidence, RevisionBinding) {
         },
         started_at: at(2),
         completed_at: at(3),
-        evidence_class: ExecutionEvidenceClass::ConfinedExecution,
+        evidence_class: ExecutionEvidenceClass::CodexExecution,
         successful: true,
         blocker: None,
     };
@@ -182,7 +163,8 @@ fn base_fixture() -> (ValidationEvidence, RevisionBinding) {
     };
     (
         ValidationEvidence {
-            schema_version: 1,
+            prior_history: vec![],
+            schema_version: 3,
             plan_digest,
             original_cwd: "/owned/repository".into(),
             history: vec![plan],
@@ -207,6 +189,7 @@ pub(crate) fn descriptive_fixture() -> (
     first.successful = false;
     first.blocker = Some("observed nonzero exit".into());
     first.command.exit_code = Some(1);
+    first.codex.as_mut().unwrap().status = kegari_codex::NativeExecutionStatus::Failed;
     first.artifacts[0].bytes = first_bytes.len() as u64;
     first.artifacts[0].digest = bytes_digest(&first_bytes);
     let mut next = evidence.history[0].clone();
@@ -221,18 +204,15 @@ pub(crate) fn descriptive_fixture() -> (
     successful.command.exit_code = Some(0);
     successful.started_at = at(5);
     successful.completed_at = at(6);
-    let provenance = successful.discovered.as_mut().unwrap();
-    provenance.plan = next.clone();
-    provenance.plan_digest = evidence.plan_digest.clone();
-    provenance.invocation_id = Uuid::from_u128(8);
-    provenance.prepared_at = at(5);
-    provenance.deadline_at = at(15);
+    let provenance = successful.codex.as_mut().unwrap();
+    provenance.plan = Some(next.clone());
+    provenance.item_id = Uuid::from_u128(8).to_string();
+    provenance.status = kegari_codex::NativeExecutionStatus::Completed;
     provenance.transcript = format!(
         "/owned/scratch/validation-transcript-{}.json",
-        provenance.invocation_id
+        provenance.item_id
     )
     .into();
-    provenance.artifacts = vec![provenance.transcript.clone()];
     successful.artifacts[0].path = provenance.transcript.clone();
     successful.artifacts[0].bytes = second_bytes.len() as u64;
     successful.artifacts[0].digest = bytes_digest(&second_bytes);
@@ -468,11 +448,6 @@ fn chunk_reordering_substitution_and_oversized_signed_claims_refuse() {
 fn complete_history_above_old_inline_record_limit_has_compact_authenticated_reference() {
     let mut f = Fixture::new();
     f.evidence.attempts[0].command.stdout = "observed failed output\n".repeat(15_000);
-    f.evidence.attempts[0]
-        .discovered
-        .as_mut()
-        .unwrap()
-        .output_bytes = 512 * 1024;
     let original = encode(&f.evidence, MAX_VALIDATION_EVIDENCE_BYTES).unwrap();
     assert!(original.len() > 300 * 1024);
     assert!(original.len() < 1024 * 1024);
@@ -559,7 +534,7 @@ fn integrated_archive_binds_entire_vector_and_signed_manifest_to_full_history() 
     let mut f = Fixture::new();
     let vector = bytes_digest(b"actual complete candidate vector description");
     let mut previous = None;
-    f.evidence.schema_version = 2;
+    f.evidence.schema_version = 4;
     for (plan, attempt) in f.evidence.history.iter_mut().zip(&mut f.evidence.attempts) {
         plan.kind = CheckKind::Integrated;
         plan.original_binding.candidate_vector_digest = Some(vector.clone());
@@ -569,9 +544,8 @@ fn integrated_archive_binds_entire_vector_and_signed_manifest_to_full_history() 
         previous = Some(digest.clone());
         attempt.kind = CheckKind::Integrated;
         attempt.binding = plan.binding.clone();
-        let provenance = attempt.discovered.as_mut().unwrap();
-        provenance.plan = plan.clone();
-        provenance.plan_digest = digest;
+        let provenance = attempt.codex.as_mut().unwrap();
+        provenance.plan = Some(plan.clone());
         for proof in &mut attempt.artifacts {
             let old = canonical_digest(1, proof).unwrap();
             let bytes = f.artifacts.remove(&old).unwrap();

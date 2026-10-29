@@ -3,6 +3,7 @@
 use super::*;
 use crate::control::{ControlSnapshot, ReceiptPhase};
 use crate::evaluation::IndependentBoundaryIdentity;
+use std::path::Component;
 
 const CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 const RECORD_BYTES: usize = 128 * 1024;

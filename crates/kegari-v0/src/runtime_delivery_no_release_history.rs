@@ -1,11 +1,14 @@
-//! Immutable no-release completion from deployment-free or actual owned-target evidence.
+//! Immutable no-release completion with explicit owned or external target provenance.
 //! A retained seal grants no current baseline, permit, acceptance or mutation.
 use super::*;
 use crate::{
     authority::IssueKey,
     control::{ControlHost, MetadataReference, ReceiptPhase},
     delivery::{AcceptedOriginIdentity, AcceptedOriginRef, RepositoryContract},
-    deployment::{OwnedTargetObservationRef, ProductionObserver, VerifiedProductionBaseline},
+    deployment::{
+        ExternalTargetObservationRef, OwnedTargetObservationRef, ProductionObserver,
+        VerifiedProductionBaseline,
+    },
     evidence::{VerifiedNoReleaseRequired, WorkIdentity},
     runtime_delivery::completion_binding::DependencyBinding,
 };
@@ -113,6 +116,7 @@ struct ObservedSource {
 /// This is preparation data, not a completed outcome or current dispatch grant.
 pub(super) struct VerifiedNoReleaseObservation {
     owned_targets: Vec<OwnedTargetObservationRef>,
+    external_targets: Vec<ExternalTargetObservationRef>,
     sources: Vec<ObservedSource>,
     observed_at: DateTime<Utc>,
 }
@@ -223,6 +227,7 @@ pub(super) fn prepare_deployment_free_observation(
     }
     Ok(VerifiedNoReleaseObservation {
         owned_targets: vec![],
+        external_targets: vec![],
         sources: sources.into_values().collect(),
         observed_at: now,
     })
@@ -284,6 +289,7 @@ fn prepare_no_release_observation(
     let mut sources = BTreeMap::new();
     let mut targets = Vec::new();
     let mut owned_targets = Vec::new();
+    let mut external_targets = Vec::new();
     for current in observed {
         let baseline = current.baseline();
         let matching: Vec<_> = contracts
@@ -310,6 +316,7 @@ fn prepare_no_release_observation(
         // This reader consumes private caps retained by the actual observer;
         // external provider JSON without a supported proof cannot reach here.
         owned_targets.extend(observer.owned_baseline_references(contract, current)?);
+        external_targets.extend(observer.external_baseline_references(contract, current)?);
         targets.extend_from_slice(current.targets());
         sources.insert(
             baseline.repository.clone(),
@@ -323,16 +330,18 @@ fn prepare_no_release_observation(
     }
     if sources.keys().cloned().collect::<BTreeSet<_>>() != repositories
         || !same_targets(&record.targets, &targets)
-        || owned_targets.len() != targets.len()
+        || owned_targets.len() + external_targets.len() != targets.len()
     {
         return Err(invalid(
             "owned target proof inventory differs from current complete no-release facts",
         ));
     }
     owned_targets.sort_by(|a, b| a.target().target.cmp(&b.target().target));
+    external_targets.sort_by(|a, b| a.target().target.cmp(&b.target().target));
     Ok(VerifiedNoReleaseObservation {
         sources: sources.into_values().collect(),
         owned_targets,
+        external_targets,
         observed_at: now,
     })
 }
@@ -362,10 +371,41 @@ struct NoReleaseCompletionRecord {
     sources: Vec<ObservedSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     owned_targets: Vec<OwnedTargetObservationRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    external_targets: Vec<ExternalTargetObservationRef>,
     outcome: Signed<NoReleaseRequired>,
     display: ReleaseDisplay,
     recorded_at: DateTime<Utc>,
     sealed_at: DateTime<Utc>,
+}
+
+impl NoReleaseCompletionRecord {
+    fn valid_schema(&self) -> bool {
+        matches!(
+            (self.schema_version, self.external_targets.is_empty()),
+            (1, true) | (2, false)
+        )
+    }
+    fn target_origins(
+        &self,
+    ) -> impl Iterator<Item = (&evidence::ProductionTargetBaseline, &str, Uuid)> {
+        self.owned_targets
+            .iter()
+            .map(|target| {
+                (
+                    target.target(),
+                    target.contract_digest(),
+                    target.runtime_id(),
+                )
+            })
+            .chain(self.external_targets.iter().map(|target| {
+                (
+                    target.target(),
+                    target.contract_digest(),
+                    target.runtime_id(),
+                )
+            }))
+    }
 }
 
 struct HistoryServices {
@@ -559,7 +599,7 @@ impl VerifiedNoReleaseCompletion {
         let record = &self.signed.payload;
         self.services.key.verify(PURPOSE, &self.signed)?;
         record.work.validate()?;
-        if record.schema_version != 1
+        if !record.valid_schema()
             || record.runtime != self.services.runtime
             || record.runtime.is_nil()
             || record.workspace.is_nil()
@@ -645,31 +685,29 @@ impl VerifiedNoReleaseCompletion {
                                 && baseline.deployed_revision.is_none()
                                 && baseline.deployed_artifact.is_none()
                                 && !record
-                                    .owned_targets
-                                    .iter()
-                                    .any(|target| target.target().repository == source.repository)
+                                    .target_origins()
+                                    .any(|(target, _, _)| target.repository == source.repository)
                         } else {
-                            let owned: Vec<_> = record
-                                .owned_targets
-                                .iter()
-                                .filter(|target| target.target().repository == source.repository)
+                            let origins: Vec<_> = record
+                                .target_origins()
+                                .filter(|(target, _, _)| target.repository == source.repository)
                                 .collect();
-                            let ids: BTreeSet<_> = owned
+                            let ids: BTreeSet<_> = origins
                                 .iter()
-                                .map(|target| target.target().target.clone())
+                                .map(|(target, _, _)| target.target.clone())
                                 .collect();
-                            !owned.is_empty()
-                                && ids.len() == owned.len()
+                            !origins.is_empty()
+                                && ids.len() == origins.len()
                                 && ids == baseline.target_artifacts.keys().cloned().collect()
                                 && ids == baseline.target_revisions.keys().cloned().collect()
-                                && owned.iter().all(|target| {
-                                    target.contract_digest() == source.contract_digest
-                                        && target.runtime_id() == record.runtime
-                                        && target.target().source == source.revision
-                                        && baseline.artifact_for_target(&target.target().target)
-                                            == Some(target.target().artifact_digest.as_str())
-                                        && baseline.source_for_target(&target.target().target)
-                                            == Some(target.target().source.commit.as_str())
+                                && origins.iter().all(|(target, contract_digest, runtime)| {
+                                    *contract_digest == source.contract_digest
+                                        && *runtime == record.runtime
+                                        && target.source == source.revision
+                                        && baseline.artifact_for_target(&target.target)
+                                            == Some(target.artifact_digest.as_str())
+                                        && baseline.source_for_target(&target.target)
+                                            == Some(target.source.commit.as_str())
                                 })
                         }
                 })
@@ -687,13 +725,12 @@ impl VerifiedNoReleaseCompletion {
                 ));
             }
         }
-        if record.owned_targets.len() > MAX_REFERENCES
+        if record.owned_targets.len() + record.external_targets.len() > MAX_REFERENCES
             || !same_targets(
                 &outcome.targets,
                 &record
-                    .owned_targets
-                    .iter()
-                    .map(|target| target.target().clone())
+                    .target_origins()
+                    .map(|(target, _, _)| target.clone())
                     .collect::<Vec<_>>(),
             )
         {
@@ -701,7 +738,7 @@ impl VerifiedNoReleaseCompletion {
                 "completion lost exact complete target observation inventory",
             ));
         }
-        if !record.owned_targets.is_empty() {
+        if !record.owned_targets.is_empty() || !record.external_targets.is_empty() {
             let deployment = PrivateDir::open(
                 &self
                     .services
@@ -710,6 +747,18 @@ impl VerifiedNoReleaseCompletion {
                     .join(record.workspace.to_string())
                     .join("deployment"),
             )?;
+            for target in &record.external_targets {
+                target.validate_retained(&deployment, &self.services.key)?;
+            }
+            for (target, _, _) in record.target_origins() {
+                if target.observed_at > record.sealed_at + Duration::seconds(5)
+                    || record.sealed_at - target.observed_at > Duration::seconds(30)
+                {
+                    return Err(invalid(
+                        "target initial observation was not current at sealing",
+                    ));
+                }
+            }
             for target in &record.owned_targets {
                 target.validate_retained(
                     &deployment,
@@ -1282,7 +1331,11 @@ impl RuntimeDelivery {
             repositories,
         )?;
         let prepared = NoReleaseCompletionRecord {
-            schema_version: 1,
+            schema_version: if observation.external_targets.is_empty() {
+                1
+            } else {
+                2
+            },
             runtime: input.intent.record.payload.runtime_id,
             workspace: input.gate.workspace_id(),
             work: input.gate.work().clone(),
@@ -1306,6 +1359,7 @@ impl RuntimeDelivery {
             binding,
             sources: observation.sources,
             owned_targets: observation.owned_targets,
+            external_targets: observation.external_targets,
             outcome: input.intent.record.clone(),
             display,
             recorded_at: input.intent.record.payload.recorded_at,
@@ -1667,7 +1721,7 @@ fn validate_inspection_identity(
     key.verify("no_release_required", &record.outcome)?;
     record.work.validate()?;
     let outcome = &record.outcome.payload;
-    if record.schema_version != 1
+    if !record.valid_schema()
         || record.runtime != runtime
         || record.workspace.is_nil()
         || record.operation.is_nil()

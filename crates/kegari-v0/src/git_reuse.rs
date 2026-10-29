@@ -1,4 +1,4 @@
-//! A clean source proof for one retained execution, never process-exit authority.
+//! Stable source proofs for retained execution, never process-exit authority.
 use super::*;
 use crate::execution::{ExecutionBinding, OwnedDirectory};
 use kegari_execution::ValidatedIsolation;
@@ -81,6 +81,33 @@ impl Git {
         binding: &ExecutionBinding,
         boundary: &ValidatedIsolation,
     ) -> Result<VerifiedReusableSource> {
+        self.verify_retained_source(ownership, binding, boundary, false)
+    }
+
+    /// Preserve a retired child's actual edits for protocol continuation. This
+    /// is not clean-source evidence for checks or delivery, and grants no launch
+    /// authority. The exact index and files remain sealed until admitted resume.
+    pub(crate) fn verify_resumable_execution(
+        &self,
+        ownership: &OwnedDirectory,
+        binding: &ExecutionBinding,
+        boundary: &ValidatedIsolation,
+    ) -> Result<VerifiedReusableSource> {
+        if boundary.plan().role != kegari_execution::ExecutionRole::Child
+            || binding.work.child.is_none()
+        {
+            return Err(changed("retained edits require original child scope"));
+        }
+        self.verify_retained_source(ownership, binding, boundary, true)
+    }
+
+    fn verify_retained_source(
+        &self,
+        ownership: &OwnedDirectory,
+        binding: &ExecutionBinding,
+        boundary: &ValidatedIsolation,
+        retain_edits: bool,
+    ) -> Result<VerifiedReusableSource> {
         let scope = self.host_scope.as_ref().ok_or_else(|| {
             Error::new(
                 "process_authority_required",
@@ -130,7 +157,9 @@ impl Git {
             ));
         }
         self.verify_execution_clone(&boundary.plan().repository, &binding.revision)?;
-        self.assert_clean(&boundary.plan().repository)?;
+        if !retain_edits {
+            self.assert_clean(&boundary.plan().repository)?;
+        }
         let tree = self.source_tree(&boundary.plan().repository, &binding.revision.tree)?;
         // Index flags such as assume-unchanged must not hide actual source edits.
         let files = before
@@ -156,7 +185,50 @@ impl Git {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        if files != tree {
+        if retain_edits {
+            for path in files.keys().chain(tree.keys()).collect::<BTreeSet<_>>() {
+                if files.get(path) != tree.get(path) {
+                    require_source_write(boundary, path)?;
+                }
+            }
+            // The index can contain staged edits even when the working bytes
+            // match HEAD. Preserve staging, but verify every affected path and
+            // refuse unresolved merges before a new agent sees this directory.
+            let status = self.run(
+                &boundary.plan().repository,
+                &[
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                    "--ignored=matching",
+                ],
+                None,
+            )?;
+            let mut entries = status.split(|b| *b == 0).filter(|p| !p.is_empty());
+            while let Some(entry) = entries.next() {
+                if entry.len() < 4
+                    || entry[2] != b' '
+                    || entry[..2].contains(&b'U')
+                    || matches!(&entry[..2], b"AA" | b"DD")
+                {
+                    return Err(changed("retained index has unresolved or malformed state"));
+                }
+                let path = std::str::from_utf8(&entry[3..])
+                    .map_err(|_| changed("retained index path is not UTF-8"))?;
+                require_source_write(boundary, path.trim_end_matches('/'))?;
+                if entry[..2].contains(&b'R') || entry[..2].contains(&b'C') {
+                    let original = entries
+                        .next()
+                        .ok_or_else(|| changed("retained rename has no original path"))?;
+                    require_source_write(
+                        boundary,
+                        std::str::from_utf8(original)
+                            .map_err(|_| changed("retained original path is not UTF-8"))?,
+                    )?;
+                }
+            }
+        } else if files != tree {
             return Err(changed(
                 "actual source bytes or executable modes differ from the original commit tree",
             ));
@@ -169,7 +241,20 @@ impl Git {
                 parent = directory.parent();
             }
         }
-        if before
+        if retain_edits {
+            for (path, entry) in &before.repository {
+                if entry.directory
+                    && !path.starts_with(".git")
+                    && !expected_directories.contains(path)
+                {
+                    require_source_write(
+                        boundary,
+                        path.to_str()
+                            .ok_or_else(|| changed("retained directory is not UTF-8"))?,
+                    )?;
+                }
+            }
+        } else if before
             .repository
             .iter()
             .filter(|(path, entry)| entry.directory && !path.starts_with(".git"))
@@ -189,7 +274,7 @@ impl Git {
         }
         let digest = canonical_digest(
             1,
-            &serde_json::json!({"purpose":"reusable_execution_source",
+            &serde_json::json!({"purpose":if retain_edits {"resumable_execution_source"} else {"reusable_execution_source"},
             "binding":binding,"isolation":boundary.digest(),"marker":ownership.digest(),
             "git":self.binary,"metadata_authority":scope.authority.identity(),"snapshot":after}),
         )?;
@@ -206,6 +291,24 @@ impl Git {
         proof.revalidate_filesystem()?;
         Ok(proof)
     }
+}
+
+fn require_source_write(boundary: &ValidatedIsolation, relative: &str) -> Result<()> {
+    validate_repo_path(relative)?;
+    let path = boundary.plan().repository.join(relative);
+    if relative == ".git"
+        || relative.starts_with(".git/")
+        || !boundary
+            .plan()
+            .source_writes
+            .iter()
+            .any(|grant| path == grant.path || grant.directory && path.starts_with(&grant.path))
+    {
+        return Err(changed(
+            "retained edit is outside original source-write scope",
+        ));
+    }
+    Ok(())
 }
 
 fn changed(message: &str) -> Error {

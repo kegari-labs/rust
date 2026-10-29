@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "issues": {
+    "00000000-0000-0000-0000-000000000064": {
+      "issue": {
+        "id": "00000000-0000-0000-0000-000000000064",
+        "identifier": "EVAL-100",
+        "title": "Inclusive boundary with verified scoped child work",
+        "description": "Inclusive boundary with verified scoped child work\n\n```kegari\n{\"e2e_child\":\"00000000-0000-0000-0000-000000000066\",\"kind\":\"parent\",\"production_targets\":[],\"required_children\":[\"00000000-0000-0000-0000-000000000065\",\"00000000-0000-0000-0000-000000000066\",\"00000000-0000-0000-0000-000000000067\"],\"schema_version\":1,\"visual\":false}\n```",
+        "team": {
+          "id": "00000000-0000-0000-0000-000000000003"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000004"
+        },
+        "creator": {
+          "id": "00000000-0000-0000-0000-000000000005"
+        },
+        "assignee": {
+          "id": "00000000-0000-0000-0000-000000000005"
+        },
+        "parent": null,
+        "state": {
+          "id": "00000000-0000-0000-0000-000000000006",
+          "name": "Prepared",
+          "type": "unstarted"
+        },
+        "labelIds": [
+          "00000000-0000-0000-0000-000000000007"
+        ],
+        "priority": 0,
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-02T00:00:00Z",
+        "url": "https://linear.app/evaluation/issue/EVAL-100"
+      },
+      "labels": [
+        {
+          "id": "00000000-0000-0000-0000-000000000007",
+          "name": "Authorized"
+        }
+      ],
+      "history": [
+        {
+          "id": "00000000-0000-0000-0000-000000000384",
+          "actor": {
+            "id": "00000000-0000-0000-0000-000000000005"
+          },
+          "actors": [
+            {
+              "id": "00000000-0000-0000-0000-000000000005"
+            }
+          ],
+          "botActor": null,
+          "addedLabelIds": [
+            "00000000-0000-0000-0000-000000000007"
+          ],
+          "removedLabelIds": [],
+          "createdAt": "2026-01-03T00:00:00Z",
+          "updatedAt": "2026-01-03T00:00:00Z",
+          "fromParentId": null,
+          "toParentId": null,
+          "updatedDescription": false
+        }
+      ]
+    },
+    "00000000-0000-0000-0000-000000000065": {
+      "issue": {
+        "id": "00000000-0000-0000-0000-000000000065",
+        "identifier": "EVAL-101",
+        "title": "CHILD-A",
+        "description": "CHILD-A: already-satisfied inclusive-boundary work. Verify current behavior; report evidenced no-change without refactoring or creating a commit.\n\n```kegari\n{\"kind\":\"child\",\"read_repositories\":[],\"responsibility\":\"implementation\",\"schema_version\":1,\"test_resources\":[],\"write_paths\":[\"src/limit.py\"],\"write_repository\":\"101\"}\n```",
+        "team": {
+          "id": "00000000-0000-0000-0000-000000000003"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000004"
+        },
+        "creator": {
+          "id": "00000000-0000-0000-0000-000000000005"
+        },
+        "assignee": {
+          "id": "00000000-0000-0000-0000-000000000005"
+        },
+        "parent": {
+          "id": "00000000-0000-0000-0000-000000000064"
+        },
+        "state": {
+          "id": "00000000-0000-0000-0000-000000000006",
+          "name": "Prepared",
+          "type": "unstarted"
+        },
+        "labelIds": [
+          "00000000-0000-0000-0000-000000000014",
+          "00000000-0000-0000-0000-000000000015",
+          "00000000-0000-0000-0000-000000000016",
+          "00000000-0000-0000-0000-000000000017"
+        ],
+        "priority": 0,
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-02T00:00:00Z",
+        "url": "https://linear.app/evaluation/issue/EVAL-101"
+      },
+      "labels": [
+        {
+          "id": "00000000-0000-0000-0000-000000000014",
+          "name": "Codex"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000015",
+          "name": "Model"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000016",
+          "name": "Reasoning"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000017",
+          "name": "Speed"
+        }
+      ],
+      "history": []
+    },
+    "00000000-0000-0000-0000-000000000066": {
+      "issue": {
+        "id": "00000000-0000-0000-0000-000000000066",
+        "identifier": "EVAL-102",
+        "title": "CHILD-T",
+        "description": "CHILD-T: add equality regression to tests/check_limit.py; do not alter src. Run boundary checks. The host independently checks that the regression fails against the seeded exclusive implementation and passes against the inclusive implementation.\n\n```kegari\n{\"kind\":\"child\",\"read_repositories\":[],\"responsibility\":\"testing\",\"schema_version\":1,\"test_resources\":[],\"write_paths\":[\"tests/check_limit.py\"],\"write_repository\":\"101\"}\n```",
+        "team": {
+          "id": "00000000-0000-0000-0000-000000000003"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000004"
+        },
+        "creator": {
+          "id": "00000000-0000-0000-0000-000000000005"
+        },
+        "assignee": {
+          "id": "00000000-0000-0000-0000-000000000005"
+        },
+        "parent": {
+          "id": "00000000-0000-0000-0000-000000000064"
+        },
+        "state": {
+          "id": "00000000-0000-0000-0000-000000000006",
+          "name": "Prepared",
+          "type": "unstarted"
+        },
+        "labelIds": [
+          "00000000-0000-0000-0000-000000000014",
+          "00000000-0000-0000-0000-000000000015",
+          "00000000-0000-0000-0000-000000000016",
+          "00000000-0000-0000-0000-000000000017"
+        ],
+        "priority": 0,
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-02T00:00:00Z",
+        "url": "https://linear.app/evaluation/issue/EVAL-102"
+      },
+      "labels": [
+        {
+          "id": "00000000-0000-0000-0000-000000000014",
+          "name": "Codex"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000015",
+          "name": "Model"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000016",
+          "name": "Reasoning"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000017",
+          "name": "Speed"
+        }
+      ],
+      "history": []
+    },
+    "00000000-0000-0000-0000-000000000067": {
+      "issue": {
+        "id": "00000000-0000-0000-0000-000000000067",
+        "identifier": "EVAL-103",
+        "title": "CHILD-D",
+        "description": "CHILD-D: document the inclusive boundary in README.md with the exact additional sentence: Values equal to the limit are accepted. Validate boundary behavior.\n\n```kegari\n{\"kind\":\"child\",\"read_repositories\":[],\"responsibility\":\"documentation\",\"schema_version\":1,\"test_resources\":[],\"write_paths\":[\"README.md\"],\"write_repository\":\"101\"}\n```",
+        "team": {
+          "id": "00000000-0000-0000-0000-000000000003"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000004"
+        },
+        "creator": {
+          "id": "00000000-0000-0000-0000-000000000005"
+        },
+        "assignee": {
+          "id": "00000000-0000-0000-0000-000000000005"
+        },
+        "parent": {
+          "id": "00000000-0000-0000-0000-000000000064"
+        },
+        "state": {
+          "id": "00000000-0000-0000-0000-000000000006",
+          "name": "Prepared",
+          "type": "unstarted"
+        },
+        "labelIds": [
+          "00000000-0000-0000-0000-000000000014",
+          "00000000-0000-0000-0000-000000000015",
+          "00000000-0000-0000-0000-000000000016",
+          "00000000-0000-0000-0000-000000000017"
+        ],
+        "priority": 0,
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-02T00:00:00Z",
+        "url": "https://linear.app/evaluation/issue/EVAL-103"
+      },
+      "labels": [
+        {
+          "id": "00000000-0000-0000-0000-000000000014",
+          "name": "Codex"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000015",
+          "name": "Model"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000016",
+          "name": "Reasoning"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000017",
+          "name": "Speed"
+        }
+      ],
+      "history": []
+    }
+  }
+}

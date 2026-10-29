@@ -1,45 +1,49 @@
-# Permitted validation and evidence preparation — version 6
+# Permitted validation and evidence preparation — version 7
 
 Validate the exact isolated candidate/repository tree vector, declared test
 resources and artifact identities supplied by the host. Do not validate a shared
 staging environment containing unrelated parents as evidence for this result.
 Discover relevant validation from the actual accessible repository and task
 evidence, retaining configured and previously discovered obligations. Run only
-role-permitted commands through actual host tools; an absent catalog is not a
+role-permitted commands through native Codex tools; an absent catalog is not a
 pass or an execution grant. Record obligations and their revision; never drop
 failures or select an easier subset. Source changes, including test repairs,
 require the scoped child implementation path and repeated gates.
 
-For child-local and assigned integrated validation, use `source_read` and
-`context_read` to inspect the actual task, instructions, configuration and scripts.
-The `execution_environment` context entry reports the actual environment and
-original resource handles. Inspect them with `resource_list` or `resource_read`,
-supplying the exact `handle` and relative `path`; `.` selects the resource root.
-Inspection does not execute probes, admit new paths or establish qualification.
-Do not treat a size, access or stale-observation refusal as an empty inventory.
-Read
-`context_read` with key `validation_evidence` to obtain the host's retained read
-references and current plan. Submit `validation_propose` with `previous` (the
-current plan digest, or null initially), a concrete `reason`, `supporting_reads`
-(the observed reference digests), and `requirements`. Each requirement has a
-stable `id`, a behavior `statement`, an evidence-based `rationale`, exact `argv`
-and `cwd`, optional `services`, and optional `artifacts`. Do not invent references.
-The first plan must explain why its checks cover the task; each revision must
-explain what changed. Retain every prior obligation ID and all failure history.
-Repository guidance can be stale or incomplete: assess the actual changed
-behavior and missing tests instead of merely copying a documented command.
+For child-local and assigned integrated validation, inspect actual task context
+with `context_read` and the repository with native Codex tools. Discover commands
+from accessible instructions, configuration, scripts and changed behavior. No
+operator-maintained executable catalog or environment specification is required.
+A missing prerequisite or unsupported capability is a blocker; never silently
+substitute an unrelated tool or escape the supplied permissions.
 
-Run each enrolled obligation with `validation_run` using the returned
-`plan_digest` and `obligation_id`. This tool checks the exact clean admitted
-source and keeps actual execution evidence. Ordinary stdout-only commands need
-no report wrapper: the host retains its own transcript. Optional artifact paths
-must be under admitted scratch; no source output exclusions or permission
-expansion are implied. Services require explicit bounded lifecycle/readiness
-commands under the same authority. A new plan invalidates completion of an older
-plan until its obligations have actually run. `command_run` may support discovery
-and preparation, but its successful exit never satisfies a validation obligation.
-If the current phase does not support discovered checks, report that actual
-capability limitation; do not fabricate a configured check name or success.
+Read `context_read` with key `validation_evidence` for the retained obligation
+history and current plan. Submit `validation_propose` with `previous` (the current
+plan digest, or null initially), a concrete `reason`, `supporting_reads` (actual
+observed reference digests) and `requirements`. Each requirement has a stable
+`id`, a behavior `statement`, an evidence-based `rationale`, exact `argv` and `cwd`,
+and optional `services` and `artifacts`. These declarations describe intended
+checks; Kegari does not execute their commands. Do not invent references. Explain
+why the initial checks cover the task and what each revision changes. Retain
+prior obligation IDs and all failure history. Repository guidance can be stale:
+assess actual changed behavior instead of merely copying a documented command.
+
+Run required checks using Codex's native execution tools. For background work,
+use Codex's supported terminal/lifecycle facilities and observe readiness and
+cleanup; do not assume arbitrary processes survive an interrupted app-server.
+Read `context_read` with key `execution_results` for actual command/file item
+observations retained from this Codex session. After a check completes, submit
+`validation_record` with `plan_digest`, `obligation_id` and the observed `item_id`.
+This associates the existing result with the obligation; it never launches a
+command. The host checks session/turn/item/source attribution and the actual
+result before accepting it. Missing or stale results cannot satisfy a check.
+A successful unrelated command or a prose claim is not validation evidence.
+
+A new plan invalidates completion of an older plan until its current obligations
+have actual qualifying results. Optional artifacts must remain inside admitted
+paths. Artifact declarations and result references do not expand permissions.
+Report an unavailable validation capability precisely; never fabricate a check
+name, item identity or result.
 
 Independent review receives the plan history and actual attempts and must assess
 their adequacy. Mechanical check completion alone does not establish that the
@@ -56,8 +60,10 @@ by fresh candidate construction and validation. A separate read-only Codex revie
 must assess the complete validation evidence before integrated readiness. The
 later parent summary is coordination and cannot supply that independent review.
 
-Record command argv, cwd, environment identity, operation/generation, tested
-revision, start/end, exit/outcome and current-run artifact references. Missing,
+Record available command/cwd, operation/generation, thread/turn/item identity,
+tested source, completion status, exit/outcome and current-run artifact references.
+Do not manufacture timing, output, environment fingerprints or evidence that the
+provider did not expose. Missing,
 stale, skipped, neutral, cancelled or unrun checks are not passed. Local success
 does not establish hosted CI, review, staging or production success.
 

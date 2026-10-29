@@ -1,4 +1,8 @@
-# Durable worker process references
+# Durable host-process and Codex session references
+
+This page describes retained ownership for Kegari-created app-server and Git
+processes. Codex owns its internal repository commands under [SPEC 1.5](../SPEC.md);
+those commands do not require Kegari process journals or individual admission.
 
 Native worker startup creates a versioned process record before starting either
 the pinned provider's `--version` probe or its app-server. The record binds the
@@ -26,10 +30,11 @@ actual cancellation handle remains registered for termination and joining.
 The journal deliberately reports `all_descendants_exited: false`. An inherited
 lock can prove that a holder remains; its absence cannot prove that a detached
 child which closed descriptors exited. Group cleanup and pipe EOF also do not
-establish whole-tree containment. Native repository execution therefore retains
-`process_tree_unverified` until an enforceable containment/observation boundary
-is qualified. A restarted host must preserve unresolved admissions instead of
-inferring exit from an empty in-memory registry.
+establish whole-tree containment. Recover supported Codex session/lifecycle facts
+without adopting arbitrary descendants or blindly replaying interrupted commands.
+A restarted host preserves unresolved admissions instead of inferring exit from
+an empty in-memory registry. The replaced executor's blanket qualification refusal
+is not a requirement on the new Codex-backed path.
 
 Session recovery separately reads the exact admitted instruction, permission,
 profile, account, work and generation bindings, then contiguous bounded journal

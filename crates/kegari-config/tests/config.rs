@@ -105,6 +105,7 @@ fn evaluation_requires_explicit_deployment_free_policy_even_when_other_policy_is
     repository.production_ci = None;
     repository.no_change_validation = None;
     workspace.evaluation = Some(EvaluationBinding {
+        child: None,
         schema_version: 1,
         suite_manifest: "/private/tmp/evaluation-suite.json".into(),
         suite_digest: "sha256:fb7ab6c0bb6d1d51fc4b003ec620a36ac9746cd0c60f745d255bbdba0113bd07"
@@ -117,8 +118,8 @@ fn evaluation_requires_explicit_deployment_free_policy_even_when_other_policy_is
         repository_id: 101,
         pull_request: 1,
         author_id: 77,
-        base_commit: "1".repeat(40),
-        head_commit: "2".repeat(40),
+        base_commit: Some("1".repeat(40)),
+        head_commit: Some("2".repeat(40)),
     });
     for provider in ["github", "linear"] {
         let mut connection = config.connections.remove(provider).unwrap();
@@ -136,6 +137,43 @@ fn evaluation_requires_explicit_deployment_free_policy_even_when_other_policy_is
     }
     config.validate().unwrap();
     Config::parse(&toml::to_string(&config).unwrap()).unwrap();
+    let mut unborn = config.clone();
+    let binding = unborn
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .evaluation
+        .as_mut()
+        .unwrap();
+    binding.schema_version = 3;
+    binding.child = Some(kegari_config::EvaluationChild {
+        parent_id: Uuid::from_u128(101),
+        child_id: Uuid::from_u128(102),
+    });
+    binding.base_commit = None;
+    binding.head_commit = None;
+    unborn.validate().unwrap();
+    Config::parse(&toml::to_string(&unborn).unwrap()).unwrap();
+    let mut partial = unborn.clone();
+    partial
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .evaluation
+        .as_mut()
+        .unwrap()
+        .head_commit = Some("a".repeat(40));
+    assert!(partial.validate().is_err());
+    unborn
+        .workspaces
+        .get_mut("example")
+        .unwrap()
+        .evaluation
+        .as_mut()
+        .unwrap()
+        .schema_version = 2;
+    assert!(unborn.validate().is_err());
+
     for (provider, endpoint) in [
         (
             "github",

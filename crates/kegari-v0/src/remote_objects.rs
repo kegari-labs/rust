@@ -743,7 +743,10 @@ impl ObjectAcquisition {
                         "candidate production base moved during acquisition",
                     ));
                 }
-                for (number, delta) in staged {
+                for (number, selected) in staged {
+                    // Replacement heads are separately published validation objects;
+                    // the related merged PR remains the independently verified original.
+                    let delta = crate::delivery::replacement_staging_original(selected)?;
                     let current = github.pull_request(repo, *number).await?;
                     if current.merged != Some(true)
                         || current.merge_commit_sha.as_deref()

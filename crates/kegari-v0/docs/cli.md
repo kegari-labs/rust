@@ -3,12 +3,13 @@
 The `kegari-cli` package owns the `cli`, `client`, `local_cli` modules and the
 `kegari-v0` executable. Build or run it with `-p kegari-cli`. Its temporary backend
 dependency supplies shared contracts and native operations without a reverse
-dependency. Both packages remain workspace default members; use `--workspace`
-for complete validation. The evaluation-inspection tool stays in `kegari-v0`.
+dependency. Both packages remain workspace default members. Workspace-wide
+validation is a later stabilization reference; use focused checks during the
+feature-first goal. The evaluation-inspection tool stays in `kegari-v0`.
 
 The executable routes public commands through the typed local/HTTPS client and
 dispatches exact hidden build/supervisor/host entrypoints. `local_cli` implements client-only preferences,
-bounded terminal TOML guidance, explicit local bootstrap, browser opening and
+bounded setup/connection/workspace forms and TOML input, explicit local bootstrap, browser opening and
 native service actions. The executable supplies `NativeRuntimeFactory` through `host`;
 provider/Keychain/native ownership qualification remains incomplete. No real host
 bootstrap, LaunchAgent installation/start/stop, browser launch, credential import
@@ -138,13 +139,13 @@ Corrections take exactly one of `--message`, `--message-file` or `--stdin`, with
 1 MiB UTF-8/nonempty bound. Files are read on the CLI device. Setup, connection
 and workspace input is typed TOML, limited to 1 MiB; `--from -` explicitly reads
 configuration from stdin. Noninteractive missing fields fail without prompting.
-Except for the initial local setup guide above, interactive guidance is a bounded
-TOML document editor: it describes the required
-fields, accepts lines until a line containing only a period, and validates the
-whole document before submitting it through the same transaction as `--from`.
-EOF before the terminator cancels without submission. The document editor does
-not echo its input; the initial setup guide deliberately displays its generated
-non-secret configuration for review. Credentials belong only in the distinct secret
+Connection and workspace addition now collect individual typed answers, display
+the generated non-secret TOML and require explicit `submit` after review. They
+retain exact provider identities, routing/profile validation and configured scope;
+optional delivery policies remain unresolved rather than blocking discovery.
+Full setup/reconfiguration still offers the bounded TOML editor ending at a line
+containing only a period. EOF or `/cancel` never submits partial input. All forms
+use the same full typed transaction as `--from`. Credentials belong only in the distinct secret
 import path. Guidance cannot bypass validation. Configuration edits still require the server's
 complete cross-connection/workspace validation and serialized apply.
 
@@ -276,6 +277,10 @@ error. Historical identity does not make a target eligible for mutation, recover
 acceptance or release.
 
 ## Deterministic validation
+
+These are reference commands for the affected areas and later stabilization.
+During the current goal, select only the smallest relevant check; do not run
+the full command list or workspace-wide Clippy after each feature.
 
 ```sh
 RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-cli --test cli --test local_cli --test main

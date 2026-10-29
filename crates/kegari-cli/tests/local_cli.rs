@@ -529,3 +529,177 @@ async fn replaced_plist_fifo_is_rejected_without_waiting_for_writer() {
     .unwrap();
     assert_eq!(observed.unwrap_err().code, "unsafe_storage");
 }
+
+#[test]
+fn guided_connection_collects_actual_fields_without_toml_or_secret_reads() {
+    let document = guided_connection(
+        ProviderKind::Codex,
+        Cursor::new("account-42\n/fixture/isolated-auth\n/fixture/codex\n2\nsubmit\n"),
+        Vec::new(),
+    )
+    .unwrap();
+    let connection: kegari_config::Connection = toml::from_str(&document).unwrap();
+    assert_eq!(connection.account_id, "account-42");
+    assert_eq!(
+        connection.argv,
+        ["/fixture/codex", "app-server", "--listen", "stdio://"]
+    );
+    assert_eq!(connection.max_agents, Some(2));
+    assert!(connection.credential_ref.is_none());
+    let mut output = Vec::new();
+    let document = guided_connection(
+        ProviderKind::Github,
+        Cursor::new("42\n\nenvironment\nGITHUB_ACCESS\nsubmit\n"),
+        &mut output,
+    )
+    .unwrap();
+    let connection: kegari_config::Connection = toml::from_str(&document).unwrap();
+    assert_eq!(
+        connection.endpoint.as_deref(),
+        Some("https://api.github.com/")
+    );
+    assert_eq!(connection.credential_ref.as_deref(), Some("$GITHUB_ACCESS"));
+    assert!(String::from_utf8(output).unwrap().contains(&document));
+    assert_eq!(
+        guided_connection(ProviderKind::Linear, Cursor::new("/cancel\n"), Vec::new())
+            .unwrap_err()
+            .code,
+        "cancelled"
+    );
+    assert!(
+        guided_connection(
+            ProviderKind::Github,
+            Cursor::new("42\nhttps://name:secret@example.invalid/\n"),
+            Vec::new()
+        )
+        .is_err()
+    );
+    assert!(
+        guided_connection(
+            ProviderKind::Codex,
+            Cursor::new("42\n/auth\n\n0\n"),
+            Vec::new()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn guided_workspace_uses_explicit_scope_and_omits_unresolved_delivery_policy() {
+    let (_temporary, host, _) = fixture();
+    let id = |value| Uuid::from_u128(value).to_string();
+    let mut answers = vec![
+        id(10),
+        "linear".into(),
+        "github".into(),
+        "codex".into(),
+        "".into(),
+        "team-a".into(),
+        "all".into(),
+        "all".into(),
+        id(11),
+        "1".into(),
+        "team-a".into(),
+    ];
+    answers.extend((20..26).map(id));
+    answers.extend([
+        id(30),
+        id(30),
+        id(30),
+        "fixture-model".into(),
+        "high".into(),
+        "".into(),
+        "fixture-model".into(),
+        "high".into(),
+        "".into(),
+    ]);
+    answers.extend((40..44).map(id));
+    answers.extend([
+        "2".into(),
+        "".into(),
+        "".into(),
+        "".into(),
+        "1".into(),
+        "42".into(),
+        host.home.join("source").to_string_lossy().into(),
+        "".into(),
+        "".into(),
+        "".into(),
+        "submit".into(),
+    ]);
+    let input = format!("{}\n", answers.join("\n"));
+    let mut output = Vec::new();
+    let document = guided_workspace(Cursor::new(&input), &mut output).unwrap();
+    let workspace: kegari_config::Workspace = toml::from_str(&document).unwrap();
+    assert_eq!(workspace.github.repositories, ["42"]);
+    assert!(workspace.github.organizations.is_empty());
+    assert!(workspace.workflow.is_none());
+    assert!(!workspace.independent_review.enabled);
+    assert_eq!(
+        workspace.routing_labels.model[&Uuid::from_u128(41)],
+        "fixture-model"
+    );
+    let repository = &workspace.repositories["42"];
+    assert!(
+        repository.ci.is_none()
+            && repository.production_ci.is_none()
+            && repository.no_change_validation.is_none()
+            && repository.deployment.is_none()
+    );
+    assert!(repository.local_checks.is_empty() && repository.integrated_checks.is_empty());
+    assert!(!document.contains("deployment =") && !document.contains("ci ="));
+    let mut config = Config::parse(
+        &guided_initial_setup(
+            &host,
+            Cursor::new(format!("operator\n{}\n2\n\n\ncreate\n", id(30))),
+            Vec::new(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for (name, kind, account, extra) in [
+        (
+            "linear",
+            ProviderKind::Linear,
+            id(30),
+            json!({"endpoint":"https://api.linear.app/graphql","credential_ref":"$LINEAR_TOKEN"}),
+        ),
+        (
+            "github",
+            ProviderKind::Github,
+            "42".into(),
+            json!({"endpoint":"https://api.github.com/","credential_ref":"$GITHUB_TOKEN"}),
+        ),
+        (
+            "codex",
+            ProviderKind::Codex,
+            "account".into(),
+            json!({"auth_home":"/fixture/auth","max_agents":2}),
+        ),
+    ] {
+        let mut value = extra;
+        value["kind"] = json!(kind);
+        value["account_id"] = json!(account);
+        config
+            .connections
+            .insert(name.into(), serde_json::from_value(value).unwrap());
+    }
+    config.workspaces.insert("example".into(), workspace);
+    config.validate().unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains(&document));
+    assert!(output.contains("No command catalog or environment manifest"));
+    assert!(output.contains(
+        "Delivery CI, production CI, no-change validation and deployment policy are omitted"
+    ));
+    assert!(std::fs::read_dir(&host.home).unwrap().next().is_none());
+    assert_eq!(
+        guided_workspace(
+            Cursor::new(input.replace("submit\n", "/cancel\n")),
+            Vec::new()
+        )
+        .unwrap_err()
+        .code,
+        "cancelled"
+    );
+}

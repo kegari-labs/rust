@@ -19,6 +19,9 @@ impl IntegratedReviewAssignment {
     pub fn context(&self) -> &Value {
         &self.context
     }
+    pub(crate) fn review_archive(&self) -> &crate::validation_archive::ResolvedValidationArchive {
+        &self.prepared.archive
+    }
     pub(crate) fn signed_input(&self) -> &Signed<IntegratedRecord> {
         &self.prepared.signed
     }
@@ -118,7 +121,12 @@ impl DeliveryCoordinator {
         let mut attempts = completion.validation_attempts.clone();
         for record in &attempts {
             record.validate_shape()?;
-            if record.discovered.is_none() {
+            if record
+                .codex
+                .as_ref()
+                .and_then(|p| p.plan.as_ref())
+                .is_none()
+            {
                 return Err(Error::new(
                     "validation_lineage_pending",
                     "mixed named/discovered integrated history cannot discard attempts",
@@ -149,11 +157,22 @@ impl DeliveryCoordinator {
             (
                 r.started_at,
                 r.completed_at,
-                r.discovered.as_ref().map(|p| p.invocation_id),
+                r.codex
+                    .as_ref()
+                    .map(|p| (p.thread_id.clone(), p.turn_id.clone(), p.item_id.clone())),
             )
         });
         let validation = evidence::ValidationEvidence {
-            schema_version: 2,
+            prior_history: actual
+                .validation_prefix
+                .as_ref()
+                .map(|prefix| prefix.history().to_vec())
+                .unwrap_or_default(),
+            schema_version: if actual.validation_prefix.is_some() {
+                6
+            } else {
+                4
+            },
             plan_digest: plan.digest().into(),
             original_cwd: actual.isolation().plan().cwd.clone(),
             history: plan.history().to_vec(),
@@ -189,7 +208,22 @@ impl DeliveryCoordinator {
                 runtime_id: current.binding.runtime_id,
             },
             &validation,
-            |artifact| artifacts.read(artifact),
+            |artifact| {
+                if artifact.validation_operation == completion.operation_id {
+                    artifacts.read(artifact)
+                } else {
+                    actual
+                        .validation_prefix
+                        .as_ref()
+                        .ok_or_else(|| {
+                            Error::new(
+                                "artifact_conflict",
+                                "prior integrated artifact lacks its original history owner",
+                            )
+                        })?
+                        .read_artifact(artifact)
+                }
+            },
         )?;
         let signed = self
             .retain_integrated_execution(contract, e2e, vector, observer, &selected, Some(&archive))
@@ -227,16 +261,14 @@ impl DeliveryCoordinator {
             prepared.archive.reference(),
         )?;
         let validation = resolved.evidence();
-        let mut context = json!({"task":task,"integrated_validation_review":{
+        let context = json!({"task":task,"integrated_validation_review":{
             "schema_version":1,"work":e2e.work(),"parent":contract.work(),"vector_digest":vector.digest(),
             "candidates":vector.candidates(),"baselines":vector.baselines(),"test_resources":contract.test_resources(),
-            "validation":validation,"validation_evidence_digest":validation.digest()?,"validation_attempt_references":validation.attempt_references()?,
+            "validation_pages":resolved.review_descriptor()?,"validation_evidence_digest":validation.digest()?,
             "requirement":"Independently assess integrated sufficiency against the complete parent task and every candidate/resource. Address all obligations, previous failures and plan changes. Exit zero alone is not semantic adequacy.",
             "required_result_schema":{"schema_version":2,"verdict":"pass | findings | blocked","unresolved_findings":[],"supporting_links":[],
                 "validation":{"evidence_digest":validation.digest()?,"sufficient":false,"rationale":"complete-vector sufficiency and history reasoning",
                 "requirements":validation.current()?.requirements.iter().map(|r| (r.id.clone(), json!({"sufficient":false,"rationale":"assessment with actual evidence","evidence_digests":[]}))).collect::<BTreeMap<_,_>>()}}}});
-        let artifacts = super::super::discovered_validation::review_artifacts(&resolved, &context)?;
-        context["integrated_validation_review"]["validation_artifacts"] = artifacts;
         if serde_json::to_vec(&context)
             .map_err(|_| Error::invalid("encode integrated review context"))?
             .len()

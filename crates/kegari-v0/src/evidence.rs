@@ -526,6 +526,7 @@ pub enum Conclusion {
 #[serde(rename_all = "snake_case")]
 pub enum Runner {
     LocalSandbox,
+    Codex,
     GitHubHosted,
     SelfHosted,
     Unknown,
@@ -671,7 +672,7 @@ pub fn verify_checks(
             CheckKind::Local | CheckKind::Integrated => {
                 if requirement.command.is_empty()
                     || run.command != requirement.command
-                    || run.runner != Runner::LocalSandbox
+                    || !matches!(run.runner, Runner::LocalSandbox | Runner::Codex)
                     || run.workflow_id.is_some()
                     || run.run_id.is_some()
                 {
@@ -839,6 +840,15 @@ pub fn verify_child(
         linear_writer,
         None,
     )
+}
+
+pub(crate) fn validate_replacement_candidate(
+    evidence: &ChildEvidence,
+    requirements: ChildRequirements<'_>,
+    review: &VerifiedReview,
+    gates: ReplacementGates<'_>,
+) -> Result<()> {
+    validate_child_candidate_inner(evidence, requirements, review, None, Some(gates))
 }
 
 pub fn verify_replacement_child(

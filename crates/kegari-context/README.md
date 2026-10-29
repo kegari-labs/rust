@@ -2,8 +2,10 @@
 
 `kegari-context` owns workflow documents, bounded instruction assembly,
 repository guidance, embedded assets and instruction-resume compatibility.
-The package remains at `0.2.0-alpha.10`; formats, instruction assets and the
-pinned Codex version are unchanged.
+The package remains at `0.2.0-alpha.10`; instruction assets now use identity `9`
+for the Codex-owned repository execution contract; the installed generic workflow
+has identity `2`. The pinned Codex version is
+unchanged; historical asset identities are not reinterpreted.
 
 Import document interfaces through `kegari_context::workflow` and assembly
 interfaces through `kegari_context::instructions`. The private resume module
@@ -11,10 +13,18 @@ retains sealed assembly and compatibility evidence. There are no backend
 compatibility reexports or unchecked constructors for assembled instructions
 or verified resume instructions.
 
-The crate supplies context for an agent; execution and admission authority remain
-backend-owned. It does not run checks, hooks, services, providers or workers.
-Workflow check/service declarations and permission manifests describe inputs;
-they do not grant execution or broaden an existing native boundary.
+The crate supplies context for an agent; Kegari retains workflow admission and
+result acceptance. Under [SPEC 1.5](../kegari-v0/SPEC.md), Codex app-server owns
+repository tools, execution, sandbox enforcement and supported terminal lifecycle.
+This crate does not run checks, hooks, services, providers or workers. Descriptive
+workflow inputs and permission manifests grant no additional authority.
+
+The embedded assets use native Codex repository tools and describe Kegari
+`validation_record` as association of actual observed results, never command
+launch. They no longer instruct agents to use custom command/edit or resource
+inventory tools. These changes accompany the production caller migration; they
+do not establish native/live qualification. The
+[instruction guide](instructions/README.md) states the boundary.
 
 `AssemblyInput::runtime_build` carries the existing host application identity.
 Production callers supply `kegari_v0::BUILD_ID`; the assembler copies it at the
@@ -43,7 +53,8 @@ pinned serialization/encoding libraries. Tests use temporary fixtures and UUID
 generation; there is no backend development dependency or process, runtime,
 platform, storage, provider or Codex dependency.
 
-From the workspace root with the pinned toolchain and dependency cache:
+Use the smallest relevant focused check under the [development policy](../../docs/development.md#feature-first-development-policy).
+These broader commands are a later stabilization reference, not a per-feature gate:
 
 ```sh
 cargo test --offline --locked -p kegari-context --release

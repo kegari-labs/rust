@@ -181,6 +181,20 @@ impl ProductionObserver {
         contract: &RepositoryContract,
         step_id: &str,
     ) -> Result<TargetRecord> {
+        self.current_owned_target_record(contract, step_id)
+            .await?
+            .ok_or_else(|| {
+                blocked("current target has no retained authenticated deployment proof")
+                    .next("Provide fresh evidence from the optional trusted baseline observation route, or use an explicitly authorized release/recovery deployment.")
+            })
+    }
+    /// An absent owned proof is distinct from invalid retained evidence. Only
+    /// actual absence may select the separately configured external observer.
+    pub(super) async fn current_owned_target_record(
+        &self,
+        contract: &RepositoryContract,
+        step_id: &str,
+    ) -> Result<Option<TargetRecord>> {
         let configured = step(contract, step_id)?;
         let contract_digest = contract.digest()?;
         let indexed = self.indexed_proof(&index_file(contract, step_id)?)?;
@@ -198,16 +212,12 @@ impl ProductionObserver {
         if let Some(record) = indexed
             && record.facts == current
         {
-            return Ok(record);
+            return Ok(Some(record));
         }
         self.scan_proof(|record| {
             Ok(record.challenge.contract_digest == contract_digest
                 && record.challenge.step == step_id
                 && record.facts == current)
-        })?
-        .ok_or_else(|| {
-            blocked("current target has no retained authenticated deployment proof")
-                .next("Run the configured trusted deployment or validation route under explicit release/recovery authority.")
         })
     }
     fn indexed_proof(&self, leaf: &str) -> Result<Option<TargetRecord>> {
@@ -571,7 +581,33 @@ impl ProductionObserver {
     ) -> Result<()> {
         self.retained_proof_receipt(contract, record)?;
         let configured = step(contract, &record.challenge.step)?;
-        let facts = &record.facts;
+        self.reobserve_historical_facts(contract, configured, &record.facts)
+            .await?;
+        if record.facts.source != record.challenge.source {
+            return Err(blocked("historical deployment source object differs"));
+        }
+        // Exact attempt endpoint, never a later human rerun of the same run ID.
+        let run = self
+            .github
+            .workflow_run(&contract.provider, record.run.id, Some(record.run.attempt))
+            .await?;
+        let jobs = self.verify_run(contract, configured, &run).await?;
+        if canonical_digest(1, &run)? != canonical_digest(1, &record.run)?
+            || canonical_digest(1, &jobs)? != record.jobs_digest
+        {
+            return Err(blocked(
+                "original successful deployment run or jobs changed",
+            ));
+        }
+        self.retained_proof_receipt(contract, record)?;
+        Ok(())
+    }
+    pub(super) async fn reobserve_historical_facts(
+        &self,
+        contract: &RepositoryContract,
+        configured: &DeploymentStep,
+        facts: &NativeTargetFacts,
+    ) -> Result<()> {
         let environment = self
             .github
             .environment_by_id(&contract.provider, facts.environment_id)
@@ -629,25 +665,9 @@ impl ProductionObserver {
             .github
             .commit(&contract.provider, &facts.source.commit)
             .await?;
-        if text(&object, "/tree/sha")? != facts.source.tree
-            || facts.source != record.challenge.source
-        {
+        if text(&object, "/tree/sha")? != facts.source.tree {
             return Err(blocked("historical deployment source object differs"));
         }
-        // Exact attempt endpoint, never a later human rerun of the same run ID.
-        let run = self
-            .github
-            .workflow_run(&contract.provider, record.run.id, Some(record.run.attempt))
-            .await?;
-        let jobs = self.verify_run(contract, configured, &run).await?;
-        if canonical_digest(1, &run)? != canonical_digest(1, &record.run)?
-            || canonical_digest(1, &jobs)? != record.jobs_digest
-        {
-            return Err(blocked(
-                "original successful deployment run or jobs changed",
-            ));
-        }
-        self.retained_proof_receipt(contract, record)?;
         Ok(())
     }
 }

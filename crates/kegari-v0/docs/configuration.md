@@ -61,108 +61,39 @@ the same manager after taking the canonical control lock and remains STOPPED.
 
 ## Generic execution migration
 
-SPEC 1.4 requires agent-led discovery without mandatory command/environment
-specifications. Runtime-owned generic guidance is the default when no repository
-workflow is selected; an explicitly selected invalid/missing workflow remains an
-error. Discovery does not change configured account, repository/write, resource,
-network or release authority. Applicable known validation obligations remain
-required even when a workflow supplies no commands.
+[SPEC 1.5](../SPEC.md) delegates repository discovery, editing and execution to
+Codex's native tools. Users do not need command/environment specifications,
+executable catalogs or target-toolset adapters. Runtime-owned generic guidance
+is the default when no repository workflow is selected; an explicitly selected
+invalid or missing workflow remains an error.
 
-Workspace configuration no longer accepts `managed_execution` or any nested
-executable, digest, read-root, executable-mapping, generated-executable or
-qualification catalog. This includes an empty table or a JSON null field: old
-configuration is rejected as unknown input rather than silently ignored or
-converted into execution authority. Remove the obsolete field through an explicit
-configuration change; this does not approve native execution or migrate retained
-execution evidence.
+Configuration continues to define accounts, repository/write scope, operator
+roles, supported provider permissions and release policy. Discovery cannot grant
+new authority, expose ambient credentials or change host configuration. Fixed
+Git/Codex integration configuration remains distinct from target-project commands.
+Required checks and source-bound result acceptance remain workflow responsibilities.
 
-Generic `test_resources` retain their actual paths and read/write/disposable
-permissions. Account, actor, repository, credential, role and release boundaries
-also remain configured and enforced. Fixed Git/Codex integration configuration is
-separate from target technology discovery.
+The custom managed-domain/resource consumers have been removed. Retained service
+declarations express workflow needs; unsupported lifecycle behavior remains an
+explicit limitation rather than a prerequisite to generic native Codex discovery. Remove obsolete
+fields and consumers with their production callers; do not preserve the custom
+executor behind compatibility options. Runtime instruction assets must migrate
+with those callers and their explicit asset identities.
 
-Preparation now produces a managed schema-5 command domain from fixed OS backend
-resources, the actual owned repository/scratch directories and already-admitted
-resource grants. No executable names, expected hashes or executable-mapping list
-are configured. Ordered command lookup uses fixed OS paths followed by those
-owned/admitted directories; explicit paths may select deeper programs. Canonical
-target checks and the rendered sandbox retain the same role, source-write,
-resource, forbidden-path and network boundaries. Finding a tool outside this
-domain does not admit its directory or expose the user's home or credentials:
-external host directories still need actual generic resource authority.
+Preserve old records and reject unsupported recovery without deleting source data
+or reinterpreting old execution proofs. Changed persisted/asset contracts require
+explicit identities. Actual configuration schema/revision changes occur with the
+implementation, not this documentation correction. Permission reductions retain
+their fencing and drained-update requirements, and source-bound uncertainty cannot
+be cleared by changing configuration.
 
-The preparation receipt binds the backend policy, and the retained isolation
-binds its actual paths, root identities and bounded observations of immutable
-read resources. Full resource capture/revalidation occurs outside Control;
-serialized gates validate the retained binding. Symlink text is observed without
-following it or claiming target-content closure. A broad read grant containing
-a narrower writable resource or owned repository/scratch subtree currently
-refuses: use disjoint grants so read-only siblings are still observed. Reads
-wholly inside owned or admitted writable scopes retain their mutable semantics.
-Actual invocation evidence binds
-the selected executable, argv, cwd, rendered environment and isolation. These
-observations are not a user inventory or a `qualified` bit. Workers can select
-literal commands through `command_run` and enroll revision-bound obligations
-through `validation_propose` before `validation_run`. Named workflow checks remain
-optional inputs. Independent review assesses validation adequacy; a successful
-command alone never passes a delivery gate. Production repository commands still
-refuse missing native backend qualification.
+### Managed repository execution policy
 
-`context_read` with key `execution_environment` reports the effective command
-environment and host-issued handles for existing read resources. `resource_list`
-and `resource_read` inspect those handles without running code or requiring
-project-specific configuration. They accept a relative path, never a new host
-root. Exact-file grants stay exact; links, Git administration, unavailable access,
-changed observations and oversized results refuse explicitly. An empty listing
-means there were no visible non-Git children in its declared inspection scope,
-not that an inspection failed or the repository has no Git history.
-These observations cannot add tools or resources outside the admitted boundary.
+This historical link target is retained for older evidence references. The former
+Kegari-managed repository policy is superseded by Codex-owned execution under
+SPEC 1.5; it is not a current configuration or qualification recipe.
 
-The unpublished `offline_cargo` configuration and schema-4 launch/check adapter
-are removed. Unknown obsolete fields/records are rejected without migration or
-source deletion; they are not silently accepted as generic proof. Prior native
-approvals and test results remain bound to their actual earlier implementations.
-Native generic-backend qualification remains incomplete.
-
-A local or integrated workflow check may have an optional `services` array.
-Each service has a unique stable `name`, literal `argv`, a `readiness` object
-with literal `argv` and `timeout_ms`, and `max_lifetime_ms`. At most eight services
-are allowed; each requires one finite readiness invocation before the main
-check. Readiness may poll within its configured bound. Services share the check's
-cwd, declared grants, aggregate deadline and captured-output budget. This does
-not grant environment overrides, sockets or network access; endpoint services
-remain unsupported until their scoped network boundary is implemented and qualified.
-
-Control retains the original validation effect throughout service start, readiness,
-check and shutdown. Each attempted member has an immutable order and distinct
-process identity. Service leaders must still be running after readiness and at
-check completion. Shutdown requests TERM, escalates after five seconds if needed,
-and joins every member before source and artifact snapshots. A nonzero service
-exit, timeout, truncation or KILL escalation prevents check success. Graceful
-services must handle TERM and exit zero. A service failure does not trigger code
-repair; a genuine nonzero main-check result may do so after clean service closure.
-These are finite check-owned services, not reusable daemons or independently
-installed host services. Supported native service qualification remains incomplete.
-
-The current automatic domain uses managed schema 5 for foreground and bundled
-checks; retained catalog schemas 1–4 and removed isolation fields are refused.
-Schema-2 resource observations are descriptive and retain their original identity.
-Service-member process rows use schema 3, while ordinary process rows remain
-schema 2 and legacy process rows remain readable without promotion. Service-bearing
-check records use schema 3; checks without services retain schemas 1/2. Handover
-metadata is version 5 and requires process schema 3, managed schema 5, workflow-source
-schema 1 and repository-policy schema 1. The latter requires readers to preserve
-unresolved delivery declarations without converting them to permission or
-deployment-free evidence. Complete configurations retain their existing serialized
-shape and config schema 1; older replacement readers are refused.
-
-The schema-5 policy digest includes the exact build identity. A retained command
-domain from a different build is refused even if its schema number matches;
-schema compatibility alone does not authorize a retained cleanup hook. There is
-no automatic migration, evidence rebinding or destructive cleanup fallback.
-Existing account, repository and generic resource permission changes retain
-their configuration fencing and drained-update requirements. Removing the old
-catalog does not change those requirements or resolve outstanding effects.
+## Repository delivery declarations
 
 Repository `ci`, `production_ci`, `no_change_validation` and `deployment` may be
 omitted while agents discover the repository and its requirements. Omission is
@@ -214,10 +145,13 @@ this builder conversation.
 
 ## Deterministic evidence
 
-Run from the workspace root with the installed, verified toolchain:
+Use focused configuration checks when changing this boundary; broader testing and
+live qualification follow the milestone policy. From the workspace root with the
+pinned toolchain/cache:
+
 
 ```sh
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --test configuration
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-v0 --test configuration
 ```
 
 The tests use real owned private storage and the production `ControlHost` and

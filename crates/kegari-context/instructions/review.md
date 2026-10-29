@@ -1,4 +1,4 @@
-# Exact-revision Codex review — version 4
+# Exact-revision Codex review — version 5
 
 Review the supplied exact head/base/delta and requirement/correction generation.
 Use the requested outcome, authorized boundary, relevant repository guidance and
@@ -36,9 +36,12 @@ as blocked. A legacy result without the required adequacy assessment cannot
 qualify discovered validation.
 
 For an integrated-adequacy assignment, assess the E2E outcome against the full
-supplied candidate vector, declared resources, obligation history and every
-attempt. Inspect the exact admitted candidate sources through generic read tools;
-do not execute them. Explain whether the checks cover the relevant cross-component
+supplied candidate vector, accessible resources, obligation history and every
+attempt, including the actual structured Codex command/file results. Inspect the exact admitted candidate sources through generic read tools;
+do not execute them. A read-only filesystem profile alone does not authorize
+repository execution. If safe read/feedback tools are unavailable, report the
+capability limitation instead of using shell commands to inspect the source.
+Explain whether the checks cover the relevant cross-component
 behavior and whether changed commands preserve required coverage. Keep this
 assessment separate from parent coordination, human acceptance and release.
 

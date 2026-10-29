@@ -10,6 +10,16 @@ pub trait SessionScope: Sync {
 }
 
 pub trait ToolBroker: Send {
+    /// Native repository tools execute inside Codex. Record their structured
+    /// observations before subsequent workflow-tool calls; this is not a launch
+    /// callback or a per-command authorization gate.
+    fn observe_execution(
+        &mut self,
+        _state: &SessionState,
+        _event: &NativeExecutionObservation,
+    ) -> Result<()> {
+        Ok(())
+    }
     /// Diagnostic callback before filtering or after terminal validation. No
     /// error return: capture failure cannot change dispatch or erase its hold.
     fn observe_protocol(&mut self, _event: ProtocolObservation<'_>) {}
@@ -55,6 +65,11 @@ pub(super) fn checkpoint_notification(
     // the ordinary event or its validation error.
     if result.is_ok() || state.intervention.is_some() {
         broker.observe_session(state)?;
+    }
+    if result.is_ok()
+        && let Some(event) = NativeExecutionObservation::from_notification(state, method, params)?
+    {
+        broker.observe_execution(state, &event)?;
     }
     result
 }
@@ -133,8 +148,20 @@ pub trait RequestGate: Send + Sync {
 fn changes_session(method: &str) -> bool {
     matches!(
         method,
-        "thread/start" | "thread/resume" | "turn/start" | "turn/steer" | "review/start"
+        "thread/start"
+            | "thread/resume"
+            | "turn/start"
+            | "turn/steer"
+            | "review/start"
+            | "command/exec"
     )
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecResult {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
 }
 pub struct RpcClient {
     pub(super) transport: RpcTransport,
@@ -154,6 +181,7 @@ pub struct RpcClient {
     pub(super) pending_reconciliation: Option<String>,
     pub(super) request_gate: Option<std::sync::Arc<dyn RequestGate>>,
     last_semantic_event: Instant,
+    active_command: Option<String>,
 }
 impl RpcClient {
     pub fn from_transport<R, W>(reader: R, writer: W, request_timeout: Duration) -> Result<Self>
@@ -179,6 +207,7 @@ impl RpcClient {
             account_id: None,
             models: None,
             verified_permissions: None,
+            active_command: None,
             pending_reconciliation: None,
             request_gate: None,
             last_semantic_event: Instant::now(),
@@ -438,8 +467,19 @@ impl RpcClient {
         &mut self,
         method: &str,
         params: Value,
+        state: Option<&mut SessionState>,
+        broker: &mut dyn ToolBroker,
+    ) -> Result<Value> {
+        self.request_bounded(method, params, state, broker, self.request_timeout)
+            .await
+    }
+    async fn request_bounded(
+        &mut self,
+        method: &str,
+        params: Value,
         mut state: Option<&mut SessionState>,
         broker: &mut dyn ToolBroker,
+        timeout: Duration,
     ) -> Result<Value> {
         if let Some(id) = self.uncertain_request {
             return Err(Error::new("operation_uncertain", "transport has an unanswered request; reconnect and reconcile before further requests").detail(json!({"request_id":id})));
@@ -455,7 +495,7 @@ impl RpcClient {
             .next_id
             .checked_add(1)
             .ok_or_else(|| Error::new("protocol_error", "request ID exhausted"))?;
-        let deadline = Instant::now() + self.request_timeout;
+        let deadline = Instant::now() + timeout;
         let request_thread = params
             .get("threadId")
             .and_then(Value::as_str)
@@ -603,6 +643,125 @@ impl RpcClient {
                 Err(Error::new("timeout", "app-server request outcome may be unknown; reconcile using the request/session identity").detail(json!({"request_id":id,"method":method,"outcome":"uncertain"})))
             }
         }
+    }
+    /// Execute an explicit lifecycle command through the pinned server sandbox.
+    /// This has no process authority; hosts retain admission and lifecycle policy.
+    pub async fn execute_command(
+        &mut self,
+        scope: &dyn SessionScope,
+        permissions: &PermissionConfiguration,
+        command: &[String],
+        process_id: &str,
+        timeout: Duration,
+        output_limit: usize,
+    ) -> Result<CommandExecResult> {
+        scope.revalidate()?;
+        if self.verified_permissions.as_deref() != Some(&permissions.isolation_digest)
+            || scope.isolation_digest() != permissions.isolation_digest
+            || permissions.settings.pointer("/features/shell_tool") != Some(&json!(true))
+            || self.account_id.is_none()
+        {
+            return Err(Error::new(
+                "isolation_unverified",
+                "lifecycle command requires authenticated, verified executable permissions",
+            ));
+        }
+        if command.is_empty()
+            || command.iter().any(|arg| arg.contains('\0'))
+            || process_id.is_empty()
+            || process_id.len() > 256
+            || process_id.chars().any(char::is_control)
+            || timeout.is_zero()
+            || timeout > Duration::from_secs(86_400)
+            || output_limit == 0
+            || output_limit > 1024 * 1024
+            || self.active_command.is_some()
+        {
+            return Err(Error::invalid(
+                "lifecycle command needs an unused identity and finite command bounds",
+            ));
+        }
+        let mut environment = permissions
+            .settings
+            .pointer("/shell_environment_policy/set")
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or_else(|| {
+                Error::new(
+                    "isolation_unverified",
+                    "lifecycle environment was not explicitly verified",
+                )
+            })?;
+        if environment.values().any(|value| !value.is_string()) {
+            return Err(Error::new(
+                "isolation_unverified",
+                "invalid verified lifecycle environment",
+            ));
+        }
+        // The app-server's own auth home is not repository command authority.
+        // Supported null overrides explicitly remove its provider-only variable.
+        environment.insert("CODEX_HOME".into(), Value::Null);
+        self.active_command = Some(process_id.into());
+        let response = self
+            .request_bounded(
+                "command/exec",
+                json!({"command":command,"processId":process_id,"cwd":scope.cwd(),
+                "permissionProfile":permissions.profile_id,"timeoutMs":timeout.as_millis() as u64,
+                "outputBytesCap":output_limit,"disableTimeout":false,"disableOutputCap":false,
+                "tty":false,"streamStdin":false,"streamStdoutStderr":false,"env":environment}),
+                None,
+                &mut DenyTools,
+                timeout + Duration::from_secs(5),
+            )
+            .await;
+        match response {
+            Ok(value) => {
+                let parsed = serde_json::from_value::<CommandExecResult>(value).map_err(|_| {
+                    Error::new(
+                        "provider_response",
+                        "command/exec omitted its actual exit/output result",
+                    )
+                })?;
+                if parsed.stdout.len() > output_limit || parsed.stderr.len() > output_limit {
+                    return Err(Error::new(
+                        "response_limit",
+                        "command/exec output exceeds its declared bound",
+                    ));
+                }
+                self.active_command = None;
+                Ok(parsed)
+            }
+            Err(error) => {
+                // This cleanup cannot turn an unknown command into success or
+                // clear the existing request uncertainty/admission fence.
+                let _ = self.terminate_command().await;
+                Err(error)
+            }
+        }
+    }
+    /// Best-effort supported cleanup on this connection. The acknowledgement is
+    /// not evidence that a hook succeeded or that a native process has exited.
+    pub async fn terminate_command(&mut self) -> Result<()> {
+        let Some(process_id) = self.active_command.clone() else {
+            return Ok(());
+        };
+        let id = self.next_id;
+        self.next_id = id
+            .checked_add(1)
+            .ok_or_else(|| Error::new("protocol_error", "request ID exhausted"))?;
+        timeout_at(Instant::now() + Duration::from_secs(2), async {
+            self.send(&json!({"id":id,"method":"command/exec/terminate","params":{"processId":process_id}})).await?;
+            loop {
+                match self.read_message().await? {
+                    RpcMessage::Response { id: response, .. } if response == id => return Ok(()),
+                    RpcMessage::Failure { id: response, .. } if response == id => return Err(Error::new("provider_response", "Codex refused lifecycle termination")),
+                    // The original command can finish concurrently. Its late
+                    // response is not adopted as a successful hook observation.
+                    RpcMessage::Response { .. } | RpcMessage::Failure { .. } | RpcMessage::Notification { .. } => {},
+                    RpcMessage::Request { .. } => return Err(Error::new("protocol_error", "unexpected request during lifecycle cleanup")),
+                }
+            }
+        }).await.map_err(|_| Error::new("timeout", "Codex lifecycle cleanup acknowledgement timed out"))?
     }
     pub async fn initialize(&mut self) -> Result<Value> {
         self.initialize_observed(&mut DenyTools).await
@@ -820,6 +979,38 @@ impl RpcClient {
                     "isolation_unverified",
                     format!("effective {key} differs from the confined profile"),
                 ));
+            }
+        }
+        if let Some(expected) = permissions.settings.get("allow_login_shell")
+            && config.get("allow_login_shell") != Some(expected)
+        {
+            return Err(Error::new(
+                "isolation_unverified",
+                "effective login-shell policy changed",
+            ));
+        }
+        if let Some(expected) = permissions.settings.get("shell_environment_policy") {
+            let actual = config.get("shell_environment_policy").ok_or_else(|| {
+                Error::new(
+                    "isolation_unverified",
+                    "effective shell environment was not reported",
+                )
+            })?;
+            for key in [
+                "inherit",
+                "ignore_default_excludes",
+                "include_only",
+                "exclude",
+                "set",
+            ] {
+                if let Some(value) = expected.get(key)
+                    && actual.get(key) != Some(value)
+                {
+                    return Err(Error::new(
+                        "isolation_unverified",
+                        format!("effective shell environment {key} changed"),
+                    ));
+                }
             }
         }
         if config

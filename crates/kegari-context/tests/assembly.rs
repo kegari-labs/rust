@@ -267,7 +267,7 @@ impl AssemblyFixture {
             codex_version: SUPPORTED_CODEX_VERSION,
             repository: Some(RepositoryContext {
                 root: self.repository.clone(),
-                revision: "0123456789012345678901234567890123456789".into(),
+                revision: Some("0123456789012345678901234567890123456789".into()),
                 scope_paths: vec!["src/".into()],
             }),
             required_context: &[],
@@ -303,6 +303,18 @@ fn delivered_starter_and_embedded_assets_assemble_without_development_checkout()
             .starts_with("# Kegari runtime authority contract")
     );
     assert!(assembled.prompt.contains("# Scoped child implementation"));
+    assert_eq!(assembled.manifest.asset_version, "9");
+    assert!(assembled.prompt.contains("Codex's native repository tools"));
+    assert!(assembled.prompt.contains("`validation_record`"));
+    for obsolete in [
+        "`command_run`",
+        "`validation_run`",
+        "`source_write`",
+        "`resource_list`",
+        "`resource_read`",
+    ] {
+        assert!(!assembled.prompt.contains(obsolete));
+    }
     assert!(
         assembled
             .prompt

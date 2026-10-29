@@ -96,7 +96,6 @@ impl Case {
             )
         };
         let isolation = IsolationPlan {
-            managed_execution: None,
             schema_version: 1,
             role: ExecutionRole::Coordination,
             execution_root,
@@ -353,4 +352,42 @@ fn undeclared_legacy_preparation_digest_has_no_substrate_extension() {
         prepare_fixture(&suite, variant, &root.join("legacy"), &suite.join("scorer")).unwrap();
     assert!(fixture.substrate.is_none());
     assert_eq!(fixture.preparation_digest,canonical_digest(1,&json!({"root":fixture.root,"repository":fixture.repository,"scratch":fixture.scratch,"codex_home":fixture.codex_home,"grader_root":fixture.grader_root,"before":fixture.before,"input":fixture.input,"prior":fixture.prior,"fixture_digest":fixture.fixture_digest,"context_binding":fixture.context_binding,"worker_placement":fixture.worker_placement,"worker_manifest":fixture.worker_manifest})).unwrap());
+}
+
+#[test]
+fn unborn_fixture_keeps_installed_workflow_outside_absent_baseline() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let suite = Path::new(env!("CARGO_MANIFEST_DIR")).join("evaluations");
+    let manifest = SuiteManifest::load(&suite.join("manifest.json")).unwrap();
+    let variant = manifest
+        .variants
+        .iter()
+        .find(|v| v.id == "unborn_repository")
+        .unwrap();
+    let grader = root.join("grader");
+    std::fs::create_dir(&grader).unwrap();
+    let fixture = prepare_fixture(&suite, variant, &root.join("trial"), &grader).unwrap();
+    assert!(fixture.before.is_empty());
+    assert!(
+        std::fs::read_dir(&fixture.repository)
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    assert!(fixture.substrate.as_ref().unwrap().is_unborn());
+    assert!(
+        !fixture
+            .workflow_path()
+            .unwrap()
+            .starts_with(&fixture.repository)
+    );
+    assert_eq!(
+        Workflow::load(&fixture.workflow_path().unwrap())
+            .unwrap()
+            .digest,
+        Workflow::installed_default().unwrap().digest
+    );
+    assert!(fixture.child_issues.is_some());
+    fixture.verify_preparation().unwrap();
 }

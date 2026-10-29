@@ -1,0 +1,491 @@
+{
+  "issue": {
+    "id": "00000000-0000-0000-0000-000000000065",
+    "workspace_id": {
+      "$kegari": "linear_workspace"
+    },
+    "endpoint": {
+      "$kegari": "linear_endpoint"
+    },
+    "identifier": "EVAL-101",
+    "title": "CHILD-A",
+    "description": "CHILD-A: fix the inclusive limit within src/limit.py. Discover this repository's unfamiliar project tool from its current guidance and use it to validate the boundary; do not replace the tool or add Kegari configuration.\n\n```kegari\n{\"kind\":\"child\",\"read_repositories\":[],\"responsibility\":\"implementation\",\"schema_version\":1,\"test_resources\":[],\"write_paths\":[\"src/limit.py\"],\"write_repository\":\"101\"}\n```",
+    "team_id": "00000000-0000-0000-0000-000000000003",
+    "project_id": "00000000-0000-0000-0000-000000000004",
+    "creator_id": "00000000-0000-0000-0000-000000000005",
+    "assignee_id": "00000000-0000-0000-0000-000000000005",
+    "parent_id": "00000000-0000-0000-0000-000000000064",
+    "state_id": "00000000-0000-0000-0000-000000000006",
+    "state_name": "Prepared",
+    "state_type": "unstarted",
+    "labels": [
+      {
+        "id": "00000000-0000-0000-0000-000000000014",
+        "name": "Codex",
+        "comparison_name": "codex"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000015",
+        "name": "Model",
+        "comparison_name": "model"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000016",
+        "name": "Reasoning",
+        "comparison_name": "reasoning"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000017",
+        "name": "Speed",
+        "comparison_name": "speed"
+      }
+    ],
+    "priority": 0,
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-02T00:00:00Z",
+    "url": "https://linear.app/evaluation/issue/EVAL-101",
+    "diagnostics": []
+  },
+  "parent": {
+    "id": "00000000-0000-0000-0000-000000000064",
+    "workspace_id": {
+      "$kegari": "linear_workspace"
+    },
+    "endpoint": {
+      "$kegari": "linear_endpoint"
+    },
+    "identifier": "EVAL-100",
+    "title": "Inclusive boundary with verified scoped child work",
+    "description": "Inclusive boundary with verified scoped child work\n\n```kegari\n{\"e2e_child\":\"00000000-0000-0000-0000-000000000066\",\"kind\":\"parent\",\"production_targets\":[],\"required_children\":[\"00000000-0000-0000-0000-000000000065\",\"00000000-0000-0000-0000-000000000066\",\"00000000-0000-0000-0000-000000000067\"],\"schema_version\":1,\"visual\":false}\n```",
+    "team_id": "00000000-0000-0000-0000-000000000003",
+    "project_id": "00000000-0000-0000-0000-000000000004",
+    "creator_id": "00000000-0000-0000-0000-000000000005",
+    "assignee_id": "00000000-0000-0000-0000-000000000005",
+    "parent_id": null,
+    "state_id": "00000000-0000-0000-0000-000000000006",
+    "state_name": "Prepared",
+    "state_type": "unstarted",
+    "labels": [
+      {
+        "id": "00000000-0000-0000-0000-000000000007",
+        "name": "Authorized",
+        "comparison_name": "authorized"
+      }
+    ],
+    "priority": 0,
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-02T00:00:00Z",
+    "url": "https://linear.app/evaluation/issue/EVAL-100",
+    "diagnostics": []
+  },
+  "children": {
+    "00000000-0000-0000-0000-000000000065": {
+      "parent_reference": {
+        "$kegari": "parent_reference"
+      },
+      "key": {
+        "endpoint": {
+          "$kegari": "linear_endpoint"
+        },
+        "workspace": {
+          "$kegari": "linear_workspace"
+        },
+        "issue": "00000000-0000-0000-0000-000000000065"
+      },
+      "issue": {
+        "id": "00000000-0000-0000-0000-000000000065",
+        "workspace_id": {
+          "$kegari": "linear_workspace"
+        },
+        "endpoint": {
+          "$kegari": "linear_endpoint"
+        },
+        "identifier": "EVAL-101",
+        "title": "CHILD-A",
+        "description": "CHILD-A: fix the inclusive limit within src/limit.py. Discover this repository's unfamiliar project tool from its current guidance and use it to validate the boundary; do not replace the tool or add Kegari configuration.\n\n```kegari\n{\"kind\":\"child\",\"read_repositories\":[],\"responsibility\":\"implementation\",\"schema_version\":1,\"test_resources\":[],\"write_paths\":[\"src/limit.py\"],\"write_repository\":\"101\"}\n```",
+        "team_id": "00000000-0000-0000-0000-000000000003",
+        "project_id": "00000000-0000-0000-0000-000000000004",
+        "creator_id": "00000000-0000-0000-0000-000000000005",
+        "assignee_id": "00000000-0000-0000-0000-000000000005",
+        "parent_id": "00000000-0000-0000-0000-000000000064",
+        "state_id": "00000000-0000-0000-0000-000000000006",
+        "state_name": "Prepared",
+        "state_type": "unstarted",
+        "labels": [
+          {
+            "id": "00000000-0000-0000-0000-000000000014",
+            "name": "Codex",
+            "comparison_name": "codex"
+          },
+          {
+            "id": "00000000-0000-0000-0000-000000000015",
+            "name": "Model",
+            "comparison_name": "model"
+          },
+          {
+            "id": "00000000-0000-0000-0000-000000000016",
+            "name": "Reasoning",
+            "comparison_name": "reasoning"
+          },
+          {
+            "id": "00000000-0000-0000-0000-000000000017",
+            "name": "Speed",
+            "comparison_name": "speed"
+          }
+        ],
+        "priority": 0,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        "url": "https://linear.app/evaluation/issue/EVAL-101",
+        "diagnostics": []
+      },
+      "scope": {
+        "schema_version": 1,
+        "kind": "child",
+        "responsibility": "implementation",
+        "write_repository": "101",
+        "write_paths": [
+          "src/limit.py"
+        ],
+        "read_repositories": [],
+        "test_resources": []
+      },
+      "profile": {
+        "$kegari": "profile"
+      },
+      "work": {
+        "$kegari": "child_work"
+      },
+      "blockers": [],
+      "prerequisites": []
+    },
+    "00000000-0000-0000-0000-000000000066": {
+      "parent_reference": {
+        "$kegari": "parent_reference"
+      },
+      "key": {
+        "endpoint": {
+          "$kegari": "linear_endpoint"
+        },
+        "workspace": {
+          "$kegari": "linear_workspace"
+        },
+        "issue": "00000000-0000-0000-0000-000000000066"
+      },
+      "issue": {
+        "id": "00000000-0000-0000-0000-000000000066",
+        "workspace_id": {
+          "$kegari": "linear_workspace"
+        },
+        "endpoint": {
+          "$kegari": "linear_endpoint"
+        },
+        "identifier": "EVAL-102",
+        "title": "CHILD-T",
+        "description": "CHILD-T: add equality regression to tests/check_limit.py; do not alter src. Run boundary checks. The host independently checks that the regression fails against the seeded exclusive implementation and passes against the inclusive implementation.\n\n```kegari\n{\"kind\":\"child\",\"read_repositories\":[],\"responsibility\":\"testing\",\"schema_version\":1,\"test_resources\":[],\"write_paths\":[\"tests/check_limit.py\"],\"write_repository\":\"101\"}\n```",
+        "team_id": "00000000-0000-0000-0000-000000000003",
+        "project_id": "00000000-0000-0000-0000-000000000004",
+        "creator_id": "00000000-0000-0000-0000-000000000005",
+        "assignee_id": "00000000-0000-0000-0000-000000000005",
+        "parent_id": "00000000-0000-0000-0000-000000000064",
+        "state_id": "00000000-0000-0000-0000-000000000006",
+        "state_name": "Prepared",
+        "state_type": "unstarted",
+        "labels": [
+          {
+            "id": "00000000-0000-0000-0000-000000000014",
+            "name": "Codex",
+            "comparison_name": "codex"
+          },
+          {
+            "id": "00000000-0000-0000-0000-000000000015",
+            "name": "Model",
+            "comparison_name": "model"
+          },
+          {
+            "id": "00000000-0000-0000-0000-000000000016",
+            "name": "Reasoning",
+            "comparison_name": "reasoning"
+          },
+          {
+            "id": "00000000-0000-0000-0000-000000000017",
+            "name": "Speed",
+            "comparison_name": "speed"
+          }
+        ],
+        "priority": 0,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        "url": "https://linear.app/evaluation/issue/EVAL-102",
+        "diagnostics": []
+      },
+      "scope": {
+        "schema_version": 1,
+        "kind": "child",
+        "responsibility": "testing",
+        "write_repository": "101",
+        "write_paths": [
+          "tests/check_limit.py"
+        ],
+        "read_repositories": [],
+        "test_resources": []
+      },
+      "profile": {
+        "$kegari": "profile"
+      },
+      "work": {
+        "$kegari": "child_work"
+      },
+      "blockers": [],
+      "prerequisites": []
+    },
+    "00000000-0000-0000-0000-000000000067": {
+      "parent_reference": {
+        "$kegari": "parent_reference"
+      },
+      "key": {
+        "endpoint": {
+          "$kegari": "linear_endpoint"
+        },
+        "workspace": {
+          "$kegari": "linear_workspace"
+        },
+        "issue": "00000000-0000-0000-0000-000000000067"
+      },
+      "issue": {
+        "id": "00000000-0000-0000-0000-000000000067",
+        "workspace_id": {
+          "$kegari": "linear_workspace"
+        },
+        "endpoint": {
+          "$kegari": "linear_endpoint"
+        },
+        "identifier": "EVAL-103",
+        "title": "CHILD-D",
+        "description": "CHILD-D: document the inclusive boundary in README.md with the exact additional sentence: Values equal to the limit are accepted. Validate boundary behavior.\n\n```kegari\n{\"kind\":\"child\",\"read_repositories\":[],\"responsibility\":\"documentation\",\"schema_version\":1,\"test_resources\":[],\"write_paths\":[\"README.md\"],\"write_repository\":\"101\"}\n```",
+        "team_id": "00000000-0000-0000-0000-000000000003",
+        "project_id": "00000000-0000-0000-0000-000000000004",
+        "creator_id": "00000000-0000-0000-0000-000000000005",
+        "assignee_id": "00000000-0000-0000-0000-000000000005",
+        "parent_id": "00000000-0000-0000-0000-000000000064",
+        "state_id": "00000000-0000-0000-0000-000000000006",
+        "state_name": "Prepared",
+        "state_type": "unstarted",
+        "labels": [
+          {
+            "id": "00000000-0000-0000-0000-000000000014",
+            "name": "Codex",
+            "comparison_name": "codex"
+          },
+          {
+            "id": "00000000-0000-0000-0000-000000000015",
+            "name": "Model",
+            "comparison_name": "model"
+          },
+          {
+            "id": "00000000-0000-0000-0000-000000000016",
+            "name": "Reasoning",
+            "comparison_name": "reasoning"
+          },
+          {
+            "id": "00000000-0000-0000-0000-000000000017",
+            "name": "Speed",
+            "comparison_name": "speed"
+          }
+        ],
+        "priority": 0,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        "url": "https://linear.app/evaluation/issue/EVAL-103",
+        "diagnostics": []
+      },
+      "scope": {
+        "schema_version": 1,
+        "kind": "child",
+        "responsibility": "documentation",
+        "write_repository": "101",
+        "write_paths": [
+          "README.md"
+        ],
+        "read_repositories": [],
+        "test_resources": []
+      },
+      "profile": {
+        "$kegari": "profile"
+      },
+      "work": {
+        "$kegari": "child_work"
+      },
+      "blockers": [],
+      "prerequisites": []
+    }
+  },
+  "scope": {
+    "schema_version": 1,
+    "kind": "child",
+    "responsibility": "implementation",
+    "write_repository": "101",
+    "write_paths": [
+      "src/limit.py"
+    ],
+    "read_repositories": [],
+    "test_resources": []
+  },
+  "phase": {
+    "$kegari": "phase"
+  },
+  "workspace": {
+    "id": {
+      "$kegari": "workspace_id"
+    },
+    "name": "Kegari evaluation",
+    "repositories": [
+      "101"
+    ]
+  },
+  "dependencies": [],
+  "corrections": {
+    "revisions": {},
+    "classes": {},
+    "pending": [],
+    "corrective_history": [],
+    "known_corrective_ids": [],
+    "watermark": 0
+  },
+  "evidence": {
+    "children": [],
+    "parent": null,
+    "acceptance": null,
+    "history": [],
+    "release": null,
+    "native_context": {
+      "authority": "untrusted_native_source_material",
+      "observations": {
+        "00000000-0000-0000-0000-000000000064": {
+          "issue": {
+            "id": "00000000-0000-0000-0000-000000000064",
+            "workspace_id": {
+              "$kegari": "linear_workspace"
+            },
+            "endpoint": {
+              "$kegari": "linear_endpoint"
+            },
+            "identifier": "EVAL-100",
+            "title": "Inclusive boundary with verified scoped child work",
+            "description": "Inclusive boundary with verified scoped child work\n\n```kegari\n{\"e2e_child\":\"00000000-0000-0000-0000-000000000066\",\"kind\":\"parent\",\"production_targets\":[],\"required_children\":[\"00000000-0000-0000-0000-000000000065\",\"00000000-0000-0000-0000-000000000066\",\"00000000-0000-0000-0000-000000000067\"],\"schema_version\":1,\"visual\":false}\n```",
+            "team_id": "00000000-0000-0000-0000-000000000003",
+            "project_id": "00000000-0000-0000-0000-000000000004",
+            "creator_id": "00000000-0000-0000-0000-000000000005",
+            "assignee_id": "00000000-0000-0000-0000-000000000005",
+            "parent_id": null,
+            "state_id": "00000000-0000-0000-0000-000000000006",
+            "state_name": "Prepared",
+            "state_type": "unstarted",
+            "labels": [
+              {
+                "id": "00000000-0000-0000-0000-000000000007",
+                "name": "Authorized",
+                "comparison_name": "authorized"
+              }
+            ],
+            "priority": 0,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+            "url": "https://linear.app/evaluation/issue/EVAL-100",
+            "diagnostics": []
+          },
+          "comments": [
+            {
+              "$kegari": "authorization_comment"
+            }
+          ],
+          "history": [
+            {
+              "id": "00000000-0000-0000-0000-000000000384",
+              "actor_id": "00000000-0000-0000-0000-000000000005",
+              "actor_ids": [
+                "00000000-0000-0000-0000-000000000005"
+              ],
+              "bot": false,
+              "added_labels": [
+                "00000000-0000-0000-0000-000000000007"
+              ],
+              "removed_labels": [],
+              "created_at": "2026-01-03T00:00:00Z",
+              "updated_at": "2026-01-03T00:00:00Z",
+              "from_parent": null,
+              "to_parent": null,
+              "description_updated": false
+            }
+          ],
+          "dependencies": []
+        },
+        "00000000-0000-0000-0000-000000000065": {
+          "issue": {
+            "id": "00000000-0000-0000-0000-000000000065",
+            "workspace_id": {
+              "$kegari": "linear_workspace"
+            },
+            "endpoint": {
+              "$kegari": "linear_endpoint"
+            },
+            "identifier": "EVAL-101",
+            "title": "CHILD-A",
+            "description": "CHILD-A: fix the inclusive limit within src/limit.py. Discover this repository's unfamiliar project tool from its current guidance and use it to validate the boundary; do not replace the tool or add Kegari configuration.\n\n```kegari\n{\"kind\":\"child\",\"read_repositories\":[],\"responsibility\":\"implementation\",\"schema_version\":1,\"test_resources\":[],\"write_paths\":[\"src/limit.py\"],\"write_repository\":\"101\"}\n```",
+            "team_id": "00000000-0000-0000-0000-000000000003",
+            "project_id": "00000000-0000-0000-0000-000000000004",
+            "creator_id": "00000000-0000-0000-0000-000000000005",
+            "assignee_id": "00000000-0000-0000-0000-000000000005",
+            "parent_id": "00000000-0000-0000-0000-000000000064",
+            "state_id": "00000000-0000-0000-0000-000000000006",
+            "state_name": "Prepared",
+            "state_type": "unstarted",
+            "labels": [
+              {
+                "id": "00000000-0000-0000-0000-000000000014",
+                "name": "Codex",
+                "comparison_name": "codex"
+              },
+              {
+                "id": "00000000-0000-0000-0000-000000000015",
+                "name": "Model",
+                "comparison_name": "model"
+              },
+              {
+                "id": "00000000-0000-0000-0000-000000000016",
+                "name": "Reasoning",
+                "comparison_name": "reasoning"
+              },
+              {
+                "id": "00000000-0000-0000-0000-000000000017",
+                "name": "Speed",
+                "comparison_name": "speed"
+              }
+            ],
+            "priority": 0,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+            "url": "https://linear.app/evaluation/issue/EVAL-101",
+            "diagnostics": []
+          },
+          "comments": [],
+          "history": [],
+          "dependencies": []
+        }
+      },
+      "pending_correction_comments": []
+    }
+  },
+  "attempt": null,
+  "profile": {
+    "$kegari": "profile"
+  },
+  "operation": {
+    "id": {
+      "$kegari": "operation_id"
+    },
+    "work": {
+      "$kegari": "authorized_work"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-# Codex protocol and isolation profile
+# Codex protocol and execution integration
 
 The protocol client, session/history data, request gates, deadlines, protocol
 recovery, observations and stream framing/I/O live in `kegari-codex`. Backend
@@ -7,6 +7,12 @@ process cleanup. Protected journals, actual receipt lineage, joined recovery and
 resume admission stay in the backend. `ResumeCandidate` supplies consistent data;
 it cannot construct `worker_run::RetainedResumeSession` or authorize execution.
 Stream EOF is not owned process-exit or successful-work evidence.
+
+**Migration status:** [SPEC 1.5](../SPEC.md) makes Codex app-server the repository
+execution layer. The ordinary admitted child path uses native tools and the old
+repository executor has been removed. Remaining integrations and focused checks
+are tracked in [PROGRESS.md](../PROGRESS.md); live qualification is pending.
+The pinned protocol client and protected workflow/session recovery remain useful.
 
 The adapter targets **codex-cli 0.164.0-alpha.11.1**, profile
 `kegari-codex-0.164.0-alpha.11.1-v1`. Its deterministic tests pass; live account,
@@ -46,37 +52,35 @@ fallback.
 
 ## Production path
 
-1. Validate and snapshot the isolated execution boundary and role.
-2. Generate a unique named permission profile with a default-deny filesystem,
-   explicit source reads/writes, separate private scratch, denied authentication
-   and controller roots, and disabled worker networking. Hooks and checks use
-   the corresponding macOS Seatbelt runner, never an unconfined fallback.
-3. Start the verified executable with an explicitly configured owner-only Codex
-   auth home and minimal environment. Initialization verifies the returned auth
-   home. No Codex internal database is accessed.
-4. Verify a ChatGPT login and its stable `workspaceRouting.chatgptAccountId`.
-   Email is not the account identity. Missing stable identity blocks execution;
-   API-key/other-provider login cannot supply a fallback.
-5. Fetch the complete authenticated model catalog and validate model, reasoning
-   and speed. `standard` sends `default`; `fast` requires the catalog to advertise
-   `priority`. The adapter refuses a changed model or speed.
-6. Read effective configuration and compare permission rules and relevant feature
-   settings before thread admission. Legacy sandbox overrides and enabled MCP
-   servers block execution. Apps, plugins, browser/computer use, image generation,
-   multi-agent delegation, provider hooks and memory are disabled in this profile.
-   Coordination/independent review additionally disable shell execution.
-7. Assemble instructions using the production instruction module and retain its
-   manifest. Supply only implemented role/phase tools. Start a new bound thread,
-   or resume only matching account/work/instruction/scope/profile identities.
-   Provider `instructionSources` is retained separately from supplied content.
-8. Before each turn, persist the host's admitted operation and attempt budget.
-   The transport counts a turn before sending: a lost response is not free work.
-   A timed-out request fences that transport against another mutation. Recovery
-   must reconnect and reconcile, not repeat an uncertain operation.
-9. Consume normalized events and persist current recovery state through the host's
-   durable receipt writer. An accepted steer does not consume a correction;
-   only the host-verified outcome watermark does. Completion racing a start/steer
-   response is covered by regression tests.
+The migrated path follows the existing operation and session boundaries:
+
+1. Admit current work, source, role, account and finite attempt/turn limits.
+   Configure the selected Codex profile's supported permissions; missing required
+   capabilities block the affected role specifically. Independent PR review must
+   not execute repository code; filesystem read-only access alone is insufficient.
+2. Launch the verified pinned app-server with the authorized private Codex home.
+   Verify the returned authentication home, stable ChatGPT account identity and
+   complete model catalog. Model, reasoning and speed must match the selected
+   supported profile; no paid provider fallback or silent version upgrade applies.
+3. Verify effective supported permissions, assemble the role-scoped context and
+   retain its manifest. Native Codex tools provide repository reads, edits and
+   commands. Kegari exposes only needed workflow/provider tools. A thread may
+   resume only with compatible account, work, instructions, scope and profile.
+4. Persist admission before changing protocol requests. The bounded transport
+   write uses the existing request gate; response waits and callbacks remain
+   outside the control mutex. A lost response is uncertain, not permission to
+   resend or obtain free turns.
+5. Consume supported command/file and lifecycle events, retaining operation,
+   thread, turn, item and source associations and available results. Unknown facts
+   stay unknown. Kegari applies its required-check, review and acceptance gates;
+   model prose and successful transport do not establish successful work.
+
+Codex owns internal command launch, sandbox enforcement and supported terminal
+management. Kegari must not recreate a shell/file executor, resource catalog,
+per-command admission or process journal around those events. Its actual owned
+app-server and deterministic Git/control processes retain their existing host
+launch and recovery machinery. Old execution evidence keeps its original meaning;
+it cannot silently become Codex-native result evidence.
 
 The host must retain account/work intervention holds across *all* sessions. The
 session state alone cannot enforce a host-wide ban on replacement work. It must
@@ -112,8 +116,9 @@ drained independently and never parsed as protocol or copied into public status.
 There is deliberately no “clear intervention” assertion API. The pinned schema
 alone does not prove which supported verification/policy resolution permits
 resumption of each intervention. A live qualification record must establish that
-flow before the host may implement/use a clearing transition. A new model,
-account, thread or retry must not bypass it. This missing qualification is an
+flow before operational use of a clearing transition. Source implementation may
+proceed under the focused-validation policy without claiming that live resolution
+is qualified. A new model, account, thread or retry must not bypass it. This missing qualification is an
 outstanding §7.3 requirement, not a completed recovery capability.
 
 ## Local probes and limitations
@@ -149,7 +154,11 @@ and failure; never convert these missing checks into passes.
 
 ## Deterministic evidence
 
-From the Rust repository:
+During implementation use the smallest relevant existing check for changed
+behavior. Comprehensive coverage and authorized actual-agent qualification belong
+to milestone 0.7, after core flows work. These focused commands are references,
+not a mandatory sequence for every increment:
+
 
 ```sh
 CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo +stable test --offline --locked -p kegari-codex
@@ -164,15 +173,15 @@ malformed/oversized frames, exact outgoing pinned schemas, input/tool refusal,
 complete model pagination failure, native review, resume context, correction and
 completion races, duplicate notifications, persistent policy/verification holds,
 transient buffering, request timeout and no second mutation, account/profile
-binding, cumulative usage, traversal/symlink/hardlink rejection, role boundaries,
-minimal environments and candidate-relative artifact/executable resolution.
+binding and cumulative usage. Retain applicable role/source-boundary checks
+while removing tests that enforce the superseded repository executor.
 They use controlled duplex transports and files; they do **not** count as actual
 agent behavior trials, real provider validation or complete V0-T10/12/14/34
 qualification.
 
 ## Metadata-only connection verification
 
-`codex::probe_connection` implements explicit setup/reconnect verification using
+`codex_host::probe_connection` implements explicit setup/reconnect verification using
 an authorized private Codex home and the caller's narrow probe permission plan.
 It runs the pinned version probe, initializes stdio app-server, reads the exact
 ChatGPT account without token refresh, enumerates its model catalog, reads
@@ -184,13 +193,15 @@ and terminates its owned process on success or failure. This implementation has
 only been exercised with finite deterministic protocol responses in this build;
 no native account/authentication probe was invoked.
 
-Native built-in shell execution is disabled for every role. Repository command
-execution uses the host's declared validation/Git tools and its independently
-checked execution boundary. Disposable test-resource write grants are separate
-from product-source grants and are included in the exact permission digest.
-Group exit and closed stdio do not establish all-descendant containment if a
-process can detach; this remains an explicit native qualification prerequisite.
+The ordinary worker path now uses Codex-native repository tools; the competing
+custom executor has been removed. The migrated path checks Codex version,
+supported permissions and required capabilities directly. Remaining integration
+and qualification work is recorded in [PROGRESS.md](../PROGRESS.md); unavailable
+capabilities are specific refusals, not a reason to rebuild a second executor.
+App-server exit or closed streams do not prove arbitrary descendants stopped;
+use supported Codex lifecycle observations and preserve uncertainty.
 
+## Session recovery
 
 Before a recorded thread is resumed, `thread/read` with `includeTurns: true`
 reobserves its exact account, thread identity, private cwd, provider and complete

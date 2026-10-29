@@ -51,6 +51,7 @@ fn host<'a>(
     operand: Option<&'a OwnedCanaryPathOperand>,
 ) -> HostContext<'a> {
     HostContext {
+        child: None,
         workspace: case.owner.identity.workspace,
         operation: case.owner.identity.operation,
         profile: &case.suite.profiles[0].binding.as_ref().unwrap().profile,

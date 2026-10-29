@@ -16,6 +16,10 @@ pub struct ValidationEvidence {
     /// All completed attempts retained by the original validation worker,
     /// including superseded-plan and failed attempts. Never a success-only list.
     pub attempts: Vec<CheckExecutionRecord>,
+    /// Earlier source/admission histories, kept as original immutable segments.
+    /// Only this record's current attempts can satisfy its current obligations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_history: Vec<ValidationEvidence>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -96,12 +100,56 @@ impl ValidationEvidence {
         revision: &RevisionBinding,
         kind: CheckKind,
     ) -> Result<()> {
-        if self.schema_version != if kind == CheckKind::Local { 1 } else { 2 }
+        self.validate_history_kind(work, revision, kind, true)
+    }
+
+    pub(crate) fn validate_observed_history(&self) -> Result<()> {
+        let current = self.current()?;
+        let revision = RevisionBinding {
+            repository: current.binding.repository.clone(),
+            head: current.binding.revision.commit.clone(),
+            base: current.binding.revision.commit.clone(),
+            tested_commit: current.binding.revision.commit.clone(),
+            tested_tree: current.binding.revision.tree.clone(),
+        };
+        self.validate_history_kind(
+            &current.binding.work,
+            &revision,
+            current.kind.clone(),
+            false,
+        )
+    }
+
+    pub(crate) fn all_attempts(&self) -> impl Iterator<Item = &CheckExecutionRecord> {
+        self.prior_history
+            .iter()
+            .flat_map(|prior| prior.attempts.iter())
+            .chain(&self.attempts)
+    }
+    pub(crate) fn history_count(&self) -> usize {
+        self.history.len()
+            + self
+                .prior_history
+                .iter()
+                .map(|prior| prior.history.len())
+                .sum::<usize>()
+    }
+
+    fn validate_history_kind(
+        &self,
+        work: &WorkIdentity,
+        revision: &RevisionBinding,
+        kind: CheckKind,
+        require_pass: bool,
+    ) -> Result<()> {
+        let schema = if kind == CheckKind::Local { 3 } else { 4 }
+            + if self.prior_history.is_empty() { 0 } else { 2 };
+        if self.schema_version != schema
             || !self.original_cwd.is_absolute()
             || self.history.is_empty()
-            || self.history.len() > MAX_VALIDATION_HISTORY
-            || self.attempts.is_empty()
-            || self.attempts.len() > 2048
+            || self.history_count() > MAX_VALIDATION_HISTORY
+            || require_pass && self.attempts.is_empty()
+            || self.all_attempts().count() > 2048
             || serde_json::to_vec(self)
                 .map_err(|_| Error::invalid("encode validation evidence"))?
                 .len()
@@ -145,6 +193,45 @@ impl ValidationEvidence {
             previous = Some(plan);
         }
         let current = self.current()?;
+        let mut previous_operations = BTreeSet::new();
+        let mut previous_time = None;
+        for prior in &self.prior_history {
+            if !prior.prior_history.is_empty() {
+                return Err(Error::new(
+                    "validation_gate",
+                    "retained validation history must be a flat bounded prefix",
+                ));
+            }
+            prior.validate_observed_history()?;
+            let old = prior.current()?;
+            if old.kind != kind
+                || old.binding.work != *work
+                || old.binding.runtime_id != current.binding.runtime_id
+                || old.binding.repository != current.binding.repository
+                || old.workflow_digest != current.workflow_digest
+                // Prior integrated results remain historical across a freshly
+                // admitted parent vector. They never enter current selection;
+                // all current attempts still bind the exact new vector below.
+                || kind != CheckKind::Integrated
+                    && old.binding.candidate_vector_digest != current.binding.candidate_vector_digest
+                || old.binding.operation_id == current.binding.operation_id
+                || old.created_at > current.created_at
+                || previous_time.is_some_and(|time| old.created_at < time)
+                || !previous_operations.insert(old.binding.operation_id)
+                || old.requirements.iter().any(|requirement| {
+                    !current
+                        .requirements
+                        .iter()
+                        .any(|new| new.id == requirement.id)
+                })
+            {
+                return Err(Error::new(
+                    "validation_gate",
+                    "continued validation changed ownership, removed an obligation or relabelled a prior source result",
+                ));
+            }
+            previous_time = Some(old.created_at);
+        }
         if canonical_digest(1, current)? != self.plan_digest
             || &current.binding.work != work
             || current.binding.repository != revision.repository
@@ -159,24 +246,37 @@ impl ValidationEvidence {
         let mut invocations = BTreeSet::new();
         for attempt in &self.attempts {
             attempt.validate_shape()?;
-            let provenance = attempt.discovered.as_ref().ok_or_else(|| {
+            let provenance = attempt.codex.as_ref().ok_or_else(|| {
                 Error::new(
-                    "validation_gate",
-                    "named execution cannot stand in for a discovered attempt",
+                    "legacy_execution_evidence",
+                    "validation needs native Codex provenance",
                 )
             })?;
-            let plan = plans.get(&provenance.plan_digest).ok_or_else(|| {
+            let retained_plan = provenance.plan.as_ref().ok_or_else(|| {
+                Error::new(
+                    "validation_gate",
+                    "native result has no discovered obligation",
+                )
+            })?;
+            let digest = canonical_digest(1, retained_plan)?;
+            let plan = plans.get(&digest).ok_or_else(|| {
                 Error::new(
                     "validation_gate",
                     "attempt is outside the retained plan history",
                 )
             })?;
-            if attempt.evidence_class != ExecutionEvidenceClass::ConfinedExecution
-                || canonical_digest(1, *plan)? != canonical_digest(1, &provenance.plan)?
+            if attempt.evidence_class != ExecutionEvidenceClass::CodexExecution
+                || canonical_digest(1, *plan)? != digest
                 || attempt.binding != plan.binding
                 || attempt.started_at < plan.created_at
                 || attempt.kind != kind
-                || !invocations.insert(provenance.invocation_id)
+                || !invocations.insert((
+                    attempt.binding.operation_id,
+                    &provenance.thread_id,
+                    &provenance.turn_id,
+                    &provenance.item_id,
+                    &attempt.check_name,
+                ))
             {
                 return Err(Error::new(
                     "validation_gate",
@@ -184,7 +284,9 @@ impl ValidationEvidence {
                 ));
             }
         }
-        self.selected()?;
+        if require_pass {
+            self.selected()?;
+        }
         Ok(())
     }
 
@@ -202,9 +304,12 @@ impl ValidationEvidence {
                 .iter()
                 .filter(|r| {
                     r.check_name == requirement.id
-                        && r.discovered
+                        && r.codex
                             .as_ref()
-                            .is_some_and(|p| p.plan_digest == self.plan_digest)
+                            .and_then(|p| p.plan.as_ref())
+                            .is_some_and(|p| {
+                                canonical_digest(1, p).ok().as_deref() == Some(&self.plan_digest)
+                            })
                 })
                 .collect();
             matching.sort_by_key(|r| r.completed_at);
@@ -240,14 +345,14 @@ impl ValidationEvidence {
             .map(|r| {
                 Ok(CheckRun {
                     id: r.check_name.clone(),
-                    kind: CheckKind::Local,
+                    kind: r.kind.clone(),
                     operation_id: r.binding.operation_id,
                     work_digest: r.binding.work.digest()?,
                     revision: revision.clone(),
                     workflow_id: None,
                     run_id: None,
                     attempt: 1,
-                    runner: Runner::LocalSandbox,
+                    runner: Runner::Codex,
                     command: r.command.argv.clone(),
                     environment_identity: r.command.isolation_digest.clone(),
                     started_at: Some(r.started_at),
@@ -271,11 +376,13 @@ impl ValidationEvidence {
             .into_iter()
             .map(|record| canonical_digest(1, record))
             .collect::<Result<BTreeSet<_>>>()?;
-        let records = self.attempts.iter().map(|record| {
+        let records = self.all_attempts().map(|record| {
             let digest = canonical_digest(1, record)?;
-            let provenance = record.discovered.as_ref().ok_or_else(|| Error::new("validation_gate", "review attempt lacks discovered provenance"))?;
+            let provenance = record.codex.as_ref().ok_or_else(|| Error::new("validation_gate", "review attempt lacks native provenance"))?;
+            let plan = provenance.plan.as_ref().ok_or_else(|| Error::new("validation_gate", "review attempt lacks discovered enrollment"))?;
             Ok(serde_json::json!({"record_digest":digest,"obligation_id":record.check_name,
-                "plan_digest":provenance.plan_digest,"invocation_id":provenance.invocation_id,
+                "plan_digest":canonical_digest(1, plan)?,"operation_id":record.binding.operation_id,
+                "thread_id":provenance.thread_id,"turn_id":provenance.turn_id,"item_id":provenance.item_id,
                 "successful":record.successful,"started_at":record.started_at,"completed_at":record.completed_at,
                 "selected":selected.contains(&digest)}))
         }).collect::<Result<Vec<_>>>()?;
@@ -325,6 +432,41 @@ impl ValidationEvidence {
                         "configured required check has not run",
                     )
                 })?;
+            if !configured.result_artifact.is_empty() {
+                let declared = std::path::Path::new(&configured.result_artifact);
+                let expected = if declared.is_absolute() {
+                    declared.to_path_buf()
+                } else {
+                    self.original_cwd.join(declared)
+                };
+                let enrolled = requirement.artifacts.iter().any(|path| {
+                    let path = std::path::Path::new(path);
+                    let path = if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        actual.command.cwd.join(path)
+                    };
+                    path == expected
+                });
+                if !enrolled
+                    || !actual
+                        .artifacts
+                        .iter()
+                        .any(|artifact| artifact.path == expected)
+                    || !actual.codex.as_ref().is_some_and(|codex| {
+                        codex.schema_version == 2
+                            && codex
+                                .artifact_freshness
+                                .iter()
+                                .any(|fresh| fresh.path == expected)
+                    })
+                {
+                    return Err(Error::new(
+                        "validation_gate",
+                        "configured result artifact lacks its enrolled fresh native output",
+                    ));
+                }
+            }
             if requirement.argv != configured.argv
                 || requirement.services != configured.services
                 || actual.command.cwd != self.original_cwd
@@ -355,8 +497,7 @@ impl ValidationEvidence {
             ));
         }
         let all = self
-            .attempts
-            .iter()
+            .all_attempts()
             .map(|r| canonical_digest(1, r))
             .collect::<Result<BTreeSet<_>>>()?;
         for selected in self.selected()? {

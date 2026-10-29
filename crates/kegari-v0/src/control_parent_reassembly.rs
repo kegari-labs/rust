@@ -87,10 +87,11 @@ impl ParentReassemblyReference {
             || self.phase.generation != canonical_digest(1, &self.worker_work.generation)?
             || !matches!(
                 self.phase.phase.as_str(),
-                "parent_integrated_validation" | "parent_evidence_review"
+                "parent_integrated_validation"
+                    | "parent_integrated_review"
+                    | "parent_evidence_review"
             )
-            || (self.phase.phase == "parent_integrated_validation")
-                != self.worker_work.child.is_some()
+            || (self.phase.phase != "parent_evidence_review") != self.worker_work.child.is_some()
             || self.attempt < if self.retry_of.is_some() { 1 } else { 2 }
             || self.attempt > self.max_attempts
             || self.max_turns == 0

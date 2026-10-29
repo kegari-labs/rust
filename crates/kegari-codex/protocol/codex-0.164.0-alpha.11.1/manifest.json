@@ -215,6 +215,30 @@
       "source_path": "v2/ThreadReadResponse.json",
       "source_sha256": "1bfe56f686a9810f9e28ff7e025b2d30662866f140f7430d606a03638e01c5a8",
       "sha256": "06f1a6079d02a56e5c09a4008695b1c94753ed11846f0aa0257ec5d3f247cf56"
+    },
+    {
+      "file": "v2_CommandExecParams.json",
+      "source_path": "v2/CommandExecParams.json",
+      "source_sha256": "fd034b4c85d7b6f466e30a3cbb73db86be1263aca3f81b89b547f14817dfb62e",
+      "sha256": "add1d3d355da803c2101e8e708e6d9399635ca0d646b49f9a44add0cf97e7c8d"
+    },
+    {
+      "file": "v2_CommandExecResponse.json",
+      "source_path": "v2/CommandExecResponse.json",
+      "source_sha256": "dec52d187121e8dd48124b47a4a8d8428ef3717b98b9200345bb404f73b62c9d",
+      "sha256": "e4984f8ce28944c5c92a8aab474f16b6c9ff7a613660cca8db020b4107a49df5"
+    },
+    {
+      "file": "v2_CommandExecTerminateParams.json",
+      "source_path": "v2/CommandExecTerminateParams.json",
+      "source_sha256": "979ece7059c6713d0909ab1690daec27149510f4ea2ec10014600bfb1d631c97",
+      "sha256": "b56133ad59c21ea6ddf0857e7d4917b24e4de4152a3e9e25405640d30f7bef36"
+    },
+    {
+      "file": "v2_CommandExecTerminateResponse.json",
+      "source_path": "v2/CommandExecTerminateResponse.json",
+      "source_sha256": "d46aa76d952bb3ac95d0bd64de609fb8a82efd98d9ee38264fe3673fd184ce5d",
+      "sha256": "8b1510e41340b84f3f860848c7e7db2c92d6b11e1e5cb1961669dfc833651e8a"
     }
   ],
   "attribution": {

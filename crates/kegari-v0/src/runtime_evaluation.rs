@@ -62,6 +62,7 @@ struct VerifiedEvaluationRequest {
 }
 struct PreparedEvaluation {
     canary_context_required: bool,
+    child_evidence_digest: Option<String>,
     source: Arc<VerifiedEvaluationSource>,
     authority: WorkerAuthority,
 }
@@ -72,6 +73,30 @@ struct PendingEvaluation {
     report_root: PathBuf,
     observed: Result<crate::evaluation::TrialReport>,
     terminal: Result<EvaluationTerminal>,
+}
+fn fresh_child_responsibility(
+    variant: &crate::evaluation::Variant,
+) -> Option<crate::authority::Responsibility> {
+    use crate::authority::Responsibility;
+    use kegari_context::instructions::AgentRole;
+    if variant.phase != "implementation" {
+        return None;
+    }
+    match (variant.case_id.as_str(), variant.id.as_str(), variant.role) {
+        ("V0-E01", "implementation", AgentRole::Implementation)
+        | ("V0-E02", "no_change", AgentRole::Implementation)
+        | (
+            "V0-E09",
+            "unfamiliar_tool" | "stale_guidance" | "unavailable_capability" | "unborn_repository",
+            AgentRole::Implementation,
+        ) => Some(Responsibility::Implementation),
+        ("V0-E01", "testing", AgentRole::Testing)
+        | ("V0-E09", "missing_tests", AgentRole::Testing) => Some(Responsibility::Testing),
+        ("V0-E01", "documentation", AgentRole::Documentation) => {
+            Some(Responsibility::Documentation)
+        }
+        _ => None,
+    }
 }
 impl VerifiedEvaluationRequest {
     fn current(
@@ -181,11 +206,14 @@ impl VerifiedEvaluationRequest {
             )
         })?;
         if operation != self.request.request_id
-            || phase.phase != "independent_review"
+            || phase.phase != self.variant.phase
             || phase.retry_grant.is_some()
             || max_turns > self.variant.bounds.max_turns
             || phase.work != authority.work_key()?
-            || !matches!(authority, WorkerAuthority::Independent(_))
+            || (self.binding.child.is_none()
+                && !matches!(authority, WorkerAuthority::Independent(_)))
+            || (self.binding.child.is_some()
+                && !matches!(authority, WorkerAuthority::Authorized(gate) if Some(gate.work().parent)==self.binding.child.as_ref().map(|c|c.parent_id) && gate.work().child==self.binding.child.as_ref().map(|c|c.child_id)))
         {
             return Err(Error::new(
                 "evaluation_fidelity",
@@ -207,7 +235,7 @@ impl VerifiedEvaluationRequest {
         if prepared.authority.digest()? != authority.digest()? {
             return Err(Error::new(
                 "evaluation_fidelity",
-                "original independent review authority changed",
+                "original evaluation authority changed",
             ));
         }
         authority.compare(&runtime.current_admission_authority(authority)?)?;
@@ -376,17 +404,24 @@ impl RuntimeCoordinator {
                     "declared model/account profile remains unresolved",
                 )
             })?;
+        let role_supported = if binding.child.is_some() {
+            trial.repetition == 1
+                && fresh_child_responsibility(&variant).is_some()
+                && ((variant.id == "unborn_repository") == (binding.schema_version == 3))
+        } else {
+            variant.phase == "independent_review"
+                && variant.role == kegari_context::instructions::AgentRole::IndependentReview
+                && configured.profiles.independent_review.as_ref() == Some(&profile.profile)
+        };
         if variant.bounds.max_turns > configuration.runtime.max_turns
-            || variant.phase != "independent_review"
-            || variant.role != kegari_context::instructions::AgentRole::IndependentReview
+            || !role_supported
             || !matches!(variant.seed, crate::evaluation::Seed::Fresh)
-            || configured.profiles.independent_review.as_ref() != Some(&profile.profile)
             || configuration.connections[&configured.codex_connection].account_id
                 != profile.account_id
         {
             return Err(Error::new(
                 "evaluation_fidelity",
-                "first native evaluator requires the exact migrated fresh independent-review contract",
+                "native evaluator requires an exact migrated fresh review or first child-trial contract",
             ));
         }
         let lease = self.control.active_lease()?;
@@ -557,7 +592,7 @@ impl RuntimeCoordinator {
             })? = Some(source.clone());
             Ok(())
         })?;
-        let projection = self
+        let mut projection = self
             .observations
             .refresh_bounded(
                 proof
@@ -566,30 +601,152 @@ impl RuntimeCoordinator {
                     .min(std::time::Duration::from_secs(60)),
             )
             .await?;
-        let gate = projection.independent_gate(
-            proof.workspace,
-            proof.binding.repository_id,
-            proof.subject.number(),
-            Utc::now(),
-            Duration::seconds(30),
-        )?;
-        if gate.pull_request().base_sha != source.base().commit
-            || gate.pull_request().head_sha != source.head().commit
-        {
-            return Err(Error::new(
-                "evaluation_fidelity",
-                "native independent gate differs from actual supplied Git objects",
-            ));
+        let authority = if let Some(child) = &proof.binding.child {
+            let parent = projection.parent(proof.workspace, child.parent_id)?;
+            if !parent.authorization_published {
+                let gate = parent.authorization_gate(Utc::now(), Duration::seconds(30))?;
+                let owner = self.clone();
+                let checked = proof.clone();
+                let checked_source = source.digest().to_owned();
+                let publisher = Arc::new(crate::preparation::AuthorizationPublisher::with_inputs(
+                    self.configuration.clone(),
+                    self.control.clone(),
+                    self.observations.clone(),
+                    self.services.secrets.clone(),
+                    self.services.key.clone(),
+                    self.services.inputs.clone(),
+                    Arc::new(move |lease| {
+                        // This callback also runs under ControlHost serialization.
+                        // It must not reenter control or observe a replacement command.
+                        owner.verify_owner(lease)?;
+                        checked.deadline.remaining()?;
+                        let config = owner.configuration.snapshot()?;
+                        crate::control_command::verify_current_actor(
+                            &config,
+                            &checked.actor,
+                            "evaluate",
+                        )?;
+                        let fences = owner.configuration.authority_fences()?;
+                        fences.check_actor(&checked.actor, "evaluate")?;
+                        fences.check_workspace(checked.workspace)?;
+                        owner
+                            .services
+                            .inputs
+                            .evaluation_providers()
+                            .ok_or_else(|| {
+                                Error::new(
+                                    "evaluation_unavailable",
+                                    "evaluation registry disappeared",
+                                )
+                            })?
+                            .verify_active(
+                                checked.workspace,
+                                checked.request.request_id,
+                                &checked_source,
+                            )
+                    }),
+                ));
+                // Keep polling this owned publication through its normal bounded
+                // provider requests and retirement. The outer deadline fences;
+                // it never drops a Sent publication future and invents its exit.
+                publisher.publish(&proof.lease, gate).await?;
+                proof.deadline.remaining()?;
+                projection = self
+                    .observations
+                    .refresh_bounded(
+                        proof
+                            .deadline
+                            .remaining()?
+                            .min(std::time::Duration::from_secs(60)),
+                    )
+                    .await?;
+            }
+            let parent = projection.parent(proof.workspace, child.parent_id)?;
+            let gate = parent.fresh_gate(
+                Some(child.child_id),
+                crate::reconcile::GatePurpose::NewOperation,
+                &self.dependency_outcomes()?,
+                Utc::now(),
+                Duration::seconds(30),
+            )?;
+            if gate.child_scope().is_none_or(|scope| {
+                Some(scope.responsibility.clone()) != fresh_child_responsibility(&proof.variant)
+                    || scope.write_repository.as_deref()
+                        != Some(proof.binding.repository_id.to_string().as_str())
+            }) {
+                return Err(Error::new(
+                    "evaluation_fidelity",
+                    "fresh child responsibility or repository differs from the declared trial",
+                ));
+            }
+            let declared_profile = proof
+                .suite
+                .profiles
+                .iter()
+                .find(|p| p.name == proof.trial.profile)
+                .and_then(|p| p.binding.as_ref())
+                .ok_or_else(|| Error::invalid("evaluation profile missing"))?;
+            if gate.profile() != &declared_profile.profile {
+                return Err(Error::new(
+                    "evaluation_fidelity",
+                    "actual child routing differs from declared profile",
+                ));
+            }
+            WorkerAuthority::Authorized(gate)
+        } else {
+            let gate = projection.independent_gate(
+                proof.workspace,
+                proof.binding.repository_id,
+                proof.subject.number(),
+                Utc::now(),
+                Duration::seconds(30),
+            )?;
+            if Some(gate.pull_request().base_sha.as_str())
+                != source.base().map(|r| r.commit.as_str())
+                || Some(gate.pull_request().head_sha.as_str())
+                    != source.head().map(|r| r.commit.as_str())
+            {
+                return Err(Error::new(
+                    "evaluation_fidelity",
+                    "native independent gate differs from actual supplied Git objects",
+                ));
+            }
+            WorkerAuthority::Independent(gate)
+        };
+        if let WorkerAuthority::Authorized(gate) = &authority {
+            fixture.attach_child_context(crate::evaluation::HostChildContext::from_parent(
+                projection.parent(proof.workspace, gate.work().parent)?,
+                gate,
+                &self.services.key,
+            )?)?;
         }
-        let authority = WorkerAuthority::Independent(gate);
         let phase = kegari_types::run::PhaseKey {
             work: authority.work_key()?,
             generation: match &authority {
                 WorkerAuthority::Independent(g) => g.review_identity().into(),
-                _ => return Err(Error::invalid("evaluation authority is not independent")),
+                WorkerAuthority::Authorized(g) => canonical_digest(1, &g.work().generation)?,
             },
-            phase: "independent_review".into(),
+            phase: proof.variant.phase.clone(),
             retry_grant: None,
+        };
+        let child_evidence_digest = if let WorkerAuthority::Authorized(gate) = &authority {
+            let parent = projection.parent(proof.workspace, gate.work().parent)?;
+            let context = runtime_workers::authorized_context(
+                parent,
+                gate,
+                &phase.phase,
+                proof.request.request_id,
+                &[proof.binding.repository_id.to_string()],
+                runtime_workers::scoped_evidence(self, proof.workspace, &parent.key)?,
+            )?;
+            Some(canonical_digest(
+                1,
+                context.get("evidence").ok_or_else(|| {
+                    Error::new("evaluation_fidelity", "original child evidence is absent")
+                })?,
+            )?)
+        } else {
+            None
         };
         *proof.prepared.lock().map_err(|_| {
             Error::new(
@@ -598,6 +755,7 @@ impl RuntimeCoordinator {
             )
         })? = Some(PreparedEvaluation {
             canary_context_required: fixture.requires_canary_context()?,
+            child_evidence_digest,
             source,
             authority: authority.clone(),
         });

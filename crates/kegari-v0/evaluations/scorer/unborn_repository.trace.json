@@ -1,0 +1,23 @@
+{
+  "evidence_class": "deterministic_replay",
+  "patch": {
+    "answer.txt": "Ready for scoped validation.\n"
+  },
+  "state": {
+    "evaluation_bootstrap_replay": {
+      "note": "Data-only expected bytes. This replay is not an actual absent-baseline capability or an accepted native grade.",
+      "source_baseline": null,
+      "initial_publication": "blocked"
+    }
+  },
+  "checks": {},
+  "artifacts": {},
+  "findings": [],
+  "known_false_mutations": [
+    "fabricated_baseline",
+    "invented_check_pass",
+    "unobserved_bootstrap",
+    "out_of_scope_file",
+    "privileged_effect"
+  ]
+}

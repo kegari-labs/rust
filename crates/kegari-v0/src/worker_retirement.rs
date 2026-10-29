@@ -29,13 +29,14 @@ impl ParentJournalHistory {
                 return Err(invalid("parent journal/artifact bytes changed"));
             }
         }
-        let recovered = recover_session(records, receipt)?
+        let recovered = recover_session_records(records, receipt, None, true)?
             .ok_or_else(|| invalid("parent session journal disappeared"))?;
         if canonical_digest(1, &recovered.state)? != self.session_digest
             || recovered.pending_method.is_some()
         {
             return Err(invalid("parent final session changed"));
         }
+        crate::worker_run::verify_native_history(records, receipt.operation_id, &recovered.state)?;
         Ok(())
     }
 }
@@ -47,7 +48,7 @@ pub(crate) fn capture_parent_journal(
     records: &PrivateDir,
     receipt: &Receipt,
     completion: &RunCompletion,
-    effects: &[Receipt],
+    _effects: &[Receipt],
 ) -> Result<ParentJournalHistory> {
     let contract = completion
         .contract
@@ -55,7 +56,7 @@ pub(crate) fn capture_parent_journal(
         .ok_or_else(|| invalid("actual parent contract missing"))?;
     let journal = PrivateDir::open(&records.path().join("journal"))?;
     Journal::verify_scope(&journal, contract)?;
-    let recovered = recover_session(records, receipt)?
+    let recovered = recover_session_records(records, receipt, None, true)?
         .ok_or_else(|| invalid("actual parent session journal missing"))?;
     let origin = recovered
         .resume_origin
@@ -75,8 +76,7 @@ pub(crate) fn capture_parent_journal(
         wanted.push(canonical_digest(1, check.production_evidence()?)?);
     }
     for check in &completion.failed_checks {
-        if check.record().evidence_class
-            != crate::execution::ExecutionEvidenceClass::ConfinedExecution
+        if check.record().evidence_class != crate::execution::ExecutionEvidenceClass::CodexExecution
         {
             return Err(Error::new(
                 "unqualified_fixture",
@@ -88,8 +88,7 @@ pub(crate) fn capture_parent_journal(
     wanted.sort();
     let mut files = BTreeMap::new();
     let mut actual = Vec::new();
-    let mut starts = BTreeMap::<String, usize>::new();
-    let mut finished = BTreeMap::<String, usize>::new();
+    let mut observed = BTreeMap::<(String, String, String, String), String>::new();
     let mut after_hooks = 0usize;
     for leaf in journal.records_bounded(65_537)? {
         let bytes = journal.read_bytes(&leaf, 4 * 1024 * 1024)?;
@@ -109,81 +108,103 @@ pub(crate) fn capture_parent_journal(
                 ));
             }
         }
-        if event["kind"] != "check" {
+        if event["kind"] == "check" {
+            return Err(Error::new(
+                "legacy_execution_evidence",
+                "custom command journals require fresh Codex result reconciliation",
+            ));
+        }
+        if event["kind"] == "codex_execution_observed" {
+            let native = &event["record"];
+            if native["item"]["type"] != "commandExecution" {
+                continue;
+            }
+            let read = |key: &str| -> Result<String> {
+                native[key]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| invalid("native execution observation has incomplete identity"))
+            };
+            if read("operation_id")? != receipt.operation_id.to_string() {
+                return Err(invalid("native result belongs to another operation"));
+            }
+            let phase = read("phase")?;
+            if !matches!(phase.as_str(), "started" | "completed") {
+                return Err(invalid("unknown native observation phase"));
+            }
+            let digest = read("observation_digest")?;
+            crate::evidence::validate_digest(&digest)?;
+            let key = (
+                read("thread_id")?,
+                read("turn_id")?,
+                read("item_id")?,
+                phase,
+            );
+            if observed.insert(key, digest).is_some() {
+                return Err(invalid("native result identity appears more than once"));
+            }
             continue;
         }
-        let record = &event["record"];
-        match record["state"].as_str() {
-            Some("started") => {
-                let identity = canonical_digest(
-                    1,
-                    &json!({"operation":record["binding"]["operation_id"],"name":record["check_name"],"started":record["started_at"]}),
-                )?;
-                *starts.entry(identity).or_default() += 1;
-            }
-            Some("finished") => {
-                // Internally tagged newtype CheckJournalEntry serializes the
-                // record fields alongside state. Decode those exact fields.
-                let mut value = record.clone();
-                value
-                    .as_object_mut()
-                    .ok_or_else(|| invalid("malformed finished check"))?
-                    .remove("state");
-                let checked: crate::execution::CheckExecutionRecord = serde_json::from_value(value)
-                    .map_err(|_| invalid("malformed finished check"))?;
-                if checked.binding.operation_id != receipt.operation_id {
-                    return Err(invalid("check belongs to another parent operation"));
-                }
-                let digest = canonical_digest(1, &checked)?;
-                if effects
-                    .iter()
-                    .filter(|r| {
-                        r.kind == "worker_validation"
-                            && r.observed_result.as_ref().is_some_and(|v| {
-                                canonical_digest(1, v).ok().as_ref() == Some(&digest)
-                            })
-                    })
-                    .count()
-                    != 1
-                {
-                    return Err(invalid(
-                        "check lacks its exact unique acknowledged Control effect",
-                    ));
-                }
-                actual.push(digest);
-                let identity = canonical_digest(
-                    1,
-                    &json!({"operation":checked.binding.operation_id,"name":checked.check_name,"started":checked.started_at}),
-                )?;
-                *finished.entry(identity).or_default() += 1;
-                for artifact in &checked.artifacts {
-                    if artifact.bytes > 256 * 1024 * 1024 {
-                        return Err(invalid("retained check artifact exceeds bound"));
-                    }
-                    crate::evidence::validate_digest(&artifact.digest)?;
-                    let mut output = Vec::new();
-                    for index in 0..artifact.bytes.div_ceil(4 * 1024 * 1024) {
-                        let leaf = format!("artifact-{}-{index}.bin", &artifact.digest[7..]);
-                        let bytes = journal.read_bytes(&leaf, 4 * 1024 * 1024)?;
-                        files.insert(leaf, bytes_digest(&bytes));
-                        output.extend(bytes);
-                    }
-                    if output.len() as u64 != artifact.bytes
-                        || bytes_digest(&output) != artifact.digest
-                    {
-                        return Err(invalid("retained check output changed"));
-                    }
-                }
-            }
-            _ => {
+        if event["kind"] != "codex_validation_recorded" {
+            continue;
+        }
+        let checked: crate::execution::CheckExecutionRecord =
+            serde_json::from_value(event["record"].clone())
+                .map_err(|_| invalid("malformed native validation record"))?;
+        checked.validate_shape()?;
+        let native = checked
+            .codex
+            .as_ref()
+            .ok_or_else(|| invalid("native validation provenance is absent"))?;
+        if checked.binding.operation_id != receipt.operation_id
+            || checked.evidence_class != crate::execution::ExecutionEvidenceClass::CodexExecution
+            || completion.state.thread_id.as_deref() != Some(&native.thread_id)
+            || !completion
+                .state
+                .completed_turns
+                .contains_key(&native.turn_id)
+        {
+            return Err(invalid(
+                "validation differs from the actual completed operation/thread/turn",
+            ));
+        }
+        for (phase, digest) in [
+            ("started", &native.started_item_digest),
+            ("completed", &native.completed_item_digest),
+        ] {
+            let key = (
+                native.thread_id.clone(),
+                native.turn_id.clone(),
+                native.item_id.clone(),
+                phase.into(),
+            );
+            if observed.get(&key) != Some(digest) {
                 return Err(invalid(
-                    "check history retains unknown or incomplete execution",
+                    "native validation lacks its original observed command lifecycle",
                 ));
+            }
+        }
+        actual.push(canonical_digest(1, &checked)?);
+        for artifact in &checked.artifacts {
+            if artifact.bytes > 256 * 1024 * 1024 {
+                return Err(invalid("retained check artifact exceeds bound"));
+            }
+            crate::evidence::validate_digest(&artifact.digest)?;
+            let mut output = Vec::new();
+            for index in 0..artifact.bytes.div_ceil(4 * 1024 * 1024) {
+                let leaf = format!("artifact-{}-{index}.bin", &artifact.digest[7..]);
+                let bytes = journal.read_bytes(&leaf, 4 * 1024 * 1024)?;
+                files.insert(leaf, bytes_digest(&bytes));
+                output.extend(bytes);
+            }
+            if output.len() as u64 != artifact.bytes || bytes_digest(&output) != artifact.digest {
+                return Err(invalid("retained check output changed"));
             }
         }
     }
     actual.sort();
-    if wanted != actual || starts != finished || after_hooks != 1 {
+    if wanted != actual || after_hooks != 1 {
         return Err(invalid("parent check/after-hook history is incomplete"));
     }
     let result = ParentJournalHistory {

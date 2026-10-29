@@ -1,109 +1,83 @@
 # Owned worker sessions
 
-`worker_run::prepare` assembles the actual configured workflow, shipped role
-instructions, opaque current authority, exact repository/read-resource grants,
-Codex account/profile, full dynamic-tool contracts and named isolation policy.
-It compares the current configuration revision and rereads workflow bytes. It
-starts no provider session. `PreparedRun::contract()` supplies the immutable
-scope needed for `ControlHost::admit_run`.
+[SPEC 1.5](../SPEC.md) retains Kegari's ownership of its Codex app-server process
+and workflow/session admission. Codex owns repository tools and internal command
+execution. The custom repository executor has been removed; supported lifecycle
+hooks use the Codex command interface. Remaining hook/lifecycle limitations and
+focused evidence are tracked in [PROGRESS.md](../PROGRESS.md); the former custom
+executor qualification campaign must not be resumed.
 
-`worker_run::run` requires that durable admission, including the original account,
-workspace, profile/instruction digests and finite turn budget. It accepts the
-concrete `WorkerServices`; fixture command boundaries cannot enter a live run.
-The host retains `OwnedWorkerRun`, calls `cancel_fenced` only after durable
-fencing, and awaits `join`. Run observations are diagnostic worker claims; the
-delivery coordinator still verifies every separate completion gate.
+## Preparation and protocol admission
 
-Native app-server process creation and installation of its owned cancellation
-handle occur inside the serialized fresh permit gate. The executable is pinned
-by actual bounded version output and file identity, then revalidated at launch.
-The version probe bounds output and explicitly terminates/reaps its owned child
-on error or timeout. Protocol initialization, account/catalog/rate-limit checks,
-permission verification and response waits happen outside the control mutex.
+`worker_run::prepare` assembles configured workflow guidance, shipped role context,
+current authority, source identity, Codex account/profile and supported permissions.
+It compares configuration and workflow identities and starts no provider session.
+`PreparedRun::contract()` supplies the immutable scope for durable run admission.
+The production worker retains finite turn/time/attempt limits and cannot acquire
+new authority from a fixture, raw session record or agent output.
 
-Before each thread/start, thread/resume, turn/start, turn/steer or review/start
-frame, the adapter calls the required production `RequestGate`. The control host
-persists a sent protocol effect and gates the bounded pipe write. Its temporary
-hold targets the exact Codex session so legitimate interleaved dynamic tools can
-run before the start response. Fencing/recovery expands unresolved effects to
-the work identity. Responses retain status and a digest, never raw prompts or
-credential-bearing protocol text. Lost responses cannot be replayed on the
-same transport.
+Native app-server creation and registration of its actual cancellation handle
+occur inside the fresh serialized permit gate. Executable identity and bounded
+version output are verified, then revalidated at launch. The owned version probe
+is terminated/reaped on error or timeout. Initialization, account/catalog/allowance
+checks, permission verification and response waits run outside the control mutex.
 
-The executable hook implementation requires a private retained `HookLedger`
-from actual owned-directory preparation, including the after-create outcome.
-Before/after-run hooks use the same `LocalExecutor`, immutable execution binding,
-fresh authority and sent-effect registry as configured checks. Preparation and
-waiting run outside the control mutex; synchronous start and cancellation-handle
-registration occur inside it. Actual session launch and end are recorded
-separately. A failed before-run hook prevents the session from launching. An
-after-run failure remains diagnostic and preserves its files/unknown effects.
-Nonexecuting coordination/review roles use a role-checked implementation that
-verifies current authority and never executes repository hooks.
+Changing thread/turn/review requests use the production `RequestGate`. Kegari
+persists the sent protocol effect and gates its bounded pipe write. Interleaved
+workflow/provider callbacks and response waits remain outside that gate. Lost
+responses stay uncertain; another transport or a matching request ID does not
+authorize replay. Protected records retain safe identities and digests rather
+than raw prompts or credentials.
 
-Cancellation signals the actual owned provider/process handles; it never adopts
-recovered numeric PIDs. Unknown callback or process exits retain their registry
-entries and sent receipts. `RunCompletion.local_exit_confirmed` is true only
-after the owned provider and all registered local command handles confirm exit.
-The host must not retire local ownership merely because the Rust task joined.
-`ExecutionRegistry::observe_exited` can later remove proven exited handles; this
-does not reconcile a remote/protocol outcome, validate evidence, or authorize
-replaying an unknown hook. Host recovery must resolve those effects separately.
+The worker's admitted role selects native Codex repository capabilities. Required
+hooks use supported Codex execution interfaces with their existing timing and
+failure semantics. Independent PR review cannot execute repository code or hooks.
+The migration removes Kegari's hook/command executor rather than adding another
+wrapper around it. Missing capabilities block the affected action specifically.
 
-The native runtime coordinator remains responsible for selection, attempt
-admission, provider refresh, current OS owner checks, correction ingestion,
-delivery verification and supervisor integration. The initial worker contract
-stays immutable. An active child can receive a separate, host-verified correction
-chain with unchanged authority, permission scope, profile and dependency
-contracts; its exact native input and processing report are tied to the actual
-turn. Pending classification closes effects while the finite original session
-waits. Historical checks remain attached to their original work generation.
-Resume additionally requires actual provider history and exact effective binding
-compatibility. It cannot silently rebind a changed instruction manifest,
-directory, account or profile. The complete unfinished-work trigger and resumed
-session readmission path remain separate implementation work; a generic summary
-cannot authorize them. Live behavioral qualification remains unperformed.
+## Cancellation and joined completion
 
-Deterministic validation uses the real assembly/control/broker/hook path and
-explicit disposable subprocess fixtures. Those fixtures never execute the
-installed Codex model or contact provider accounts:
+The host retains `OwnedWorkerRun`, fences mutation/admission before `cancel_fenced`
+and awaits `join`. Actual owned handles govern app-server cleanup; recovered
+numeric PIDs cannot be adopted as owned children. Native launch still uses the
+host journal/guard and shared process interlock needed for Kegari's own processes.
+See [process recovery](process-recovery.md).
 
-```sh
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-v0 --test worker --test codex_protocol
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo test --offline --locked -p kegari-controller --test supervisor
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache cargo clippy --offline --locked --workspace --all-targets -- -D warnings
-```
+Workflow completion must distinguish actual owned host exit, supported Codex
+terminal/writer observations, result acceptance and unresolved effects. A joined
+Rust task, EOF or app-server exit does not prove arbitrary descendant closure.
+Request supported Codex interruption/cleanup, preserve affected workspaces and do
+not replay unknown commands or adopt/restart arbitrary background services.
 
-Native sandbox enforcement, live account/model behavior and required human
-evaluation calibration remain unqualified. This module does not clear those
-gates or authorize coordinator activation.
+The existing completion registry, host-process evidence and retention paths must
+migrate without discarding uncertainty. Old local-command closure fields are
+legacy contract data; they must not silently become proof of Codex-internal
+command cleanup. Change affected persisted identities explicitly and refuse
+unsupported recovery while retaining original records.
 
-Worker services now require the host's durable process journal. Both the bounded
-version probe and app-server start are gated and registered before the control
-mutex is released. A separate owned probe handle must have exited before the
-app-server handle is installed. The provider starts in the exact admitted private
-cwd. See [process recovery](process-recovery.md) for crash/identity semantics and
-the remaining whole-tree containment limitation.
+## Runtime and recovery integration
 
-Live evaluation and native scheduling share `launch_provider` through the sealed
-`WorkerProviderLaunch` capability obtained from an actual `ScopedWorker`.
-Construction validates without registering a fictitious active process; launch
-registers ownership under the current serialized permit before the first native
-probe. Probe and app-server starts each inherit a protected journal guard, and
-all subsequent requests use the same durable protocol gate. The capability binds
-the complete permission configuration, exact assembly, source isolation, account,
-canonical work and original turn budget. Closing before launch prevents later
-spawn; cancellation fences before invoking owned handles. Returning a process
-error or dropping a trial does not release an unknown process hold.
+The runtime coordinator owns selection, current authority, finite admission,
+provider refresh, correction ingestion, result/review gates and supervisor
+integration. The original worker contract remains immutable. Verified corrections
+may steer the bounded session only within supported scope; processing is tied to
+the actual turn and source generation.
 
-Actual joined runs retain their original `WorkerContract` and optional
-`WorkerExecution` capabilities for separately admitted delivery phases. A
-historical JSON session record cannot manufacture checkout ownership.
+Resume requires supported provider history plus compatible account, directory,
+profile, instructions and source/workflow state. Opaque protected lineage and
+actual receipt checks remain backend responsibilities; protocol data does not
+issue admission authority. Failed results stay failed, and unknown outcomes retain
+their holds. Later validation or repair requires its own actual workflow admission.
 
+Evaluation and ordinary workers share actual app-server launch and protocol
+mechanics. Evaluation permission alone cannot create an unowned subprocess or
+release uncertain ownership. Fixture-based results do not establish live behavior.
 
-Joined completions retain actual failed check capabilities alongside passing
-checks, only after the corresponding effect has been observed under the current
-authority. A failed check is never passing evidence; its capability can establish
-an exact remaining validation obligation for a later host decision. An unknown
-owned-process exit withholds both capability classes. Serialized diagnostics
-cannot recreate either class.
+## Focused development checks
+
+Select existing worker/protocol/supervisor checks relevant to the changed path,
+using the pinned toolchain/cache and `--offline --locked`. Do not routinely run
+all suites or add new lifecycle qualification infrastructure during feature work.
+Initial migration uses a simulated production flow and missing/stale-result
+refusal. Native/provider qualification remains a separately authorized milestone
+0.7 activity; no such operation is authorized by this guide.

@@ -1,6 +1,6 @@
-//! Environment and isolation behavior uses only disposable filesystem fixtures.
+//! Codex path-scope validation uses only disposable filesystem fixtures.
 use kegari_execution::*;
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
 const TEST_BUILD: &str = "execution-integration-test-build";
 
@@ -17,7 +17,6 @@ fn fixture() -> (tempfile::TempDir, IsolationPlan) {
         std::fs::create_dir(root.join(d)).unwrap();
     }
     let plan = IsolationPlan {
-        managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::Child,
         execution_root: root.clone(),
@@ -36,36 +35,15 @@ fn fixture() -> (tempfile::TempDir, IsolationPlan) {
 }
 
 #[test]
-fn sandbox_paths_roles_and_environment_fail_closed() {
+fn role_scope_rejects_unpermitted_source_writes() {
     let (_temp, mut plan) = fixture();
-    let isolated = plan.validate(TEST_BUILD).unwrap();
-    let profile = isolated.seatbelt_profile().unwrap();
-    assert!(profile.contains("(deny default)"));
-    assert!(!profile.contains("(allow network"));
+    plan.validate(TEST_BUILD).unwrap();
     plan.role = ExecutionRole::Coordination;
     assert!(plan.validate(TEST_BUILD).is_err());
     plan.source_writes.clear();
     plan.validate(TEST_BUILD).unwrap();
-    plan.role = ExecutionRole::Child;
-    plan.managed_execution = Some(BoundManagedExecution::automatic(&plan, TEST_BUILD).unwrap());
     plan.role = ExecutionRole::IndependentReview;
-    assert!(plan.validate(TEST_BUILD).is_err());
-    assert!(
-        worker_environment(
-            &plan.scratch,
-            &BTreeMap::from([("PRIVATE_ALIAS".into(), "secret".into())]),
-            &["PRIVATE_ALIAS".into()]
-        )
-        .is_err()
-    );
-    assert!(
-        worker_environment(
-            &plan.scratch,
-            &BTreeMap::from([("CODEX_HOME".into(), "elsewhere".into())]),
-            &[]
-        )
-        .is_err()
-    );
+    plan.validate(TEST_BUILD).unwrap();
 }
 
 #[test]
@@ -117,24 +95,6 @@ fn writable_directory_rejects_hardlinks_to_unrelated_files() {
 }
 
 #[test]
-fn bare_executable_uses_admitted_path_without_rebasing_arguments() {
-    let (_temp, mut plan) = fixture();
-    plan.managed_execution = Some(BoundManagedExecution::automatic(&plan, TEST_BUILD).unwrap());
-    let isolation = plan.validate(TEST_BUILD).unwrap();
-    assert_eq!(
-        isolation.resolve_executable("sh").unwrap(),
-        Path::new("/bin/sh").canonicalize().unwrap()
-    );
-    assert!(isolation.resolve_executable("./sh").is_err());
-    // Unknown names are resolved generically; there is no configured tool list.
-    assert!(
-        isolation
-            .resolve_executable("kegari-nonexistent-command-fixture")
-            .is_err()
-    );
-}
-
-#[test]
 fn test_resource_writes_are_separate_exact_grants_and_never_reopen_source_or_control() {
     let (_temp, mut plan) = fixture();
     let resource = plan.execution_root.join("disposable-resource");
@@ -151,11 +111,7 @@ fn test_resource_writes_are_separate_exact_grants_and_never_reopen_source_or_con
     );
     plan.read_roots.push(grant.clone());
     let boundary = plan.validate(TEST_BUILD).unwrap();
-    let profile = boundary.seatbelt_profile().unwrap();
-    assert!(profile.contains(&format!(
-        "(allow file-write* (subpath \"{}\"))",
-        resource.display()
-    )));
+    assert_eq!(boundary.plan().resource_writes, vec![grant]);
     plan.role = ExecutionRole::Coordination;
     plan.source_writes.clear();
     assert_eq!(
@@ -211,7 +167,6 @@ fn isolation_records_preserve_exact_fields_defaults_and_unknown_field_refusal() 
         source_writes: vec![],
         resource_writes: vec![],
         forbidden_roots: vec!["/fixture/forbidden".into()],
-        managed_execution: None,
     };
     let encoded = serde_json::to_string(&plan).unwrap();
     assert_eq!(
@@ -220,13 +175,12 @@ fn isolation_records_preserve_exact_fields_defaults_and_unknown_field_refusal() 
     );
     let mut omitted = serde_json::to_value(&plan).unwrap();
     omitted.as_object_mut().unwrap().remove("resource_writes");
-    omitted["managed_execution"] = serde_json::Value::Null;
     let decoded: IsolationPlan = serde_json::from_value(omitted).unwrap();
     assert!(decoded.resource_writes.is_empty());
-    assert!(decoded.managed_execution.is_none());
     assert_eq!(serde_json::to_string(&decoded).unwrap(), encoded);
     for (field, value) in [
         ("authority", serde_json::json!(true)),
+        ("managed_execution", serde_json::Value::Null),
         ("resource_writes", serde_json::Value::Null),
         ("role", serde_json::json!("unknown")),
     ] {

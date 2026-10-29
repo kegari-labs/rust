@@ -1,195 +1,77 @@
 # Runtime instruction and repository workflow contract
 
-The installed executable embeds six role/authority assets and a versioned generic
-workflow with their checked SHA-256 catalog. `instructions::assemble` is the production assembly entry point;
-it validates the catalog, role/tools/permissions and exact profile, discovers
-allowed guidance, renders the selected workflow, and returns the prompt plus an
-instruction manifest. The runtime never reads these generic assets from the build
-checkout. Changes require a newly built, independently qualified binary and the
-explicit coordinator handover procedure in SPEC §11.7.
+[SPEC 1.5](../../kegari-v0/SPEC.md) makes Codex app-server the repository execution
+layer. Kegari supplies task context, role/scope permissions, workflow obligations
+and acceptance rules. It does not supply a competing repository command/edit
+harness or require environment inventories and predefined command catalogs.
 
-Layers, in assembly order:
+## Current assets and identity
 
-1. `authority.md` supplies immutable authority, scope, noninteractive and evidence
-   rules. It grants no capability; the broker and sandbox enforce the boundary.
-2. `child.md`, `coordination.md`, `review.md` or `validation.md` supplies the admitted
-   role. Implementation, testing and documentation share child guidance;
-   independent PR review uses review guidance with no source writes/code execution.
-3. `continuation.md` supplies correction, bounded continuation and recovery rules.
-4. The operation boundary binds identities, generations, profile, cwd, permissions
-   and tools. Caller-supplied context must match the admitted snapshot.
-5. Accessible Codex-home and repository `AGENTS.override.md`/`AGENTS.md`, scoped
-   instruction chains and explicitly required context are supplied with path,
-   scope and byte digests. Missing, inaccessible, oversized or secret-bearing
-   required input blocks assembly. No target guidance is rewritten.
-6. An explicitly selected repository WORKFLOW.md supplies additional guidance.
-   If no workflow is selected, the installed generic workflow supplies discovery
-   guidance without reading a file or inferring a cwd-relative selection. Neither
-   source changes roles, accounts, scope or execution permission.
+The executable currently embeds six role/authority assets, the generic workflow
+and their checked SHA-256 catalog. `instructions::assemble` validates the catalog,
+role/profile/context bindings, selects applicable guidance and produces the prompt
+and provenance manifest. Installed assets do not depend on a mutable checkout.
 
-Supplied files and provider-confirmed discovery are separate manifest fields.
-Deterministic discovery tests establish what Kegari supplies, not what an actual
-provider loaded internally. The pinned profile must independently validate its
-configured home, instruction limits, cwd/discovery and review operation. Provider
-context that was not observed remains `unavailable`. The implementation does not
-inspect Codex internal storage. Scoped guidance for later context reads belongs
-with the actual turn/revision in `IncrementalInput`; a new generation or
-incompatible effective guidance requires reconciliation and fresh admission.
+Asset identity `9` includes typed blocked-child reporting on the Codex-owned
+execution path. The runtime
+assets direct permitted repository work through native Codex tools. Kegari's
+narrow tools supply context, obligation proposals, outcome proposals and provider
+feedback; `validation_record` references an actual observed command item rather
+than launching it. The previous `command_run`, `source_write`, `validation_run`
+and resource-inventory recipes have been removed from runtime instructions.
 
-For native `review/start`, the adapter must first create a thread with the
-assembled review guidance and exact revision context, then use the supported
-review operation. Its result is a proposal, not a formal self-approval or a host
-attestation. The host publishes the authenticated status after gate verification.
-A successful assembly call alone does not establish native-review compatibility.
+The asset catalog records their exact hashes. The installed generic workflow
+uses version `2`; a recorded version `1` workflow cannot silently become the new
+execution contract. The generic installed workflow and
+exported starter share the same bytes. This README is explanatory; the actual
+runtime assets and callers are the implementation contract. Local assembly checks
+do not establish successful live execution or qualification.
 
-## Selecting and adapting the starter
+Historical instruction manifests and execution evidence retain their original
+identities. Unsupported recovery must refuse without converting old proof into
+Codex execution evidence. A rebuilt candidate is distinct from authorized
+installation, qualification or coordinator handover.
 
-`examples/WORKFLOW.md` is an optional copy of the installed generic guidance.
-Choose an explicit new destination through `instructions::export_starter` (which
-uses create-new and cannot overwrite an existing file) if repository-specific
-additions are useful. Omit `workspace.workflow` to use the installed default.
-An explicit selected path must resolve to its actual bounded, valid workflow;
-missing, unreadable or invalid selections never fall back. No file is guessed
-from the working directory.
+## Context and workflow responsibilities
 
-The default declares no executable catalog, check commands or hooks. It directs
-the agent to discover relevant guidance, environment and validation from the
-actual permitted task/repository context, including an empty or unborn repository.
-This guidance does not establish an execution facility or missing source evidence.
-`context_read` with key `execution_environment` returns the effective command
-environment, its limitations and original resource handles. `resource_list` and
-`resource_read` accept a listed handle and normalized relative path. They inspect
-existing repositories/test resources without a process or a new permission; an
-exact-file grant supports only `.` for reading. Listings cover visible non-Git
-children within their declared scope; they are bounded and complete or explicitly
-refused. Original observations and their settled read references
-remain subject to current scope, input identity and the worker's original cutoff.
-Fixed OS command visibility does not grant model access to OS file contents, and
-ambient PATH or home contents are not imported. Tools outside existing authority
-remain an explicit access dependency.
-The worker's `command_run` accepts literal `argv` and `cwd` through its admitted
-generic boundary. It records actual source, environment and outcome observations;
-it does not mint check evidence or authorize broader access. Results include
-bounded output previews and protected history references, also available through
-`context_read` with key `command_history`. Native qualification remains closed.
-Child-local and assigned integrated workers use actual settled source/context reads to enroll obligations
-with `validation_propose`, then execute the current plan with `validation_run`.
-`context_read` with key `validation_evidence` supplies observed read references
-and the current plan identity. No configured check list or custom report format
-is needed; the host retains an actual command transcript. Plan revisions retain
-earlier obligations and attempts. Independent review must assess the exact
-history's adequacy before final staging/readiness. Commands and enrolled plans
-alone are not passes. See `validation.md` for the actual tool contract.
+Authority, role, continuation and optional repository workflow guidance compose
+with the admitted operation's task/context and supported Codex permissions.
+Implementation, testing and documentation remain scoped child responsibilities;
+parent coordination does not gain implementation rights. Independent PR review
+cannot execute repository code; read-only filesystem access alone does not prove
+that restriction.
 
-Integrated plans bind the authorized E2E child and the complete isolated candidate
-vector. Mechanical execution completion precedes a separate read-only adequacy
-review; only its verified result can establish integrated readiness. Parent
-coordination then summarizes the completed evidence. It cannot replace adequacy.
+Keep applicable repository guidance, bounded rendering, secret exclusion,
+source/correction identities and instruction-resume compatibility. Distinguish
+Kegari-supplied inputs from provider-confirmed context and unavailable internal
+context. Repository content cannot broaden authority or select accounts.
 
-Discovered-plan continuation/recovery, complete output paging and empty/unborn
-Git runtime support remain implementation work. Parent reassembly cannot reset
-discovered obligations or omit the distinct adequacy phase; unsupported lineage
-refuses before replacement work begins.
-New discovered review, child and parent publications use schema 3 with compact
-references to an authenticated private archive. Verification resolves the full
-plan/attempt history and all retained artifact bytes before applying the gates;
-an unresolved reference cannot establish readiness. Earlier signed formats keep
-their original encodings and verification rules.
+The [starter workflow](../examples/WORKFLOW.md) is optional. Omitting a selected
+workflow uses installed generic guidance; an invalid explicit selection refuses.
+Export uses create-new and does not overwrite repository files. A file workflow
+retains its path/digest; an installed default retains its embedded identity.
 
-Independent review receives the complete history and original artifact contents
-from failed, superseded and selected attempts. Text uses UTF-8; other bytes use
-explicit base64 with digest/length verification and decoded secret checks. Binary
-byte access does not establish visual inspection. The complete prompt still has
-a 1 MiB admission limit. Larger review inputs refuse until paging is implemented;
-compaction never truncates them. Archives bound history to 8 MiB, unique artifacts
-to 256 MiB total and 4,096 proofs, and their signed manifest to 256 KiB. Publication
-bodies retain the 60 KiB limit. These are finite host bounds, not operator-authored
-environment specifications.
+Codex retrieves project instructions, documentation, configuration and scripts to
+derive appropriate in-scope commands, including for unfamiliar or empty projects.
+Kegari does not interpret ecosystem manifests or require operators to prepare
+command lists, executable catalogs or environment packages. Missing material
+intent or unsupported permissions remain specific blockers.
 
-Empty configured check sets are valid undiscovered inputs; missing or unrun
-obligations still block dependent delivery. These local paths do not qualify the
-native backend, actual-agent behavior or the complete default-workflow lifecycle.
+Required project checks, hosted CI, independent review, human acceptance and
+release authority remain separate gates. Structured Codex results must retain
+available operation/thread/turn/item/source associations. Model summaries, exit
+zero and missing results cannot establish passing validation. Corrections and
+continuation preserve required obligations, failures and uncertain effects.
 
-A file workflow records its actual canonical path and byte digest. The installed
-default records an explicit embedded version/digest and has no filesystem path.
-Worker binding and retained cleanup compare the original source identity; an
-obsolete embedded version or a changed selected file cannot silently replace it.
-Existing file-origin records retain their string path and omit the embedded field.
-Handover metadata schema 4 explicitly requires `workflow_source_schema = 1` for
-these config/instruction/cleanup formats. Missing or unsupported reader support
-refuses replacement even if the advertised asset catalog has matching names.
-Historical six-asset binaries also fail the existing asset-key compatibility gate;
-that incidental mismatch is not the definition of workflow reader support.
+## Maintaining instructions
 
-Optional configured commands and artifact paths resolve from the isolated
-execution/candidate cwd. An explicit relative workflow resource link is available
-only for a selected file workflow; an embedded default has no filesystem resource
-anchor. Result presence alone cannot establish execution, revision or freshness.
+Use minimum sufficient focused checks during implementation, as required by the
+[developer policy](../../../docs/development.md#feature-first-development-policy).
+The initial migration needs one ordinary production flow through simulated Codex
+transport and a missing/stale-result refusal. Do not create a new instruction or
+evaluation framework. Broader regression and actual-agent/human qualification
+follow working product features in the [milestones](../../kegari-v0/MILESTONES.md).
 
-The front matter is a closed mapping: `schema_version: 1`, optional `hooks` and
-optional `checks`. Hooks are explicit shell strings (`after_create`, `before_run`,
-`after_run`, `before_remove`) plus positive `timeout_ms`. Each named
-`checks.local.NAME` or `checks.integrated.NAME` contains `argv` (a string array),
-`result_artifact` (a path string), and optional bounded `services` declarations.
-These are optional inputs/obligations rather than a required command catalog.
-Duplicate keys, implicit non-string argv values, unsupported fields and empty
-prompt bodies fail.
-
-Templates support `{{ path }}`, `if`/`elsif`/`else`, `for`/`else`, `assign`, literal
-array-index/map-key paths, comparisons and logical conditions. Supported filters
-are `json`, `escape`, `default`, `join`, `size`, `upcase`, `downcase` and `strip`.
-Unknown variables never disappear, including before `default`. Optional fields
-must exist as null/empty values. Use `json` for maps/arrays; implicit stringification
-is rejected. Templates are bounded to 64 nesting levels, 10,000 total loop
-iterations and 8 MiB output; complete operation input has its own stricter bound.
-
-A reference input is provided by `tests/config_harness.rs::AssemblyFixture`: all
-thirteen documented context keys exist; `workspace.id` and `operation.id` match
-the admitted UUIDs; `profile` is the exact validated profile; `phase` matches the
-operation. The fixture model and paths are synthetic and establish no real account
-availability. Run `cargo test -p kegari-v0 --locked --test config_harness` to exercise
-starter rendering, actual assembly, strict parsing and conflicting cwd fixtures.
-
-## Target preparation before dispatch
-
-Repository context may include concise entry points, architecture/conventions,
-existing root/nested instructions and target-owned scripts/configuration. The
-agent discovers relevant commands and environment from permitted evidence; the
-operator does not need to maintain an executable inventory or command manifest.
-An empty repository starts from the authorized task, without invented existing
-files or revisions. Required inaccessible context remains a blocker.
-
-Account identities, actors, repository/resource scope, roles and release policy
-remain host-owned authorization inputs. Actual hosted proof, review, strict-base
-integration, deployment and human acceptance gates remain required when their
-operations apply. Some current configuration and delivery paths still require
-predeclared hosted CI/no-change/deployment identities; removing discovery blockers
-there requires a separate implementation preserving those evidence gates.
-`config check` is read-only and must distinguish verified, unverified and blocked.
-Neither generic instructions nor optional configured checks grant permissions or
-qualification, and they cannot make a failed or unrun obligation pass.
-
-Prepare one parent and scoped children in Linear before authorization. Include
-outcome, relevant context, constraints, dependencies, acceptance criteria and
-validation expectations, plus exactly one fenced `kegari` JSON metadata block:
-
-```kegari
-{"schema_version":1,"kind":"parent","required_children":["<child-UUID>"],"e2e_child":"<child-UUID>","visual":false,"production_targets":["<configured-target-ID>"]}
-```
-
-```kegari
-{"schema_version":1,"kind":"child","responsibility":"implementation","write_repository":"<stable-GitHub-repository-ID>","write_paths":["src/","tests/"],"read_repositories":[],"test_resources":[]}
-```
-
-Testing/documentation children use their actual responsibility. A genuinely
-read-only child uses `write_repository: null` and `write_paths: []`; private
-scratch does not grant source writes. Use explicit relative files/directory
-prefixes, or `.` deliberately for the assigned repository; never shell globs.
-Include the E2E child and required documentation responsibility. Inaccessible
-required children/context stay blocked rather than disappearing from completeness.
-
-Every guidance/assembly/tool/profile change needs affected deterministic and
-actual-agent evaluation coverage before qualification. Maintain the digest catalog
-when deliberately changing generic assets, preserve earlier failed reports, and
-obtain the required human rubric review; a new prompt or green unit test is not
-operational qualification.
+Runtime asset changes require explicit identities and catalog consistency.
+Qualification claims require their corresponding authorized evidence; a new
+prompt, simulated response or successful assembly test is not live operation.

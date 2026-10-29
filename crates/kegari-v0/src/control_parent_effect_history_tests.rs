@@ -521,10 +521,33 @@ fn cold_reader_restores_comparison_history_without_a_live_index_writer() {
     let after = host
         .with_parent_effect_history(prep.operation_id, model, |snapshot, history| {
             assert!(snapshot.active_operations.is_empty());
-            Ok(history.binding().clone())
+            // The continuation check runs while the real Control lock is held.
+            // It must use the supplied snapshot rather than lock Control again.
+            host.revalidate_parent_effect_history(snapshot, history)?;
+            Ok(history.clone())
         })
         .unwrap();
-    assert_eq!(after, before);
+    assert_eq!(after.binding(), &before);
+    host.serialize_observation(|snapshot| host.revalidate_parent_effect_history(snapshot, &after))
+        .unwrap();
+    let mut changed_snapshot = host.snapshot().unwrap();
+    changed_snapshot.pending_local_processes.push(model);
+    assert!(
+        host.revalidate_parent_effect_history(&changed_snapshot, &after)
+            .is_err()
+    );
+    let mut changed = host.operation(model).unwrap();
+    changed.observed_result.as_mut().unwrap()["observation"] =
+        json!({"component_only":"substituted"});
+    host.receipts.save(&changed).unwrap();
+    host.serialize_observation(|snapshot| {
+        assert!(
+            host.revalidate_parent_effect_history(snapshot, &after)
+                .is_err()
+        );
+        Ok(())
+    })
+    .unwrap();
     drop(host);
     drop(root);
 }

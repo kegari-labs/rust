@@ -491,6 +491,8 @@ pub(super) async fn run(f: ReviewFixture<'_>) {
         review_round: None,
         paired_round: None,
         paired_completion: None,
+        replacement_work: None,
+        replacement: None,
     };
     f.service.persist_child(&child).unwrap();
     let operations_before =

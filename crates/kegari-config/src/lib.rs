@@ -8,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 
 mod evaluation;
-pub use evaluation::EvaluationBinding;
+pub use evaluation::{EvaluationBinding, EvaluationChild};
 
 fn schema_one() -> u32 {
     1
@@ -536,6 +536,10 @@ pub struct DeploymentStep {
     pub target_id: String,
     pub environment_id: String,
     pub workflow: ExactRevisionWorkflow,
+    /// Optional trusted read-only observation of an already deployed target.
+    /// Kegari consumes its evidence; this route is never dispatched implicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_observation: Option<ExactRevisionWorkflow>,
     #[serde(default)]
     pub depends_on: Vec<String>,
 }
@@ -1019,6 +1023,9 @@ impl Repository {
                         return Err(Error::invalid("duplicate deployment step ID"));
                     }
                     step.workflow.validate()?;
+                    if let Some(route) = &step.baseline_observation {
+                        route.validate()?;
+                    }
                 }
                 let mut done = BTreeSet::new();
                 while done.len() < steps.len() {

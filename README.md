@@ -24,17 +24,26 @@ Linear with changes in GitHub. Follow progress, guide corrections and review
 results from your Mac or another authorized computer. Planned dashboards will
 bring work, results and decisions into one view.
 
-**Development preview:** CLI inspection is available; end-to-end operation
-remains under validation.
+**Development preview:** CLI inspection is available; Codex-backed end-to-end
+operation remains incomplete.
+
+The approved [SPEC 1.5](crates/kegari-v0/SPEC.md) makes Codex app-server, the
+programmatic interface provided by Codex, the repository execution layer; Kegari
+orchestrates its work. The native path is being integrated and the duplicated
+repository execution harness has been removed. See the revised
+[milestones](crates/kegari-v0/MILESTONES.md) and
+[six-hour goal](crates/kegari-v0/GOAL.md). The current run state and fixed deadline
+are recorded in [PROGRESS.md](crates/kegari-v0/PROGRESS.md). Existing alpha.10
+artifacts are unchanged.
 
 ## Features
 
 | Feature | Version | Status |
 | --- | --- | --- |
 | Build and explore the macOS CLI | `0.2.0-alpha.10` | Available preview |
-| Discover project workflows and execute focused work | `0.2.0` | Planned |
+| Orchestrate native Codex work with usable discovery and status | `0.2.0` | Planned |
 | Resume interrupted work with context and budgets intact | `0.3.0` | Planned |
-| Review visual and external evidence alongside changes | `0.4.0` | Planned |
+| Complete replacement delivery and visual/external evidence | `0.4.0` | Planned |
 | Install, upgrade and hand over reliably | `0.5.0` | Planned |
 | Evaluate agent behavior across representative workflows | `0.6.0` | Planned |
 | Complete validation of supported workflows and integrations | `0.7.0` | Planned |

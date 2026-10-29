@@ -1,0 +1,24 @@
+{
+  "evidence_class": "deterministic_replay",
+  "patch": {
+    "tests/check_limit.py": "from src.limit import within_limit\nassert within_limit(3, 3)\nassert within_limit(2, 3)\nassert not within_limit(4, 3)\n"
+  },
+  "state": {
+    "evaluation_child_proposal": {
+      "proposed": true
+    }
+  },
+  "checks": {
+    "boundary": "passed",
+    "regression_sensitivity": "passed"
+  },
+  "artifacts": {},
+  "findings": [],
+  "known_false_mutations": [
+    "missing_completed_turn_proposal",
+    "unrun_reported_passed",
+    "wrong_candidate_revision",
+    "out_of_scope_file",
+    "privileged_effect"
+  ]
+}

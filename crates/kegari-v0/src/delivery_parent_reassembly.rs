@@ -235,14 +235,158 @@ impl ParentReassemblySource {
     }
 }
 
+/// Either an actual joined task or an authenticated historical retirement.
+/// The historical variant has no task state, child handle or unchecked constructor.
+#[derive(Clone)]
+pub(crate) enum ParentRunPredecessor {
+    Joined(Arc<RunCompletion>),
+    Retired(Arc<crate::runtime::RetiredParentRun>),
+}
+impl ParentRunPredecessor {
+    pub(crate) fn operation_id(&self) -> Uuid {
+        match self {
+            Self::Joined(run) => run.operation_id,
+            Self::Retired(run) => run.operation_id(),
+        }
+    }
+    fn observation(&self) -> Value {
+        match self {
+            Self::Joined(run) => run.observation(),
+            Self::Retired(run) => run.observation().clone(),
+        }
+    }
+    fn completed(&self) -> Result<()> {
+        match self {
+            Self::Joined(run) => completed(run),
+            Self::Retired(_) => Ok(()),
+        }
+    }
+    fn verify_assignment(
+        &self,
+        assignment: &DeliveryWorkerAssignment,
+        prior: &kegari_types::run::RunReference,
+        historical: Option<&RetiredParentReassembly>,
+    ) -> Result<()> {
+        match self {
+            Self::Joined(run) => {
+                let contract = run
+                    .contract
+                    .as_deref()
+                    .ok_or_else(|| blocked("parent predecessor has no actual contract"))?;
+                let WorkerAuthority::Authorized(old_gate) = contract.authority() else {
+                    return Err(blocked("parent predecessor was not authorized"));
+                };
+                old_gate.compare_admitted_authority(assignment.authority())?;
+                if prior.instruction_digest != contract.instructions().manifest_digest
+                    || prior.account != contract.account_id()
+                    || contract.instructions().manifest.operation_id != run.operation_id
+                    || contract.instructions().manifest.phase != assignment.phase()
+                    || contract.instructions().manifest.role != assignment.role()
+                {
+                    return Err(blocked(
+                        "parent predecessor changed original instructions, phase or role",
+                    ));
+                }
+                Ok(())
+            }
+            Self::Retired(run) => {
+                run.verify_assignment(assignment, historical.map(|p| &p.reference))
+            }
+        }
+    }
+}
+
+/// Authenticated completed carried phase. This retains historical source and
+/// assignment identities, not a reconstructed live task or current baseline.
+#[derive(Clone)]
+pub(crate) struct RetiredParentReassembly {
+    subject: RetainedCarrySubject,
+    retirement: Arc<crate::runtime::RetiredParentRun>,
+    reference: ParentReassemblyReference,
+}
+impl RetiredParentReassembly {
+    fn verify(&self, snapshot: &crate::control::ControlSnapshot) -> Result<()> {
+        self.retirement.verify_current(snapshot)?;
+        let actual = self
+            .subject
+            .reassembly_reference(&self.reference.phase.phase, self.retirement.operation_id())?;
+        self.retirement
+            .origin()
+            .verify_reassembly_reference(&actual)?;
+        if actual != self.reference || !actual.matches_run(self.retirement.run()) {
+            return Err(blocked(
+                "historical carried phase changed its exact causal run",
+            ));
+        }
+        Ok(())
+    }
+    fn verify_predecessor(
+        &self,
+        predecessor: &ParentRunPredecessor,
+        source: &ParentReassemblySource,
+    ) -> Result<()> {
+        let ParentRunPredecessor::Retired(retired) = predecessor else {
+            return Err(blocked(
+                "historical carried phase requires its authenticated retirement",
+            ));
+        };
+        let [parent, acceptance] = source
+            .original
+            .references
+            .reference()
+            .publication_receipts();
+        if retired.operation_id() != self.reference.operation
+            || self.reference.original_parent != parent
+            || self.reference.original_acceptance != acceptance
+            || self.reference.original_token != source.original.parent().token()
+            || self.reference.parent_work != *source.parent_authority.work()
+        {
+            return Err(blocked(
+                "historical carried phase changed original acceptance or predecessor",
+            ));
+        }
+        retired
+            .origin()
+            .verify_reassembly_reference(&self.reference)
+    }
+}
+impl DeliveryCoordinator {
+    pub(crate) fn retired_parent_reassembly(
+        &self,
+        subject: &RetainedCarrySubject,
+        retirement: Arc<crate::runtime::RetiredParentRun>,
+        gate: &FreshGate,
+        grants: &[VerifiedRetryGrant],
+    ) -> Result<Arc<RetiredParentReassembly>> {
+        (self.current_gate)(gate)?;
+        let reference = subject
+            .reassembly_reference(&retirement.run().phase.phase, retirement.operation_id())?;
+        if reference.worker_work != *gate.work() || reference.workspace != gate.workspace_id() {
+            return Err(blocked(
+                "historical carried phase differs from current authorized subject",
+            ));
+        }
+        verify_retained_parent_grants(&reference, &self.host.operations()?, grants)?;
+        let proof = Arc::new(RetiredParentReassembly {
+            subject: subject.clone(),
+            retirement,
+            reference,
+        });
+        proof.verify(&self.host.snapshot()?)?;
+        Ok(proof)
+    }
+}
+
 /// One actual next attempt of the existing finite parent phase. The assignment
 /// owns this proof only after its ordinary payload digest has been sealed.
 #[derive(Clone)]
 pub(crate) struct ParentReassemblyWork {
     source: Arc<ParentReassemblySource>,
     assignment: DeliveryWorkerAssignment,
-    predecessor: Arc<RunCompletion>,
+    predecessor: ParentRunPredecessor,
     joined: Vec<Arc<RunCompletion>>,
+    retired: Vec<Arc<crate::runtime::RetiredParentRun>>,
+    historical: Vec<Arc<RetiredParentReassembly>>,
     grants: Vec<VerifiedRetryGrant>,
     reference: ParentReassemblyReference,
 }
@@ -265,7 +409,14 @@ impl ParentReassemblyWork {
     pub(crate) fn verify_joined(
         &self,
         retained: &impl Fn(Uuid) -> Result<Option<Arc<RunCompletion>>>,
+        snapshot: &crate::control::ControlSnapshot,
     ) -> Result<()> {
+        for retired in &self.retired {
+            retired.verify_current(snapshot)?;
+        }
+        for historical in &self.historical {
+            historical.verify(snapshot)?;
+        }
         for completion in &self.joined {
             if retained(completion.operation_id)?
                 .as_ref()
@@ -281,12 +432,19 @@ impl ParentReassemblyWork {
         self.verify_predecessor()
     }
     fn verify_predecessor(&self) -> Result<()> {
-        if self.reference.transient_of.is_some() {
-            transient_failure(&self.predecessor)
-        } else if self.reference.retry_of.is_some() {
-            failed(&self.predecessor)
-        } else {
-            completed(&self.predecessor)
+        match &self.predecessor {
+            ParentRunPredecessor::Joined(run) if self.reference.transient_of.is_some() => {
+                transient_failure(run)
+            }
+            ParentRunPredecessor::Joined(run) if self.reference.retry_of.is_some() => failed(run),
+            ParentRunPredecessor::Retired(_)
+                if self.reference.transient_of.is_some() || self.reference.retry_of.is_some() =>
+            {
+                Err(blocked(
+                    "historical completed parent cannot supply a failed retry cause",
+                ))
+            }
+            predecessor => predecessor.completed(),
         }
     }
     pub(crate) fn verify_grants(
@@ -318,6 +476,9 @@ impl ParentReassemblyWork {
     ) -> Result<super::carry_history::CarryReferences> {
         self.source.validate(config)?;
         let mut refs = self.source.transition().carry_references(config)?;
+        for historical in &self.historical {
+            refs.extend(&historical.subject.reassembly_history_references()?)?;
+        }
         let source = &self.source;
         refs.extend(&source.original().references().retain_carry_references(
             &source.records,
@@ -453,12 +614,18 @@ impl ParentReassemblyWork {
     ) -> Result<()> {
         self.source.validate(config)?;
         self.source.validate_current(config)?;
+        for retired in &self.retired {
+            retired.verify_current(snapshot)?;
+        }
+        for historical in &self.historical {
+            historical.verify(snapshot)?;
+        }
         self.verify_grants(receipts, grants)?;
         crate::control::verify_parent_reassembly_reference(snapshot, &self.reference, receipts)?;
         self.verify_assignment(&self.assignment)?;
         let receipt = receipts
             .iter()
-            .find(|r| r.operation_id == self.predecessor.operation_id)
+            .find(|r| r.operation_id == self.predecessor.operation_id())
             .ok_or_else(|| blocked("actual parent predecessor receipt disappeared"))?;
         if receipt
             .observed_result
@@ -663,8 +830,9 @@ pub(crate) struct ParentReassemblySourceOrigin<'a> {
 
 /// Actual prior run plus its optional already-sealed reassembly ancestry.
 pub(crate) struct ParentReassemblyPredecessor<'a> {
-    pub completion: Arc<RunCompletion>,
+    pub completion: ParentRunPredecessor,
     pub previous: Option<&'a ParentReassemblyWork>,
+    pub historical: Option<&'a Arc<RetiredParentReassembly>>,
 }
 
 impl DeliveryCoordinator {
@@ -898,26 +1066,25 @@ impl DeliveryCoordinator {
         let ParentReassemblyPredecessor {
             completion: predecessor,
             previous,
+            historical,
         } = predecessor;
         (self.current_gate)(&source.parent_authority)?;
         (self.current_gate)(assignment.authority())?;
         source.validate(config)?;
-        completed(&predecessor)?;
+        predecessor.completed()?;
         let receipts = self.host.operations()?;
         let receipt = receipts
             .iter()
-            .find(|r| r.operation_id == predecessor.operation_id)
+            .find(|r| r.operation_id == predecessor.operation_id())
             .ok_or_else(|| blocked("parent predecessor admission missing"))?;
         let prior = crate::control::run_reference_from_receipt(receipt)?
             .ok_or_else(|| blocked("parent predecessor has no actual worker run"))?;
-        let original_contract = predecessor
-            .contract
-            .as_deref()
-            .ok_or_else(|| blocked("parent predecessor has no actual contract"))?;
-        let WorkerAuthority::Authorized(old_gate) = original_contract.authority() else {
-            return Err(blocked("parent predecessor was not authorized"));
-        };
-        old_gate.compare_admitted_authority(assignment.authority())?;
+        if previous.is_some() && historical.is_some() {
+            return Err(blocked(
+                "parent predecessor has conflicting live and historical ancestry",
+            ));
+        }
+        predecessor.verify_assignment(&assignment, &prior, historical.map(Arc::as_ref))?;
         let phase = prior.phase.clone();
         let (retained_grants, grant_references) = grant_lineage::capture(
             &phase,
@@ -929,11 +1096,6 @@ impl DeliveryCoordinator {
         if phase.work != assignment.authority().work_key()?
             || phase.generation != canonical_digest(1, &assignment.authority().work().generation)?
             || phase.phase != assignment.phase()
-            || prior.instruction_digest != original_contract.instructions().manifest_digest
-            || prior.account != original_contract.account_id()
-            || original_contract.instructions().manifest.operation_id != predecessor.operation_id
-            || original_contract.instructions().manifest.phase != assignment.phase()
-            || original_contract.instructions().manifest.role != assignment.role()
             || assignment.candidate_vector_digest() != Some(source.vector.digest())
             || assignment.parent_reassembly().is_some()
         {
@@ -947,8 +1109,18 @@ impl DeliveryCoordinator {
             .reference()
             .publication_receipts();
         let mut joined = if let Some(previous) = previous {
-            previous.verify_result(&predecessor, &receipts)?;
+            let ParentRunPredecessor::Joined(run) = &predecessor else {
+                return Err(blocked(
+                    "carried historical parent requires its original complete reassembly ancestry",
+                ));
+            };
+            previous.verify_result(run, &receipts)?;
             previous.joined.clone()
+        } else if let Some(historical) = historical {
+            historical.verify(&self.host.snapshot()?)?;
+            historical.verify_predecessor(&predecessor, &source)?;
+            verify_retained_parent_grants(&historical.reference, &receipts, grants)?;
+            Vec::new()
         } else {
             if ParentReassemblyReference::from_receipt(receipt)?.is_some() {
                 return Err(blocked(
@@ -957,7 +1129,19 @@ impl DeliveryCoordinator {
             }
             Vec::new()
         };
-        joined.push(predecessor.clone());
+        let mut retired = previous
+            .map(|proof| proof.retired.clone())
+            .unwrap_or_default();
+        let mut histories = previous
+            .map(|proof| proof.historical.clone())
+            .unwrap_or_default();
+        if let Some(historical) = historical {
+            histories.push(historical.clone());
+        }
+        match &predecessor {
+            ParentRunPredecessor::Joined(run) => joined.push(run.clone()),
+            ParentRunPredecessor::Retired(run) => retired.push(run.clone()),
+        }
         let mut reference = ParentReassemblyReference {
             grants: grant_references,
             retry_of: None,
@@ -1026,6 +1210,8 @@ impl DeliveryCoordinator {
             assignment: assignment.clone(),
             predecessor,
             joined,
+            retired,
+            historical: histories,
             grants: retained_grants,
             reference,
         });
@@ -1093,8 +1279,10 @@ impl DeliveryCoordinator {
         let proof = Arc::new(ParentReassemblyWork {
             source: previous.source.clone(),
             assignment: previous.assignment.clone(),
-            predecessor: failed_completion,
+            predecessor: ParentRunPredecessor::Joined(failed_completion),
             joined,
+            retired: previous.retired.clone(),
+            historical: previous.historical.clone(),
             grants,
             reference,
         });
@@ -1159,8 +1347,10 @@ impl DeliveryCoordinator {
         let proof = Arc::new(ParentReassemblyWork {
             source: previous.source.clone(),
             assignment: previous.assignment.clone(),
-            predecessor: failed_completion,
+            predecessor: ParentRunPredecessor::Joined(failed_completion),
             joined,
+            retired: previous.retired.clone(),
+            historical: previous.historical.clone(),
             grants: previous.grants.clone(),
             reference,
         });

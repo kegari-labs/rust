@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+case "${1-}" in
+  help) printf "%s\n" "reef check RESULT: validate inclusive boundaries" ;;
+  check) test "$#" -eq 2; exec python3 -B scripts/validate_boundary.py --result "$2" ;;
+  *) printf "%s\n" "unknown reef command; use help" >&2; exit 2 ;;
+esac

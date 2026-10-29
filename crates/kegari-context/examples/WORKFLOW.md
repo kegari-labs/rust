@@ -13,7 +13,11 @@ workflow, absent check catalog or unavailable execution facility is not evidence
 of success. Explain unsupported or inaccessible prerequisites accurately, without
 discarding failed checks or choosing an easier subset.
 
-Use only the actual host-provided tools within their admitted boundaries. Parent
+Use native Codex repository tools for permitted inspection, editing and command
+execution. Codex enforces the supplied sandbox and manages supported terminals.
+Use Kegari tools only for the exposed workflow/context/provider operations.
+Record actual structured results; prose claims cannot replace observed execution.
+Parent
 coordination never implements; independent PR review never executes repository
 code or environment probes. No instruction here grants filesystem, network,
 credential, process, service or provider authority. Host capability refusal

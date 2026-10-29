@@ -8,7 +8,7 @@ use crate::{
     reconcile::FreshGate,
 };
 use chrono::{DateTime, Utc};
-use kegari_config::{Deployment, DeploymentStep};
+use kegari_config::{Deployment, DeploymentStep, ExactRevisionWorkflow};
 use kegari_digest::{bytes_digest, canonical_digest};
 use kegari_git::Revision;
 use kegari_providers::{GithubClient, GithubRecord, WorkflowJob, WorkflowRun};
@@ -30,6 +30,11 @@ pub use history::{HistoricalTargetDeployment, TargetProofReference};
 #[path = "deployment_baseline_history.rs"]
 mod baseline_history;
 pub(crate) use baseline_history::OwnedTargetObservationRef;
+#[path = "deployment_external.rs"]
+mod external;
+use external::VerifiedExternalTarget;
+pub use external::external_baseline_context_digest;
+pub(crate) use external::{ExternalTargetObservationRef, HistoricalExternalTarget};
 
 pub type CurrentAuthority = Arc<dyn Fn(&FreshGate) -> Result<()> + Send + Sync>;
 
@@ -45,6 +50,7 @@ pub struct ProductionObserver {
 pub struct VerifiedProductionBaseline {
     // Actual current owned target proofs; successor baselines cannot mint history.
     owned_targets: Vec<VerifiedTargetDeployment>,
+    external_targets: Vec<VerifiedExternalTarget>,
     baseline: ProductionBaseline,
     targets: Vec<ProductionTargetBaseline>,
     contract_digest: String,
@@ -163,6 +169,17 @@ impl VerifiedTargetDeployment {
         &self.record.challenge.contract_digest
     }
 }
+/// Current source/artifact verification only; it cannot supply a deployment effect.
+#[derive(Clone, Debug)]
+pub struct VerifiedExistingTarget {
+    digest: String,
+}
+impl VerifiedExistingTarget {
+    pub fn digest(&self) -> Result<String> {
+        Ok(self.digest.clone())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TargetDeploymentChallenge {
     signed: Signed<ChallengeRecord>,
@@ -294,7 +311,7 @@ impl ProductionObserver {
         target: &str,
         source: &Revision,
         artifact: &str,
-    ) -> Result<VerifiedTargetDeployment> {
+    ) -> Result<VerifiedExistingTarget> {
         source.validate()?;
         crate::evidence::validate_digest(artifact)?;
         let Deployment::Steps { steps } = contract.configuration.deployment_policy()? else {
@@ -318,23 +335,32 @@ impl ProductionObserver {
                 "existing target no longer serves the accepted production source/artifact",
             ));
         }
-        let proof = self.recover_target(contract, &configured.id).await?;
-        if proof.target().source != *source
-            || proof.target().artifact_digest != artifact
-            || !baseline.targets.iter().any(|target| {
-                let mut current = proof.target().clone();
-                // Observation time changes on each complete read; every native
-                // source, artifact, target and provider record must stay exact.
-                current.observed_at = target.observed_at;
-                target == &current
-            })
+        let (target, digest) = if let Some(record) = self
+            .current_owned_target_record(contract, &configured.id)
+            .await?
+        {
+            self.reobserve_record(contract, &record).await?;
+            let digest = canonical_digest(1, &record)?;
+            (record.target, digest)
+        } else {
+            let observed = self.external_target(contract, configured, None).await?;
+            (observed.target(), observed.digest()?)
+        };
+        if target.source != *source
+            || target.artifact_digest != artifact
+            || !baseline
+                .targets
+                .iter()
+                .any(|current| baseline_history::same_target(current, &target))
+            || self.main(contract).await? != *source
         {
             return Err(blocked(
                 "existing target changed during complete baseline observation",
             ));
         }
-        Ok(proof)
+        Ok(VerifiedExistingTarget { digest })
     }
+
     /// Recover only an already persisted exact challenge. This does not admit,
     /// dispatch, or renew a deployment operation.
     pub fn recover_challenge(
@@ -439,6 +465,7 @@ impl ProductionObserver {
         baseline.validate()?;
         Ok(VerifiedProductionBaseline {
             owned_targets: vec![],
+            external_targets: vec![],
             baseline,
             targets: current.targets,
             contract_digest: current.contract_digest,
@@ -771,9 +798,14 @@ impl ProductionObserver {
                             "configured recovery target/environment inventory is ambiguous",
                         ));
                     }
-                    let record = self.retained_target_record(contract, &step.id).await?;
-                    self.reobserve_target_record(contract, &record).await?;
-                    let mut target = record.target;
+                    let mut target = if let Some(record) =
+                        self.current_owned_target_record(contract, &step.id).await?
+                    {
+                        self.reobserve_target_record(contract, &record).await?;
+                        record.target
+                    } else {
+                        self.external_target(contract, step, None).await?.target()
+                    };
                     target.observed_at = Utc::now();
                     targets.push(target);
                 }
@@ -810,6 +842,7 @@ impl ProductionObserver {
         let mut targets = Vec::new();
         let mut target_artifacts = BTreeMap::new();
         let mut owned_targets = Vec::new();
+        let mut external_targets = Vec::new();
         let deployment_free = match deployment {
             Deployment::None(value) if value == "none" => true,
             Deployment::Steps { steps } if !steps.is_empty() => {
@@ -822,18 +855,29 @@ impl ProductionObserver {
                             "configured deployment targets/environments are ambiguous",
                         ));
                     }
-                    let observed = self.recover_target(contract, &s.id).await?;
-                    if observed.target().source != production {
+                    let mut target = if let Some(record) =
+                        self.current_owned_target_record(contract, &s.id).await?
+                    {
+                        self.reobserve_record(contract, &record).await?;
+                        let observed = VerifiedTargetDeployment {
+                            record,
+                            observed_at: Utc::now(),
+                        };
+                        let target = observed.target().clone();
+                        owned_targets.push(observed);
+                        target
+                    } else {
+                        let observed = self.external_target(contract, s, None).await?;
+                        let target = observed.target();
+                        external_targets.push(observed);
+                        target
+                    };
+                    if target.source != production {
                         return Err(blocked("deployed target and current main diverge"));
                     }
-                    target_artifacts.insert(
-                        s.target_id.clone(),
-                        observed.target().artifact_digest.clone(),
-                    );
-                    let mut target = observed.target().clone();
-                    target.observed_at = observed.observed_at();
+                    target_artifacts.insert(s.target_id.clone(), target.artifact_digest.clone());
+                    target.observed_at = Utc::now();
                     targets.push(target);
-                    owned_targets.push(observed);
                 }
                 false
             }
@@ -869,6 +913,7 @@ impl ProductionObserver {
         baseline.validate()?;
         Ok(VerifiedProductionBaseline {
             owned_targets,
+            external_targets,
             baseline,
             targets,
             contract_digest,
@@ -1090,8 +1135,15 @@ impl ProductionObserver {
         step: &DeploymentStep,
         run: &WorkflowRun,
     ) -> Result<Vec<WorkflowJob>> {
+        self.verify_route_run(contract, &step.workflow, run).await
+    }
+    async fn verify_route_run(
+        &self,
+        contract: &RepositoryContract,
+        route: &ExactRevisionWorkflow,
+        run: &WorkflowRun,
+    ) -> Result<Vec<WorkflowJob>> {
         let actor = self.github.identity().await?;
-        let route = &step.workflow;
         route.proof.validate()?;
         let locator = route.proof.workflow_ref.split('@').next().unwrap_or("");
         let workflow_path = locator.splitn(3, '/').nth(2).unwrap_or("");
@@ -1337,6 +1389,12 @@ fn check_manifest(
     Ok(())
 }
 fn read_manifest(bytes: &[u8]) -> Result<(DeploymentManifest, String)> {
+    read_named_manifest(bytes, "kegari-deployment.json")
+}
+fn read_named_manifest<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    name: &str,
+) -> Result<(T, String)> {
     const LIMIT: u64 = 1_048_576;
     if bytes.len() > 4 * 1024 * 1024 {
         return Err(blocked("deployment archive exceeds bound"));
@@ -1351,7 +1409,7 @@ fn read_manifest(bytes: &[u8]) -> Result<(DeploymentManifest, String)> {
     let mut file = archive
         .by_index(0)
         .map_err(|_| blocked("deployment archive member is unreadable"))?;
-    if file.name().ok().as_deref() != Some("kegari-deployment.json")
+    if file.name().ok().as_deref() != Some(name)
         || file.encrypted()
         || file.is_dir()
         || file.is_symlink()

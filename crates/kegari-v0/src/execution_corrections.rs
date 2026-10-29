@@ -20,7 +20,6 @@ pub struct CorrectionExecutionProvenance {
 pub struct EffectiveExecutionBinding {
     original: ExecutionBinding,
     effective: ExecutionBinding,
-    ownership_digest: String,
     transition: Arc<VerifiedCorrectionTransition>,
 }
 impl EffectiveExecutionBinding {
@@ -54,7 +53,6 @@ impl EffectiveExecutionBinding {
         Ok(Self {
             original: original.clone(),
             effective,
-            ownership_digest: ownership.digest().into(),
             transition,
         })
     }
@@ -75,52 +73,4 @@ impl EffectiveExecutionBinding {
             input_digest: self.transition.input_digest(),
         })
     }
-    fn verify(&self, executor: &LocalExecutor<'_>, effective: &ExecutionBinding) -> Result<()> {
-        if effective != &self.effective
-            || executor.ownership.digest() != self.ownership_digest
-            || self.original.work != *self.transition.original_work()
-            || self.effective.work != *self.transition.effective_work()
-        {
-            return Err(Error::new(
-                "correction_execution_binding",
-                "effective execution or original ownership changed",
-            ));
-        }
-        executor.launch_identity(&self.original)
-    }
 }
-
-impl LocalExecutor<'_> {
-    pub fn prepare_effective_check(
-        &self,
-        invocation: CheckInvocation<'_>,
-        effective: &EffectiveExecutionBinding,
-        persist: impl FnMut(&CheckJournalEntry) -> Result<()>,
-    ) -> Result<PreparedCheck> {
-        effective.verify(self, invocation.binding)?;
-        if invocation.kind != CheckKind::Local {
-            return Err(Error::new(
-                "correction_execution_binding",
-                "active child corrections require local checks; integrated candidates need a new exact vector",
-            ));
-        }
-        self.prepare_check_inner(invocation, Some(effective.clone()), persist)
-    }
-    pub(super) fn check_ownership_binding<'a>(
-        &self,
-        binding: &'a ExecutionBinding,
-        effective: Option<&'a EffectiveExecutionBinding>,
-    ) -> Result<&'a ExecutionBinding> {
-        match effective {
-            Some(effective) => {
-                effective.verify(self, binding)?;
-                Ok(effective.original())
-            }
-            None => Ok(binding),
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "execution_corrections_tests.rs"]
-mod tests;

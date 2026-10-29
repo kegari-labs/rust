@@ -30,8 +30,106 @@ enum ContextSource {
     IndependentPullRequestNumber,
     IndependentPullRequestUrl,
     ForbiddenCanaryPath,
+    AuthorizedWork,
+    ChildWork,
+    AuthorizationComment,
+    LinearEndpoint,
+    LinearWorkspace,
+    ParentReference,
+}
+/// Expected-context substitutions from the actual reconciled host. These
+/// descriptive identities confer no execution or admission capability.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct HostChildContext {
+    workspace: uuid::Uuid,
+    work: crate::evidence::WorkIdentity,
+    children: BTreeMap<uuid::Uuid, crate::evidence::WorkIdentity>,
+    authorization: kegari_providers::Comment,
+}
+impl HostChildContext {
+    pub(crate) fn from_parent(
+        parent: &crate::reconcile::ParentProjection,
+        gate: &crate::reconcile::FreshGate,
+        key: &kegari_secrets::AttestationKey,
+    ) -> Result<Self> {
+        let selected = gate.work().child.ok_or_else(|| {
+            Error::new(
+                "evaluation_fidelity",
+                "child context requires actual child authority",
+            )
+        })?;
+        if parent.workspace_id != gate.workspace_id()
+            || parent.key.issue != gate.work().parent
+            || parent.children.get(&selected).and_then(|c| c.work.as_ref()) != Some(gate.work())
+        {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "child context differs from the actual projection",
+            ));
+        }
+        let observed = parent.observations.get(&parent.key.issue).ok_or_else(|| {
+            Error::new("evaluation_fidelity", "parent native observation missing")
+        })?;
+        let [comment] = observed.comments.as_slice() else {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "fresh child fixture requires exactly its actual authorization publication",
+            ));
+        };
+        let signed: kegari_secrets::Signed<crate::reconcile::AuthorizationSnapshot> =
+            crate::evidence::decode_signed_publication(&comment.body, "parent_authorization", key)?;
+        if comment.issue_id != parent.key.issue
+            || comment.body_digest != bytes_digest(comment.body.as_bytes())
+            || canonical_digest(1, &signed.payload.event)? != gate.work().generation.authorization
+            || signed.payload.parent != parent.key
+            || signed.payload.required_children != parent.required_children
+            || !parent.authorization_published
+            || parent
+                .authorization_candidate
+                .as_ref()
+                .map(|candidate| canonical_digest(1, candidate))
+                .transpose()?
+                != Some(canonical_digest(1, &signed.payload)?)
+        {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "native authorization comment differs from admitted scope",
+            ));
+        }
+        let children = parent
+            .children
+            .iter()
+            .map(|(id, child)| {
+                let work = child.work.as_ref().ok_or_else(|| {
+                    Error::new(
+                        "evaluation_fidelity",
+                        "declared child has no actual work identity",
+                    )
+                })?;
+                work.validate()?;
+                if work.child != Some(*id)
+                    || work.parent != gate.work().parent
+                    || work.linear_workspace != gate.work().linear_workspace
+                    || work.generation.authorization != gate.work().generation.authorization
+                {
+                    return Err(Error::new(
+                        "evaluation_fidelity",
+                        "child identity differs from original authorization",
+                    ));
+                }
+                Ok((*id, work.clone()))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        Ok(Self {
+            workspace: gate.workspace_id(),
+            work: gate.work().clone(),
+            children,
+            authorization: comment.clone(),
+        })
+    }
 }
 pub(super) struct HostContext<'a> {
+    pub child: Option<&'a HostChildContext>,
     pub canary_operand: Option<&'a OwnedCanaryPathOperand>,
     pub workspace: uuid::Uuid,
     pub operation: uuid::Uuid,
@@ -44,7 +142,7 @@ pub(super) struct HostContext<'a> {
 }
 impl NativeContextBinding {
     pub(super) fn validate(&self, input: &Value) -> Result<()> {
-        if !matches!(self.schema_version, 1..=3)
+        if !matches!(self.schema_version, 1..=4)
             || self.slots.len() < 4
             || self.slots.len() > 64
             || self.source_write_paths.len() > MAX_FILES
@@ -83,6 +181,20 @@ impl NativeContextBinding {
             {
                 return Err(Error::invalid(
                     "forbidden pathname requires version 3 and its exact declared field",
+                ));
+            }
+            if matches!(
+                slot.source,
+                ContextSource::AuthorizedWork
+                    | ContextSource::ChildWork
+                    | ContextSource::AuthorizationComment
+                    | ContextSource::LinearEndpoint
+                    | ContextSource::LinearWorkspace
+                    | ContextSource::ParentReference
+            ) && (self.schema_version != 4 || !child_pointer_valid(slot))
+            {
+                return Err(Error::invalid(
+                    "child host substitutions require version 4 and exact identity/publication fields",
                 ));
             }
             expected.insert(slot.pointer.clone(), slot.source);
@@ -152,6 +264,19 @@ impl NativeContextBinding {
                 ));
             }
         }
+        if self.schema_version == 4
+            && (expected.get("/operation/work") != Some(&ContextSource::AuthorizedWork)
+                || expected
+                    .values()
+                    .filter(|s| **s == ContextSource::AuthorizationComment)
+                    .count()
+                    != 1
+                || !expected.values().any(|s| *s == ContextSource::ChildWork))
+        {
+            return Err(Error::invalid(
+                "version 4 needs actual operation/child identities and one parent authorization publication",
+            ));
+        }
         let mut actual = BTreeMap::new();
         let mut context = input.clone();
         context
@@ -169,6 +294,9 @@ impl NativeContextBinding {
     }
     pub(super) fn requires_canary_context(&self) -> bool {
         self.schema_version == 3
+    }
+    pub(super) fn requires_child_context(&self) -> bool {
+        self.schema_version == 4
     }
     pub(super) fn write_paths(&self) -> &[String] {
         &self.source_write_paths
@@ -214,10 +342,70 @@ impl NativeContextBinding {
                 "declared context and original canary operand differ",
             ));
         }
+        if (self.schema_version == 4) != host.child.is_some() {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "child context declaration and actual retained host identities differ",
+            ));
+        }
+        if let Some(child) = host.child
+            && (child.workspace != host.workspace
+                || child.work.digest()? != host.work_generation
+                || child.work.generation.correction != host.correction_revision)
+        {
+            return Err(Error::new(
+                "evaluation_fidelity",
+                "retained child identities differ from the actual worker manifest",
+            ));
+        }
         let mut expected = input.clone();
         expected.as_object_mut().unwrap().remove("timeline");
         for slot in &self.slots {
             let value = match slot.source {
+                ContextSource::LinearEndpoint => {
+                    Value::String(host.child.unwrap().work.linear_endpoint.clone())
+                }
+                ContextSource::LinearWorkspace => {
+                    serde_json::json!(host.child.unwrap().work.linear_workspace)
+                }
+                ContextSource::ParentReference => Value::String(format!(
+                    "{}/{}",
+                    host.workspace,
+                    host.child.unwrap().work.parent
+                )),
+                ContextSource::AuthorizedWork => crate::delivery::public_model_context(
+                    &serde_json::to_value(&host.child.unwrap().work)
+                        .map_err(|_| Error::invalid("work identity encoding failed"))?,
+                )?,
+                ContextSource::ChildWork => {
+                    let id = child_pointer_id(&slot.pointer, "/children/", "/work")?;
+                    let work = host.child.unwrap().children.get(&id).ok_or_else(|| {
+                        Error::new(
+                            "evaluation_fidelity",
+                            "declared child identity is absent from actual authorization",
+                        )
+                    })?;
+                    crate::delivery::public_model_context(
+                        &serde_json::to_value(work)
+                            .map_err(|_| Error::invalid("work identity encoding failed"))?,
+                    )?
+                }
+                ContextSource::AuthorizationComment => {
+                    let child = host.child.unwrap();
+                    let id = child_pointer_id(
+                        &slot.pointer,
+                        "/evidence/native_context/observations/",
+                        "/comments/0",
+                    )?;
+                    if id != child.work.parent || child.authorization.issue_id != id {
+                        return Err(Error::new(
+                            "evaluation_fidelity",
+                            "authorization publication slot names another parent",
+                        ));
+                    }
+                    serde_json::to_value(&child.authorization)
+                        .map_err(|_| Error::invalid("authorization comment encoding failed"))?
+                }
                 ContextSource::ForbiddenCanaryPath => Value::String(
                     host.canary_operand
                         .ok_or_else(|| {
@@ -271,6 +459,49 @@ impl NativeContextBinding {
         }
         Ok(expected)
     }
+}
+fn child_pointer_id(pointer: &str, prefix: &str, suffix: &str) -> Result<uuid::Uuid> {
+    pointer
+        .strip_prefix(prefix)
+        .and_then(|p| p.strip_suffix(suffix))
+        .and_then(|id| uuid::Uuid::parse_str(id).ok())
+        .filter(|id| !id.is_nil())
+        .ok_or_else(|| Error::invalid("child host slot requires one exact UUID"))
+}
+fn child_pointer_valid(slot: &ContextSlot) -> bool {
+    match slot.source {
+        ContextSource::AuthorizedWork => slot.pointer == "/operation/work",
+        ContextSource::ChildWork => child_pointer_id(&slot.pointer, "/children/", "/work").is_ok(),
+        ContextSource::AuthorizationComment => child_pointer_id(
+            &slot.pointer,
+            "/evidence/native_context/observations/",
+            "/comments/0",
+        )
+        .is_ok(),
+        ContextSource::ParentReference => {
+            child_pointer_id(&slot.pointer, "/children/", "/parent_reference").is_ok()
+        }
+        ContextSource::LinearEndpoint => {
+            issue_identity_pointer(&slot.pointer, "endpoint")
+                || child_pointer_id(&slot.pointer, "/children/", "/key/endpoint").is_ok()
+        }
+        ContextSource::LinearWorkspace => {
+            issue_identity_pointer(&slot.pointer, "workspace_id")
+                || child_pointer_id(&slot.pointer, "/children/", "/key/workspace").is_ok()
+        }
+        _ => false,
+    }
+}
+fn issue_identity_pointer(pointer: &str, field: &str) -> bool {
+    pointer == format!("/issue/{field}")
+        || pointer == format!("/parent/{field}")
+        || child_pointer_id(pointer, "/children/", &format!("/issue/{field}")).is_ok()
+        || child_pointer_id(
+            pointer,
+            "/evidence/native_context/observations/",
+            &format!("/issue/{field}"),
+        )
+        .is_ok()
 }
 fn independent_pointer(source: ContextSource) -> Option<&'static str> {
     match source {
@@ -357,6 +588,7 @@ mod tests {
         let (binding, input) = declaration();
         let profile = profile();
         let host = HostContext {
+            child: None,
             workspace: uuid::Uuid::new_v4(),
             operation: uuid::Uuid::new_v4(),
             profile: &profile,
@@ -393,6 +625,8 @@ mod tests {
             fixture_digest: bytes_digest(b"declared fixture"),
             preparation_digest: String::new(),
             context_binding: Some(binding),
+            child_issues: None,
+            child_context: None,
             worker_placement: None,
             worker_manifest: None,
             canary: None,
@@ -412,6 +646,7 @@ mod tests {
             .unwrap();
         verify_declared_phase(variant, variant.role, host.phase).unwrap();
         let different_phase = HostContext {
+            child: None,
             phase: "review_fix",
             ..host
         };
@@ -431,6 +666,7 @@ mod tests {
             "evaluation_fidelity"
         );
         let host = HostContext {
+            child: None,
             phase: "implementation",
             ..different_phase
         };
@@ -516,6 +752,7 @@ mod tests {
         }
         let profile = profile();
         let host = HostContext {
+            child: None,
             workspace: uuid::Uuid::new_v4(),
             operation: uuid::Uuid::new_v4(),
             profile: &profile,
@@ -567,6 +804,7 @@ mod tests {
             url: "https://github.example.invalid/evaluation/fixture/pull/803".into(),
         };
         let host = HostContext {
+            child: None,
             workspace: uuid::Uuid::new_v4(),
             operation: uuid::Uuid::new_v4(),
             profile: &profile,
@@ -597,6 +835,8 @@ mod tests {
             fixture_digest: bytes_digest(b"declared native subject fixture"),
             preparation_digest: String::new(),
             context_binding: Some(binding.clone()),
+            child_issues: None,
+            child_context: None,
             worker_placement: None,
             worker_manifest: None,
             canary: None,
@@ -624,6 +864,7 @@ mod tests {
             );
         }
         let absent = HostContext {
+            child: None,
             independent_pull_request: None,
             canary_operand: None,
             ..host
@@ -645,6 +886,7 @@ mod tests {
         wrong.slots.sort_by(|a, b| a.pointer.cmp(&b.pointer));
         assert!(wrong.validate(&input).is_err());
         let bad_phase = HostContext {
+            child: None,
             phase: "implementation",
             ..absent
         };
@@ -700,6 +942,7 @@ mod tests {
         };
         let profile = profile();
         let host = HostContext {
+            child: None,
             workspace: uuid::Uuid::new_v4(),
             operation: uuid::Uuid::new_v4(),
             profile: &profile,
@@ -755,6 +998,7 @@ mod tests {
             );
         }
         let absent = HostContext {
+            child: None,
             independent_pull_request: None,
             canary_operand: None,
             ..host

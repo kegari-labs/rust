@@ -1,5 +1,511 @@
 # Kegari v0 build progress
 
+## Six-hour redesign — checkpointed for early pause, 2026-10-29
+
+The user activated the authoritative GOAL.md assignment. Work is on the current
+branch, with no commits or additional permissions requested.
+
+- `started_at`: **2026-10-29T01:30:33Z** (02:30:33 Europe/Amsterdam).
+- `handoff_at`: **2026-10-29T07:10:33Z** (08:10:33 Europe/Amsterdam).
+- `deadline_at`: **2026-10-29T07:30:33Z** (08:30:33 Europe/Amsterdam).
+
+These timestamps persist across continuations; no new six-hour window is granted.
+The run is being paused early at the completed build boundary under the user's
+weekly-only/no-paid-credit restriction. The latest allowance observation is 98%
+used, not exhausted, and the paid-credit balance is unchanged. Further substantive
+implementation remains, but another coherent increment cannot be reliably bounded
+to this small remainder. The goal is not complete. Consult the goal service for
+the registered pause state; any later continuation retains the original deadline
+unless the user changes it. The preparation checkpoint below is historical.
+
+First target: M02-1, an ordinary admitted child workflow using Codex native
+repository tools and structured source-bound results. Then remove the superseded
+custom execution harness (M02-2), and advance dependency-ready features. Focused
+compilation and minimal relevant fixtures are the validation policy; comprehensive
+coverage and live/native qualification remain deferred. The existing documentation
+preparation changes and alpha.10 archive are preserved.
+
+## Redesign checkpoint 08 — 2026-10-29 05:33 UTC
+
+**Cold carried-parent continuation is connected, and the refreshed optimized
+candidate builds and passes the five state-free inspections.** Work is checkpointed
+for early pause under the weekly-only spending restriction above. No minor
+milestone is complete; this is not an operationally qualified release.
+
+The 0.3/0.4 cold path can now continue a completed carried parent after another
+baseline change. It reads the exact signed carry and authentic retired
+integrated/adequacy/synthesis phases, original human acceptance and native
+publications. The historical proof retains original assignment, source-transition
+and retry-grant ancestry through later reassembly and retirement. A fresh baseline
+transition and new checks still enter ordinary admission with the existing finite
+budgets. No live task, current acceptance or process owner is reconstructed from
+descriptive JSON. Missing legacy recovery/source records remain explicit refusals.
+No new persisted format was introduced.
+
+The affected library check and three existing carry-recovery component checks pass
+(`/private/tmp/kegari-carried-parent-history-check.log` and
+`/private/tmp/kegari-carried-parent-history-focused.log`). These checks do not
+establish a full cold-restart or provider-backed end-to-end workflow.
+
+Current executable: `target/release/kegari-v0`, version `0.2.0-alpha.10`.
+Runtime build: `sha256:cf0769172519167334250d7c46f143632b152b5d0e95bdd9f6e7d13a14de9345`.
+Executable SHA-256: `fee7aa64488542262af69d08fb26fbd66a9bb307fc1814520441eec09d224ac8`.
+Build log: `/private/tmp/kegari-redesign-build-handoff.log`.
+Inspection evidence: `/private/tmp/kegari-redesign-handoff-inspection.json`.
+`--help`, `--version`, `setup --help`, `__build-info` and `__handover-info`
+pass with an empty environment and leave the disposable working directory empty.
+Version/build metadata agree; assets remain 9, handover schema 6 and Codex execution
+schema 1. The checkpoint-07 binary identity is historical; this build supersedes
+it. The alpha.10 archive is unchanged. No installation or release archive exists
+for this candidate.
+
+The reviewable work is uncommitted on the current branch. Custom repository
+command running, sandbox rendering, resource/environment inventories, competing
+worker read/edit/command tools and their obsolete tests are removed. Host
+Git/Codex/control process ownership, workflow authority and required-check
+acceptance remain. Focused results and meaningful failures are recorded above
+and below; comprehensive regression, actual-agent/provider/native qualification
+and human calibration remain deferred to 0.7.
+
+Next source work remains the unfinished milestone queue, especially initial
+empty-remote publication policy, further cold phase/uncertain-result reconstruction,
+authoritative intervention resolution and genuine evaluation continuation/repetitions.
+Independent PR review still refuses the pinned profile's unestablished
+no-repository-execution capability; no upgrade or unsandboxed fallback is implied.
+The smallest supervised follow-up is to agree the pinned Codex review-capability
+route and a bounded actual-app-server smoke scope before authorizing native/live
+actions. No such action, real Keychain access, service activation, commit, push,
+remote mutation or paid-credit fallback was performed.
+
+## Redesign checkpoint 07 — 2026-10-29 05:21 UTC
+
+**An optimized Codex-backed checkpoint executable builds and passes all five
+state-free inspections.** The goal remains active with its original 07:30:33Z
+deadline. Weekly allowance is 97% consumed; the paid-credit balance is unchanged.
+No minor milestone or operational qualification is complete.
+
+- Fixed the final child-evaluation admission check to bind the original
+  authoritative context evidence instead of requiring an empty evidence object.
+  Its eight-context fixture passes, including substituted-context and injected
+  canary refusals. Independent-review restrictions remain unchanged.
+- Carry recovery now records the actual independent adequacy phase for discovered
+  validation, using schema 2. Legacy two-phase schema-1 bytes remain unchanged;
+  missing, aliased or relabelled adequacy cannot become valid recovery. The focused
+  existing carry fixture passes. Cold repeated reassembly ancestry remains the
+  next bounded implementation target.
+- The requested read-only Markdown audit found no architectural instruction
+  conflicting with Codex-owned repository execution. All 614 local file links
+  resolve and the specification inventory passes. Two guide freshness notes now
+  distinguish current asset 9 and current evaluation enrollment from older inputs.
+
+Checkpoint executable: `target/release/kegari-v0` (not installed or packaged).
+Version remains `0.2.0-alpha.10`; runtime build identity is
+`sha256:753e7fdb54b2df1ce24d71acc451297b937d6caae4cf68897af4b4587ee55208`.
+Executable SHA-256 is
+`399189bd75b3194327893832f8c37a05efca31f712fd00bfa4dcedf66dc78c61`.
+`--help`, `--version`, `setup --help`, `__build-info` and `__handover-info`
+all exit successfully with an empty environment; their disposable working
+directory remains empty. Version/build identities agree. Instruction assets are
+9, handover schema 6, Codex execution schema 1, configuration schema 1 and process
+schema 3. Later source edits require a new build before claiming it is current.
+
+Evidence: `/private/tmp/kegari-evaluation-final-context-gate.log`,
+`/private/tmp/kegari-carry-adequacy-final.log`,
+`/private/tmp/kegari-redesign-build-final.log` and
+`/private/tmp/kegari-redesign-inspection.json`. The earlier build and failed
+attempts remain retained. `git diff --check` passes. No broad application suite,
+installed Codex, real Keychain, live provider, native qualification, service
+activation, commit, remote operation or release packaging ran.
+
+Remaining limitations include independent PR review's unsupported pinned
+no-execution capability, initial empty-remote publication policy, additional cold
+phase/reassembly paths, authoritative intervention clearing, genuine evaluation
+continuation and live qualification. These are not silently waived by the build.
+
+## Redesign checkpoint 06 — 2026-10-29 05:05 UTC
+
+**Blocked child outcomes and cold unpublished-E2E recovery are connected.**
+The original 07:30:33Z deadline remains fixed. Weekly allowance was 95% consumed
+at the last check; integration/build is being brought forward to preserve the
+user's restriction against paid-credit continuation. No minor milestone is complete.
+
+- 0.2: a child can report a typed blocker with its actual completed-turn proposal,
+  reason and next action. It cannot claim fulfilled criteria, completed delivery
+  or successful checks. Existing status/receipt handling retains the blocker;
+  retry still requires a legitimate new trigger. Instruction assets are version
+  **9**, with the catalog changed alongside the new result contract.
+- 0.3/0.4: an actual E2E child waiting for integrated validation now writes a private
+  signed preparation checkpoint. Cold restoration checks original retired receipts,
+  owned source/Git state, validation archives, review and hosted evidence. Parent
+  assembly can recover the unpublished input. Publication and closure still require
+  fresh integrated validation and their own admitted operation. No historical JSON
+  becomes a live worker, current result or process owner. Another baseline change
+  after cold restoration of an already-carried parent still needs authentic prior
+  reassembly ancestry; that separate implementation was not started.
+- 0.6: fresh implementation/testing/documentation/no-change contexts use the ordinary
+  production authorization and worker path. E09 now has five declared variants for
+  unfamiliar tools, stale guidance, missing tests, unavailable capability and an
+  actually empty repository. The empty case keeps its workflow outside source,
+  uses schema-3 absent baseline declarations and actual Git/provider empty-state
+  checks, and records native bootstrap observations without inventing a commit or
+  accepted completion. Ordinary candidate-provenance checks remain unchanged.
+  Live trials, genuine continuation and remaining contexts/repetitions are deferred.
+
+Focused checks passed: eight committed authorization/context flows (one test),
+actual blocked-child simulated transport, prepared-E2E retirement/refusal, existing
+empty coordination binding, actual disposable-Git unborn preservation/root sealing,
+and empty fixture preparation. Logs: `/private/tmp/kegari-e09-committed-contexts3.log`,
+`/private/tmp/kegari-blocked-child-focused.log`,
+`/private/tmp/kegari-unborn-git-current.log`, and
+`/private/tmp/kegari-e09-unborn-fixture2.log`. The initial missing macro import,
+private-field access and incorrect fixture phase were diagnosed and corrected;
+failed logs remain. Configuration absent/partial-baseline bounds also pass
+(`/private/tmp/kegari-unborn-config-focused.log`). The first optimized build
+passed (`/private/tmp/kegari-redesign-build.log`); a subsequently identified
+child-evaluation final-admission evidence mismatch is being corrected before
+final rebuild and state-free inspection.
+No broad suite, installed Codex, live provider, Keychain or native qualification ran.
+
+## Redesign checkpoint 05 — 2026-10-29 04:40 UTC
+
+**Cold recovery and the first real child evaluation context have advanced.
+The original 07:30:33Z deadline remains fixed; no minor milestone is complete.**
+
+- 0.3: cold changed-baseline parent reconstruction now retains original phase
+  budgets and validation history before entering the actual carry transition.
+  Completed carried parents can recover current release inputs through fresh
+  authenticated evidence. Historical results are not installed as current
+  readiness, and no retained PID or summary becomes a live worker.
+- 0.3/0.4: interrupted replacements now retain a schema-2 signed assignment
+  checkpoint. Recovery reads the original published staging evidence, exact
+  imported production source and protected session/receipt lineage before using
+  the existing resume path. Actual resume successors keep the same assignment;
+  parent fencing follows their original finite receipt chain. Schema-1 records
+  remain preserved without inventing missing source identities. Restoring the
+  unpublished E2E candidate input needed by an ordinary waiting parent remains
+  in progress; this is not yet complete cold replacement delivery.
+- 0.6: fresh E01 implementation evaluation now uses captured issue/history data,
+  actual signed authorization publication, reconciled child authority and the
+  ordinary production worker caller. The complete declared context template
+  matches through typed host identity/publication substitutions. Task text,
+  scope and history stay literal; expected context is never copied from actual
+  context at runtime. The old summary-object assumption is corrected for typed
+  child claims; a recorded proposal is descriptive evidence, not successful
+  execution or delivery. Other fresh child contexts and continuation remain open.
+- Deletion/clarity: removed two unused private executor-related fields, kept
+  no-spawn reservation support only in tests, and corrected the stale protocol
+  and controller-guide passages identified by the documentation review.
+
+Focused evidence: E01's actual reserved-provider publication/reconciliation/context
+fixture passed (1/1), including unpublished-authority and changed-task refusals;
+`/private/tmp/kegari-e01-child-fixture4.log`. The same compiled backend test binary
+passed the cold comparison-history, prior/current parent-vector and exact
+replacement resume-chain filters (1/1 each). The latter rejects forks, changed
+predecessor records and another child's lineage. Initial compile errors and the
+authorization-event versus publication-digest mismatch were understood and fixed;
+earlier logs remain beside the successful run. Small subsequent parent/recovery
+edits will receive their next affected compile check. No broad suite or live/native
+qualification ran.
+
+Next: finish useful ordinary-path recovery and migrate remaining fresh child
+evaluation contexts through the existing caller. Keep feature-first checks and
+reserve 07:10:33Z onward for integration, executable build and handoff.
+
+## Redesign checkpoint 04 — 2026-10-29 04:10 UTC
+
+**Operator visibility, cleanup hooks and delivery/recovery integrations have
+advanced. The original deadline remains 07:30:33Z; no minor milestone is complete.**
+
+- 0.2: native result lists and complete redacted command output are paged through
+  the existing context tool, with session/item/source/output identities and stale
+  cursor refusal. Existing status now renders the real control-host envelope and
+  includes a bounded, redacted recent-log tail that survives restart; unavailable
+  or truncated logs are explicitly identified.
+- 0.2: `before_remove` now uses the pinned Codex command interface under the
+  original sealed cleanup decision. Kegari owns only the adapter processes,
+  preserves unknown hook outcomes and joins cleanup before removal can proceed.
+  The remaining unused custom repository-reader implementation is deleted;
+  historical read records remain data and cannot become native Codex evidence.
+  The retained context-read journal and tamper-refusal checks pass. Two tests
+  solely exercising the removed reader/path paging were removed with it.
+- 0.3: cold ordinary-child validation restores the actual retained obligations,
+  attempts and artifacts through a distinct signed history archive, without
+  weakening passing-evidence requirements. Same-process parent reassembly now
+  carries prior history into fresh validation, separate adequacy review and
+  synthesis. Cold completed-parent restoration uses authentic retirement records
+  and fresh provider/Git/evidence reads; changed-baseline cold reassembly remains
+  in progress. No live worker or process ownership is fabricated from saved data.
+- 0.4: external baselines retain their external provenance through current and
+  historical unchanged-target/no-release verification. Replacement delivery now
+  connects actual isolated production source, fresh checks, exact-head CI, review,
+  original contribution mapping and publication. Completed replacement discovery
+  avoids replay and revalidates actual published evidence. Replacement generations
+  fence both workers and preparation. Repeated replacements now preserve their complete predecessor/contribution
+  chain and original staging proof, with focused actual Git capture/verification.
+  Interrupted replacement recovery remains a separate unfinished path.
+
+Focused evidence: the coordinated twelve checks passed, covering replacement
+acquisition/Git/generation fencing, prior/current parent vectors, four retained
+Git/source cases, cleanup admission/journaling, recent logs and CLI status. The
+native output-paging fixture and cold validation-history/archive fixtures also
+passed. Logs remain under `/private/tmp/kegari-*-focused*.log` and the previously
+reported individual paths. The two replacement fixture compile omissions and a
+private runtime-field access were corrected; failed logs are retained. No broad
+suite, installed Codex, real providers, Keychain or native qualification was run.
+
+The documentation-only final review found no blocking architecture instructions;
+273 Markdown files and 611 local links were scanned, with no missing local links.
+The inventory check retained 520 contract blocks and 140 named requirements. That
+review did not restart the goal or establish product qualification.
+
+Remaining pin limitation: independent PR review requires a verified no-execution
+profile. Current official configuration documentation describes shell-tool
+reduction, but available evidence does not establish complete tool exclusion for
+this exact alpha pin. Keep the specific refusal; do not guess switches, restore a
+Kegari reader/executor or invoke an unauthorized native probe. Initial remote
+publication for an unborn repository and provider-intervention clearance also
+retain their recorded policy/capability limitations.
+
+Next: finish remaining cold/replacement recovery, migrate the existing evaluator
+to fresh production child contexts, and integrate the current source. Continue
+minimal sufficient validation; reserve 07:10:33Z onward for build and handoff.
+
+## Redesign checkpoint 03 — 2026-10-29 03:40 UTC
+
+**Onboarding, continuation, delivery evidence and operator handover have advanced.
+The original 07:30:33Z deadline remains fixed; no minor milestone is complete.**
+
+- 0.2: guided connection/workspace forms collect individual values, show the
+  proposed TOML and require explicit submission. Delivery policy stays optional
+  during discovery. Empty/unborn repositories now reach an actual scoped child
+  and retain a real nonempty root commit without modifying the operator's index.
+  Initial remote publication still needs a defined initialization policy; no SHA,
+  PR, accepted result or production baseline is invented.
+- 0.2: provider-failure and adequacy-repair continuation retain prior obligations
+  and attempts. Blocker comments use current eligible Linear scope, stable content
+  deduplication and owned-effect reconciliation. Status exposes reason-specific
+  provider intervention actions; unavailable resolution observation remains a
+  limitation. Account refresh journal kinds now match the guarded Codex launcher.
+- 0.3: cold ordinary-child recovery validates the protected original contract,
+  exact receipt/session, current provider readback and preserved dirty/staged
+  source. Metadata readback can refresh within its original finite budget.
+  Restoring incomplete validation histories is being integrated separately from
+  passing delivery evidence; parent and broader phase recovery remain unfinished.
+- 0.4: candidate-bound visual evidence uses actual selected native checks and
+  archived recording/inspection bytes, then existing private upload and exact
+  authenticated readback. No Kegari media runner was added. Initial external
+  baselines now use a fresh pinned observation workflow and external provenance;
+  unchanged/no-release consumption and replacement-delta delivery are in progress.
+- 0.5: local CLI routes now inspect a handover candidate, record reviewed external
+  qualification evidence and inspect/apply the existing stopped-runtime handover.
+  Exact-plan checks and idempotent receipt replay remain enforced. This is source
+  functionality verified with disposable fixtures, not real qualification or
+  installation.
+- Deletion: removed unused media/transcode records, obsolete command/source-read
+  helpers and old executor test fixtures. Four retained deterministic Git tests
+  remain. A real source-sealing defect rejected Git-ignored generated outputs;
+  the correction preserves ignored files while still refusing tracked changes
+  and undeclared untracked source. Strict fresh candidate assembly is unchanged.
+
+Focused evidence: the combined eleven relevant CLI/handover/visual/recovery/hold
+checks passed, as did the external-baseline fixture. Earlier unborn-root and cold
+recovery fixtures passed. Logs remain in `/private/tmp/kegari-*focused*.log`,
+`kegari-external-baseline-test.log` and the named prior checkpoint logs. No live
+provider, installed Codex, Keychain or native qualification was invoked.
+
+Retained failed attempts: the first four-test Git run passed three and exposed
+that ignored-output source-sealing defect; its corrected rerun could not compile
+while the replacement module was being introduced. Cold validation's first
+fixture exposed the existing passing-only archive boundary; its correction uses
+a distinct history archive rather than weakening delivery acceptance. These
+changes await the next coherent-source focused checks. No broad suite was run.
+
+Next: integrate and check those bounded fixes, finish external/replacement
+production callers and cold validation continuity, then advance dependency-ready
+remaining features. Reserve the final twenty minutes for build and handoff.
+
+## Redesign checkpoint 02 — 2026-10-29 02:43 UTC
+
+**Native artifacts, supported hooks and paged review inputs are integrated; the
+remaining 0.2 feature work is underway. The original deadline is unchanged.**
+
+- Native command results now retain declared artifacts with observed freshness.
+  Unchanged/missing outputs and incomplete/overlapping writers refuse acceptance;
+  original failed outputs remain available. Git-ignored generated outputs no
+  longer masquerade as source edits. This observes Codex results, not a new runner.
+- Supported lifecycle hooks use the pinned Codex command interface, with actual
+  result/cancellation handling. Hook records explicitly identify Codex provenance;
+  unsupported cleanup/service capabilities remain specific limitations.
+- Review context pages the original protected history, manifest and artifact
+  bytes with archive/digest identity. Satisfactory review requires complete page
+  coverage. Source-advanced validation preserves prior obligations, failures and
+  artifacts while requiring fresh current-source results. Provider-failed retries
+  and adequacy-repair continuation are being connected next.
+- Exhausted-account refresh now has an independently admitted metadata-only Codex
+  observation path: no model turn, login, reset or paid fallback. Actual quota
+  observations control readmission; a predicted reset does not invent capacity.
+  Slow refresh cannot overwrite a newer observation. Session/dispatch logging and
+  queued/attempt/next-action diagnostics are connected to operator status; readable
+  CLI output is undergoing its focused check.
+- Empty/unborn repository support is in progress with explicit absent-baseline
+  data and authenticated provider checks. No invented Git revision is permitted.
+  The integrated production library compiles; the targeted bootstrap fixture and
+  its provider-emptiness route are still being completed.
+
+Focused checks pass for native artifacts, protocol hooks, incomplete and
+uncertain native results, quota behavior, validation prefixes and review paging.
+A hook fixture initially supplied a temporary-path symlink to protected storage;
+its canonical-path correction is being checked. Older mixed test fixtures were
+adapted to native evidence where needed to compile these focused checks; no full
+suite or new testing framework was introduced. Latest integrated production check:
+`/private/tmp/kegari-unborn-check2.log`; focused results are retained under
+`/private/tmp/kegari-focused-*.log` and agent-specific hook/artifact logs.
+
+The final documentation audit found sibling discovery files still claiming old
+baseline authority and guides lagging the actual source migration. Historical
+notices now point explicitly to SPEC 1.5; current guides describe implemented
+removals separately from unfinished integration. The attachment remains a single
+absolute reference, and no new goal or clock was created. The inventory first rejected the two contextual specification wording edits until
+its pinned contract hash was explicitly reconciled; prior evidence is retained.
+No live/native operation, commit, service activation or release packaging occurred.
+
+Next: finish bounded empty-source and validation-continuation integration,
+connect actionable blocker publication, then advance the remaining dependency-ready
+features. Broad tests, independent-review execution guarantees, service lifecycle,
+cold recovery and operational qualification remain open; no milestone is complete.
+
+## Redesign checkpoint 01 — 2026-10-29 01:50 UTC
+
+**M02-1's ordinary admitted child path is connected to native Codex results;
+M02-2's competing repository executor has been physically removed. The goal is
+active and the original 07:30:33 UTC deadline remains fixed.**
+
+Implemented: executable child/validation roles use native Codex tools; Kegari's
+remaining dynamic tools handle context, obligation enrollment/result references,
+outcomes, corrections and provider review feedback. Structured command/file
+notifications bind the operation/thread/turn/item to actual source observations.
+`validation_record` accepts actual known terminal results for the current source
+and requirement, never a model completion claim. Schema-5 checks explicitly name
+Codex provenance; new validation histories distinguish native records from legacy
+custom evidence. Downstream required-check/retirement readers accept this new
+contract. Instruction assets are version 8, installed default workflow version 2,
+and handover metadata schema 6 declares Codex execution schema 1.
+
+Deleted: custom repository command/spawn/output runner, sandbox rendering,
+managed environment/resource inventories, worker command/resource/edit tools,
+command-level bundle admission and command journaling, old hook executor and
+obsolete tests for those implementations. Shared host Codex/Git process ownership,
+process journals, scope/path checks and workflow authority remain. Legacy retained
+custom executions refuse incompatible recovery rather than gaining native meaning.
+No new crate or release version was created.
+
+Focused evidence: backend library/production target compiles with the pinned
+cache and offline lockfile. Two protocol cases and two admitted-worker simulated
+transport cases pass; the latter cover actual native result acceptance and
+missing/unknown/stale-result refusal. Three existing context/asset checks passed.
+No installed Codex, native qualification, Keychain, service or remote operation
+was invoked. Initial default-cache checks lacked fastrand; using the existing
+`/private/tmp/kegari-v0-cargo-cache` resolved them without downloads. The first
+integrated check required the expected offline lockfile update after dependency
+removal; intermediate compile failures were dangling deleted-API callers, then
+resolved. Only unused dependency edges changed, not external versions. Logs are
+in `/private/tmp/kegari-codex-redesign-check*.log` and agent-owned focused logs.
+
+In progress: retain/prove freshness for configured native artifact outputs;
+exclude Git-ignored generated outputs from source identity; connect supported
+sandboxed Codex lifecycle hooks. Until those changes land, required declared
+artifact/service evidence and applicable legacy hooks refuse specifically.
+Independent PR review currently refuses because the selected pin's complete
+no-repository-execution guarantee has not been established. Generic native
+execution uses the host PATH/HOME via supported Codex policy with no ambient
+variable inheritance, a private TMPDIR and no new toolset configuration.
+
+Deferred: comprehensive suites and live qualification; some mixed old test
+fixtures still need native-evidence adaptation. Existing policy assertions remain
+rather than being erased to obtain a broad green result. No full suite/review
+campaign or optimized build has been run during this increment. M02-3 onward
+remains unfinished. Alpha.10 archive and prior documentation edits are preserved;
+no commits, branches/worktrees, release packaging or permission requests.
+
+Next: finish the three bounded in-progress integrations, run only their relevant
+focused checks, then advance onboarding/continuity/runtime usability in the
+milestone queue. Final twenty minutes remain reserved for build and handoff.
+
+## Historical preparation — Codex orchestration goal, 2026-10-29
+
+This section records the state before activation; its inactive-goal and unchanged
+implementation statements below are historical. The active checkpoint and fixed
+timestamps at the top of this file supersede them.
+
+**At preparation: SPEC 1.5 and the revised milestone/goal instructions were ready.
+No goal was active, its clock had not started, and implementation was unchanged.**
+
+The user approved Codex-owned repository reasoning, inspection, file editing,
+command execution, sandbox enforcement and supported terminal management.
+Kegari retains scheduling, operation/session authority, role/scope/context,
+provider writes, deterministic Git integration, result acceptance and release
+decisions. The current control-host driver and lock/lease child arrangement is
+retained. A separate process relocation is not a prerequisite.
+
+The first implementation increment must connect the ordinary child flow to
+native Codex tools and structured results, then **delete** the superseded custom
+repository harness, obsolete configuration/instructions/tests and unused
+dependencies. Optional flags, wrappers and fallback paths are not acceptable
+substitutes for removal. Shared mechanics needed by Kegari's own Codex, Git and
+control processes remain. These are approved changes to make, not completed work.
+
+The user's strong requirement against over-testing is controlling: build features,
+use minimum sufficient focused validation, then advance. Full regression,
+end-to-end coverage, exhaustive cases and qualification are deferred to later
+stabilization; they do not block dependency-ready features. Existing target-project
+required checks and acceptance rules still apply. The specification inventory
+retains historical evidence and leaves changed requirements unassessed.
+
+The [milestones](MILESTONES.md) now allocate Codex orchestration to 0.2, recovery
+to 0.3, delivery completion to 0.4, handover to 0.5, missing evaluation functionality
+to 0.6 and comprehensive stabilization/qualification to 0.7. Implementation,
+focused validation and qualification are tracked separately. All seventeen
+packages remain alpha.10; alpha.11 is reserved for the next coherent Codex-backed
+candidate. The historical alpha.10 archive is untouched.
+
+The [new goal](GOAL.md) replaces the cancelled assignment. Its activation time,
+six-hour deadline and final-twenty-minute handoff time remain **unset** until
+explicit activation. It requests a pause at the deadline, or earlier if no useful
+authorized implementation remains. A duration cap is not a guaranteed billing
+cutoff. No credit purchases, banked resets or paid API fallback are authorized.
+No commits, remote mutations, branches/worktrees, installation, service activation,
+release packaging, real Keychain access, installed Codex/live-account invocation
+or native qualification are authorized by this preparation.
+
+The source baseline is `0a631ce05fbf5e98b592a401aaa551bb0f1e70db`; the previous
+application extraction was committed as `4989e93`. Prior results below remain
+historical evidence for their original source/contracts. Their handoff statements
+about uncommitted changes and future work are not current instructions.
+
+The documentation cleanup removes obsolete custom-executor recipes and qualification
+roadmaps from current subsystem guides, plus superseded implementation/commit
+instructions from this history. Runtime-loaded instruction assets remain unchanged
+until their corresponding code migration; the goal explicitly requires updating
+those assets and their versioned identities together. Existing application code
+still awaits redesign, and historical custom-executor evidence does not establish
+Codex-backed behavior.
+
+GOAL.md is the sole authoritative assignment. The attachment now uses absolute
+references to it and its supporting files instead of maintaining a second copy.
+Final preparation verification passed: the inventory contains 520 contract blocks
+and all 140 named requirements, with the 24 changed named requirements unassessed.
+Historical evidence is preserved, including all 44 previously stale records;
+the 144 stale records also retain superseded clauses and the earlier preparation
+draft. The eleven existing inventory tests, 284 local documentation links and
+diff checks pass. Legal text, historical verification reports, application source
+and embedded runtime assets are unchanged. An additional preservation check first
+assumed every archived record came directly from the committed specification;
+accounting for unchanged records carried through the prior draft resolved that
+check without altering evidence. No Cargo suite, build or native/live operation
+was run, and no goal is registered. Activation times remain unset.
+
+## Historical final execution extraction checkpoint
+
 **Goal mode cancelled. Final execution extraction verified; checkpoint complete.**
 
 Work proceeds through individual prompts. `kegari-execution` now owns native
@@ -717,11 +1223,7 @@ regressions are in progress; no final frozen-source regression/build claim yet.
 Logs are under `/private/tmp/kegari-policy-*`. Root owns Cargo and commits; agents
 have non-overlapping slices. No minor milestone is complete.
 
-Next: finish review corrections, freeze source, run meaningful integration checks,
-retain exact-source development build and evidence, then continue authenticated
-output/review paging and empty/unborn baselines. Native qualification remains
-separately blocked by explicit approval; consumed approvals are not reusable.
-Follow [MILESTONES.md](MILESTONES.md).
+At this historical checkpoint, review corrections, onboarding completion, paging and empty/unborn baselines were outstanding. Native approvals were separately bounded and consumed; the current work queue is MILESTONES.md.
 
 ### Previous environment/resource inspection increment
 
@@ -759,14 +1261,7 @@ SHA-256 `c4d019a26bf4d1d2ab4f1993ca3e56253691fd5cefc13a591708a5cdf3abd300`; all 
 Complete source snapshots 1–4, failures, successful logs and development bytes
 are retained. Our Cargo/test handles and delegated work are terminal.
 
-Next: correct mandatory hosted-CI/no-change configuration ahead of independent
-discovery in `config.rs::Repository::validate`, preserving actual delivery gates.
-Then continue authenticated output/review paging and empty/unborn source identity.
-Cross-worker discovered continuation/reassembly remains open. Extra host resource
-access still needs legitimate authority; inspection cannot supply it. Fresh bounded
-native qualification requires separate explicit approval; earlier approvals are
-consumed. No native/live action, permission request, installation, remote mutation
-or coordinator activation occurred. Follow [MILESTONES.md](MILESTONES.md).
+At this historical checkpoint, optional delivery-policy handling, paging, empty/unborn sources and discovered continuation were incomplete. No native/live action, installation, remote mutation or activation occurred.
 
 This inspection/tool-contract increment is a separate commit boundary from the
 archive/storage increment. No history consolidation is performed; the remote-tracking
@@ -824,12 +1319,7 @@ All hashes are verified. Complete source snapshots 2–5 share 506 content blobs
 failed/successful logs, preliminary manifests, metadata and development bytes
 remain available. Our Cargo/test handles and delegated work are terminal.
 
-Next: audit and complete generic environment admission without operator tool or
-command inventories, then continue authenticated output/review paging and
-empty/unborn baselines. Cross-worker discovered continuation/reassembly remains
-open. Fresh bounded native qualification needs separate explicit approval;
-previous approvals remain consumed. No native/live action, permission request,
-installation, remote mutation or coordinator activation occurred.
+At this historical checkpoint, paging, empty/unborn sources and discovered continuation remained open. The proposed custom environment-admission work is superseded by SPEC 1.5. No native/live action, installation, remote mutation or activation occurred.
 
 This archive/storage/schema change is a separate commit boundary from the prior
 parent workflow. No history consolidation is performed. Follow
@@ -877,15 +1367,7 @@ Evidence archive: `target/validation/m02-integrated-969d688a092d`, 2,252 files p
 manifest SHA-256 `e1da9a09a2f8abaa0d9645169240d176308223c18f506546593f8e2aa6a07a5e`.
 All archive hashes were verified; failed results and development bytes are retained.
 
-Next: compact authenticated evidence transport while preserving full plan/attempt
-history, actual reviewer input and artifact bytes from every attempt. Current
-integrated artifact retention covers selected successes; current publication and
-review bounds remain 60 KiB / 1 MiB. References cannot substitute for readable
-retained bytes. Then continue environment admission, full output access and
-empty/unborn baselines. Cross-worker discovery/reassembly recovery remains open.
-Native viability still requires a separately approved bounded exact-source plan;
-prior approvals remain consumed. No native/live action, permission request,
-installation, remote mutation or runtime activation occurred.
+This historical checkpoint retained selected successful artifacts, with publication/review bounds of 60 KiB / 1 MiB. Full output access, empty/unborn sources and discovered continuation were incomplete. No native/live action, installation, remote mutation or activation occurred.
 
 Root owns the authorized local commit. No consolidation is performed: parent
 candidate scope, its distinct review lifecycle and signed formats form a separate
@@ -933,14 +1415,7 @@ inventory tests passed. All Cargo/test handles are terminal. Evidence archive:
 No new release package or native qualification is claimed. See [the evidence report](validation/LOCAL-DISCOVERED-VALIDATION.md) and
 [MILESTONES.md](MILESTONES.md). Delegated implementation and reviews are complete.
 
-Next: remove the parent's mandatory integrated-check prerequisite together with
-actual integrated plan execution, full candidate-vector provenance and a separate
-read-only adequacy stage before readiness. Preserve the E2E prepared-source cycle
-break and all existing parent authority/dependency gates. Parent Coordination
-synthesis cannot substitute for independent adequacy. Then replace bulky inline
-publication with compact authenticated references backed by retained, verified
-full history and actual reviewer access; current publication is limited to 60 KiB
-and complete prompt assembly to 1 MiB. Neither limit may silently drop evidence.
+At this historical checkpoint, parent discovery integration and compact authenticated evidence publication remained incomplete. Publication was bounded to 60 KiB and prompt assembly to 1 MiB. These were historical limits, not current implementation instructions.
 
 Discovered-plan continuation/recovery currently refuses rather than losing prior
 obligations. Generic environment admission, full output paging, empty/unborn
@@ -997,12 +1472,7 @@ no history rewrite or consolidation is performed. Root owns the authorized local
 commit. Failed and uncertain disposable fixture evidence remains at paths in the
 retained logs; those injected outcomes do not represent a running native process.
 
-Next: bind discovered validation obligations to source/correction identities and
-independent adequacy review, then replace the transitional named-check gate.
-External environment admission, full output paging, empty/unborn baselines and
-cold invocation/process reconciliation also remain open. Native viability remains
-separately blocked pending explicit bounded approval; no native/live action or
-permission request is made while unattended. No minor milestone is complete.
+At this historical checkpoint, discovered-validation linkage, paging, empty/unborn sources and cold recovery remained incomplete. Native viability was unqualified and no minor milestone was complete.
 
 ### Previous automatic-domain increment
 
@@ -1060,14 +1530,7 @@ coherent checkpoint from the installed-workflow and guard corrections because it
 changes configuration/persisted compatibility and has distinct review evidence.
 No history rewrite/consolidation, remote mutation or activation is performed.
 
-Next M02-2/M02-3 work: expose generic bounded argv/cwd invocation through the
-existing Control, execution registry, process journal and cancellation ownership;
-record actual command facts separately from validation satisfaction. Then add
-revision-bound discovered obligations and independent adequacy review through the
-delivery gates, retaining prior failures and unknowns. Do not let agent-selected
-output paths exclude source from candidate snapshots or grant repair capabilities
-merely from a failed generic command. Empty/unborn baselines must be observed,
-not fabricated Git SHAs. Recovery must reconcile the original invocation history.
+The historical proposal to expose host-owned command invocation and per-command journals is superseded by Codex-owned repository execution. Discovered validation and empty/unborn source handling remained incomplete at this checkpoint.
 
 External host environment discovery/admission is also open. Requiring a configured
 test-resource entry for every tool would recreate the prohibited inventory.
@@ -1204,19 +1667,7 @@ the approved specification checkpoint `304cc98` remains intact. No commits are
 consolidated, history rewritten, remote state changed or release qualification
 claimed.
 
-Next M02-1/M02-2 integration after this verified increment: replace configured
-tool/digest/mapping admission with a host-produced generic command domain, ordered
-PATH and automatically observed per-invocation identity. Keep existing role,
-source/write/network/credential boundaries and original lifecycle/authority.
-Discovery cannot turn an ambient PATH directory or executable's installation
-prefix into a recursive read grant. Fixed OS resources, owned repository/scratch
-and explicitly authorized resources supply the initial domain; unfamiliar names
-are valid within it. Any additional host environment namespace needs actual
-generic authority and credential separation, not ecosystem-specific parsing.
-Then expose bounded arbitrary command/inspection and recorded validation
-obligations through production worker tools, including empty/unborn baselines.
-The mandatory catalog and named-check requirement are still open work; do not
-claim M02-1 complete or shift its exit criteria to a later minor version.
+The proposed host-produced command domains, automatic resource inventory and custom invocation tools were superseded by SPEC 1.5. This checkpoint did not complete a minor milestone or qualify execution.
 
 While unattended, decide routine details independently; do not open optional
 questions or start actions known to require manual approval, authentication or
@@ -1629,21 +2080,9 @@ then recorded separate hashes and the exact checks applied to each artifact.
 No runtime algorithm changed, no coordinator was activated and no installation,
 signing, entitlement request, provider operation or remote mutation occurred.
 
-Containment still blocks repository commands. The user questioned making an
-Endpoint Security entitlement a prerequisite; no such dependency is established
-and no application is planned. The current objective still explicitly requires
-escaped-descendant ownership. The pending supervised decision is whether to
-retain it or explicitly adopt a supported managed-workload contract for v0.
-Silence does not approve that scope change. Neither the refusal nor SPEC/GOAL
-has been weakened. See [containment findings](docs/process-containment.md).
+At this historical checkpoint, repository commands were blocked and a managed-workload scope decision was pending. That decision was subsequently made; the current lifecycle boundary is SPEC 1.5. The later user-reported Endpoint Security application is recorded in the containment notes; no entitlement is assumed.
 
-The milestone order remains 0.2.0 containment/build, 0.3.0 recovery, 0.4.0 evidence,
-0.5.0 operator handover, 0.6.0 evaluation machinery, 0.7.0 qualification. No minor
-milestone is complete. Continue independent authorized work while the containment
-decision is pending; the existing handover library lacks its public operator route.
-Held B evaluation drafts remain untouched. The earlier --no-run native-test binary
-belongs to the prior version and needs refreshed identity before a qualification
-request for this prerelease. No native test or host-change approval was inferred.
+At this historical checkpoint, no minor milestone was complete, the handover operator route was missing and held evaluation drafts were untouched. The earlier native-test binary belonged to an older source; no native test or host-change approval was inferred.
 
 Historical preparation reconciliation while paused:
 Preparation reconciliation on
@@ -1665,26 +2104,9 @@ prefix and final newline. SPEC 1.2 retains its approved SHA-256
 The index is empty; PROGRESS.md is the only working-tree edit. Prior validation
 remains evidence for the unchanged implementation, not a newly executed check.
 
-The milestone sequence in GOAL.md controls future work: 0.2.0 containment and
-executable build; 0.3.0 recovery; 0.4.0 target/visual evidence; 0.5.0 operator
-handover; 0.6.0 evaluation machinery; 0.7.0 full v0 qualification. Compatible
-corrections use patch versions; 1.0.0 and the lasting build remain out of scope.
-On explicit resumption, first prepare the 0.2.0 containment feasibility decision:
-verify candidate API/host prerequisites, launch enrollment and descendant/exit
-guarantees; map cancellation, retirement and recovery consumers; then prepare
-finite adversarial cases and exact native-test approval details. Do not remove
-the current refusal or resume the held B drafts merely to regain momentum.
+The former containment-first assignment was cancelled and is superseded by the new Codex-orchestration goal. Its implementation sequence and per-command qualification project are no longer instructions.
 
-Proposed native prerequisite request NQ-01 is not approved or executed: name a
-permitted macOS host/account and pin the source, executable, argv and owned TEMP
-directory; run the existing native host/birth-identity test once, followed only
-on success by the owned-child signalling test once. Run serially with a proposed
-two-minute aggregate execution deadline. The second test owns one /bin/sleep 30
-child. Retain bounded logs and exit/reaping evidence; uncertainty is not cleanup
-success. No retries after denial, sandbox bypass, installation, entitlement or
-security changes, credentials, model/provider work or remote mutation are
-included. Exact host/environment and executable details must be supplied before
-requesting approval. These tests qualify prerequisites only, not containment.
+The original NQ-01 prerequisite proposal was neither approved nor executed at this checkpoint. Later bounded approval/run records retain their own source and scope; this historical proposal grants no permission.
 
 This preparation used read-only source/evidence inspection and bounded subagent
 reviews; only this progress record was updated. No implementation, build, test,
@@ -3758,14 +4180,9 @@ repository commands fail closed before unqualified execution. No live evaluation
 remote writes, installation, deployment, denied native probes or host security
 changes were performed. SPEC remains version1.2 with approved SHA
 `80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326`.
-This checkpoint does not establish readiness to coordinate the lasting build.
+This checkpoint did not establish operational readiness.
 
-Next: commit the verified inventory correction, then integrate and validate
-validation retry and clean-successor lineage only after their concrete producers,
-consumers and independent findings are resolved. Further engineering includes
-paired transient recovery, external production observations, cold/corrected and
-configured-hook recovery, carried acceptance and concrete evaluation composition.
-Live/human blockers remain separate from useful authorized engineering.
+This historical checkpoint left validation retry, transient recovery, external observations, carried acceptance and evaluation composition incomplete. Its former continuation and automatic-commit instructions are removed.
 
 ## Historical preparation notes
 
@@ -3837,12 +4254,7 @@ read-only, with separate actual closed observation finalization. Config is also
 preparing a separate opaque validation-retry producer for the concrete failed
 Validate-stage liveness gap; no shared runtime/pipeline edits are installed.
 
-Before another local commit, recheck publication state. At the last observation
-origin/main remained 44b7578e and local HEAD was 6936aa21. If still unpublished,
-the related owned-target increment should consolidate into that local no-release
-checkpoint under the applicable commit rule, after creating a local recovery ref
-and verifying final file contents. Never rewrite it if publication is observed;
-no push or remote mutation is authorized.
+At this historical publication observation, origin/main was 44b7578e and local HEAD was 6936aa21. No push or remote mutation occurred. The former consolidation instructions are removed; these identities are historical evidence only.
 
 ## Prior increment validation and ownership
 
@@ -3904,7 +4316,7 @@ retained in the detailed report; they have not been replaced by later passes.
 
 - Started 2026-10-25 on existing `main`, clean worktree and empty index, at `36a3e83` (`docs(kegari-v0): finalize the specification and build prompt`). No project branches/worktrees created.
 - Read the complete SPEC 1.2; SHA-256 `80b6f703d224ce7800c9e04a23c6356ab72f02133ab9be5ccb129fd6eb10e326` matches the approved contract. Source baselines remain those recorded in SPEC §1.1. SPEC/GOAL and existing license are preserved.
-- Applicable instructions are the user-supplied AGENTS rules; no additional AGENTS.md exists in this repository or its ancestor directories inspected. The goal authorizes local signed-off commits, owned disposable Git test fixtures and implementation inside this Rust repository. Remote repository writes/pushes/deployment and host configuration changes remain prohibited.
+- Applicable instructions are the user-supplied AGENTS rules; no additional AGENTS.md exists in this repository or its ancestor directories inspected. The former goal authorized local signed-off commits and disposable Git fixtures; that authorization ended with its cancellation. Remote repository writes/pushes/deployment and host configuration changes remain prohibited.
 - Effective tools: workspace-write sandbox, automatic approval review; repository and temporary paths writable, host configuration not writable. No permission/security change made.
 - Installed: Rust/Cargo 1.99.1 (under existing `stable` alias), Git 2.56.0, Codex `0.164.0-alpha.11.1`, macOS sandbox-exec/Keychain/launchctl. `tailscale`, `ffmpeg`, `ffprobe` not found on PATH. `rust-toolchain.toml` now pins 1.99.1; development uses `RUSTUP_TOOLCHAIN=stable` only because this alias was verified to contain that exact version. No toolchain installation is authorized or needed on this host. This is availability evidence only, not compatibility qualification.
 - Builder model/speed settings are inherited unchanged. The runtime profiles will remain explicitly configured and separate. Assistance attribution will omit a model identifier unless independently verified.
@@ -3920,13 +4332,13 @@ retained in the detailed report; they have not been replaced by later passes.
 
 Historical foundation checkpoint: strict configuration/workflow, embedded instruction assets, canonical digests, private durable storage, serialized intent/admission/mutations, authorization/correction/scheduling primitives, immutable paged snapshots, pinned app-server/isolation adapter, and deterministic Git/evidence/release primitives are implemented and have focused tests. Real Git fixtures preserve the source checkout/index, exclude staged B from A's candidate, and preserve failed candidates. Provider schemas/config parsing are verified locally; actual sandbox enforcement is not.
 
-Root owns repository integration, validation, this record and commits. Current agents work only in TEMP: configuration handles declared protocol observation, Codex independently reviews gaps/observations, and delivery prepares evidence. The earlier foundation work split Control/runtime, release history and worker recovery across these agents; that ownership snapshot is superseded. The native `main.rs`/factory is now wired to the concrete delivery decisions and shared worker runtime. CLI-only executable checks pass; no service was activated. Component and focused fixtures do not establish all complete delivery/recovery scenarios.
+At this historical checkpoint, root owned integration and validation. Agents worked only in TEMP: configuration handles declared protocol observation, Codex independently reviews gaps/observations, and delivery prepares evidence. The earlier foundation work split Control/runtime, release history and worker recovery across these agents; that ownership snapshot is superseded. The native `main.rs`/factory is now wired to the concrete delivery decisions and shared worker runtime. CLI-only executable checks pass; no service was activated. Component and focused fixtures do not establish all complete delivery/recovery scenarios.
 
 The detailed local integration report records the checkpoint's full-suite counts.
 Later focused results below identify the tested increment and do not establish a
 complete SC/V0-T scenario or real-provider qualification.
 
-## Current remaining engineering
+## Historical engineering audit
 
 A bounded independent caller audit reconciled the old checklist with current source:
 `/private/tmp/kegari-remaining-engineering-reconciliation-v1/REVIEW.md`, SHA-256
@@ -3934,13 +4346,13 @@ A bounded independent caller audit reconciled the old checklist with current sou
 Root read the complete report. It is static evidence for the listed slices, not an
 exhaustive SPEC audit or a new native qualification.
 
-| Scope | Current remaining work |
+| Scope | Historical audit observations |
 | --- | --- |
 | Control membership and parent history | Committed1e14788 after917 full-suite passes and two required native ignores; all38 new names passed. Evidence and narrow partial coverage are finalized. |
 | Native evaluation and E07 | Declared authority/protocol observations committed102984e after931 passes; transport extension committed998677a after947 passes; broker read/effect inventory committed316c362 after954 passes; three further broker regressions now locally verified, canary corrections and E07 source-data tool in TEMP. Concrete canary/output rubric and versioned pr_attack migration remain. Only independent_malicious currently has native context;27 contexts and other role/prior-state lanes still need genuine producers. All56 slots remain unqualified. |
-| Coordination and continuation observations | Derive assertions from actual scoped publications, receipts and predecessor lineage. Repository-free coordination needs its own substrate; fixture JSON cannot create prior execution authority. |
-| Cold recovery and native containment | Historical parent seals do not recreate worker/source/completion capabilities. Implement a distinct supported cold obligation with fresh evidence. Actual descendant containment remains a code gap in addition to the denied native host prerequisites; group/leader exit is insufficient. |
-| External targets and visual cold readback | Add explicitly supported serving-artifact/source and authenticated video retrieval producers. Existing deployment-free/owned-target paths remain valid within their local evidence limits. |
+| Coordination and continuation observations | The audit found incomplete production observations and a missing repository-free coordination substrate. |
+| Cold recovery and native containment | Cold recovery was incomplete; the earlier custom descendant-containment contract was unimplemented. That contract does not prescribe the SPEC 1.5 repository executor. |
+| External targets and visual cold readback | Serving-artifact/source observations and authenticated video retrieval were incomplete; existing deployment-free/owned-target evidence was limited to its recorded local scope. |
 
 The prior no-release/owned-target history, structured review claims, exact paired
 round/retry consumers, carried acceptance, released dependency cache and typed
@@ -4125,7 +4537,7 @@ invented. None of these next-slice source drafts are integrated into this run.
 
 ## Requirement-to-evidence checklist
 
-Status key: **not run** is not a pass; **implemented** requires tests/review before **verified**. Detailed deterministic cases will be linked as they are executed. The complete normative contract remains SPEC; this grouped ledger does not waive any clause.
+This is a historical evidence snapshot, not a validation plan or a current requirement assessment. Original results retain their source and limitations; SPEC 1.5, MILESTONES.md and the current inventory determine current obligations.
 
 | Contract / retained requirements | Planned evidence | Current status |
 | --- | --- | --- |
@@ -4925,21 +5337,23 @@ Status key: **not run** is not a pass; **implemented** requires tests/review bef
   recovery checks actual admission, contract, completed turn and journal output.
   These new paths compile; focused adversarial tests remain in flight.
 
-## Blockers and bounded follow-up dependencies
+## Historical qualification blockers
 
-| Dependency / affected requirements | Observed evidence, permitted work, smallest next action |
+These observations belong to their original checkpoints. They preserve failure
+and coverage evidence, not a work queue or a prerequisite to recreating the old
+executor. Current qualification follows SPEC 1.5 and MILESTONES.md.
+
+| Dependency / affected requirements | Historical evidence and limitations |
 | --- | --- |
-| Live agent trials and account compatibility; §7, E01–08, §12.3.3 | Not attempted: no explicit accounts, finite live plan or execution authorization. Prepare cases and production runner locally; later approve named account/profile, isolated fixtures, repetition/turn/time bounds and handling of uncertain outcomes. No paid fallback. |
-| Disposable Linear/GitHub integration; §§4/8/9/12 | Not attempted: remote repository writes and deployment remain prohibited, no approved disposable targets. Prepare exact account/target/action/evidence/recovery plan; explicit scoped authorization must amend applicable prohibitions before remote test actions. |
-| Tailscale/media/background/locked-session/handover; §§7/8.5/10.3/11 | Required utilities not on PATH; no installation attempted. Implement adapters and deterministic fixtures; later identify installed supported paths or operator-provisioned tools/certificates and approve bounded host testing. |
-| Actual macOS execution boundary; §7.1, V0-T12, E07 | Installed Codex schema generation and credential-free strict named-permission parsing succeeded. A nested sandbox probe exited 71 (`sandbox_apply: Operation not permitted`) under the existing outer sandbox. No bypass/unsandboxed retry. Continue deterministic boundary tests; actual canaries need a permitted supervised execution environment before qualification. |
-| Native execution descendants; §§7.1/11, V0-T12/23/E07 | An ordinary finite owned fixture proves setsid descendants can outlive group/EOF completion. Native result promotion now fails closed with `process_tree_unverified`; implement verifiable containment/descendant ownership before native checks can pass, then qualify in an allowed supervised environment. This is an engineering gap, not permission to use group exit as full proof. |
-| Native process ownership; §§6.1/11, V0-T07–09/23 | Read-only macOS boot-identity query returns `Operation not permitted` in this sandbox. Production ownership discovery fails closed; two retained native tests are explicitly blocked. Injected deterministic process fixtures verify registration/intent/lease logic only. A permitted supervised environment is required for actual process birth/boot identity, termination and restart qualification. |
-| Trusted native Git executable; §§7/8/9 | The installed Homebrew Git has a group-writable ancestor and fails the unchanged executable-identity policy. Exact-byte private copies are used only inside disposable tests. Production setup needs an operator-provisioned supported executable path satisfying the owner/mode/ancestor checks; no host permissions or installation have been changed. |
-| GitHub-hosted runner provenance; §§8.2/9.4 | Job labels do not prove runner type. Signed OIDC verifier now binds fixed issuer/JWKS, audience, exact job/run/attempt/workflow and time/replay guards. The trigger SHA is distinct from the source actually checked out: the reviewed pinned proof workflow must verify the tested checkout and derive the audience accordingly. Adapter fixtures pass; proof workflow preparation/collection and actual hosted route remain unqualified. |
-| Human qualitative review/calibration; §12.4.3 | Operator explicitly available for supervised decisions as of the 2026-10-26 preparation message; Goal remains paused. Calibration has not been performed. Prepare representative evidence across every qualitative rubric and all material failures for the real human gate; supervision itself is not a completed review. |
-
-These block only dependent validation, not local implementation. No missing prerequisite is permission to weaken the contract.
+| Live agent trials and account compatibility; §7, E01–08, §12.3.3 | Not attempted at this checkpoint: no named accounts or finite live authorization. No paid fallback was used. |
+| Disposable Linear/GitHub integration; §§4/8/9/12 | Not attempted: no approved disposable targets or remote-write/deployment authority. |
+| Tailscale/media/background/locked-session/handover; §§7/8.5/10.3/11 | Required utilities were not on PATH; no installation or corresponding native qualification was attempted. |
+| Actual macOS execution boundary; §7.1, V0-T12, E07 | Installed Codex schema generation and credential-free named-permission parsing succeeded. A nested sandbox probe exited 71 (`sandbox_apply: Operation not permitted`) under the outer sandbox. No bypass or unsandboxed retry occurred. |
+| Native execution descendants; §§7.1/11, V0-T12/23/E07 | A finite owned setsid fixture demonstrated that descendants can outlive group/EOF completion. The old custom command path consequently returned `process_tree_unverified`. This evidence does not qualify Codex-backed execution or mandate completion of the replaced executor. |
+| Native process ownership; §§6.1/11, V0-T07–09/23 | A read-only macOS boot-identity query returned `Operation not permitted`; two native tests were blocked at that checkpoint. Injected fixtures established registration/intent/lease behavior only. Later bounded native results retain their separate source identities. |
+| Trusted native Git executable; §§7/8/9 | The observed Homebrew Git had a group-writable ancestor and failed executable-identity policy. Exact-byte private copies were used only inside disposable tests; no host permissions or installation changed. |
+| GitHub-hosted runner provenance; §§8.2/9.4 | Signed OIDC adapter fixtures passed with issuer/JWKS, audience, job/run/attempt/workflow and time/replay binding. Actual hosted proof collection and checkout provenance remained unqualified; job labels alone were not proof. |
+| Human qualitative review/calibration; §12.4.3 | Supervision was offered on 2026-10-26, but calibration had not been performed. Availability did not establish a completed human review. |
 
 ## Milestones and recovery notes
 

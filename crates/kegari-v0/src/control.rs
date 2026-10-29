@@ -17,8 +17,6 @@ use uuid::Uuid;
 
 #[path = "control_check_bundle.rs"]
 mod check_bundle;
-pub use check_bundle::CheckBundleLaunch;
-pub(crate) use check_bundle::{CheckBundlePlan, CheckBundleStepSpec, InFlightCheckBundle};
 
 #[path = "control_effect_index.rs"]
 mod effect_index;
@@ -54,6 +52,7 @@ pub use session_resume::RunResumeReference;
 #[path = "control_recovery_preparation.rs"]
 mod recovery_preparation;
 pub use recovery_preparation::SessionRecoveryPreparationReference;
+pub(crate) use recovery_preparation::metadata_readback_refreshable;
 #[path = "control_release.rs"]
 mod release_recovery;
 pub use release_recovery::ReleaseResumeReference;
@@ -253,7 +252,7 @@ impl MetadataReference {
     fn validate(&self) -> Result<()> {
         if !matches!(
             self.purpose.as_str(),
-            "parent_authorization" | "no_release_required"
+            "parent_authorization" | "no_release_required" | "scheduling_blocker"
         ) || self.attempt == 0
             || self.attempt > self.max_attempts
         {

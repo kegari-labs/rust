@@ -12,13 +12,21 @@ owns request sequencing, deadlines, request-gate calls, uncertain outcomes and
 session protocol work. `SessionScope` supplies host revalidation and scope data;
 implementing it does not establish execution authority.
 
-Native ownership remains in backend `kegari_v0::codex_host`.
+[SPEC 1.5](../kegari-v0/SPEC.md) uses Codex app-server as the repository execution
+layer, with native repository tools, supported sandbox/permissions and terminal
+lifecycle. Kegari supplies workflow authority and consumes actual structured
+results. The ordinary admitted child path now uses native Codex tools and the
+custom repository executor has been removed. Remaining integration work and
+focused evidence are recorded in [PROGRESS.md](../kegari-v0/PROGRESS.md); this
+source migration does not establish live compatibility or qualification.
+
+Native ownership of Kegari's app-server remains in `kegari_v0::codex_host`.
 `NativeCodexClient` retains the actual child, cancellation and diagnostic task,
-and lends its protocol client through `client_mut()`. Native launch still
-requires the backend's validated isolation and guards. `from_host_transport`
+and lends its protocol client through `client_mut()`. `from_host_transport`
 accepts ordinary streams and startup context, performs no I/O and adopts no
-process. The backend retains protected session journals, receipt verification,
-execution permits and authorized resume admission.
+process. Protected session journals, receipt verification and authorized session
+resume remain backend responsibilities; they do not imply per-command control
+of Codex-internal execution.
 
 `ResumeCandidate` checks retained protocol data and exposes read-only lineage.
 It is not a protected journal or an admission permit. Backend
@@ -40,7 +48,8 @@ Interface migrations:
 - Import `RpcClient`, `SessionState`, `RequestGate`, `ToolBroker`, history, resume
   and observation interfaces from `kegari_codex`.
 - Use `kegari_codex::app_server_argv` for protocol arguments and backend
-  `kegari_v0::codex_host::permission_configuration` for isolation-derived policy.
+  `kegari_v0::codex_host::permission_configuration` for current permission derivation,
+  which must migrate to the supported Codex-owned execution boundary.
 - Native launch, executable verification and connection probes are free
   functions in `kegari_v0::codex_host`.
 - Replace `RpcClient.last_valid_output` with `last_valid_output()` and
@@ -54,7 +63,8 @@ or provider dependency. Tests may use protected disposable storage fixtures.
 Backend build hashing covers this manifest, source tree and pinned assets; the
 application retains one backend-owned build identity.
 
-From the workspace root with the pinned toolchain and dependency cache:
+Use focused checks for changed protocol behavior under the [development policy](../../docs/development.md#feature-first-development-policy).
+The broader commands below are a later stabilization reference:
 
 ```sh
 cargo test --offline --locked -p kegari-codex --release

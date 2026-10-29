@@ -41,6 +41,7 @@ pub struct RuntimeWorkflow {
     decisions: DecisionManager,
     delivery: Arc<dyn RuntimeDeliveryDecisions>,
     progression: Arc<dyn crate::runtime_driver::RuntimeProgression>,
+    driver: Option<Arc<crate::runtime_driver::RuntimeDriver>>,
 }
 impl RuntimeWorkflow {
     /// The release/recovery implementation is mandatory. Construction cannot
@@ -69,7 +70,13 @@ impl RuntimeWorkflow {
             decisions,
             delivery,
             progression,
+            driver: None,
         }
+    }
+
+    pub(crate) fn with_driver(mut self, driver: Arc<crate::runtime_driver::RuntimeDriver>) -> Self {
+        self.driver = Some(driver);
+        self
     }
 }
 impl WorkflowControl for RuntimeWorkflow {
@@ -100,7 +107,8 @@ impl WorkflowControl for RuntimeWorkflow {
     }
     fn health(&self) -> Result<Value> {
         Ok(json!({"providers":self.runtime.observations.health()?,
-            "accounts":self.runtime.account_observations()?}))
+            "accounts":self.runtime.account_observations()?,
+            "driver":self.driver.as_ref().map(|driver| driver.diagnostics()).transpose()?}))
     }
     fn command_targets(&self, request: &CommandRequest) -> Result<Vec<String>> {
         if request.command == kegari_types::api::CommandName::EvaluationRun {

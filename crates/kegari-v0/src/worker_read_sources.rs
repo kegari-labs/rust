@@ -62,36 +62,6 @@ impl WorkerContract {
         }
         Ok(root.clone())
     }
-    pub(super) fn observed_source_root(
-        &self,
-        observed: &Path,
-    ) -> Result<(PathBuf, Option<String>)> {
-        if observed.starts_with(&self.isolation.plan().repository) {
-            return Ok((self.isolation.plan().repository.clone(), None));
-        }
-        let mut selected = None;
-        for (root, resource) in &self.read_resources {
-            let ReadResource::Repository { id } = resource else {
-                continue;
-            };
-            if observed.starts_with(root) {
-                let original = self.read_source_root(Some(id))?;
-                if original != *root || selected.is_some() {
-                    return Err(Error::new(
-                        "validation_read",
-                        "observed source is ambiguous in retained repository grants",
-                    ));
-                }
-                selected = Some((original, Some(id.clone())));
-            }
-        }
-        selected.ok_or_else(|| {
-            Error::new(
-                "validation_read",
-                "source observation is outside original repository identities",
-            )
-        })
-    }
 }
 impl ScopedWorker {
     pub(super) fn read_sources(&self) -> Result<Value> {

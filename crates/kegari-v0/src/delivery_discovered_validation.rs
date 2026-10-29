@@ -72,7 +72,12 @@ impl DeliveryCoordinator {
         let mut attempts = completion.validation_attempts.clone();
         for record in &attempts {
             record.validate_shape()?;
-            if record.discovered.is_none() {
+            if record
+                .codex
+                .as_ref()
+                .and_then(|p| p.plan.as_ref())
+                .is_none()
+            {
                 return Err(Error::new(
                     "validation_lineage_pending",
                     "mixed named/discovered attempt history requires explicit lineage migration",
@@ -96,11 +101,22 @@ impl DeliveryCoordinator {
             (
                 r.started_at,
                 r.completed_at,
-                r.discovered.as_ref().map(|p| p.invocation_id),
+                r.codex
+                    .as_ref()
+                    .map(|p| (p.thread_id.clone(), p.turn_id.clone(), p.item_id.clone())),
             )
         });
         let validation = evidence::ValidationEvidence {
-            schema_version: 1,
+            prior_history: contract
+                .validation_prefix
+                .as_ref()
+                .map(|prefix| prefix.history().to_vec())
+                .unwrap_or_default(),
+            schema_version: if contract.validation_prefix.is_some() {
+                5
+            } else {
+                3
+            },
             plan_digest: plan.digest().into(),
             original_cwd: contract.isolation().plan().cwd.clone(),
             history: plan.history().to_vec(),
@@ -133,7 +149,22 @@ impl DeliveryCoordinator {
                 runtime_id: admission.scope.runtime_id,
             },
             &validation,
-            |artifact| artifacts.read(artifact),
+            |artifact| {
+                if artifact.validation_operation == completion.operation_id {
+                    artifacts.read(artifact)
+                } else {
+                    contract
+                        .validation_prefix
+                        .as_ref()
+                        .ok_or_else(|| {
+                            Error::new(
+                                "artifact_conflict",
+                                "prior artifact lacks its original history owner",
+                            )
+                        })?
+                        .read_artifact(artifact)
+                }
+            },
         )?;
         let checks = validation.runs(&admission.scope.revision)?;
         evidence::verify_checks(
@@ -163,7 +194,7 @@ pub(super) fn require_legacy_continuation(completion: &RunCompletion) -> Result<
         || completion
             .validation_attempts
             .iter()
-            .any(|r| r.discovered.is_some())
+            .any(|r| r.discovered.is_some() || r.codex.as_ref().is_some_and(|p| p.plan.is_some()))
         || completion
             .checks
             .iter()
@@ -226,19 +257,23 @@ pub(super) fn retain_attempt(
             "attempt has no original opaque enrollment",
         )
     })?;
-    let provenance = record.discovered.as_ref().ok_or_else(|| {
-        Error::new(
-            "validation_plan_binding",
-            "named checks cannot replace discovered attempts",
-        )
-    })?;
+    let provenance = record
+        .codex
+        .as_ref()
+        .and_then(|p| p.plan.as_ref())
+        .ok_or_else(|| {
+            Error::new(
+                "validation_plan_binding",
+                "named checks cannot replace discovered attempts",
+            )
+        })?;
     let retained = current
         .history()
         .iter()
         .find(|p| canonical_digest(1, *p).ok().as_deref() == Some(original.digest()));
-    if record.evidence_class != ExecutionEvidenceClass::ConfinedExecution
-        || provenance.plan_digest != original.digest()
-        || canonical_digest(1, &provenance.plan)? != canonical_digest(1, original.record())?
+    if record.evidence_class != ExecutionEvidenceClass::CodexExecution
+        || canonical_digest(1, provenance)? != original.digest()
+        || canonical_digest(1, provenance)? != canonical_digest(1, original.record())?
         || retained.is_none()
         || original.history().len() > current.history().len()
         || canonical_digest(1, original.history())?
@@ -348,112 +383,6 @@ impl DeliveryCoordinator {
     }
 }
 
-// This is an input limit, not a promise that the final prompt will fit. The
-// instruction assembler independently bounds its complete envelope to 1 MiB.
-const REVIEW_INPUT_BYTES: usize = 1024 * 1024;
-
-fn review_bytes<T: Serialize>(value: &T, limit: usize) -> Result<usize> {
-    struct Count {
-        bytes: usize,
-        limit: usize,
-    }
-    impl std::io::Write for Count {
-        fn write(&mut self, input: &[u8]) -> std::io::Result<usize> {
-            let next = self
-                .bytes
-                .checked_add(input.len())
-                .filter(|n| *n <= self.limit)
-                .ok_or_else(|| std::io::Error::other("review input bound"))?;
-            self.bytes = next;
-            Ok(input.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut count = Count { bytes: 0, limit };
-    serde_json::to_writer(&mut count, value).map_err(|_| {
-        Error::new(
-            "bounded_input",
-            "complete artifact review input requires paging beyond its finite bound",
-        )
-    })?;
-    Ok(count.bytes)
-}
-
-/// Original bytes for every attempt, including superseded and failed attempts.
-/// Duplicate exact proofs share one body; the full history retains all uses.
-/// Base64 is byte access, not evidence of visual or semantic inspection.
-pub(super) fn review_artifacts(
-    archive: &crate::validation_archive::ResolvedValidationArchive,
-    context: &Value,
-) -> Result<Value> {
-    use base64::Engine;
-    // Charge the field name, separators, array and full existing context first.
-    let mut used = review_bytes(context, REVIEW_INPUT_BYTES)?
-        .checked_add(32)
-        .ok_or_else(|| Error::invalid("review input overflow"))?;
-    let mut seen = BTreeSet::new();
-    let mut entries = Vec::new();
-    for proof in archive
-        .evidence()
-        .attempts
-        .iter()
-        .flat_map(|a| &a.artifacts)
-    {
-        let identity = canonical_digest(1, proof)?;
-        if !seen.insert(identity.clone()) {
-            continue;
-        }
-        let remaining = REVIEW_INPUT_BYTES.saturating_sub(used);
-        // Refuse large cached artifacts before copying any original bytes.
-        if proof.bytes > remaining as u64 {
-            return Err(Error::new(
-                "bounded_input",
-                "original artifact exceeds remaining review input budget",
-            ));
-        }
-        let bytes = archive.read_artifact(proof)?;
-        let text = std::str::from_utf8(&bytes)
-            .ok()
-            .filter(|s| !s.contains('\0'));
-        let encoding = if text.is_some() { "utf8" } else { "base64" };
-        let mut entry =
-            json!({"proof_digest":identity,"proof":proof,"encoding":encoding,"data":""});
-        let overhead = review_bytes(&entry, remaining)? + 1;
-        let available = remaining.saturating_sub(overhead);
-        let data_bytes = if let Some(text) = text {
-            review_bytes(&text, available.saturating_add(2))?.saturating_sub(2)
-        } else {
-            bytes
-                .len()
-                .div_ceil(3)
-                .checked_mul(4)
-                .filter(|n| *n <= available)
-                .ok_or_else(|| {
-                    Error::new(
-                        "bounded_input",
-                        "encoded artifact exceeds review input budget",
-                    )
-                })?
-        };
-        if overhead > remaining || data_bytes > available {
-            return Err(Error::new(
-                "bounded_input",
-                "artifact metadata exceeds review input budget",
-            ));
-        }
-        // Allocation happens only after charging the exact encoded size.
-        entry["data"] = Value::String(match text {
-            Some(text) => text.to_owned(),
-            None => base64::engine::general_purpose::STANDARD.encode(&bytes),
-        });
-        used += overhead + data_bytes;
-        entries.push(entry);
-    }
-    Ok(Value::Array(entries))
-}
-
 #[cfg(test)]
 mod archive_context_tests {
     use super::*;
@@ -478,61 +407,28 @@ mod archive_context_tests {
         (temp, archive)
     }
     #[test]
-    fn reviewer_receives_original_failed_and_selected_text_binary_and_nul_bytes() {
-        use base64::Engine;
-        for binary in [b"valid UTF8 with\0NUL".to_vec(), vec![0xff, 0xfe, 0, 1]] {
-            let failed = b"original failed transcript\n".to_vec();
-            let (_temp, archive) = archive([failed.clone(), binary.clone()]);
-            let input =
-                review_artifacts(&archive, &json!({"validation":archive.evidence()})).unwrap();
-            let entries = input.as_array().unwrap();
-            assert_eq!(entries.len(), 2);
-            assert_eq!(entries[0]["encoding"], "utf8");
-            assert_eq!(entries[0]["data"].as_str().unwrap().as_bytes(), failed);
-            assert_eq!(entries[1]["encoding"], "base64");
-            assert_eq!(
-                base64::engine::general_purpose::STANDARD
-                    .decode(entries[1]["data"].as_str().unwrap())
-                    .unwrap(),
-                binary
-            );
-            for (entry, attempt) in entries.iter().zip(&archive.evidence().attempts) {
-                assert_eq!(
-                    entry["proof"],
-                    serde_json::to_value(&attempt.artifacts[0]).unwrap()
-                );
-                assert_eq!(
-                    entry["proof_digest"],
-                    canonical_digest(1, &attempt.artifacts[0]).unwrap()
-                );
-            }
-            assert!(!archive.evidence().attempts[0].successful);
-            assert!(archive.evidence().attempts[1].successful);
-        }
-    }
-    #[test]
-    fn reviewer_artifacts_share_context_budget_and_encoded_expansion_is_bounded() {
-        for bodies in [
-            [vec![b'a'; 600_000], vec![b'b'; 600_000]],
-            [vec![1; 200_000], vec![b'b'; 1]],
-            [vec![0xff; 900_000], vec![b'b'; 1]],
-        ] {
-            let (_temp, archive) = archive(bodies);
-            assert_eq!(
-                review_artifacts(&archive, &json!({})).unwrap_err().code,
-                "bounded_input"
-            );
-        }
-        let (_temp, archive) = archive([b"failed".to_vec(), b"passed".to_vec()]);
+    fn paged_review_manifest_keeps_complete_failed_and_selected_originals() {
+        let bodies = [
+            b"original failed transcript\n".to_vec(),
+            vec![0xff; 1_200_000],
+        ];
+        let (_temp, archive) = archive(bodies.clone());
+        let descriptor = archive.review_descriptor().unwrap();
+        assert!(serde_json::to_vec(&descriptor).unwrap().len() < 4096);
+        assert_eq!(descriptor["attempt_count"], 2);
+        assert_eq!(descriptor["artifact_count"], 2);
         assert_eq!(
-            review_artifacts(
-                &archive,
-                &json!({"existing": "x".repeat(REVIEW_INPUT_BYTES)})
-            )
-            .unwrap_err()
-            .code,
-            "bounded_input"
+            descriptor["evidence_digest"],
+            archive.evidence().digest().unwrap()
         );
+        for (attempt, original) in archive.evidence().attempts.iter().zip(bodies) {
+            assert_eq!(
+                archive.artifact_bytes(&attempt.artifacts[0]).unwrap(),
+                original
+            );
+        }
+        assert!(!archive.evidence().attempts[0].successful);
+        assert!(archive.evidence().attempts[1].successful);
     }
     #[test]
     fn schema_three_publication_retains_remote_bound_after_history_compaction() {

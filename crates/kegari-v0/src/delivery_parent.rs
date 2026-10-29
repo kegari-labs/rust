@@ -10,6 +10,9 @@ use kegari_types::artifact::ArtifactProof;
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 
+#[path = "delivery_video.rs"]
+mod video;
+
 #[path = "delivery_parent_run_origin.rs"]
 mod run_origin;
 pub(crate) use run_origin::{
@@ -385,6 +388,18 @@ pub struct IntegratedEvidence {
     derived_runs: Vec<IntegratedRun>,
 }
 impl IntegratedEvidence {
+    pub(crate) fn validation_prefix(&self) -> Result<Option<crate::validation::ValidationPrefix>> {
+        match &self.archive {
+            Some(archive) => {
+                crate::validation::ValidationPrefix::from_archive(archive.clone()).map(Some)
+            }
+            None if self.has_discovered_validation() => Err(Error::new(
+                "validation_lineage_pending",
+                "cold parent continuation requires its complete original validation archive",
+            )),
+            None => Ok(None),
+        }
+    }
     pub(crate) fn has_discovered_validation(&self) -> bool {
         self.signed.payload.validation.is_some() || self.signed.payload.archive.is_some()
     }
@@ -971,6 +986,11 @@ impl ParentReviewAssignment {
     pub fn context(&self) -> &Value {
         &self.context
     }
+    pub(crate) fn review_archive(
+        &self,
+    ) -> Option<&crate::validation_archive::ResolvedValidationArchive> {
+        self.integrated.archive.as_ref()
+    }
 }
 pub struct ParentEvidenceInputs<'a> {
     pub contract: &'a ParentContract,
@@ -988,6 +1008,20 @@ pub struct PublishedParent {
     verified: evidence::VerifiedParent,
     signed: Signed<ParentResultRecord>,
     publication: Publication,
+}
+pub(crate) struct RestoredWaitingParent {
+    pub(crate) children: Vec<PublishedChild>,
+    pub(crate) staged: Vec<StagedDelta>,
+    pub(crate) slices: Vec<Arc<IsolatedSlice>>,
+    pub(crate) baselines: Vec<Arc<crate::deployment::VerifiedProductionBaseline>>,
+}
+pub(crate) struct RestoredCompletedParent {
+    pub(crate) parent: PublishedParent,
+    pub(crate) vector: ParentCandidateVector,
+    pub(crate) integrated: IntegratedEvidence,
+    pub(crate) children: Vec<PublishedChild>,
+    pub(crate) slices: Vec<Arc<IsolatedSlice>>,
+    pub(crate) baselines: Vec<Arc<crate::deployment::VerifiedProductionBaseline>>,
 }
 impl PublishedParent {
     pub fn publication_digest(&self) -> Result<String> {
@@ -1168,8 +1202,10 @@ impl DeliveryCoordinator {
             "child_results":children.iter().map(|c|c.verified.evidence()).collect::<Vec<_>>(),
             "child_validation_results":child_validation_results,
             "required_contributions":contributions,"integrated_results":input.integrated.runs(),
-            "integrated_digest":input.integrated.digest()?,"integrated_validation":input.integrated.reviewed_validation(),"test_resources":contract.test_resources,
+            "integrated_digest":input.integrated.digest()?,"integrated_validation":if input.integrated.archive.is_some() { None } else { input.integrated.reviewed_validation() },"test_resources":contract.test_resources,
             "production_targets":contract.production_targets,"visual":contract.visual,
+            "visual_evidence":Self::visual_validation_context(contract.visual),
+            "validation_review":input.integrated.archive.as_ref().map(|a| a.review_descriptor()).transpose()?,
             "required_result_schema":{"schema_version":1,"executive_summary":"outcome and limits","touched_components":[],
                 "fulfilled_criteria":[],"caveats":[],"go":true}}});
         if serde_json::to_vec(&context)
@@ -1426,7 +1462,25 @@ impl DeliveryCoordinator {
                 "parent result lacks complete bounded product outcome and go/no-go reasoning",
             ));
         }
-        if contract.visual != input.video.is_some() {
+        // Upload only after the complete actual coordination result and current
+        // integrated evidence have passed their existing checks.
+        let generated_video = if contract.visual && input.video.is_none() {
+            self.publish_candidate_video(admission, contract, assignment)
+                .await?
+        } else {
+            None
+        };
+        let video = input.video.or(generated_video.as_ref());
+        if let Some(video) = video {
+            self.reobserve_candidate_video(
+                contract,
+                &assignment.integrated,
+                assignment.vector.digest(),
+                &video.evidence,
+            )
+            .await?;
+        }
+        if contract.visual != video.is_some() {
             return Err(Error::new(
                 "video_gate",
                 "visual parent requires actual candidate video upload, association and playback proof",
@@ -1474,7 +1528,7 @@ impl DeliveryCoordinator {
             },
             archived_integrated_validation: assignment.integrated.archived_review().map(Box::new),
             visual: contract.visual,
-            video: input.video.map(|v| v.evidence.clone()),
+            video: video.map(|v| v.evidence.clone()),
             publication_operation: admission.operation_id(),
             created_at: self.operation_time(admission, "parent-result")?,
             supersedes,
@@ -1606,13 +1660,14 @@ impl DeliveryCoordinator {
                 "published parent differs from retained complete vector and actual integrated execution",
             ));
         }
-        // Visual publications additionally require the retained asset observation
-        // path before recovery can promote them; raw payload booleans are ignored.
+        // Reopen the original native archive and exact owned provider receipts;
+        // a retained playback boolean alone never restores visual readiness.
         if signed.payload.evidence.visual {
-            return Err(Error::new(
-                "video_gate",
-                "current authenticated video retrieval observation is required",
-            ));
+            let video = signed.payload.evidence.video.as_ref().ok_or_else(|| {
+                Error::new("video_gate", "visual parent has no original recording")
+            })?;
+            self.reobserve_candidate_video(contract, &integrated, vector.digest(), video)
+                .await?;
         }
         let children = self
             .current_parent_children(
@@ -1842,6 +1897,19 @@ impl DeliveryCoordinator {
                     )),
                 }
             }
+            // A separately verified replacement explicitly supersedes its
+            // original staged result. Competing replacements remain ambiguous.
+            let superseded: BTreeSet<_> = valid
+                .values()
+                .filter_map(|child| match &child.verified.evidence().outcome {
+                    evidence::ChildOutcome::Replacement { delta, .. } => delta
+                        .replacement
+                        .as_ref()
+                        .map(|mapping| mapping.staging_result_digest.clone()),
+                    _ => None,
+                })
+                .collect();
+            valid.retain(|digest, _| !superseded.contains(digest));
             if valid.len() == 1 {
                 let child = valid.into_values().next().expect("one verified result");
                 let id = child
@@ -2177,7 +2245,8 @@ pub(crate) use accepted_origin::{AcceptedOriginIdentity, AcceptedOriginRef};
 mod reassembly;
 pub(crate) use reassembly::{
     AcceptedParentOrigin, ParentReassemblyPredecessor, ParentReassemblySource,
-    ParentReassemblySourceOrigin, ParentReassemblyWork,
+    ParentReassemblySourceOrigin, ParentReassemblyWork, ParentRunPredecessor,
+    RetiredParentReassembly,
 };
 
 #[path = "delivery_completed_carry.rs"]

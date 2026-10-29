@@ -12,6 +12,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+#[path = "validation_continuation.rs"]
+mod continuation;
+pub(crate) use continuation::ValidationPrefix;
+
 pub const MAX_VALIDATION_HISTORY: usize = 32;
 pub const MAX_VALIDATION_PLAN_BYTES: usize = 192 * 1024;
 

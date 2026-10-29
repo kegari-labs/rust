@@ -1,5 +1,5 @@
-//! Sealed control-host process authority for bounded read-only recovery. This
-//! authority never grants model work, repository mutation or an orchestration lease.
+//! Sealed control-host process authority for read-only recovery and explicitly
+//! authorized cleanup through Codex. It grants no model work or orchestration lease.
 use crate::control::ControlHost;
 use crate::control::HostProcessToken;
 use crate::control::MutationRequest;
@@ -44,6 +44,11 @@ struct OwnedState {
     closing: bool,
     handles: BTreeMap<Uuid, Arc<dyn CommandCancellation>>,
 }
+struct CleanupCodex {
+    cwd: std::path::PathBuf,
+    argv_digest: String,
+    command: Value,
+}
 pub struct LocalProcessPermit {
     services: HostProcessServices,
     identity: HostProcessIdentity,
@@ -53,6 +58,7 @@ pub struct LocalProcessPermit {
     owned: Mutex<OwnedState>,
     cleanup: Option<Arc<crate::housekeeping::VerifiedCleanupExecution>>,
     cleanup_root: Option<crate::housekeeping::VerifiedCleanupReadRoot>,
+    cleanup_codex: Option<CleanupCodex>,
 }
 impl LocalProcessPermit {
     pub fn metadata(services: HostProcessServices, request: MetadataRequest) -> Result<Arc<Self>> {
@@ -144,6 +150,7 @@ impl LocalProcessPermit {
             owned: Mutex::new(OwnedState::default()),
             cleanup: None,
             cleanup_root: None,
+            cleanup_codex: None,
         }))
     }
     pub(crate) fn cleanup(
@@ -151,6 +158,45 @@ impl LocalProcessPermit {
         proof: Arc<crate::housekeeping::VerifiedCleanupExecution>,
         root: crate::housekeeping::VerifiedCleanupReadRoot,
         binary: BinaryIdentity,
+    ) -> Result<Arc<Self>> {
+        Self::cleanup_scope(services, proof, root, binary, None)
+    }
+    /// A sealed cleanup may own the pinned Codex adapter. Its sole mutating
+    /// protocol request is the exact reviewed before_remove hook, not a model
+    /// turn or a generic host command capability.
+    pub(crate) fn cleanup_codex(
+        services: HostProcessServices,
+        proof: Arc<crate::housekeeping::VerifiedCleanupExecution>,
+        root: crate::housekeeping::VerifiedCleanupReadRoot,
+        binary: BinaryIdentity,
+        argv: &[String],
+        command: Value,
+    ) -> Result<Arc<Self>> {
+        let cwd = root.root().to_path_buf();
+        if command.get("cwd").and_then(Value::as_str) != cwd.to_str() {
+            return Err(Error::new(
+                "scope_violation",
+                "cleanup command cwd differs from owned source",
+            ));
+        }
+        Self::cleanup_scope(
+            services,
+            proof,
+            root,
+            binary,
+            Some(CleanupCodex {
+                cwd,
+                argv_digest: canonical_digest(1, argv)?,
+                command,
+            }),
+        )
+    }
+    fn cleanup_scope(
+        services: HostProcessServices,
+        proof: Arc<crate::housekeeping::VerifiedCleanupExecution>,
+        root: crate::housekeeping::VerifiedCleanupReadRoot,
+        binary: BinaryIdentity,
+        codex: Option<CleanupCodex>,
     ) -> Result<Arc<Self>> {
         proof.validate_current()?;
         services.registration.verify_control_owner()?;
@@ -166,7 +212,19 @@ impl LocalProcessPermit {
             ));
         }
         let read = crate::git::cleanup_host_read_root(&root, &configuration)?;
-        binary.revalidate(true)?;
+        binary.revalidate(codex.is_none())?;
+        let scope_digest = if let Some(codex) = &codex {
+            canonical_digest(
+                1,
+                &json!({"plan":proof.plan().digest(),"root":read.digest()?,"binary":binary,
+                "codex":{"cwd":codex.cwd,"argv_digest":codex.argv_digest,"command":codex.command}}),
+            )?
+        } else {
+            canonical_digest(
+                1,
+                &json!({"plan":proof.plan().digest(),"root":read.digest()?,"binary":binary}),
+            )?
+        };
         let identity = HostProcessIdentity {
             runtime_id: owner.runtime_id,
             owner_generation: owner.owner_generation,
@@ -175,10 +233,7 @@ impl LocalProcessPermit {
                 .ok_or_else(|| Error::new("ownership_conflict", "control process absent"))?,
             operation_id: proof.receipt().operation_id,
             work_key: format!("cleanup:{}", proof.plan().operation_id),
-            scope_digest: canonical_digest(
-                1,
-                &json!({"plan":proof.plan().digest(),"root":read.digest()?,"binary":binary}),
-            )?,
+            scope_digest,
             config_revision: crate::config::config_revision(&configuration)?,
             cleanup_receipt: Some(proof.receipt().payload_digest.clone()),
         };
@@ -191,6 +246,7 @@ impl LocalProcessPermit {
             owned: Mutex::new(OwnedState::default()),
             cleanup: Some(proof),
             cleanup_root: Some(root),
+            cleanup_codex: codex,
         }))
     }
     fn current(&self, state: &crate::control::ControlSnapshot) -> Result<()> {
@@ -234,6 +290,12 @@ impl LocalProcessPermit {
         cancellation: Arc<dyn CommandCancellation>,
         launch: impl FnOnce(SpawnGuard) -> Result<T>,
     ) -> Result<T> {
+        if self.cleanup_codex.is_some() {
+            return Err(Error::new(
+                "scope_violation",
+                "Codex cleanup cannot invoke host Git commands",
+            ));
+        }
         let version = validate_metadata_argv(argv)?;
         if version {
             if self.binary.path.parent() != Some(cwd) {
@@ -299,45 +361,31 @@ impl LocalProcessPermit {
         }
         result
     }
-    pub(crate) fn start_cleanup_command(
+    pub(crate) fn start_cleanup_codex<T>(
         &self,
-        isolation: &kegari_execution::ValidatedIsolation,
-        argv: &[String],
-        timeout: std::time::Duration,
-        output_limit: usize,
-    ) -> Result<kegari_execution::OwnedCommand> {
-        let cleanup = self.cleanup.as_ref().ok_or_else(|| {
+        version: bool,
+        launch: impl FnOnce(SpawnGuard) -> Result<(T, Arc<dyn CommandCancellation>)>,
+    ) -> Result<T> {
+        let codex = self.cleanup_codex.as_ref().ok_or_else(|| {
             Error::new(
                 "scope_violation",
-                "metadata authority cannot execute removal hooks",
+                "host scope does not own a Codex cleanup adapter",
             )
         })?;
-        let (expected, expected_argv, expected_timeout) = cleanup.command_identity()?;
-        if expected.digest() != isolation.digest()
-            || expected_argv != argv
-            || timeout != expected_timeout
-            || output_limit > 16 * 1024
-        {
-            return Err(Error::new(
-                "scope_violation",
-                "removal hook differs from sealed cleanup workflow",
-            ));
-        }
-        kegari_execution::repository_command_prerequisite(&expected)?;
-        let launch_identity = kegari_execution::command_launch_identity(isolation, argv)?;
         let effect = Uuid::new_v4();
-        let slot = Arc::new(CleanupCancellation::default());
         let result = self.services.control.with_host_process(
             &self.token,
             |state| self.current(state),
             || {
-                let mut owned = self.owned.lock().map_err(|_| {
-                    Error::new("ownership_conflict", "cleanup handle registry unavailable")
-                })?;
-                if owned.closing || owned.handles.len() >= 4096 {
+                self.binary.revalidate(false)?;
+                let mut owned = self
+                    .owned
+                    .lock()
+                    .map_err(|_| Error::new("ownership_conflict", "cleanup handles unavailable"))?;
+                if owned.closing || owned.handles.len() >= 2 {
                     return Err(Error::new(
                         "admission_closed",
-                        "cleanup scope closed or exhausted",
+                        "cleanup adapter scope is closed or already used",
                     ));
                 }
                 let binding = SpawnBinding {
@@ -348,31 +396,30 @@ impl LocalProcessPermit {
                     check_bundle: None,
                     work_key: self.identity.work_key.clone(),
                     scope_digest: self.identity.scope_digest.clone(),
-                    cwd: launch_identity.cwd,
-                    executable: launch_identity.launcher,
-                    observed_executables: vec![launch_identity.target],
-                    argv_digest: launch_identity.argv_digest,
-                    kind: "repository_command".into(),
+                    cwd: codex.cwd.clone(),
+                    executable: self.binary.clone(),
+                    observed_executables: vec![],
+                    argv_digest: if version {
+                        canonical_digest(1, &vec!["--version"])?
+                    } else {
+                        codex.argv_digest.clone()
+                    },
+                    kind: if version {
+                        "codex-version"
+                    } else {
+                        "codex-app-server"
+                    }
+                    .into(),
                 };
                 let guard = self.services.processes.begin_control(binding, self)?;
-                owned.handles.insert(effect, slot.clone());
+                let (started, cancellation) = launch(guard)?;
+                owned.handles.insert(effect, cancellation.clone());
                 self.services.executions.register(
                     self.identity.operation_id,
                     effect,
-                    slot.clone(),
+                    cancellation,
                 )?;
-                let command = kegari_execution::start_guarded_command(
-                    isolation,
-                    argv,
-                    timeout,
-                    output_limit,
-                    &[],
-                    guard,
-                )?;
-                *slot.0.lock().map_err(|_| {
-                    Error::new("ownership_conflict", "cleanup child handle unavailable")
-                })? = Some(Arc::new(command.cancellation()));
-                Ok(command)
+                Ok(started)
             },
         );
         if result.is_err() && self.services.control.fence_host_process(&self.token)? {
@@ -381,6 +428,26 @@ impl LocalProcessPermit {
                 .cancel_fenced(&self.services.control, self.identity.operation_id)?;
         }
         result
+    }
+    pub(crate) fn dispatch_cleanup_command(
+        &self,
+        method: &str,
+        frame: &Value,
+        transmit: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        let codex = self
+            .cleanup_codex
+            .as_ref()
+            .ok_or_else(|| Error::new("scope_violation", "missing cleanup Codex scope"))?;
+        if method != "command/exec" || frame.get("params") != Some(&codex.command) {
+            return Err(Error::new(
+                "scope_violation",
+                "cleanup permits only its exact before_remove command",
+            ));
+        }
+        self.services
+            .control
+            .with_host_process(&self.token, |state| self.current(state), transmit)
     }
     /// Close further starts before inspecting actual owned handles. Unknown exit
     /// preserves the durable pending local receipt and never acknowledges it.
@@ -442,20 +509,27 @@ impl LocalProcessPermit {
             ));
         }
         if binding.kind == "host_git_metadata"
+            && self.cleanup_codex.is_none()
             && binding.executable == self.binary
             && binding.observed_executables.is_empty()
         {
             return Ok(());
         }
-        if binding.kind == "repository_command"
-            && let Some(cleanup) = &self.cleanup
-        {
-            let (isolation, argv, _) = cleanup.command_identity()?;
-            let expected = kegari_execution::command_launch_identity(&isolation, &argv)?;
-            if binding.cwd == expected.cwd
-                && binding.executable == expected.launcher
-                && binding.observed_executables == [expected.target]
-                && binding.argv_digest == expected.argv_digest
+        if let Some(codex) = &self.cleanup_codex {
+            let expected = match binding.kind.as_str() {
+                "codex-version" => canonical_digest(1, &vec!["--version"])?,
+                "codex-app-server" => codex.argv_digest.clone(),
+                _ => {
+                    return Err(Error::new(
+                        "scope_violation",
+                        "cleanup adapter process kind differs",
+                    ));
+                }
+            };
+            if binding.executable == self.binary
+                && binding.cwd == codex.cwd
+                && binding.observed_executables.is_empty()
+                && binding.argv_digest == expected
             {
                 return Ok(());
             }
@@ -464,32 +538,6 @@ impl LocalProcessPermit {
             "scope_violation",
             "host process journal command differs from its exact grant",
         ))
-    }
-}
-#[derive(Default)]
-struct CleanupCancellation(Mutex<Option<Arc<dyn CommandCancellation>>>);
-impl CommandCancellation for CleanupCancellation {
-    fn cancel(&self) -> Result<()> {
-        if let Some(handle) = self
-            .0
-            .lock()
-            .map_err(|_| Error::new("ownership_conflict", "cleanup child handle unavailable"))?
-            .as_ref()
-        {
-            handle.cancel()?;
-        }
-        Ok(())
-    }
-    fn exited(&self) -> Result<bool> {
-        match self
-            .0
-            .lock()
-            .map_err(|_| Error::new("ownership_conflict", "cleanup child handle unavailable"))?
-            .as_ref()
-        {
-            Some(handle) => handle.exited(),
-            None => Ok(false),
-        }
     }
 }
 pub(crate) fn host_actor(identity: &HostProcessIdentity) -> Result<String> {
@@ -595,7 +643,8 @@ pub(crate) fn validate_metadata_argv(argv: &[String]) -> Result<bool> {
             "--untracked-files=all",
             "--ignored=matching",
         ] => true,
-        ["status", "--porcelain=v1", "--untracked-files=all"]
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"]
+        | ["status", "--porcelain=v1", "--untracked-files=all"]
         | ["for-each-ref", "--format=%(objectname)", "refs/heads"]
         | ["fsck", "--full", "--no-reflogs"]
         | ["fsck", "--full", "--strict", "--no-reflogs"] => true,
@@ -801,6 +850,7 @@ mod tests {
         let exact_object = format!("{oid}^{{object}}");
         assert!(validate_metadata_argv(&["--version".into()]).unwrap());
         for args in [
+            vec!["status", "--porcelain=v1", "-z", "--untracked-files=all"],
             vec!["rev-parse", "--verify", "HEAD^{tree}"],
             vec![
                 "rev-parse",

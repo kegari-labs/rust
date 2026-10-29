@@ -1,6 +1,6 @@
 //! Native admission adapter for a parent-only released-baseline trigger. All
 //! checks remain inside the ordinary capacity/authority model gate; no receipt
-//! field can substitute for the retained source and joined predecessor.
+//! field can substitute for the retained source and actual joined or sealed retired predecessor.
 use super::*;
 use crate::delivery::ParentReassemblyWork;
 impl RuntimeCoordinator {
@@ -97,7 +97,7 @@ impl RuntimeCoordinator {
             &self.services.key,
         )?;
         proof.verify_current(&config, snapshot, &receipts, &grants)?;
-        proof.verify_joined(&|id| self.retained_completion(id))?;
+        proof.verify_joined(&|id| self.retained_completion(id), snapshot)?;
         crate::runtime_schedule::plan_parent_reassembly(
             &config.runtime,
             proof.reference(),

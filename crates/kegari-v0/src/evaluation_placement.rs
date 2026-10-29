@@ -212,6 +212,14 @@ impl PreparedFixture {
             ));
         }
         if let Some(substrate) = &self.substrate {
+            if substrate.is_unborn()
+                && (manifest.repository_revision.is_some() || manifest.repository_root.is_none())
+            {
+                return Err(Error::new(
+                    "evaluation_fidelity",
+                    "unborn fixture requires actual repository identity without a fabricated revision",
+                ));
+            }
             substrate.verify_contract(variant, &self.repository, false, workflow_digest)?;
             substrate.verify_contract(
                 variant,
@@ -243,6 +251,7 @@ impl PreparedFixture {
             context,
             &self,
             &HostContext {
+                child: self.child_context.as_ref(),
                 workspace: manifest.workspace_id,
                 operation: manifest.operation_id,
                 profile: &manifest.profile,
@@ -455,7 +464,6 @@ mod tests {
             );
             assert_eq!(snapshot(&repository).unwrap(), fixture.before);
             let isolation = IsolationPlan {
-                managed_execution: None,
                 schema_version: 1,
                 role: ExecutionRole::Child,
                 execution_root,
@@ -501,7 +509,7 @@ mod tests {
                 codex_version: instructions::SUPPORTED_CODEX_VERSION,
                 repository: Some(RepositoryContext {
                     root: repository.clone(),
-                    revision,
+                    revision: Some(revision),
                     scope_paths: vec!["src/limit.py".into()],
                 }),
                 required_context: &[],

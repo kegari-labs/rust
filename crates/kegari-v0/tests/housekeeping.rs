@@ -331,7 +331,6 @@ impl Fixture {
             id: "101".into(),
         };
         let isolation = IsolationPlan {
-            managed_execution: None,
             schema_version: 1,
             role: ExecutionRole::Validation,
             execution_root: execution.path().into(),
@@ -1258,12 +1257,38 @@ fn diagnostic_rotation_redacts_secrets_and_failure_remains_visible() {
             .len()
             <= 2048
     );
+    let recent = sink.recent(id(2));
+    assert_eq!(recent["available"], true);
+    assert!(!recent["events"].as_array().unwrap().is_empty());
+    let encoded = serde_json::to_string(&recent).unwrap();
+    assert!(!encoded.contains("sentinel-secret") && !encoded.contains("example-token"));
+    assert_eq!(sink.recent(id(3))["error"], "log_identity");
+    // A restarted reader can inspect retained activity; newly registered
+    // secrets are redacted even if older diagnostics predate their registration.
+    let reader = LogSink::new(PrivateDir::open(root.path()).unwrap());
+    reader
+        .register_secret(&kegari_secrets::Secret::new(b"fixture".to_vec()).unwrap())
+        .unwrap();
+    assert!(
+        !serde_json::to_string(&reader.recent(id(2)))
+            .unwrap()
+            .contains("fixture")
+    );
     event.reason = None;
+    for _ in 0..40 {
+        assert!(sink.emit(&event));
+    }
+    let recent = sink.recent(id(2));
+    assert_eq!(recent["available"], true);
+    assert_eq!(recent["events"].as_array().unwrap().len(), 32);
+    assert_eq!(recent["truncated"], true);
+    assert!(serde_json::to_vec(&recent).unwrap().len() <= 65536);
     std::fs::remove_file(root.path().join("events.jsonl")).unwrap();
     std::os::unix::fs::symlink("/nonexistent", root.path().join("events.jsonl")).unwrap();
     assert!(!sink.emit(&event));
     assert_eq!(sink.health().failed_events, 1);
     assert!(sink.health().last_error.is_some());
+    assert_eq!(sink.recent(id(2))["available"], false);
 }
 
 struct HandoverFixture {
@@ -1447,6 +1472,127 @@ async fn explicit_handover_preserves_intent_evidence_and_old_service_without_sta
         .await
         .unwrap();
     assert_eq!(replay.operation_id, receipt.operation_id);
+}
+
+#[tokio::test]
+async fn recorded_qualification_connects_reviewed_evidence_to_idempotent_handover() {
+    let f = HandoverFixture::new();
+    let candidate = inspect_handover_candidate(f.replacement.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        candidate.binary.digest,
+        f.qualification_record.binary_digest
+    );
+    assert_eq!(
+        candidate.instruction_digest,
+        f.qualification_record.instruction_digest
+    );
+    let mut wrong_reviewer = f.qualification_record.clone();
+    wrong_reviewer.reviewed_by = "another-operator".into();
+    assert_eq!(
+        record_runtime_qualification(
+            &f.host,
+            f.replacement.clone(),
+            wrong_reviewer,
+            &f.key,
+            &f.probe,
+            actor(),
+            id(60)
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "access_denied"
+    );
+    assert!(!f.root.path().join("qualifications").exists());
+    let recorded = record_runtime_qualification(
+        &f.host,
+        f.replacement.clone(),
+        f.qualification_record.clone(),
+        &f.key,
+        &f.probe,
+        actor(),
+        id(60),
+    )
+    .await
+    .unwrap();
+    let replayed_record = record_runtime_qualification(
+        &f.host,
+        f.replacement.clone(),
+        f.qualification_record.clone(),
+        &f.key,
+        &f.probe,
+        actor(),
+        id(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        recorded.qualification_digest,
+        replayed_record.qualification_digest
+    );
+    let reviewed = load_runtime_qualification(&f.host, id(60), &f.key).unwrap();
+    let plan = inspect_handover(&f.host, f.replacement.clone(), &reviewed, &f.probe)
+        .await
+        .unwrap();
+    assert_eq!(
+        apply_recorded_handover(
+            &f.host,
+            f.replacement.clone(),
+            &reviewed,
+            &f.probe,
+            actor(),
+            id(61),
+            "stale-token"
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "stale_handover_plan"
+    );
+    let receipt = apply_recorded_handover(
+        &f.host,
+        f.replacement.clone(),
+        &reviewed,
+        &f.probe,
+        actor(),
+        id(61),
+        &plan.token,
+    )
+    .await
+    .unwrap();
+    assert_eq!(receipt.phase, ReceiptPhase::Acknowledged);
+    let replay = apply_recorded_handover(
+        &f.host,
+        f.replacement.clone(),
+        &reviewed,
+        &f.probe,
+        actor(),
+        id(61),
+        &plan.token,
+    )
+    .await
+    .unwrap();
+    assert_eq!(receipt.payload_digest, replay.payload_digest);
+    assert_eq!(receipt.updated_at, replay.updated_at);
+    assert_eq!(
+        apply_recorded_handover(
+            &f.host,
+            f.replacement.clone(),
+            &reviewed,
+            &f.probe,
+            actor(),
+            id(61),
+            "different-token"
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "request_conflict"
+    );
+    let intent: kegari_v0::control::IntentRecord = f.root.read("intent.json").unwrap();
+    assert_eq!(intent.desired, Intent::Stopped);
 }
 
 #[tokio::test]
@@ -1659,7 +1805,7 @@ async fn blocked_provider_read_does_not_hold_control_and_force_prevents_deletion
 }
 
 #[tokio::test]
-async fn unavailable_native_containment_blocks_hook_before_cleanup_effect() {
+async fn unavailable_codex_cleanup_adapter_blocks_hook_before_cleanup_effect() {
     let f = Fixture::with_hook(true);
     let plan = f.house.inspect(id(7), &f.client).await.unwrap();
     let error = f
@@ -1674,7 +1820,7 @@ async fn unavailable_native_containment_blocks_hook_before_cleanup_effect() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.code, "process_tree_unverified");
+    assert_eq!(error.code, "unsupported_codex_lifecycle_hook");
     assert_eq!(
         f.control.operation(id(602)).unwrap_err().code,
         "record_missing"

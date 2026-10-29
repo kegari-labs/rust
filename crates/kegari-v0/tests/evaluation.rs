@@ -174,7 +174,7 @@ fn declared_native_context_file_uses_production_assembly_without_context_waivers
         codex_version: kegari_context::instructions::SUPPORTED_CODEX_VERSION,
         repository: Some(RepositoryContext {
             root: fixture.repository.clone(),
-            revision: "1234567890123456789012345678901234567890".into(),
+            revision: Some("1234567890123456789012345678901234567890".into()),
             scope_paths: vec!["src/limit.py".into()],
         }),
         required_context: &[],
@@ -333,9 +333,9 @@ fn scorer(variant: &Variant) -> Scorer {
 #[test]
 fn all_required_variants_have_exact_versioned_assets_and_two_declared_trials() {
     let suite = suite();
-    assert_eq!(suite.variants.len(), 28);
-    assert_eq!(suite.plan().unwrap().len(), 56);
-    assert_eq!(suite.max_trials, 56);
+    assert_eq!(suite.variants.len(), 33);
+    assert_eq!(suite.plan().unwrap().len(), 66);
+    assert_eq!(suite.max_trials, 66);
     assert!(
         suite
             .profiles
@@ -367,6 +367,11 @@ fn all_required_variants_have_exact_versioned_assets_and_two_declared_trials() {
 #[test]
 fn every_grader_accepts_observable_known_good_trace_but_never_self_assessment() {
     for variant in &suite().variants {
+        // This case requires an actual protected unborn worker binding; a replay
+        // cannot fabricate that provenance to produce a positive grade.
+        if variant.id == "unborn_repository" {
+            continue;
+        }
         let (_temp, fixture, isolation, _) = setup(variant);
         let facts = good(&fixture, &trace(&variant.id));
         let graded = grade(
@@ -391,6 +396,25 @@ fn every_grader_accepts_observable_known_good_trace_but_never_self_assessment() 
         let mut invented = facts.clone();
         invented.summary = None;
         invented.review_claim = None;
+        if matches!(
+            variant.id.as_str(),
+            "implementation"
+                | "testing"
+                | "documentation"
+                | "no_change"
+                | "unfamiliar_tool"
+                | "stale_guidance"
+                | "missing_tests"
+                | "unavailable_capability"
+        ) {
+            invented.state.as_object_mut().unwrap().remove(
+                if variant.id == "unavailable_capability" {
+                    "evaluation_child_blocker"
+                } else {
+                    "evaluation_child_proposal"
+                },
+            );
+        }
         assert!(
             !grade(
                 &scorer(variant),
@@ -405,7 +429,25 @@ fn every_grader_accepts_observable_known_good_trace_but_never_self_assessment() 
             variant.id
         );
         invented = facts.clone();
-        if let Some(review) = &mut invented.review_claim {
+        if matches!(
+            variant.id.as_str(),
+            "implementation"
+                | "testing"
+                | "documentation"
+                | "no_change"
+                | "unfamiliar_tool"
+                | "stale_guidance"
+                | "missing_tests"
+                | "unavailable_capability"
+        ) {
+            // Typed child results carry ordinary prose, whose accuracy remains
+            // human-graded. Deterministic checks bind the actual source proof.
+            invented
+                .checks
+                .get_mut("boundary")
+                .unwrap()
+                .candidate_digest = bytes_digest(b"different candidate");
+        } else if let Some(review) = &mut invented.review_claim {
             review.source_revision = "ffffffffffffffffffffffffffffffffffffffff".into();
         } else {
             invented.summary.as_mut().unwrap().revision =
@@ -737,7 +779,7 @@ fn assembly_uses_real_workflow_assets_scoped_guidance_and_context() {
         codex_version: "0.164.0-alpha.11.1",
         repository: Some(RepositoryContext {
             root: fixture.repository.clone(),
-            revision: "1234567890123456789012345678901234567890".into(),
+            revision: Some("1234567890123456789012345678901234567890".into()),
             scope_paths: vec!["src/limit.py".into()],
         }),
         required_context: &[],
@@ -891,7 +933,7 @@ async fn unresolved_profile_records_all_56_blockers_without_calling_executor() {
     })
     .await
     .unwrap();
-    assert_eq!(reports.len(), 56);
+    assert_eq!(reports.len(), 66);
     assert!(
         reports
             .iter()
@@ -900,7 +942,7 @@ async fn unresolved_profile_records_all_56_blockers_without_calling_executor() {
     let assessment = assess(&suite, &reports).unwrap();
     assert_eq!(assessment.actual_agent_trials, 0);
     assert!(!assessment.qualified);
-    assert_eq!(assessment.blocking_trials.len(), 56);
+    assert_eq!(assessment.blocking_trials.len(), 66);
     assert!(store.finish(&reports[0]).is_err());
     assert!(ReportStore::create(store.root(), &suite).is_err());
 }
@@ -1032,7 +1074,7 @@ async fn finite_trial_deadline_cancels_hung_preparation_before_next_trial() {
     .await
     .expect("per-trial timeout must not wait for the suite deadline")
     .unwrap();
-    assert_eq!(calls, 56);
+    assert_eq!(calls, 66);
     assert_eq!(reports[0].outcome, TrialOutcome::Interrupted);
     assert!(
         reports[0]
@@ -1051,7 +1093,7 @@ async fn finite_trial_deadline_cancels_hung_preparation_before_next_trial() {
             .all(|r| r.evidence_class == EvidenceClass::NotRun)
     );
     let archive = kegari_v0::evaluation_reports::ReportArchive::open(store.root()).unwrap();
-    assert_eq!(archive.reports().len(), 56);
+    assert_eq!(archive.reports().len(), 66);
     assert_eq!(archive.reports()[0].outcome, TrialOutcome::Interrupted);
 }
 
@@ -1191,8 +1233,8 @@ async fn every_executor_failure_is_retained_without_retry_or_synthetic_pass() {
     })
     .await
     .unwrap();
-    assert_eq!(count, 56);
-    assert_eq!(reports.len(), 56);
+    assert_eq!(count, 66);
+    assert_eq!(reports.len(), 66);
     assert!(
         reports
             .iter()

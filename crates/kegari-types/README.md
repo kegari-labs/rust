@@ -34,6 +34,10 @@ The workspace version remains `0.2.0-alpha.10`, and the executable remains
 `kegari-v0`. Build it through `kegari-cli` and check all packages from the workspace
 root:
 
+Workspace-wide test/lint commands below are later stabilization references.
+The current [goal](../kegari-v0/GOAL.md) requires only affected compilation and
+minimal focused validation while features are being implemented.
+
 ```sh
 cargo build --offline --locked -p kegari-cli --bin kegari-v0
 cargo test --offline --locked --workspace

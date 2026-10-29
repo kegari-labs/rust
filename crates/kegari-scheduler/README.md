@@ -35,6 +35,10 @@ this crate's manifest and source tree.
 
 From the workspace root with the pinned toolchain/cache:
 
+Workspace-wide test/lint commands below are later stabilization references.
+The current [goal](../kegari-v0/GOAL.md) requires only affected compilation and
+minimal focused validation while features are being implemented.
+
 ```sh
 cargo test --release --offline --locked -p kegari-scheduler
 cargo test --release --offline --locked --workspace

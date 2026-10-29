@@ -1,291 +1,91 @@
-# Local execution and evidence
+# Codex repository execution and Kegari evidence
 
-`execution.rs` implements local hooks, named checks, restricted Git inspection,
-scoped source writes, and validation of a video captured by an integrated check.
-Its admitted `JournaledSandboxBoundary` calls backend `execution_host` adapters
-and the `kegari-execution` command mechanism. `SandboxBoundary` refuses commands
-without a journal. There is no unsandboxed fallback or injection of provider
-credentials into subprocesses.
+[SPEC 1.5](../SPEC.md) defines the intended boundary: Codex app-server owns
+repository inspection, file editing, shell execution, sandbox enforcement and
+supported terminal management. Kegari selects and admits work, supplies context
+and supported role permissions, observes results and decides workflow progression.
+
+The ordinary admitted child path now uses native Codex tools and the custom
+repository executor has been removed. Remaining caller integration and source
+compatibility work are tracked in [MILESTONES.md](../MILESTONES.md) and
+[PROGRESS.md](../PROGRESS.md). Focused simulated evidence does not establish
+live/native qualification.
 
 ## Host integration
 
-Create an isolated clone, validate its `IsolationPlan`, then register an
-`OwnedDirectory`. Retain the returned identity digest in host control storage.
-Recovery uses `OwnedDirectory::reopen` with that retained digest; a directory
-marker by itself does not authorize adoption. Source and operator checkouts must
-be disjoint. Every action revalidates the current boundary, runtime/work/repository
-identity and admitted Git revision.
+Kegari prepares an owned source directory and admits a bounded operation/session
+using current work, correction, role, account and source identities. The selected
+Codex profile supplies native repository tools and supported permissions. An
+independent PR review cannot execute repository code; a read-only filesystem
+profile alone does not establish that restriction. Missing required capabilities
+produce a specific blocker, never a custom-executor or unsandboxed fallback.
 
-`LocalExecutor` accepts the trusted command boundary, pinned `Git`, finite limits,
-and owned directory capability. The command boundary is a host dependency, never
-a dynamic tool argument. Only child and validation roles can execute repository
-commands or hooks. Parent, review and independent-review roles cannot do so.
-`GitInspection` exposes only fixed status, diff and object-file reads. Trusted
-delivery code separately owns commits, branches, publication and merge effects.
+Structured command/file observations retain their operation, thread, turn, item
+and source associations. Available completion, output and artifact facts remain
+separate from model interpretations. Kegari must not reconstruct executable or
+environment inventories, generate repository sandbox rules, or require its own
+admission and process journal for every Codex-internal command.
 
-`write_source` requires a child role, exact permitted path, expected prior content
-digest and finite bytes. It persists an incomplete receipt before writing, uses a
-retained parent-directory descriptor with no-follow exclusive creation and an
-atomic rename, rechecks identity and prior bytes, then persists completion. It
-rejects linked files, traversal, `.git`, stale writes and paths outside the scope.
-Failed writes preserve owned temporary files for explicit reconciliation.
+Kegari retains narrow machinery for launching and supervising its own app-server,
+Git and control processes. Deterministic Git source preparation, candidate
+assembly and privileged publication remain application operations with their
+existing ownership and authority. See [host metadata operations](host-process.md)
+and [process recovery](process-recovery.md).
 
 ## Hooks and durable attempts
 
-`HookLedger` persists a started/unknown record before dispatch. `after_create`
-runs once and only success initializes the directory. `before_run` is keyed to an
-admitted session. The host calls `mark_launched` only after actual launch, and
-`mark_ended` after actual termination, before `after_run` becomes eligible.
-An `after_run` failure remains diagnostic and never makes failed work successful.
+Explicitly selected repository hooks use the supported Codex execution interface
+and the existing workflow timing. Preparation failure prevents dependent work;
+failed or uncertain cleanup hooks preserve the directory. Hook observations and
+workflow attempts remain recoverable facts, not permission to replay an unknown
+effect. No standalone Kegari shell runner is retained as a hook fallback.
 
-`before_remove` requires the digest of an explicitly authorized cleanup plan and
-no launched session or unknown hook. A failure leaves all files in place. A fresh
-explicit cleanup plan can retry a known failure while retaining the earlier
-record; the same plan cannot replay. The host must recheck every preservation
-predicate after the hook and immediately before removal. This adapter never
-deletes an execution directory. Timed-out or identity-mismatched hooks remain
-unknown and require reconciliation.
+On interruption, Kegari fences its mutations before requesting supported Codex
+cancellation and terminal cleanup. Requested cancellation, confirmed completion
+and uncertainty remain distinct. App-server exit or stream EOF does not prove
+that every repository descendant stopped. Preserve affected files and block
+conflicting work or acceptance until the relevant uncertainty is reconciled.
 
-## Named checks
+## Required checks and source-bound results
 
-This existing named-check path is a migration component, not the full SPEC 1.4
-execution contract. Generic discovered invocations and revision-bound validation
-obligations must replace its mandatory preconfigured-command/result-artifact
-assumptions under M02-1–M02-4. Empty configured check sets cannot imply that all
-necessary validation ran. The Cargo-specific preparation path is removed;
-commands are not rewritten by an ecosystem adapter.
+Agents discover appropriate commands from authorized repository guidance and
+the task. Users do not need command catalogs or environment manifests. Kegari
+retains required-check obligations, prior failures and reasons for corrections;
+it does not parse target-toolset manifests or infer test counts from exit zero.
 
-`run_check` resolves the exact named local or integrated workflow command. It
-preserves argv and uses the validated repository cwd. Hosted CI cannot be created
-through this API. Integrated checks require the candidate-vector digest. The host
-fixes any additional output paths, such as a recording, before dispatch.
+Result acceptance requires actual available execution results and the matching
+work, correction and source/candidate identity. Missing, stale or substituted
+results cannot satisfy a check. A completion message does not replace evidence.
+Hosted CI, review, human acceptance and release decisions remain separate gates.
+Source changes require fresh applicable evidence rather than relabeling old
+results. Current named-check/custom-command mechanisms must migrate to this
+boundary instead of becoming a second execution path.
 
-Checks persist `CheckJournalEntry::Started` before execution and a finished or
-uncertain outcome afterward. The host must store these records durably, prevent
-duplicate operation dispatch, and reconcile outstanding started records after a
-crash. Persistence failure never grants a successful result.
+## Artifacts and visual evidence
 
-For supervised cancellation, use the split API: `prepare_check` performs source
-inspection without launching a process; `start_check` synchronously creates the
-owned process under the serialized control gate; `complete_check` waits outside
-that gate. Register the returned `CommandCancellation` capability before leaving
-the start gate. Persist and fence operator cancellation before invoking it. The
-host finalizes the durable effect and rechecks current authority before exposing
-passed evidence. Cancellation holds an actual unreaped child handle, never an
-adopted numeric PID. Full source hashing and process waiting do not hold the
-control mutex. `run_check_complete` also returns a private failed capability so
-failed result bytes can be retained before a corrected rerun.
+Protected artifact capture, storage, provenance and acceptance remain Kegari
+responsibilities. Required writers must finish before their output is final;
+retained artifacts cannot be overwritten merely because a rerun needs the path.
+An arbitrary existing recording is not proof of the current candidate's behavior.
+Visual capture, validation, publication and authenticated retrieval must retain
+actual source/candidate and artifact identities through the supported Codex and
+provider interfaces. Unsupported capabilities remain explicit limitations.
 
-Optional managed resource content is observed before preparation and after
-command completion outside that mutex. A changed observed resource cannot turn a
-successful command into accepted evidence: checks persist uncertainty and hooks
-retain their started/unknown state. Admission reconstructs the retained binding
-without reading resource bytes. The original explicit resource read root remains the
-read boundary, with separately enumerated library mappings and no added process
-execution grant. This is pre/post observation, not an immutable filesystem view;
-host updates can invalidate it. Public workload qualification remains separate.
+## Migration and validation
 
-Source snapshots bind HEAD, tree, regular-file bytes, executable modes and symlink
-targets. The pinned Git adapter rejects tracked/index changes and undeclared
-untracked files, so dirty source cannot claim a clean commit. Source and revision
-must remain unchanged while checks run. Each declared artifact must be a fresh,
-bounded regular file under an allowed output root. Existing output requires a
-private `RetainedArtifact` capability: `retain_outputs` copies and verifies its
-bytes in content-addressed chunks in owner-only host storage outside every worker
-read/write root. A digest alone does not authorize overwriting prior evidence.
+Remove replaced command rendering, sandbox generation, managed environment and
+resource inventories, execution/edit adapters and command-level bookkeeping,
+along with obsolete configuration, instructions, tests and dependencies. Preserve
+shared host-process machinery and valid application evidence/acceptance rules.
+Do not keep the replaced executor behind flags or compatibility wrappers.
 
-`VerifiedCheckExecution::production_evidence` rejects deterministic fixture
-results. The host must additionally apply current work/correction authority,
-workflow freshness and the exact required check inventory before constructing a
-delivery gate. A local successful check does not imply hosted CI, review, staging,
-acceptance, release or production success.
+Old records remain evidence for their original source and contract. They must
+not silently become Codex execution evidence. Change affected persisted and
+instruction identities explicitly and refuse unsupported recovery while
+preserving the original data.
 
-## Video provenance
-
-A `CaptureOrigin` can only be obtained from a successful integrated check that
-declared and freshly produced the video artifact. It binds the executed check,
-source snapshot, candidate vector and bytes. An arbitrary existing MP4 path cannot
-be promoted into a capture origin.
-
-`validate_video` revalidates those bindings, runs the explicitly admitted ffprobe
-and ffmpeg binaries with fixed arguments, verifies MP4 container metadata,
-H.264/AAC streams, bounded duration and dimensions, and requires a complete decode.
-Optional conversion reads the original captured flow, uses fixed codec settings
-and a new output, and preserves the original. It does not generate substitute
-frames, truncate the flow or invent capture success. Media receipts bind tool
-binary digests and command outcomes. Upload, attachment to the parent, retrieval
-and playback authorization are separate provider gates.
-
-## Validation and remaining qualification
-
-Run the deterministic integration suite with:
-
-```sh
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache \
-  cargo test -p kegari-v0 --test execution --test git_delivery
-RUSTUP_TOOLCHAIN=stable CARGO_HOME=/private/tmp/kegari-v0-cargo-cache \
-  cargo clippy -p kegari-v0 --lib --test execution --test git_delivery -- -D warnings
-```
-
-The execution suite uses real disposable Git repositories and filesystem writes,
-with a clearly marked deterministic subprocess boundary. It verifies hook order
-and failure preservation, write-ahead persistence, role denial, dirty source and
-stale artifacts, prior-artifact retention, exact source writes, codec/decode
-failure, full-flow conversion provenance, directory identity and hardlink denial.
-These fixtures do not qualify actual OS sandbox enforcement, live ffmpeg capture,
-provider upload/playback, or real-agent behavior. The current host's outer policy
-blocked the earlier OS sandbox qualification attempt; this adapter does not
-retry or bypass that restriction. Actual qualification remains separately gated.
-
-Limits cover command time, stdout/stderr, source scans, individual artifact bytes
-and media duration. They do not implement a filesystem quota for all scratch
-files written by a subprocess. The host still owns disk-pressure admission and
-preservation policy, durable operation recovery and actual worker/provider wiring.
-
-Hooks also expose `prepare_hook`, `start_hook`, and `complete_hook`: preparation
-persists the attempt before any process starts, the short admitted start returns
-an owned cancellation handle, and completion waits outside the control mutex.
-Skipped hooks have no process handle. Failed or interrupted starts retain
-`StartedUnknown` and cannot silently replay. The host must finalize the control
-effect against current authority before admitting the following phase.
-
-Trusted Git sequences use `Git::start_operation` with finite per-command and
-whole-operation deadlines, bounded stdin/stdout/stderr, and an owned process
-group cancellation handle. Every actual subprocess start passes the supplied
-short authority gate; a fence between commands prevents the next command.
-Ordinary disposable-process tests verify timeout, cancellation, and reaping;
-these tests make no claim about OS sandbox qualification.
-
-`prepare_execution_clone` copies committed local objects into an independently
-owned exact-revision checkout; the operator's staged, unstaged and untracked work
-is never input. Its retained receipt sits outside the worker repository. Reuse
-requires matching identity and HEAD and preserves all dirty files and staging.
-Independent PR reviews use `prepare_independent_review_clone` with a separate
-workspace/repository/PR/head/base identity, without a fabricated Linear parent.
-The review role still receives no repository execution or write permission.
-
-`commit_execution_changes` accepts only an owned child directory and its exact
-execution binding. It rejects ambient staging and changes outside both declared
-scope and actual source grants, constructs a separate retained index, writes raw
-binary/symlink/mode objects, and creates a single-parent signed-off commit before
-advancing HEAD by comparison with the old revision. Source writers must be ended
-before this host phase; subsequent checks need fresh admission for the new head.
-Partial indexes and objects are retained on interruption. External Git filters,
-configuration includes, sparse checkouts and Gitlinks are explicitly blocked by
-the supported execution profile. SHA-1 is used only for Git object interoperability;
-evidence authentication remains SHA-256/HMAC. The object/index mechanics follow
-the official [Git index](https://git-scm.com/docs/git-update-index),
-[raw object](https://git-scm.com/docs/git-hash-object) and
-[commit object](https://git-scm.com/docs/git-commit-tree) interfaces.
-
-Owned process groups are established from actual freshly spawned Child handles,
-never restored numeric PIDs. The host observes terminal leaders with
-`waitid(WNOWAIT)`, finishes their group while the leader remains unreaped, and only
-then consumes the exit status. The nonconsuming observation follows the
-[POSIX wait status contract](https://pubs.opengroup.org/onlinepubs/9699919799/functions/V2_chap02.html).
-Group cleanup does not prove that a descendant could not escape into another
-session/group. Actual execution-boundary qualification must establish that
-containment separately; unexpected group identity or pipe retention remains
-unknown and cannot release evidence gates.
-
-The new-session escape is a concrete open implementation finding, not merely a
-missing test. `process_group` now includes a finite owned fixture which creates a
-new session, closes inherited streams, and writes its owned artifact after the
-original group has completed. The current Seatbelt profile has no verified
-mechanism preventing this escape. Native `OwnedCommand::wait` therefore returns
-`process_tree_unverified` after group completion instead of producing passing
-check evidence. `group_exited` is diagnostic only; the stronger `exited` capability
-also refuses completion. Callers retain their registry entry, Sent receipt and
-permit/hold. An actual descendant containment or tracking mechanism remains
-required before native repository commands can complete safely. The deterministic
-execution boundary continues to test the surrounding workflow without claiming
-that missing native guarantee.
-
-Native execution now requires `JournaledSandboxBoundary`, bound to the current
-operation permit. Every actual subprocess persists Starting and an inherited
-locked guard before spawn, captures its native child identity when available,
-and records GroupExited only after owned group cleanup and reap. Recovery never
-adopts the stored PID and still reports all-descendants-exited as false. Plain
-`SandboxBoundary` rejects native starts without this journal.
-
-`Git::from_pinned_executable` inspects tool bytes without launching a process;
-`start_journaled_operation` performs its version probe under the same current
-gate and journal. `GitExecutionScope` covers trusted metadata reads during check
-preparation/completion and structured Git inspection. Each read registers a
-cancellation handle within the spawn gate, waits outside ControlHost, and removes
-that handle only after its owned process has exited. Preparation and model runs
-use different immutable permits even when reusing one owned directory.
-
-The observed Homebrew Git path has a group-writable ancestor and is rejected by
-the strict executable ownership check. Tests use an exact-byte Git copy under
-their own disposable protected directory, not a host installation. Native boot
-identity remains unavailable in the outer development sandbox; journaled Git
-fixtures explicitly inject a synthetic boot UUID while observing their actual
-owned PID/start/path and Git effects. Neither fixture arrangement qualifies the
-native production process-identity boundary.
-
-Repository commands now fail the `process_tree_unverified` prerequisite before
-native spawn. A known inability to prove descendant containment must not create
-an avoidable permanent unknown operation. The prebuilt host cleanup guard uses
-the same prerequisite and exact executable/profile/argument binding. Trusted
-fixed Git metadata remains a separate journaled operation. A passing fixture
-boundary does not remove this native production prerequisite.
-
-## Checks after an active correction
-
-`EffectiveExecutionBinding` requires the original owned execution and an actual `VerifiedCorrectionTransition` reconstructed from current signed native correction history. It changes only the effective work identity for new child local-check evidence. The original operation, revision, isolation, owned-directory identity and marker remain unchanged. An arbitrary serialized work identity cannot pass this bridge.
-
-`prepare_effective_check` retains that capability through process start and completion. Corrected check records use schema 2 and include the original binding digest, exact transition digest, processed watermark and correction input digest. Earlier check records retain their original generation. The enclosing worker compares the current correction epoch under the serialized start and completion gates; a changed epoch cannot publish stale passing evidence. Integrated validation continues to require a separately prepared exact candidate vector.
-
-The regression `native_correction_check_keeps_original_marker_and_historical_evidence` uses the real signed native correction-publication fixture and actual disposable Git clone, with an explicitly deterministic command boundary. It verifies unchanged ownership bytes, historical earlier checks, exact corrected provenance, rejected raw work/revision rebinding and continued rejection as production evidence. Native repository execution remains subject to the documented process-containment prerequisite.
-
-## Unchanged source for directory reuse
-
-`Git::verify_reusable_execution` issues an opaque `VerifiedReusableSource` only
-under fresh host metadata authority for the same runtime and canonical work. An
-expired worker permit, unscoped Git handle, or serialized record cannot issue it.
-The verifier checks the original prepared clone, actual HEAD and tree, clean Git
-state, and independently hashes every source file against the tree. Index flags
-such as `assume-unchanged` therefore cannot hide changes.
-
-The bounded inventory includes Git administration, source files, directory
-identities, the original ownership marker, and the prepared-clone marker. It
-checks file bytes, modes, owner, device/inode and timestamps before and after
-Git observation. Final filesystem revalidation runs without a subprocess or
-Control reentry. This initial route accepts SHA-1 clones with ordinary owned
-files and directories, and rejects symlinks, hardlinks, external write modes,
-untracked or ignored files, and extra empty source directories. Its inventory
-limits are 100,000 entries, 256 MiB of file content including `.git`, and depth
-128. These are source-preservation checks, not process-exit or sandbox proof.
-
-The family component fixtures use actual disposable Git objects, host metadata
-process guards, Control admissions and directory enrollment. Their terminal
-session metadata is explicitly synthetic; they create no provider recovery
-capability or native runtime completion. They check typed resume enrollment,
-ordinary-permit refusal, unchanged original creation history, stale/unknown hook
-refusal, and changed-source rejection. The cleanup fixture rejects the old
-cleanup token after enrollment, preserves an exact retained clone, and records
-removal tombstones for both family operations through guarded metadata reads.
-Native end-to-end session resumption
-requires the independently verified provider and joined-execution path.
-
-## Environment package boundary
-
-`kegari_execution` owns isolation plans, managed resource binding, sandbox
-rendering and descriptive observations, together with native command ownership,
-journals and joined cleanup. Backend `execution_host` retains admission adapters.
-This module retains the
-application checks, protected artifacts and evidence policy. Environment/domain
-construction and validation explicitly use the current application `BUILD_ID`;
-this refactor adds no command-discovery requirements or qualification.
-
-## Execution package boundary
-
-`kegari-execution` owns native command construction, output budgets, actual child
-and group ownership, journal mechanics and joined cleanup. Backend adapters retain
-permits and construct exact bindings through a synchronous one-shot factory at the
-original journal-creation point. No factory is retained or invoked during cleanup.
-`process_records::ProcessJournal` keeps application admission checks over
-`kegari_execution::journal::ProcessJournalStore`; retained records grant no launch,
-adoption, signaling or recovery authority. Command outcome/service records and
-resource-limit types are imported directly from `kegari_execution`.
+The initial increment compiles affected code and exercises one ordinary production
+flow through simulated Codex transport plus a missing/stale-result refusal.
+Further development uses the smallest relevant check. Full regression and
+separately authorized live qualification belong to milestone 0.7; historical
+custom-executor tests do not establish the new path's operation.

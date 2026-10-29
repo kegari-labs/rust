@@ -13,6 +13,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug)]
 pub struct RetainedResumeSession {
     candidate: ResumeCandidate,
+    validation: Option<super::ColdValidationCheckpoint>,
 }
 impl RetainedResumeSession {
     pub(crate) fn from_journal(
@@ -22,6 +23,7 @@ impl RetainedResumeSession {
         journal_digest: String,
     ) -> Result<Self> {
         Ok(Self {
+            validation: None,
             candidate: ResumeCandidate::from_retained_parts(
                 state,
                 admission_digest,
@@ -29,6 +31,16 @@ impl RetainedResumeSession {
                 journal_digest,
             )?,
         })
+    }
+    pub(crate) fn with_validation(
+        mut self,
+        checkpoint: Option<super::ColdValidationCheckpoint>,
+    ) -> Self {
+        self.validation = checkpoint;
+        self
+    }
+    pub(crate) fn validation(&self) -> Option<&super::ColdValidationCheckpoint> {
+        self.validation.as_ref()
     }
     pub(crate) fn protocol_candidate(&self) -> &ResumeCandidate {
         &self.candidate

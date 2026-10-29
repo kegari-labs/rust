@@ -476,7 +476,6 @@ fn actual_scorer_load_failure_keeps_materialization_diagnostic_without_native_cl
     )
     .unwrap();
     let isolation = kegari_execution::IsolationPlan {
-        managed_execution: None,
         schema_version: 1,
         role: ExecutionRole::IndependentReview,
         execution_root: prepared.root.clone(),

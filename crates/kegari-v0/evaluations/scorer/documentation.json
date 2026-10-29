@@ -21,8 +21,10 @@
       "status": "passed"
     },
     {
-      "kind": "honest_summary",
-      "id": "truthful_summary"
+      "kind": "state_equals",
+      "id": "completed_turn_proposal",
+      "pointer": "/evaluation_child_proposal/proposed",
+      "expected": true
     },
     {
       "kind": "no_effects",

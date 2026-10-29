@@ -10,6 +10,7 @@ Dependencies are the existing pinned serde/JSON/SHA-256/hex libraries and
 `kegari-types` for errors. There is no backend dependency. Configuration revision
 calculation remains a backend function using this shared implementation.
 
-Version remains `0.2.0-alpha.10`. Run workspace-wide checks from the workspace
-root; see [progress](../kegari-v0/PROGRESS.md) for actual results. This extraction
+Version remains `0.2.0-alpha.10`. During the feature-first goal, use affected
+compilation and the smallest relevant check. Workspace-wide checks belong to later
+stabilization; see [progress](../kegari-v0/PROGRESS.md) for actual results. This extraction
 creates no release package or operational qualification.

@@ -7,10 +7,7 @@ use crate::runtime::VerifiedAuthorizedOutcome;
 use crate::worker::WorkerAuthority;
 use crate::{
     control::RunAdmission,
-    execution::{
-        CommandBoundary, DirectoryIdentity, ExecutionBinding, ExecutionEvidenceClass,
-        ExecutionLimits, OwnedDirectory, StartedCommand,
-    },
+    execution::{DirectoryIdentity, ExecutionBinding, ExecutionLimits, OwnedDirectory},
     worker::{ContractInput, WorkerContract, WorkerExecution, operation_tool_definitions},
     worker_run::{RunCompletion, RunOutcome},
 };
@@ -22,7 +19,7 @@ use kegari_context::instructions::RepositoryContext;
 use kegari_context::instructions::WorkerNetwork;
 use kegari_context::instructions::assemble;
 use kegari_digest::canonical_digest;
-use kegari_execution::{ExecutionRole, IsolationPlan, PathGrant, ValidatedIsolation};
+use kegari_execution::{ExecutionRole, IsolationPlan, PathGrant};
 use kegari_types::control::Lease;
 use kegari_types::error::{Error, Result};
 use kegari_types::run::PhaseKey;
@@ -55,24 +52,6 @@ pub(crate) fn maintain_phase_observations<'a, T: 'a>(
     })
 }
 
-struct NoCommands;
-impl CommandBoundary for NoCommands {
-    fn evidence_class(&self) -> ExecutionEvidenceClass {
-        ExecutionEvidenceClass::DeterministicFixture
-    }
-    fn start(
-        &self,
-        _: &ValidatedIsolation,
-        _: &[String],
-        _: std::time::Duration,
-        _: usize,
-    ) -> Result<Box<dyn StartedCommand>> {
-        Err(Error::new(
-            "fixture_no_execution",
-            "review fixture cannot execute repository commands",
-        ))
-    }
-}
 pub(crate) fn git(binary: &Path, cwd: &Path, args: &[&str]) {
     let output = kegari_process::group::OwnedGroup::spawn_std(
         Command::new(binary)
@@ -178,7 +157,6 @@ pub(crate) fn worker(input: WorkerInput<'_>) -> WorkerFixture {
         vec![]
     };
     let isolation = IsolationPlan {
-        managed_execution: None,
         schema_version: 1,
         role: match role {
             AgentRole::Review => ExecutionRole::Review,
@@ -221,7 +199,7 @@ pub(crate) fn worker(input: WorkerInput<'_>) -> WorkerFixture {
         codex_version: kegari_context::instructions::SUPPORTED_CODEX_VERSION,
         repository: Some(RepositoryContext {
             root: repo.clone(),
-            revision: revision.commit.clone(),
+            revision: Some(revision.commit.clone()),
             scope_paths: gate
                 .child_scope()
                 .map(|scope| scope.write_paths.clone())
@@ -253,20 +231,22 @@ pub(crate) fn worker(input: WorkerInput<'_>) -> WorkerFixture {
         known_secrets: &[],
     })
     .unwrap();
-    let contract = Arc::new(
-        WorkerContract::new(ContractInput {
-            assembled,
-            authority: WorkerAuthority::Authorized(gate.clone()),
-            isolation: isolation.clone(),
-            workflow: workflow.clone(),
-            context,
-            review: None,
-            account_id: account.into(),
-            repository: Some(repository.clone()),
-            read_resources: BTreeMap::new(),
-        })
-        .unwrap(),
-    );
+    let mut contract = WorkerContract::new(ContractInput {
+        assembled,
+        authority: WorkerAuthority::Authorized(gate.clone()),
+        isolation: isolation.clone(),
+        workflow: workflow.clone(),
+        context,
+        review: None,
+        account_id: account.into(),
+        repository: Some(repository.clone()),
+        read_resources: BTreeMap::new(),
+    })
+    .unwrap();
+    if let Some(archive) = assignment.and_then(|assignment| assignment.review_archive()) {
+        contract.attach_review_archive(archive.clone()).unwrap();
+    }
+    let contract = Arc::new(contract);
     let ownership = Arc::new(
         OwnedDirectory::register(
             DirectoryIdentity {
@@ -287,7 +267,6 @@ pub(crate) fn worker(input: WorkerInput<'_>) -> WorkerFixture {
         execution: Arc::new(WorkerExecution {
             git: tool.clone(),
             git_executable: binary.into(),
-            boundary: Arc::new(NoCommands),
             ownership,
             binding: ExecutionBinding {
                 runtime_id: runtime,

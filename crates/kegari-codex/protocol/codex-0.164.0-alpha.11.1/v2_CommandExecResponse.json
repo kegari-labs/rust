@@ -1,0 +1,1 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","properties":{"exitCode":{"format":"int32","type":"integer"},"stderr":{"type":"string"},"stdout":{"type":"string"}},"required":["exitCode","stderr","stdout"],"type":"object","$comment":"Generated from Codex 0.164.0-alpha.11.1. Modified: descriptions/titles omitted and JSON compacted. See PROVENANCE.md."}

@@ -57,13 +57,13 @@ fn exact_identity_entrypoints_report_the_bound_build_and_assets() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(actual["schema_version"], 5);
+    assert_eq!(actual["schema_version"], 6);
     assert_eq!(actual["config_schema"], 1);
     assert_eq!(actual["repository_policy_schema"], 1);
     assert_eq!(actual["workflow_source_schema"], 1);
     assert_eq!(actual["process_schema"], 3);
-    assert_eq!(actual["managed_execution_schema"], 5);
-    assert_eq!(actual["asset_version"], "7");
+    assert_eq!(actual["codex_execution_schema"], 1);
+    assert_eq!(actual["asset_version"], "9");
     assert_eq!(actual["runtime_version"], build_info["runtime_version"]);
     assert_eq!(actual["runtime_build"], build_info["runtime_build"]);
     assert_eq!(

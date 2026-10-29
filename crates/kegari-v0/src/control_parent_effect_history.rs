@@ -30,6 +30,7 @@ impl ParentEffectHistoryBinding {
 }
 /// Borrowed only during the actual Control callback. No Deserialize/constructor.
 /// Frozen membership includes reservations, including known not-sent outcomes.
+#[derive(Clone)]
 pub(crate) struct ParentEffectHistoryObservation {
     preparation: Receipt,
     model: Receipt,
@@ -80,13 +81,43 @@ impl ControlHost {
             .state
             .lock()
             .map_err(|_| Error::new("control_failed", "control serialization failed"))?;
-        let history = self.parent_effect_history(&state, preparation, model)?;
+        let history =
+            self.parent_effect_history(Some(&state), &state.snapshot(), preparation, model)?;
         observe(&state.snapshot(), &history)
+    }
+
+    /// Recheck an already authenticated frozen observation while the caller owns
+    /// the ordinary admission gate. This never locks Control or creates an
+    /// observation from arbitrary receipt JSON. Exact frozen bindings from the
+    /// original state-aware read reject rollback, omission and index changes.
+    pub(crate) fn revalidate_parent_effect_history(
+        &self,
+        snapshot: &ControlSnapshot,
+        expected: &ParentEffectHistoryObservation,
+    ) -> Result<()> {
+        let current = self.parent_effect_history(
+            None,
+            snapshot,
+            expected.preparation.operation_id,
+            expected.model.operation_id,
+        )?;
+        if current.binding != expected.binding
+            || canonical_digest(1, &current.preparation)?
+                != canonical_digest(1, &expected.preparation)?
+            || canonical_digest(1, &current.model)? != canonical_digest(1, &expected.model)?
+            || canonical_digest(1, &current.effects)? != canonical_digest(1, &expected.effects)?
+        {
+            return Err(invalid(
+                "authenticated parent closure changed before readmission",
+            ));
+        }
+        Ok(())
     }
 
     fn parent_effect_history(
         &self,
-        state: &State,
+        state: Option<&State>,
+        snapshot: &ControlSnapshot,
         preparation: Uuid,
         model: Uuid,
     ) -> Result<ParentEffectHistoryObservation> {
@@ -118,7 +149,7 @@ impl ControlHost {
             || prep.workspace != run.workspace
             || prep.account != run.account
             || preparation.runtime_id != model.runtime_id
-            || model.runtime_id != state.intent.runtime_id
+            || model.runtime_id != snapshot.intent.runtime_id
             || preparation.owner_generation != model.owner_generation
             || preparation.actor != model.actor
             || !matches!(
@@ -137,7 +168,7 @@ impl ControlHost {
         let mut selected = BTreeMap::new();
         let mut bind = |owner: &Receipt| -> Result<OwnerEffectHistory> {
             let owner_id = owner.operation_id;
-            if state.effect_history.members.contains_key(&owner_id) {
+            if state.is_some_and(|state| state.effect_history.members.contains_key(&owner_id)) {
                 return Err(invalid("parent owner reuses an indexed effect identity"));
             }
             let owned: BTreeSet<_> = all
@@ -151,7 +182,7 @@ impl ControlHost {
                     .frozen
                     .as_ref()
                     .ok_or_else(|| invalid("parent owner membership is not frozen"))?;
-                if let Some(live) = state.effect_indexes.get(&owner_id)
+                if let Some(live) = state.and_then(|state| state.effect_indexes.get(&owner_id))
                     && (live.root != inventory.root
                         || live.cursor != inventory.cursor
                         || !live.frozen)
@@ -160,7 +191,8 @@ impl ControlHost {
                         "parent membership differs from actual retained high-water",
                     ));
                 }
-                if let Some(anchor) = state.effect_history.owners.get(&owner_id)
+                if let Some(anchor) =
+                    state.and_then(|state| state.effect_history.owners.get(&owner_id))
                     && (anchor.root != inventory.root
                         || anchor.cursor != inventory.cursor
                         || !anchor.frozen)
@@ -169,7 +201,10 @@ impl ControlHost {
                         "parent membership differs from retained historical identity",
                     ));
                 }
-                for (operation, member) in &state.effect_history.members {
+                for (operation, member) in state
+                    .into_iter()
+                    .flat_map(|state| &state.effect_history.members)
+                {
                     if member.owner == owner_id
                         && inventory.members.get(operation) != Some(&member.identity)
                     {
@@ -187,17 +222,18 @@ impl ControlHost {
                 (binding, inventory.members.keys().copied().collect())
             } else {
                 let prefix = format!("{PREFIX}{owner_id}-");
-                if state.effect_indexes.contains_key(&owner_id)
-                    || state.effect_history.owners.contains_key(&owner_id)
-                    || state
-                        .effect_history
-                        .members
-                        .values()
-                        .any(|m| m.owner == owner_id)
-                    || names
-                        .range(prefix.clone()..)
-                        .next()
-                        .is_some_and(|n| n.starts_with(&prefix))
+                if state.is_some_and(|state| {
+                    state.effect_indexes.contains_key(&owner_id)
+                        || state.effect_history.owners.contains_key(&owner_id)
+                        || state
+                            .effect_history
+                            .members
+                            .values()
+                            .any(|m| m.owner == owner_id)
+                }) || names
+                    .range(prefix.clone()..)
+                    .next()
+                    .is_some_and(|n| n.starts_with(&prefix))
                 {
                     return Err(invalid(
                         "known indexed parent owner cannot become legacy history",
@@ -235,10 +271,13 @@ impl ControlHost {
         let mut operations: BTreeSet<_> = selected.keys().copied().collect();
         operations.extend([preparation.operation_id, model.operation_id]);
         if operations.iter().any(|id| {
-            state.permits.contains_key(id)
-                || state.holds.contains_key(id)
-                || state.pending_external_effects.contains(id)
-                || state.local_processes.contains(id)
+            snapshot
+                .active_operations
+                .iter()
+                .any(|permit| permit.operation_id == *id)
+                || snapshot.unresolved_operations.contains_key(id)
+                || snapshot.pending_external_effects.contains(id)
+                || snapshot.pending_local_processes.contains(id)
         }) {
             return Err(invalid(
                 "parent effect history retains active or unresolved ownership",

@@ -54,6 +54,7 @@ fn binding(candidates: &[kegari_git::CandidateManifest]) -> CarryRecoveryBinding
         configuration_revision: digest("config"),
         vector_digest: digest("vector"),
         integrated: reference(),
+        adequacy: None,
         review: reference(),
         production: candidates
             .iter()
@@ -71,6 +72,33 @@ fn selected_full_production_vector_rejects_omissions_duplicates_aliases_and_wron
     let candidates = vec![candidate("81", false), candidate("84", true)];
     let expected = binding(&candidates);
     expected.validate_shape(&candidates).unwrap(); // Data contract only.
+    let legacy = serde_json::to_value(&expected).unwrap();
+    assert!(legacy.get("adequacy").is_none());
+    let mut discovered = expected.clone();
+    discovered.schema_version = 2;
+    discovered.adequacy = Some(reference());
+    discovered.validate_shape(&candidates).unwrap();
+    assert_eq!(
+        discovered
+            .phases()
+            .map(|(_, phase)| phase)
+            .collect::<Vec<_>>(),
+        vec![
+            "parent_integrated_validation",
+            "parent_integrated_review",
+            "parent_evidence_review"
+        ]
+    );
+    let mut missing_adequacy = discovered.clone();
+    missing_adequacy.adequacy = None;
+    assert!(missing_adequacy.validate_shape(&candidates).is_err());
+    let mut aliased_adequacy = discovered.clone();
+    aliased_adequacy.adequacy = Some(aliased_adequacy.integrated.clone());
+    assert!(aliased_adequacy.validate_shape(&candidates).is_err());
+    let mut relabelled = discovered;
+    relabelled.schema_version = 1;
+    assert!(relabelled.validate_shape(&candidates).is_err());
+
     let mut missing = expected.clone();
     missing.production.pop();
     assert_eq!(

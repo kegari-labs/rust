@@ -70,7 +70,7 @@ impl Fixture {
             codex_version: SUPPORTED_CODEX_VERSION,
             repository: Some(RepositoryContext {
                 root: self.repository.clone(),
-                revision: "a".repeat(40),
+                revision: Some("a".repeat(40)),
                 scope_paths: vec!["src/".into()],
             }),
             required_context: &[],

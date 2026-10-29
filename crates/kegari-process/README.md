@@ -9,14 +9,17 @@ Guarded standard/Tokio spawning and owned process-group lifecycle handling.
 
 Import these modules directly; the backend no longer exposes `process_spawn` or
 `process_group` compatibility modules. The backend depends on this crate. The CLI
-continues to reach platform operations through its temporary backend dependency
-and has no direct process dependency.
+reaches platform operations through `kegari-platform` and has no direct process
+dependency.
 
 This crate depends on `kegari-storage`, `kegari-types`, Tokio's `process` feature,
 libc, UUID generation and `serde_json` for existing diagnostic details. It has no backend dependency, including in tests.
-`kegari-execution` owns process-journal mechanics, isolation and native command
-cleanup. Control permits, journal admission, recovery policy, registration,
-service management and application supervision remain in the backend.
+Shared process-journal mechanics currently live in `kegari-execution`.
+Control permits, journal admission, recovery policy, registration, service
+management and application supervision remain in the backend. Preserve this
+crate's actual Codex/Git/control callers during the [SPEC 1.5](../kegari-v0/SPEC.md)
+migration. Its presence does not require Kegari to supervise every internal Codex
+command; Codex owns repository execution and supported terminal management.
 
 ## Ownership and interlock
 
@@ -47,12 +50,13 @@ Run the standalone crate with the pinned toolchain and existing cache:
 cargo test --offline --locked --release -p kegari-process
 ```
 
-Use workspace-wide tests and Clippy for backend integration. Existing disposable
-process fixtures move with this crate; native/live qualification remains separately
-restricted. The three native qualification tests remain ignored across platform
-and execution packages.
+Use focused integration coverage when changing retained host callers. Workspace-wide
+checks belong to later stabilization under the [development policy](../../docs/development.md#feature-first-development-policy).
+Existing disposable process fixtures remain useful; native/live qualification is
+separately restricted. The retained native platform qualification tests remain
+ignored; the obsolete custom-command qualification test was removed with that executor.
 
-Version remains `0.2.0-alpha.10`; executable arguments, persisted/API schemas and
-instruction assets are unchanged. This refactor does not package another alpha or
-resume goal mode. See [current progress](../kegari-v0/PROGRESS.md) and the
+Version remains `0.2.0-alpha.10`. Current progress records the active redesign
+and its changed schema/asset identities; the extraction report retains its
+original evidence. No release is packaged by these source changes. See [current progress](../kegari-v0/PROGRESS.md) and the
 [verification report](../kegari-v0/validation/PROCESS-EXTRACTION.md).

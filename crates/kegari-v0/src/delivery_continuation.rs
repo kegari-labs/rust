@@ -326,7 +326,6 @@ impl DeliveryCoordinator {
         request: ValidationRepairRequest<'_>,
         review: RepairReview,
     ) -> Result<UnfinishedChildWork> {
-        super::discovered_validation::require_legacy_continuation(&request.completion)?;
         let admission = request.source.admission;
         self.current(admission, &[DeliveryPhase::LocalValidation])?;
         self.repair_worker(
@@ -341,7 +340,34 @@ impl DeliveryCoordinator {
                 "repair validation workflow changed",
             ));
         }
-        let required = local_requirements(self.contract(admission)?, request.workflow)?;
+        let prior = crate::validation::ValidationPrefix::from_completion(&request.completion)?;
+        let required = if let Some(prefix) = &prior {
+            let current = prefix
+                .history()
+                .last()
+                .ok_or_else(|| Error::invalid("empty validation prefix"))?
+                .current()?;
+            if current.binding.work != admission.scope.work
+                || current.binding.repository != admission.scope.repository
+            {
+                return Err(Error::new(
+                    "validation_history_binding",
+                    "discovered failure differs from current work and repository",
+                ));
+            }
+            current
+                .requirements
+                .iter()
+                .map(|requirement| CheckRequirement {
+                    id: requirement.id.clone(),
+                    kind: CheckKind::Local,
+                    workflow_id: None,
+                    command: requirement.argv.clone(),
+                })
+                .collect()
+        } else {
+            local_requirements(self.contract(admission)?, request.workflow)?
+        };
         let completion = &request.completion;
         // Retained old failures are historical: compare both private capability
         // sets before selecting the latest result for each configured check.
@@ -351,6 +377,17 @@ impl DeliveryCoordinator {
         }
         for check in &completion.failed_checks {
             records.push((check.record(), true));
+        }
+        if let Some(plan) = &completion.validation_plan {
+            records.retain(|(record, _)| {
+                record
+                    .codex
+                    .as_ref()
+                    .and_then(|provenance| provenance.plan.as_ref())
+                    .is_some_and(|original| {
+                        canonical_digest(1, original).ok().as_deref() == Some(plan.digest())
+                    })
+            });
         }
         let selected = latest_required_failures(&required, &records)?;
         let execution = completion.execution.as_ref().ok_or_else(|| {
@@ -375,8 +412,16 @@ impl DeliveryCoordinator {
                 })?;
             check.production_failure()?;
             validate_failed_record(record, admission, request.outcome, execution, contract)?;
-            let configured = &request.workflow.front_matter.checks.local[&record.check_name];
-            if record.command.argv != configured.argv {
+            let expected = required
+                .iter()
+                .find(|requirement| requirement.id == record.check_name)
+                .ok_or_else(|| {
+                    Error::new(
+                        "validation_gate",
+                        "failed result is outside the current obligations",
+                    )
+                })?;
+            if record.command.argv != expected.command {
                 return Err(Error::new(
                     "validation_gate",
                     "failed command differs from configured obligation",
@@ -387,7 +432,8 @@ impl DeliveryCoordinator {
                 "exit_code":record.command.exit_code,"stdout":record.command.stdout,"stderr":record.command.stderr,
                 "record_digest":canonical_digest(1,record)?}));
         }
-        let cause = json!({"kind":"required_local_checks","checks":findings});
+        let cause = json!({"kind":"required_local_checks","checks":findings,
+            "retained_validation":prior.as_ref().map(|prefix|prefix.descriptor()).transpose()?});
         self.finish_repair(
             request.source,
             request.outcome,
@@ -469,21 +515,18 @@ impl DeliveryCoordinator {
             request.outcome,
             &request.completion,
         )?;
-        if claim.validation.is_some() {
-            return Err(Error::new(
-                "validation_lineage_pending",
-                "discovered adequacy findings require obligation-preserving repair lineage before another implementation/validation session",
-            ));
-        }
         if claim.verdict != evidence::Verdict::Findings || claim.unresolved_findings.is_empty() {
             return Err(Error::new(
                 "no_work_trigger",
                 "only concrete unresolved review findings authorize scoped repair",
             ));
         }
-        let cause = json!({"kind":"review_findings","findings":claim.unresolved_findings,
+        let mut cause = json!({"kind":"review_findings","findings":claim.unresolved_findings,
             "supporting_links":claim.supporting_links,"review_claim":request.outcome.digest(),
             "review_context":request.outcome.outcome().instructions.context_digest});
+        if let Some(assessment) = claim.validation {
+            cause["validation_assessment"] = json!(assessment);
+        }
         self.finish_repair(
             request.source,
             request.outcome,
@@ -900,6 +943,27 @@ fn validate_failed_record(
     execution: &crate::worker::WorkerExecution,
     contract: &crate::worker::WorkerContract,
 ) -> Result<()> {
+    let expected_cwd = record
+        .codex
+        .as_ref()
+        .and_then(|provenance| provenance.plan.as_ref())
+        .and_then(|plan| {
+            plan.requirements
+                .iter()
+                .find(|requirement| requirement.id == record.check_name)
+        })
+        .map(|requirement| {
+            contract.isolation().with_cwd(
+                &contract
+                    .isolation()
+                    .plan()
+                    .repository
+                    .join(&requirement.cwd),
+            )
+        })
+        .transpose()?
+        .map(|isolation| isolation.plan().cwd.clone())
+        .unwrap_or_else(|| contract.isolation().plan().repository.clone());
     if record.binding.work != admission.scope.work
         || record.workflow_digest != admission.gate.workflow_digest()
         || record.binding.repository != admission.scope.repository
@@ -910,7 +974,7 @@ fn validate_failed_record(
         || record.before != record.after
         || record.kind != CheckKind::Local
         || record.binding.isolation_digest != contract.isolation().digest()
-        || record.command.cwd != contract.isolation().plan().repository
+        || record.command.cwd != expected_cwd
         || record.command.isolation_digest != contract.isolation().digest()
         || canonical_digest(1, &record.binding)? != canonical_digest(1, &execution.binding)?
         || record.correction.is_some()
@@ -1662,8 +1726,15 @@ impl DeliveryCoordinator {
             &source.revision().tree,
             &json!({"phase":reference.phase.phase}),
         )?;
+        let mut assignment = request.assignment.clone();
+        if assignment.phase() == "child_local_validation"
+            && let Some(prefix) =
+                crate::validation::ValidationPrefix::from_completion(&request.completion)?
+        {
+            assignment.continue_validation(prefix)?;
+        }
         let mut identity = json!({"purpose":"source_advanced","previous":predecessor_digest,"previous_inventory":phase_inventory_digest,"source":source_receipt_digest,
-            "source_seal":request.source.source.receipt().payload_digest,"assignment":request.assignment.digest()?,"progress":progress_digest,"review_rounds_consumed":review_rounds_consumed,"granted_review":granted_review.as_ref().map(CompletedReviewLineage::digest)});
+            "source_seal":request.source.source.receipt().payload_digest,"assignment":assignment.digest()?,"progress":progress_digest,"review_rounds_consumed":review_rounds_consumed,"granted_review":granted_review.as_ref().map(CompletedReviewLineage::digest)});
         if let Some(budget) = &validation_budget {
             identity["validation_budget"] = json!(budget.digest());
         }
@@ -1672,7 +1743,7 @@ impl DeliveryCoordinator {
         }
         let digest = canonical_digest(1, &identity)?;
         Ok(VerifiedSourceAdvanced {
-            assignment: request.assignment.clone(),
+            assignment,
             reference,
             predecessor,
             predecessor_digest,
@@ -1961,6 +2032,7 @@ mod tests {
         };
         let isolation = bytes_digest(b"fixture isolation");
         CheckExecutionRecord {
+            codex: None,
             discovered: None,
             schema_version: 1,
             correction: None,

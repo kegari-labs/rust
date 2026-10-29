@@ -47,7 +47,10 @@ impl HostRuntimeFactory for NativeRuntimeFactory {
                     authorization_tasks: 16,
                 },
             )?;
-            let workflow = Arc::new(RuntimeWorkflow::new(runtime, delivery.clone(), delivery));
+            let workflow = Arc::new(
+                RuntimeWorkflow::new(runtime, delivery.clone(), delivery)
+                    .with_driver(driver.clone()),
+            );
             Ok(RuntimeBackend { workflow, driver })
         })
     }

@@ -65,7 +65,7 @@ fn complete_authenticated_history_uses_existing_public_projection_and_readonly_a
         codex_version: SUPPORTED_CODEX_VERSION,
         repository: Some(RepositoryContext {
             root: repository.clone(),
-            revision: "a".repeat(40),
+            revision: Some("a".repeat(40)),
             scope_paths: vec![".".into()],
         }),
         required_context: &[],

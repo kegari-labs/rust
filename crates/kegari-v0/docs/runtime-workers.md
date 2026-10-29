@@ -1,5 +1,12 @@
 # Runtime worker preparation
 
+**Approved boundary:** [SPEC 1.5](../SPEC.md) delegates repository tools and
+execution to Codex app-server. Existing source/admission/context mechanisms remain;
+the custom repository executor and hook runner described by older reports have
+been removed. Ordinary source work uses native Codex tools and supported hook
+interfaces. Remaining integration and qualification are recorded in PROGRESS.md;
+local fixtures are not live-operation evidence.
+
 `runtime_workers::launch` connects current sealed runtime authority to the actual
 worker adapter. It accepts a canonical phase, owned lease, operation ID, finite
 turn/duration bounds and, where applicable, a host-selected exact repository
@@ -14,9 +21,9 @@ workspace, account and exact phase. A separate preparation admission reserves
 the same canonical work identity. Owned Git clone
 creation has a durable Sent effect, cancellation registration and a fresh gate
 around every subprocess start. Waiting happens outside the control mutex.
-Creation hooks use the real LocalExecutor and retained HookLedger. Failed or
-unknown preparation preserves directories and records; an exit-observation
-failure fences before requesting cancellation. An empty in-memory registry alone
+Creation hooks must migrate to supported Codex execution interfaces without
+a custom shell fallback. Failed or unknown preparation preserves directories and
+records; an exit-observation failure fences before requesting cancellation. An empty in-memory registry alone
 is not recovery proof for work from a prior host process.
 
 Only after observed local preparation exit does the runtime retire that
@@ -38,28 +45,26 @@ reasoning responsibility, and expose no Git, source-write, validation or hook
 execution. Repository-backed children use an owned clone; the operator checkout
 is never reset or written.
 
-Product source writes and disposable test-resource writes are distinct grants.
-Each resource grant must match the actual configured path and writable/disposable
-flags plus the child's authorized resource names. Resource writes cannot overlap
-any configured operator checkout, product source, scratch, credentials or control
-records; writable resource trees reject symlinks and hardlinks. The instruction
-manifest, Codex permission configuration and local execution policy bind these
-same grants. Built-in Codex shell execution is disabled for every role. Declared
-repository checks, restricted Git inspection and source writes use host tools.
+Production admission retains the actual role, source/write scope, account and
+supported provider permissions. Native Codex tools inspect and modify the
+repository and run its commands; Kegari does not reconstruct a resource catalog
+or individual command ownership. Independent review requires enforceable
+no-repository-code-execution behavior, not merely a read-only filesystem.
 
-Deterministic coverage checks source/generation binding, configured resource
-flags, forbidden resource aliases, role/tool narrowing and actual assembled
-manifests. It does not qualify live Codex or native sandbox containment. The
-native command boundary rejects repository execution with
-`process_tree_unverified` before spawn where full descendant containment has not
-been qualified. Retained preparation records do not authorize cleanup.
+Replace the current custom-backend qualification refusals with selected Codex
+version, permission and capability checks on the migrated path. Missing
+capabilities remain specific blockers. Retain actual host Git/Codex/control
+process ownership; do not claim arbitrary descendant closure or interpret old
+custom-executor records as Codex results. Preparation records alone cannot
+authorize cleanup.
 
 Source resolution reads the actual configured provider staging reference twice
 around commit/tree metadata, or rereads the exact independent PR before and after
 that metadata. Changed source/configuration/authority blocks preparation. It does
 not update the operator checkout. Git metadata and clone commands use the preparation permit's
-journaled process path. After model admission the execution boundary is rebuilt
-with the model permit, so preparation authority is never reused for later checks.
+journaled host-process path. Model/session admission has its own current
+authority; preparation authority cannot authorize later workflow or provider
+effects. Codex-internal commands do not receive individual Kegari permits.
 
 Worker source preparation now uses the admitted exact-object acquisition broker
 for initial configured staging and independent PR sources. The request binds the
@@ -73,7 +78,7 @@ source capability. Host metadata authority cannot perform cache-miss imports.
 The common `prepare_admitted` / `AdmittedWorker` path stops after exact assembly
 and final durable worker admission. Production consumes `.run()`; evaluation
 consumes `.into_trial()`, which exposes actual `TrialOperation` references and
-real hooks. Dropping either admitted capability fences before cancellation and
+the admitted session lifecycle. Dropping either admitted capability fences before cancellation and
 preserves uncertain process/effect ownership. This composition does not itself
 satisfy actual-agent qualification or the pending native fixture mapping.
 
@@ -137,5 +142,14 @@ assembly seal for future compatible resume. Only typed operation ID/attempt
 metadata is normalized; the actual rendered workflow, full task context,
 guidance, permissions and all other manifest fields remain exact. A workflow
 that renders a changed operation ID is incompatible. Legacy manifests retain
-their original serialization and cannot establish this new proof. The native
-resume admission/source-reuse bridge is still unfinished.
+their original serialization and cannot establish this new proof. The supported
+protocol resume path remains narrower than full cold workflow reconstruction and
+changed-generation continuation; see the current milestones.
+
+## Development validation
+
+Use focused existing source-preparation, admission, correction or recovery checks
+for the changed caller. Initial Codex-native migration exercises one ordinary
+production flow through simulated transport and a missing/stale-result refusal.
+Do not turn deferred live qualification or comprehensive coverage into a blocker
+on independent feature implementation. Follow [MILESTONES.md](../MILESTONES.md).

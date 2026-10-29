@@ -14,11 +14,14 @@ pub(crate) struct VerifiedEvaluationSource {
     operation: Uuid,
     namespace_digest: String,
     subject: subject::TrialSubject,
-    review_text: kegari_providers::PullRequestText,
+    review_text: Option<kegari_providers::PullRequestText>,
+    child_issues: Option<crate::evaluation_provider::ChildIssues>,
+    parents: Vec<String>,
     digest: String,
     root: VerifiedHostReadRoot,
-    base: Revision,
-    head: Revision,
+    base: Option<Revision>,
+    head: Option<Revision>,
+    unborn_branch: Option<String>,
     files_digest: String,
     receipt: Receipt,
 }
@@ -32,8 +35,14 @@ impl VerifiedEvaluationSource {
     pub(crate) fn namespace_digest(&self) -> &str {
         &self.namespace_digest
     }
-    pub(crate) fn review_text(&self) -> &kegari_providers::PullRequestText {
-        &self.review_text
+    pub(crate) fn review_text(&self) -> Option<&kegari_providers::PullRequestText> {
+        self.review_text.as_ref()
+    }
+    pub(crate) fn child_issues(&self) -> Option<&crate::evaluation_provider::ChildIssues> {
+        self.child_issues.as_ref()
+    }
+    pub(crate) fn parents(&self) -> &[String] {
+        &self.parents
     }
     pub(crate) fn pull_request(&self) -> u64 {
         self.subject.number()
@@ -41,11 +50,14 @@ impl VerifiedEvaluationSource {
     pub(crate) fn digest(&self) -> &str {
         &self.digest
     }
-    pub(crate) fn base(&self) -> &Revision {
-        &self.base
+    pub(crate) fn base(&self) -> Option<&Revision> {
+        self.base.as_ref()
     }
-    pub(crate) fn head(&self) -> &Revision {
-        &self.head
+    pub(crate) fn head(&self) -> Option<&Revision> {
+        self.head.as_ref()
+    }
+    pub(crate) fn unborn_branch(&self) -> Option<&str> {
+        self.unborn_branch.as_deref()
     }
     pub(super) fn verify_closed_metadata(&self, runtime: &RuntimeCoordinator) -> Result<()> {
         let actual = runtime.control.operation(self.receipt.operation_id)?;
@@ -99,8 +111,22 @@ pub(super) async fn observe(
     request: Arc<VerifiedEvaluationRequest>,
     fixture: &crate::evaluation::PreparedFixture,
 ) -> Result<VerifiedEvaluationSource> {
-    let review_text = fixture.independent_review_text()?;
-    let review_text_digest = canonical_digest(1, &review_text)?;
+    let child_issues = request
+        .binding
+        .child
+        .as_ref()
+        .map(|_| fixture.child_issues(&request.binding))
+        .transpose()?;
+    let review_text = if child_issues.is_none() {
+        Some(fixture.independent_review_text()?)
+    } else {
+        None
+    };
+    let review_text_digest = if let Some(text) = &review_text {
+        canonical_digest(1, text)?
+    } else {
+        canonical_digest(2, &child_issues)?
+    };
     let configured = request
         .configuration
         .workspaces
@@ -183,18 +209,31 @@ pub(super) async fn observe(
             limits: GitLimits::default(),
             authority: guarded,
         })?;
-        let base = git.exact_revision(&source_root, &base_commit)?;
-        let head = git.exact_revision(&source_root, &head_commit)?;
-        if !git.is_ancestor(&source_root, &base.commit, &head.commit)? {
-            return Err(Error::new(
-                "evaluation_fidelity",
-                "declared base is not an actual ancestor of the supplied head",
-            ));
-        }
-        // Actual first-slice source contract is one plain changed commit over its declared base.
-        // The metadata reader verifies that edge rather than inventing parents in the adapter.
-        git.publication_objects(&source_root, &base, &head)?;
-        git.verify_execution_tree(&source_root, &head, &BTreeSet::new())?;
+        let (base, head, parents, unborn_branch) = match (&base_commit, &head_commit) {
+            (Some(base), Some(head)) => {
+                let base = git.exact_revision(&source_root, base)?;
+                let head = git.exact_revision(&source_root, head)?;
+                if !git.is_ancestor(&source_root, &base.commit, &head.commit)? {
+                    return Err(Error::new(
+                        "evaluation_fidelity",
+                        "declared base is not an actual ancestor of the supplied head",
+                    ));
+                }
+                if base != head {
+                    git.publication_objects(&source_root, &base, &head)?;
+                }
+                let parents = git.observed_commit_parents(&source_root, &head.commit)?;
+                git.verify_execution_tree(&source_root, &head, &BTreeSet::new())?;
+                (Some(base), Some(head), parents, None)
+            }
+            (None, None) => {
+                // The real Git reader establishes absent HEAD and absent refs;
+                // a synthetic provider declaration cannot supply this evidence.
+                let branch = git.unborn_branch(&source_root)?;
+                (None, None, vec![], Some(branch))
+            }
+            _ => return Err(Error::invalid("evaluation source has a partial baseline")),
+        };
         let actual = crate::evaluation::tree_digest(&source_root)?;
         if actual != expected {
             return Err(Error::new(
@@ -202,14 +241,23 @@ pub(super) async fn observe(
                 "actual clean Git source differs from exact declared fixture files/modes",
             ));
         }
-        git.verify_execution_tree(&source_root, &head, &BTreeSet::new())?;
+        if let Some(head) = &head {
+            git.verify_execution_tree(&source_root, head, &BTreeSet::new())?;
+        } else if git.unborn_branch(&source_root)?.as_str()
+            != unborn_branch.as_deref().unwrap_or_default()
+        {
+            return Err(Error::new(
+                "unstable_observation",
+                "unborn evaluation source changed during inspection",
+            ));
+        }
         if crate::evaluation::tree_digest(&source_root)? != actual {
             return Err(Error::new(
                 "unstable_observation",
                 "evaluation source changed during admitted inspection",
             ));
         }
-        Ok((base, head, actual))
+        Ok((base, head, actual, parents, unborn_branch))
     })
     .await
     .map_err(|_| {
@@ -219,11 +267,11 @@ pub(super) async fn observe(
         )
     })
     .and_then(|r| r);
-    let receipt=metadata.finish(json!({"action":"evaluation_source_read","operation":request.request.request_id,"subject":request.subject.reference(),"review_text_digest":review_text_digest,"result":read.as_ref().map(|(base,head,files)|json!({"base":base,"head":head,"files":files})).map_err(|error|json!({"code":error.code,"message":error.message}))}))?;
-    let (base, head, files_digest) = read?;
+    let receipt=metadata.finish(json!({"action":"evaluation_source_read","operation":request.request.request_id,"subject":request.subject.reference(),"review_text_digest":review_text_digest,"result":read.as_ref().map(|(base,head,files,parents,unborn)|json!({"base":base,"head":head,"files":files,"parents":parents,"unborn_branch":unborn})).map_err(|error|json!({"code":error.code,"message":error.message}))}))?;
+    let (base, head, files_digest, parents, unborn_branch) = read?;
     let digest = canonical_digest(
         1,
-        &json!({"workspace":request.workspace,"operation":request.request.request_id,"namespace":namespace_digest,"subject":request.subject.reference(),"review_text_digest":review_text_digest,"root":root.digest()?,"base":base,"head":head,"files":files_digest,"receipt":receipt}),
+        &json!({"workspace":request.workspace,"operation":request.request.request_id,"namespace":namespace_digest,"subject":request.subject.reference(),"review_text_digest":review_text_digest,"root":root.digest()?,"base":base,"head":head,"unborn_branch":unborn_branch,"files":files_digest,"receipt":receipt}),
     )?;
     let proof = VerifiedEvaluationSource {
         workspace: request.workspace,
@@ -231,10 +279,13 @@ pub(super) async fn observe(
         namespace_digest,
         subject: request.subject.clone(),
         review_text,
+        child_issues,
+        parents,
         digest,
         root,
         base,
         head,
+        unborn_branch,
         files_digest,
         receipt,
     };
